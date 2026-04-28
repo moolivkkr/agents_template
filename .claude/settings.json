@@ -1,0 +1,78 @@
+{
+  "model": {
+    "default": "claude-sonnet-4-6",
+    "complex_agents": "claude-opus-4-6",
+    "fast_agents": "claude-haiku-4-5-20251001"
+  },
+  "agents": {
+    "opus_agents": [
+      "architecture_orchestrator",
+      "backend_developer",
+      "api_developer",
+      "ux_designer",
+      "code_reviewer_II",
+      "security_reviewer",
+      "acceptance_test_agent",
+      "spec_impl_reconciler",
+      "product_manager"
+    ],
+    "haiku_agents": [
+      "demo_executor",
+      "test_runner",
+      "status"
+    ]
+  },
+  "quality_gates": {
+    "unit_test_coverage_pct": 80,
+    "test_retry_max": 3,
+    "review_retry_max": 2,
+    "security_blocking_severity": "HIGH",
+    "acceptance_retry_max": 2,
+    "e2e_retry_max": 2,
+    "phase_gate_required": true
+  },
+  "sdlc": {
+    "require_previous_phase_gate": true,
+    "auto_run_plan_if_missing": true,
+    "e2e_on_workflow_unlock": true,
+    "carry_forward_known_issues": true
+  },
+  "paths": {
+    "requirements": "requirements/",
+    "docs": "docs/",
+    "brd": "docs/BRD.md",
+    "implementation_guidelines": "docs/IMPLEMENTATION_GUIDELINES.md",
+    "phase_specs": "docs/design/phases/",
+    "agent_state": "agent_state/",
+    "phase_gates": "agent_state/phases/",
+    "phase_manifests": "agent_state/phases/{{PHASE}}/manifest.json",
+    "phase_reports": "agent_state/phases/{{PHASE}}/reports/",
+    "agent_registry": "agent_state/agent_registry.json",
+    "generated_agents": ".claude/agents/generated/",
+    "skill_packs": ".claude/skills/",
+    "reconciliation": {
+      "requirements_vs_brd": "agent_state/reconciliation/requirements_vs_brd.md",
+      "brd_vs_specs": "agent_state/reconciliation/phase-{{PHASE}}/brd_vs_specs.md",
+      "specs_vs_impl": "agent_state/reconciliation/phase-{{PHASE}}/specs_vs_impl.md",
+      "specs_vs_tests": "agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.md"
+    },
+    "test_results": {
+      "unit": "agent_state/phases/{{PHASE}}/reports/unit_tests.md",
+      "integration": "agent_state/phases/{{PHASE}}/reports/integration_tests.md",
+      "e2e": "agent_state/e2e/results.md",
+      "acceptance": "agent_state/phases/{{PHASE}}/reports/acceptance_report.md"
+    },
+    "seed_data": {
+      "user_provided": "requirements/test-data/phase-{{PHASE}}.yaml",
+      "user_global": "requirements/test-data/global.yaml",
+      "generated": "agent_state/phases/{{PHASE}}/test-data/generated-seed.yaml"
+    }
+  },
+  "permissions": {
+    "auto_start_infra": true,
+    "auto_run_tests": true,
+    "auto_apply_migrations": true,
+    "auto_commit_after_phase": false,
+    "require_confirmation_for_prod_deploy": true
+  }
+}
