@@ -43,6 +43,48 @@ fi
 
 Warn if phases are incomplete — but do not block. Acceptance can run on partially complete product (results will reflect gaps).
 
+### Pre-flight audit
+
+Before running any tests, validate that completed phases are actually complete:
+
+```bash
+for PHASE_DIR in agent_state/phases/*/; do
+  PHASE_NUM=$(basename "$PHASE_DIR")
+  MANIFEST="$PHASE_DIR/manifest.json"
+  GATE="$PHASE_DIR/gate.passed"
+
+  # Check 1: gate.passed exists
+  [ -f "$GATE" ] || echo "⚠ Phase $PHASE_NUM: gate.passed missing"
+
+  # Check 2: manifest exists and has artifacts
+  [ -f "$MANIFEST" ] || echo "⚠ Phase $PHASE_NUM: manifest.json missing"
+
+  # Check 3: artifacts referenced in manifest actually exist on disk
+  # (parse manifest.artifacts.code[] and verify each file)
+
+  # Check 4: gate.passed is not stale (warn if > 30 days old)
+  if [ -f "$GATE" ]; then
+    GATE_AGE=$(( ($(date +%s) - $(stat -f %m "$GATE" 2>/dev/null || stat -c %Y "$GATE" 2>/dev/null)) / 86400 ))
+    [ "$GATE_AGE" -gt 30 ] && echo "⚠ Phase $PHASE_NUM: gate is ${GATE_AGE} days old — consider re-running /develop"
+  fi
+
+  # Check 5: if gate was forced, surface it
+  if [ -f "$GATE" ] && grep -q "FORCED" "$GATE" 2>/dev/null; then
+    echo "⚠ Phase $PHASE_NUM: gate was FORCED — review overridden blockers"
+  fi
+done
+```
+
+**Report pre-flight findings before proceeding:**
+```
+Pre-flight audit:
+  Phases planned: N
+  Phases gated: N (M forced)
+  Missing artifacts: [list or "none"]
+  Stale gates: [list or "none"]
+  → Proceeding with acceptance testing
+```
+
 Start full stack:
 ```bash
 # Read startup commands from docs/IMPLEMENTATION_GUIDELINES.md §Local Dev

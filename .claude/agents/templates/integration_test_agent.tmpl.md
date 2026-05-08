@@ -14,6 +14,9 @@ input:
     - type: prev_manifest
       path: agent_state/phases/{{PHASE-1}}/manifest.json
       description: Which integration tests already exist — avoid duplicating
+    - type: api_contracts
+      path: docs/design/phases/{{PHASE}}/specs/api-contracts.md
+      description: "Exact response shapes from api_developer — validate actual API responses match these contracts"
   optional:
     - type: component_spec
       path: docs/design/phases/{{PHASE}}/specs/<component>.md
@@ -39,6 +42,7 @@ quality_gates:
   db_isolation: true
   no_shared_state_between_tests: true
   api_contracts_verified: true
+  response_shapes_match_contracts: true
 dependencies:
   upstream:
     - backend_developer
@@ -48,7 +52,8 @@ dependencies:
 skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
   - ".claude/skills/databases/{{DB_TECH}}.md"
-  - ".claude/skills/frameworks/{{TEST_FRAMEWORK}}.md"
+  - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
+  - ".claude/skills/core/testing-principles.md"
 ---
 
 # Agent: Integration Test Agent — {{PROJECT_NAME}}
@@ -120,6 +125,25 @@ tests/integration/api/
   - Not found → 404
   - Idempotency: repeat identical PUT → same result
 ```
+
+### 4. Response Shape Contract Tests (CRITICAL — prevents UI↔API mismatches)
+
+If `api-contracts.md` exists, add contract validation tests for EVERY endpoint:
+
+```
+tests/integration/contracts/
+  For each endpoint in api-contracts.md:
+  - Response envelope: has "data", "error", "meta" keys (no extra, no missing)
+  - List endpoints: "data" is array type (even when empty → [])
+  - Single-resource endpoints: "data" is object type (or null for 404)
+  - All declared fields present with correct types
+  - Nested object shapes match contract
+  - Error responses match declared error envelope
+  - Empty state: list endpoint with no data returns { "data": [], ... } not { "data": null } or { "data": {} }
+  - Pagination: if meta has page/limit/total, verify values are correct numbers
+```
+
+**Why this matters:** UI components are built against `api-contracts.md` shapes. If the actual API returns `{}` where the contract says `[]`, every UI list component breaks. These tests catch that drift BEFORE the UI is built.
 
 ## Isolation Patterns
 

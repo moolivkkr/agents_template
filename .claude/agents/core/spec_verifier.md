@@ -35,8 +35,13 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 
 ### Internal Consistency
 - UI wireframe API bindings reference endpoints defined in backend specs (no dangling refs)
+- **Wireframe data type matching:** for each wireframe API binding:
+  - If the wireframe component is a table/list/grid → the bound endpoint spec must declare `data: []` (array response)
+  - If the wireframe component is a detail view/form → the bound endpoint spec must declare `data: {}` (object response)
+  - Mismatches are **BLOCKING** — this is the #1 cause of UI↔API integration failures
 - Performance targets in specs reference specific NFR-PERF-* IDs from BRD
 - Data types used in specs are consistent across related specs (same field name = same type)
+- Response field names in backend specs match field names referenced in wireframe API bindings
 
 ### Completeness
 - Every spec has: interface contracts, edge cases (≥10), test coverage requirements

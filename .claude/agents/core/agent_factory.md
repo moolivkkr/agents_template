@@ -52,7 +52,7 @@ database:
   orm: <e.g. pgx, sqlx, prisma, typeorm, sqlalchemy, gorm>
   migration_tool: <e.g. goose, flyway, alembic, prisma>
 cache:
-  db_tech: <e.g. redis, memcached> or null
+  cache_tech: <e.g. redis, memcached> or null
 frontend:
   enabled: <true | false>
   ui_framework: <e.g. react, nextjs, vue, angular> or null
@@ -63,7 +63,9 @@ frontend:
   test_framework: <e.g. vitest, jest> or null
   e2e_tool: <e.g. playwright, cypress> or null
   api_mock_tool: <e.g. msw, nock> or null
+  ext: <ts | js>  # file extension for frontend code
 testing:
+  ext: <go | py | ts | js | java | rs>  # file extension for backend test files
   test_framework: <e.g. testify, pytest, jest, junit>
   mock_framework: <e.g. mockery, unittest.mock, jest.mock, mockito>
 ```

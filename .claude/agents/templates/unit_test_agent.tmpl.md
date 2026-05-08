@@ -43,8 +43,9 @@ dependencies:
     - integration_test_agent
 skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
-  - ".claude/skills/frameworks/{{TEST_FRAMEWORK}}.md"
-  - ".claude/skills/frameworks/{{MOCK_FRAMEWORK}}.md"
+  - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
+  - ".claude/skills/testing/{{MOCK_FRAMEWORK}}.md"
+  - ".claude/skills/core/testing-principles.md"
 ---
 
 # Agent: Unit Test Agent — {{PROJECT_NAME}}

@@ -60,12 +60,63 @@ FunctionName(param1 Type1, param2 Type2) (ReturnType, error)
 - Throws/Returns errors: <error types and conditions>
 
 ### API Endpoints (if applicable)
+
+For EACH endpoint, specify the EXACT response shape using this strict format:
+
 ```
 METHOD /api/v<VERSION>/path
-Request:  { field: type, ... }
-Response: { field: type, ... }
-Errors:   { 400: reason, 401: reason, 404: reason, 500: reason }
+
+Request Body:
+  {
+    "field_name": "<type>",          // required | optional — description
+    "field_name": "<type>"           // required | optional — description
+  }
+
+Query Params (GET only):
+  ?param=<type>&param=<type>         // include defaults and ranges
+
+Response 2xx:
+  {
+    "data": [ ... ] | { ... },       // ⚠ MUST specify: array [] for list endpoints, object {} for single-resource endpoints
+    "error": null,
+    "meta": {                        // required for list endpoints; omit for single-resource
+      "page": "<number>",
+      "limit": "<number>",
+      "total": "<number>"
+    }
+  }
+
+  // data shape (ONE of):
+  // LIST endpoint — data is ALWAYS an array (even when empty → []):
+  "data": [
+    { "field": "<type>", "field": "<type>" }
+  ]
+
+  // SINGLE endpoint — data is ALWAYS an object (or null if not found → null):
+  "data": {
+    "field": "<type>", "field": "<type>"
+  }
+
+Empty States:
+  - List endpoint returns empty results:  { "data": [], "error": null, "meta": { "total": 0 } }
+  - Single resource not found:            404 with { "data": null, "error": { "code": "NOT_FOUND", "message": "..." }, "meta": null }
+  - Successful delete/action:             { "data": null, "error": null, "meta": null } (or 204 No Content)
+
+Errors:
+  400: { "data": null, "error": { "code": "VALIDATION_ERROR", "message": "...", "details": [...] }, "meta": null }
+  401: { "data": null, "error": { "code": "UNAUTHORIZED", "message": "..." }, "meta": null }
+  403: { "data": null, "error": { "code": "FORBIDDEN", "message": "..." }, "meta": null }
+  404: { "data": null, "error": { "code": "NOT_FOUND", "message": "..." }, "meta": null }
+  409: { "data": null, "error": { "code": "CONFLICT", "message": "..." }, "meta": null }
+  500: { "data": null, "error": { "code": "INTERNAL_ERROR", "message": "..." }, "meta": null }
 ```
+
+**CRITICAL contract rules:**
+- List endpoints MUST return `"data": []` (array), never `"data": {}` or `"data": null` for empty results
+- Single-resource endpoints MUST return `"data": { ... }` (object), never `"data": [{ ... }]`
+- Every field in the response must have an explicit type: `string`, `number`, `boolean`, `string (ISO 8601)`, `string (UUID)`, `string (enum: val1|val2)`, `object`, `array<type>`
+- Nullable fields must be marked: `"field": "<type> | null"`
+- Nested objects must be fully expanded — no `"field": "object"` without showing the shape
 
 ## Data Model
 - Entities created or modified: [list]
@@ -122,7 +173,10 @@ Errors:   { 400: reason, 401: reason, 404: reason, 500: reason }
 
 - Every FR-* ID cited MUST exist verbatim in `docs/BRD.md` — no invented IDs
 - Minimum 10 edge cases — fewer than 10 = incomplete spec
-- Every API endpoint must declare all 4xx/5xx error codes
+- Every API endpoint must declare all 4xx/5xx error codes with exact JSON shapes
+- Every API endpoint must explicitly state whether `data` is an array or object — ambiguous shapes are a spec failure
+- List endpoints must show the empty-state response (`"data": []`); single endpoints must show null-state (`"data": null`)
+- All response fields must have explicit types — no untyped or `"object"` without expansion
 - If DB changes needed: migration is required, not optional
 - Performance targets must cite a specific NFR-* ID — generic targets are not acceptable
 - Do NOT describe UI layout in a backend spec (that belongs in a wireframe)

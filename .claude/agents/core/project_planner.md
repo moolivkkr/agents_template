@@ -30,7 +30,7 @@ dependencies:
 ## Role
 Reads BRD requirements and IMPLEMENTATION_GUIDELINES component inventory to define the scope, exit criteria, and parallel implementation waves for a specific phase.
 
-**Critical output:** This agent writes `phase_context.md` — the compact context file that all implementation agents for this phase load instead of the full BRD and IMPLEMENTATION_GUIDELINES. Keep it tight: ~1-2K tokens max.
+**Critical output:** This agent writes `phase_context.md` — the structured context file (~6-8K tokens) that all implementation agents for this phase load instead of the full BRD and IMPLEMENTATION_GUIDELINES. Rich enough to be complete, lean enough to leave room for code.
 
 ## Responsibilities
 
@@ -70,8 +70,23 @@ Wave 3 (parallel, if UI): ui_developer
 Wave 4 (parallel): unit_test_agent, integration_test_agent
 
 ## E2E Workflows Unlocked
-[List of complete user workflows first testable after this phase]
-[Empty if no complete workflow is first available this phase]
+[List workflows that become end-to-end testable for the first time after this phase completes.
+Empty list [] if no new complete workflow is unlocked this phase.]
+
+Format — one entry per workflow:
+- name: "<workflow-slug>" (e.g. "user-registration-flow")
+  description: "<what the user does end-to-end>"
+  triggers: [FR-NNN, FR-NNN]  (which FR-* requirements compose this workflow)
+  persona: "<which BRD persona executes this>"
+  steps:
+    1. <user action> → <expected result>
+    2. <user action> → <expected result>
+  success_criteria: "<what proves the workflow works>"
+
+## BRD Gate Checklist Items (from BRD §Gate Checklists)
+[Copy the specific gate checklist items from BRD that this phase satisfies.
+These are verified during the phase gate (Step 6). If BRD has no gate checklists, omit this section.]
+- [ ] <gate item from BRD> — verified by: <which test/check proves this>
 ```
 
 ## Output 2: `docs/design/phases/N/phase_context.md`

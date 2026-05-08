@@ -18,6 +18,9 @@ output:
 dependencies:
   upstream: [backend_developer, api_developer, ui_developer]
   downstream: [code_reviewer_II]
+skill_packs:
+  - ".claude/skills/languages/{{LANG}}.md"
+  - ".claude/skills/frameworks/{{FRAMEWORK}}.md"
 ---
 
 # Agent: Code Reviewer I — Style & Idioms

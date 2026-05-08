@@ -17,6 +17,10 @@ output:
 dependencies:
   upstream: [code_reviewer_I]
   downstream: [security_reviewer]
+skill_packs:
+  - ".claude/skills/languages/{{LANG}}.md"
+  - ".claude/skills/frameworks/{{FRAMEWORK}}.md"
+  - ".claude/skills/databases/{{DB_TECH}}.md"
 ---
 
 # Agent: Code Reviewer II — Architecture

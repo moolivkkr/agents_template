@@ -34,6 +34,10 @@ dependencies:
 quality_gates:
   all_in_scope_use_cases_pass: true
   all_personas_exercised: true
+skill_packs:
+  - ".claude/skills/languages/{{LANG}}.md"
+  - ".claude/skills/core/api-design.md"
+  - ".claude/skills/core/testing-principles.md"
 ---
 
 # Agent: Acceptance Test Agent

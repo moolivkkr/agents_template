@@ -7,7 +7,7 @@ input:
   required:
     - type: phase_context
       path: docs/design/phases/{{PHASE}}/phase_context.md
-      description: Compact context slice — in-scope FR-*, tech constraints, what already exists (~1-2K tokens). Load this INSTEAD of full BRD and IMPLEMENTATION_GUIDELINES.
+      description: Compact context slice — in-scope FR-*, tech constraints, conventions, what already exists (~6-8K tokens). Load this INSTEAD of full BRD and IMPLEMENTATION_GUIDELINES.
     - type: component_spec
       path: docs/design/phases/{{PHASE}}/specs/<your-component>.md
       description: Spec for the specific component(s) this agent is implementing. Load only the relevant spec file(s), not the entire specs/ folder.
@@ -98,6 +98,74 @@ Implements server-side business logic, domain models, service layer, and reposit
 - No HTTP, no JSON encoding, no framework-specific types in service layer
 - Context propagation: first parameter of every service method is `context` (or equivalent)
 
+### Service Return Type Conventions (CRITICAL — api_developer depends on these)
+
+The api_developer calls your service methods and serializes the results. If your return types are ambiguous about list-vs-single or miss pagination data, the API response will be wrong and the UI will break.
+
+**Rule 1 — List methods MUST return a list result with total count:**
+
+```
+// ✅ CORRECT — returns items AND total for pagination
+func (s *ResourceService) List(ctx, filters, page, limit) → (items []Resource, total int, err error)
+// or use a result struct:
+type ListResult[T] {
+  Items []T       // ALWAYS a slice, NEVER nil — initialize as empty slice if no results
+  Total int       // total matching count (before pagination)
+  Page  int
+  Limit int
+}
+func (s *ResourceService) List(ctx, filters, page, limit) → (ListResult[Resource], error)
+
+// ❌ WRONG — no total count, api_developer can't build meta.total
+func (s *ResourceService) List(ctx) → ([]Resource, error)
+
+// ❌ WRONG — returns single object, api_developer might wrap as {data: {...}} instead of {data: [...]}
+func (s *ResourceService) List(ctx) → (*Resource, error)
+```
+
+**Rule 2 — Single-entity methods MUST return a pointer or option (nullable):**
+
+```
+// ✅ CORRECT — nil/None means "not found", non-nil means "found"
+func (s *ResourceService) GetByID(ctx, id) → (*Resource, error)
+
+// ❌ WRONG — value type, caller can't distinguish "not found" from "empty struct"
+func (s *ResourceService) GetByID(ctx, id) → (Resource, error)
+```
+
+**Rule 3 — NEVER return nil/null for empty lists:**
+
+```
+// ✅ CORRECT — empty slice, NOT nil
+items := make([]Resource, 0)  // Go
+items = []                     // Python
+items: Resource[] = []         // TypeScript
+
+// ❌ WRONG — nil slice serializes to JSON null, breaking UI list components
+var items []Resource           // Go: nil slice → JSON null
+items = None                   // Python: None → JSON null
+```
+
+**Rule 4 — Document return types in manifest:**
+
+Add return type info to your manifest so api_developer knows what it's getting:
+
+```json
+{
+  "services": [
+    {
+      "name": "ResourceService",
+      "methods": [
+        { "name": "List", "returns": "list", "has_pagination": true },
+        { "name": "GetByID", "returns": "single_nullable" },
+        { "name": "Create", "returns": "single" },
+        { "name": "Delete", "returns": "none" }
+      ]
+    }
+  ]
+}
+```
+
 ## Iteration Rules
 
 - **Test failures**: fix → rerun → max 3 attempts before escalating with a summary
@@ -112,9 +180,27 @@ On completion, write `agent_state/phases/{{PHASE}}/backend_developer/manifest.js
   "phase": "{{PHASE}}",
   "agent": "backend_developer",
   "models": ["<list of domain types implemented>"],
-  "services": ["<list of service interfaces/impls>"],
+  "services": [
+    {
+      "name": "<ServiceName>",
+      "interface": "<path to interface file>",
+      "methods": [
+        { "name": "List", "returns": "list", "has_pagination": true, "item_type": "<DomainType>" },
+        { "name": "GetByID", "returns": "single_nullable", "item_type": "<DomainType>" },
+        { "name": "Create", "returns": "single", "item_type": "<DomainType>" },
+        { "name": "Update", "returns": "single", "item_type": "<DomainType>" },
+        { "name": "Delete", "returns": "none" }
+      ]
+    }
+  ],
   "repositories": ["<list of repo interfaces/impls>"],
   "coverage_pct": 0,
   "tests_pass": false
 }
 ```
+
+**`returns` field values:**
+- `"list"` — returns a slice/array + total count → api_developer uses `respondList()`
+- `"single"` — returns a non-null entity → api_developer uses `respondOne()`
+- `"single_nullable"` — returns entity or null (not found) → api_developer uses `respondOne()` with 404 guard
+- `"none"` — returns only error → api_developer uses `respondNoContent()`

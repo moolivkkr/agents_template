@@ -5,6 +5,9 @@ model: sonnet
 category: testing
 input:
   required:
+    - type: api_contracts
+      path: docs/design/phases/{{PHASE}}/specs/api-contracts.md
+      description: "REQUIRED — exact response shapes from api_developer. ALL mock responses in Tier 2 tests MUST match these shapes exactly. This is the single source of truth."
     - type: guidelines
       path: docs/IMPLEMENTATION_GUIDELINES.md
       description: UI stack and testing configuration
@@ -39,8 +42,12 @@ dependencies:
   downstream:
     - e2e_orchestrator
 skill_packs:
+  - ".claude/skills/languages/{{LANG}}.md"
   - ".claude/skills/frameworks/{{UI_FRAMEWORK}}.md"
   - ".claude/skills/core/testing-principles.md"
+  - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
+  - ".claude/skills/testing/{{E2E_TOOL}}.md"
+  - ".claude/skills/testing/{{API_MOCK_TOOL}}.md"
 ---
 
 # Agent: UI Test Agent — {{PROJECT_NAME}}
@@ -68,11 +75,40 @@ Tests all UI screens and components for **{{PROJECT_NAME}}** across three tiers:
 - Assert: renders correctly, handles loading/error/empty states, user interactions trigger correct callbacks
 - Coverage gate: 80% of implemented components
 
-### Tier 2 — Integration Tests (API-mocked)
+### Tier 2 — Integration Tests (API-mocked, contract-derived)
 - Mount full screen components with mocked API responses (`{{API_MOCK_TOOL}}`)
+- **ALL mock response shapes MUST be copied from `api-contracts.md`** — do NOT invent mock data shapes
 - Test complete interaction flows from wireframe specs
 - Assert: data displays correctly from API response, error states handled, navigation triggered correctly
-- Mock handlers defined per wireframe's declared API bindings
+
+**Mock derivation rules (CRITICAL):**
+1. Read `api-contracts.md` for the endpoint being mocked
+2. Copy the EXACT `{ data, error, meta }` envelope shape — including whether `data` is `[]` or `{}`
+3. Fill in realistic sample values that match the declared types
+4. For list endpoints: mock with `data: [...]` (array with sample items) AND test `data: []` (empty array)
+5. For single-resource endpoints: mock with `data: { ... }` (object) AND test `data: null` (not found)
+6. For error responses: mock the EXACT error envelope from `api-contracts.md` error section
+7. **NEVER mock a response shape that differs from `api-contracts.md`** — if the mock shape doesn't match the contract, the test is testing the wrong thing
+
+```
+// ✅ CORRECT — mock shape matches api-contracts.md
+server.use(
+  http.get('/api/v1/resources', () =>
+    HttpResponse.json({
+      data: [{ id: '1', name: 'Test', status: 'active' }],  // array — matches contract
+      error: null,
+      meta: { page: 1, limit: 50, total: 1 }
+    })
+  )
+)
+
+// ❌ WRONG — returns object instead of array, missing envelope
+server.use(
+  http.get('/api/v1/resources', () =>
+    HttpResponse.json({ id: '1', name: 'Test' })  // no envelope, data is object not array
+  )
+)
+```
 
 ### Tier 3 — E2E Tests
 - Run only when a complete user workflow is declared in the phase plan
@@ -82,10 +118,13 @@ Tests all UI screens and components for **{{PROJECT_NAME}}** across three tiers:
 
 ## Required Reading Sequence
 
-1. `docs/design/phases/{{PHASE}}/specs/` — wireframe interaction flows define test scenarios
-2. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — which screens/components to test
-3. `docs/IMPLEMENTATION_GUIDELINES.md` — test configuration and conventions
-4. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing tests not to break
+1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — **READ FIRST** — exact response shapes. ALL Tier 2 mocks must match these shapes.
+2. `docs/design/phases/{{PHASE}}/specs/` — wireframe interaction flows define test scenarios
+3. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — which screens/components to test
+4. `docs/IMPLEMENTATION_GUIDELINES.md` — test configuration and conventions
+5. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing tests not to break
+
+**STOP CONDITION:** If `api-contracts.md` does not exist, do NOT write Tier 2 tests. Report: `⛔ Blocked: api-contracts.md missing — cannot derive mock shapes.`
 
 ## Test Naming Convention
 

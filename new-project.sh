@@ -18,11 +18,10 @@ PARENT_DIR="${2:-$(pwd)}"
 PROJECT_DIR="$PARENT_DIR/$PROJECT_NAME"
 
 if [ -d "$PROJECT_DIR" ]; then
-  echo "Error: $PROJECT_DIR already exists"
-  exit 1
+  echo "Note: $PROJECT_DIR already exists — continuing with scaffold"
+else
+  echo "Creating project: $PROJECT_DIR"
 fi
-
-echo "Creating project: $PROJECT_DIR"
 echo
 
 # Directory scaffold
@@ -82,7 +81,18 @@ cat > "$PROJECT_DIR/requirements/IMPLEMENTATION_GUIDELINES.md" << 'TMPL'
 TMPL
 
 # git init
-cd "$PROJECT_DIR" && git init -q && echo ".claude/agents/generated/" > .gitignore
+# git init + .gitignore (append, don't overwrite)
+cd "$PROJECT_DIR"
+if [ ! -d ".git" ]; then
+  git init -q
+fi
+GITIGNORE_ENTRY=".claude/agents/generated/"
+if [ -f ".gitignore" ]; then
+  # Append only if not already present
+  grep -qxF "$GITIGNORE_ENTRY" .gitignore || echo "$GITIGNORE_ENTRY" >> .gitignore
+else
+  echo "$GITIGNORE_ENTRY" > .gitignore
+fi
 
 echo "✅ Project created: $PROJECT_DIR"
 echo

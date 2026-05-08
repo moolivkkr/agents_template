@@ -18,6 +18,10 @@ output:
 dependencies:
   upstream: [backend_developer, api_developer]
   downstream: []
+skill_packs:
+  - ".claude/skills/languages/{{LANG}}.md"
+  - ".claude/skills/core/security-owasp.md"
+  - ".claude/skills/databases/{{DB_TECH}}.md"
 ---
 
 # Agent: Security Reviewer

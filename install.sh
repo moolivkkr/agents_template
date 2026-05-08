@@ -50,8 +50,22 @@ if [ ! -f "$SETTINGS_DEST" ]; then
   cp "$SETTINGS_SRC" "$SETTINGS_DEST"
   echo "  ✅ settings.json created"
 else
-  echo "  ⚠  settings.json already exists — skipped (merge manually if needed)"
-  echo "     Reference: $SETTINGS_SRC"
+  # Back up existing, then show diff so user knows what changed
+  cp "$SETTINGS_DEST" "$SETTINGS_DEST.bak"
+  echo "  ⚠  settings.json already exists — backed up to settings.json.bak"
+  if command -v diff &>/dev/null; then
+    DIFF_OUTPUT=$(diff "$SETTINGS_DEST" "$SETTINGS_SRC" 2>/dev/null || true)
+    if [ -n "$DIFF_OUTPUT" ]; then
+      echo "     Changes in new version:"
+      echo "$DIFF_OUTPUT" | head -20
+      echo "     Full diff: diff $SETTINGS_DEST $SETTINGS_SRC"
+      echo "     To accept new version: cp $SETTINGS_SRC $SETTINGS_DEST"
+    else
+      echo "     No differences found — already up to date"
+    fi
+  else
+    echo "     Compare: $SETTINGS_SRC vs $SETTINGS_DEST"
+  fi
 fi
 
 echo

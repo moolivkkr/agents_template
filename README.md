@@ -9,16 +9,81 @@ A reusable AI-agent framework for building software products end-to-end with Cla
 You provide requirements. The agents do the rest — from turning a pitch deck into a structured BRD, through implementation waves, to final acceptance testing against every user persona.
 
 ```
-requirements/                  ← your docs go here
-    ├── feature-spec.md        ← user stories, PRD, pitch deck
-    ├── IMPLEMENTATION_GUIDELINES.md  ← optional: tech stack decisions
+requirements/                  ← YOUR INPUT — agents read but never modify this
+    ├── feature-spec.md        ← user stories, PRD, pitch deck (any format)
+    ├── IMPLEMENTATION_GUIDELINES.md  ← optional DRAFT: fill in what you know
     └── test-data/             ← optional: seed data per phase
 
-/startup/init  →  docs/BRD.md + docs/IMPLEMENTATION_GUIDELINES.md
+                ↓ /startup/init reads requirements/, interviews for gaps ↓
+
+docs/                          ← GENERATED OUTPUT — agents write here
+    ├── BRD.md                 ← numbered requirements (FR-*, NFR-*) — always generated, never hand-written
+    └── IMPLEMENTATION_GUIDELINES.md  ← confirmed tech stack — generated from your draft + interview
+
 /startup/plan  →  docs/design/phases/1/specs/  (TRDs + wireframes)
 /startup/develop  →  implement + test + review + gate
 (repeat plan/develop per phase)
 /startup/accept  →  full-product validation against all BRD personas
+```
+
+> **Convention:** `requirements/` is read-only input. `docs/` is generated output. Never write `BRD.md` by hand — always run `/startup/init`. The `IMPLEMENTATION_GUIDELINES.md` in `requirements/` is your optional draft; `/init` produces the authoritative confirmed version in `docs/`.
+
+---
+
+## Core Concepts
+
+The framework has four building blocks. Understanding how they connect is the key to using (and extending) the system.
+
+| Concept | What it is | Where it lives | Example |
+|---------|-----------|----------------|---------|
+| **Command** | User-facing entry point. You invoke these. Each command orchestrates a sequence of agents. | `.claude/commands/*.md` | `/startup/develop`, `/startup/review` |
+| **Pipeline Step** | A numbered step inside a command. Steps run sequentially; some steps run agents in parallel. | Defined inside command `.md` files | Step 4 (Review) inside `/startup/develop` |
+| **Agent** | The worker that does the actual job. Reads inputs, loads skill packs, produces code or reports. | `.claude/agents/core/*.md` (universal) and `.claude/agents/generated/*.md` (project-specific) | `code_reviewer_I`, `api_developer_myapp` |
+| **Skill Pack** | Static knowledge file. Contains idiomatic patterns, conventions, and anti-patterns for a specific technology. Agents load these as context before executing. | `.claude/skills/**/*.md` | `go.md`, `react.md`, `testify.md` |
+
+### How they connect
+
+```
+COMMAND                    PIPELINE STEPS              AGENTS                    SKILL PACKS
+(you invoke)               (inside the command)        (do the work)             (domain knowledge)
+─────────────              ──────────────────          ─────────────             ──────────────────
+/startup/develop    ─┬──→  Step 0 Orient
+                     ├──→  Step 1 Audit          ──→  backend_audit_agent
+                     ├──→  Step 2 Implement      ──→  backend_developer    ←──  go.md, chi.md, postgresql.md
+                     │                           ──→  api_developer        ←──  go.md, chi.md, api-design.md
+                     │                           ──→  ui_developer         ←──  typescript.md, react.md, shadcn.md
+                     ├──→  Step 3 Test           ──→  unit_test_agent      ←──  go.md, testify.md, gomock.md
+                     │                           ──→  integration_test     ←──  go.md, testify.md, postgresql.md
+                     ├──→  Step 3f Optimize      ──→  code_optimizer       ←──  go.md, chi.md, postgresql.md
+                     │                           ──→  ui_code_optimizer    ←──  typescript.md, react.md, shadcn.md
+                     ├──→  Step 4 Review         ──→  code_reviewer_I      ←──  go.md, chi.md
+                     │                           ──→  security_reviewer    ←──  go.md, security-owasp.md
+                     ├──→  Step 5 Acceptance     ──→  acceptance_test_agent←──  go.md, api-design.md
+                     └──→  Step 6 Gate
+
+/startup/review     ─┬──→  Step 1 Style         ──→  code_reviewer_I      ←──  go.md, chi.md
+                     ├──→  Step 2 Architecture   ──→  code_reviewer_II     ←──  go.md, chi.md, postgresql.md
+                     └──→  Step 3 Security       ──→  security_reviewer    ←──  go.md, security-owasp.md
+```
+
+**The flow:** You invoke a **command** → the command runs **pipeline steps** in order → each step spawns **agents** → each agent loads its **skill packs** for technology-specific knowledge → the agent reads code/specs, applies skill pack patterns, and produces output.
+
+**Why skill packs matter:** Without `go.md`, the `code_reviewer_I` agent wouldn't know that `var items []Certificate` (nil slice) serializes to JSON `null` instead of `[]`. Without `testify.md`, the `unit_test_agent` wouldn't know to use `require.NoError` for preconditions and `assert.Equal` for assertions. Skill packs are what make generic agents produce idiomatic, tech-specific output.
+
+### Skill pack loading flow
+
+```
+/startup/init
+  → agent_factory reads IMPLEMENTATION_GUIDELINES
+  → extracts tech profile: { lang: go, framework: chi, db_tech: postgresql, ... }
+  → resolves {{PLACEHOLDER}} in agent templates: ".claude/skills/languages/{{LANG}}.md" → ".claude/skills/languages/go.md"
+  → writes generated agents with resolved skill_packs paths
+
+/startup/develop (later)
+  → spawns backend_developer agent
+  → agent reads skill_packs: [go.md, chi.md, postgresql.md]
+  → skill content becomes part of agent's working context
+  → agent writes Go code using patterns from the skill packs
 ```
 
 ---
@@ -84,6 +149,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup/accept` | Runs full-product acceptance tests after all phases complete |
 | `/startup/test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system) |
 | `/startup/review` | Standalone code review: style + architecture + security |
+| `/startup/optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
 | `/startup/deploy` | Builds, migrates, and deploys to local / staging / prod |
 | `/startup/status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
 
@@ -107,6 +173,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --phase=N         Override phase number (default: auto-detect from gate state)
 --audit_only      Gap report only — no implementation changes
 --test_only       Run tests only — no implementation changes
+--force_gate      Force gate to pass with failures (logged as gate_override in manifest)
 ```
 
 **`/startup/test`**
@@ -123,6 +190,15 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --manual          Generate manual QA test plan
 ```
 
+**`/startup/optimize`**
+```
+--phase=N         Target phase (default: auto-detect latest completed)
+--backend_only    Optimize backend only — skip UI
+--ui_only         Optimize UI only — skip backend
+--dry_run         Show what WOULD change without modifying code
+--aggressive      Include MEDIUM-confidence dead code removal
+```
+
 **`/startup/deploy`**
 ```
 --target=local|staging|prod   (default: local)
@@ -133,37 +209,45 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 ## The SDLC pipeline
 
-`/startup/develop` runs a 7-step pipeline per phase:
+`/startup/develop` runs a multi-step pipeline per phase:
 
 ```
-Step 0  Orient          Detect phase, load previous manifest, start infra
-Step 1  Audit           Gap report: what's missing vs what the specs require
-Step 2  Implement       Wave-based parallel execution (DB → backend → UI)
-Step 3  Test            Unit → Integration → E2E (if workflow unlocked)
-Step 3d Reconcile C     Spec ↔ Implementation (bidirectional)
-Step 3e Reconcile D     Spec ↔ Tests (bidirectional)
-Step 4  Review          Style review → Architecture review + Security (parallel)
-Step 5  Acceptance      Use case + persona level validation with seed data
-Step 6  Gate            9 conditions must pass — writes gate.passed + manifest.json
-Step 6b Document        API docs + README updates (non-blocking, parallel)
-Step 7  Report          Summary of what was built, test results, gate status
+Step 0    Orient           Detect phase, load previous manifest, start infra
+Step 1    Audit            Gap report: what's missing vs what the specs require
+Step 2    Implement        Wave-based execution (DB → backend → contract validation → UI → tests)
+Step 2.5  Contract Valid.  Verify api-contracts.md before UI starts (UI phases only)
+Step 3a   Unit Tests       Unit tests for all new code
+Step 3a.5 Regression       Cross-phase regression check (Phase > 1 only)
+Step 3b   Integration      Service↔DB + API endpoint tests + response shape contract tests
+Step 3c   E2E Tests        Full user workflow tests (if workflow unlocked this phase)
+Step 3d   Reconcile C      Spec ↔ Implementation (bidirectional)
+Step 3e   Reconcile D      Spec ↔ Tests (bidirectional)
+Step 3f   Optimize         Dead code removal + code optimization (backend ∥ UI, mandatory)
+Step 3g   Re-test          Post-optimization test re-run (mandatory safety net)
+Step 4    Review           Style → Architecture + Security + Dependency scan (parallel)
+Step 5    Acceptance       Use case + persona level validation with seed data
+Step 6    Gate             11 conditions must pass — writes gate.passed + manifest.json
+Step 6b   Document         API docs + README updates (non-blocking, parallel)
+Step 7    Report           Summary of what was built, test results, gate status
 ```
 
-### Phase gate — all 9 must pass
+### Phase gate — all 11 must pass
 
 ```
 ✅ Unit tests              all passing
 ✅ Integration tests       all passing
 ✅ E2E tests               all passing (only if phase unlocks a workflow)
-✅ Reconciliation C        no MISSING implementations (spec → impl)
-✅ Reconciliation D        no HIGH-priority untested behaviors (spec → tests)
+✅ Reconciliation C        no MISSING implementations; unspecced items acknowledged
+✅ Reconciliation D        no HIGH-priority untested behaviors
+✅ Code optimization       post-optimization tests pass (CLEAN or PARTIAL accepted)
+✅ UI code optimization    post-optimization tests pass (if frontend enabled)
 ✅ Code review I           no BLOCKING style issues
 ✅ Code review II          no architecture violations
 ✅ Security review         no HIGH severity findings
 ✅ Acceptance tests        all in-scope use cases pass
 ```
 
-If any condition fails: the gate does not write. The blocker is surfaced with the specific file, finding, and how to fix it.
+If any condition fails: the gate does not write. The blocker is surfaced with the specific file, finding, and how to fix it. Use `--force_gate` to override known flakes (logged in manifest as `gate_override`).
 
 ### Bidirectional reconciliation
 
@@ -180,16 +264,19 @@ Forward gaps = blockers. Reverse gaps (invented/unspecced) = flagged for human r
 
 ### Implementation waves
 
-Each phase runs in parallel waves:
+Each phase runs in waves (sequential between waves, parallel within):
 
 ```
-Wave 1  database_agent + migration_agent
-Wave 2  backend_developer + api_developer
-Wave 3  ui_developer  (UI phases only)
-Wave 4  unit_test_agent + integration_test_agent
+Wave 1    database_agent + migration_agent          (parallel)
+Wave 1.5  Migration validation — dry-run UP/DOWN    (sequential gate)
+Wave 2a   backend_developer                         (sequential — api needs service interfaces)
+Wave 2b   api_developer                             (reads backend manifest for return types)
+Wave 2.5  API contract validation                   (UI phases only — blocks Wave 3)
+Wave 3    ui_developer                              (UI phases only — reads api-contracts.md)
+Wave 4    unit_test_agent + integration_test_agent   (parallel)
 ```
 
-Waves are sequential. Tasks within each wave run in parallel.
+**Key dependency:** api_developer reads backend_developer's manifest to know which response helper to use (`RespondList` for list methods, `RespondOne` for single methods). This is why Wave 2 is sequential (2a → 2b), not parallel.
 
 ---
 
@@ -243,9 +330,13 @@ my-project/
 │           └── reports/
 │               ├── unit_tests.md
 │               ├── integration_tests.md
+│               ├── regression_check.md         ← cross-phase regression (Phase > 1)
+│               ├── code_optimization.md        ← backend dead code + optimization
+│               ├── ui_code_optimization.md     ← UI dead code + optimization (UI phases)
 │               ├── code_review_I.md
 │               ├── code_review_II.md
 │               ├── security_review.md
+│               ├── dependency_scan.md          ← CVE/outdated/license scan
 │               ├── acceptance_report.md
 │               └── documentation_update.md
 │
@@ -325,6 +416,14 @@ These are created by `agent_factory` from templates during `/init`:
 
 Each generated agent is pre-loaded with your project's specific language, framework, ORM, test library, and design conventions.
 
+#### Code Optimization
+
+| Agent | Role | Model | Trigger |
+|-------|------|-------|---------|
+| `code_optimizer` | Backend dead code removal + code/performance optimization | sonnet | `/develop` Step 3f (mandatory) |
+| `ui_code_optimizer` | UI dead code removal + bundle size/render optimization | sonnet | `/develop` Step 3f (if frontend enabled) |
+| `dependency_scanner` | Scans dependencies for CVEs, outdated packages, license issues | haiku | `/develop` Step 4 (parallel with review) |
+
 #### Code Review
 
 | Agent | Role | Model |
@@ -382,22 +481,62 @@ Each generated agent is pre-loaded with your project's specific language, framew
 
 ## Skill packs
 
-Skill packs are loaded by generated agents at runtime to apply language- and framework-specific idioms, patterns, and conventions. They're how `code_reviewer_I` knows what "idiomatic Go" means vs "idiomatic Python".
+Skill packs are static knowledge files that agents load as context before executing. They contain idiomatic patterns, code examples, conventions, and anti-patterns for a specific technology. They're how `code_reviewer_I` knows what "idiomatic Go" means vs "idiomatic Python", and how `code_optimizer` knows to check for nil-slice → JSON null bugs in Go but `undefined` → omitted-field bugs in TypeScript.
 
-### Languages
-`go` · `python` · `typescript` · `java` · `rust`
+### Available skill packs (37)
 
-### Frameworks
-**Backend:** `gin` · `echo` · `fastapi` · `django` · `express` · `nestjs`
-**Frontend:** `react` · `nextjs` · `vue`
+| Category | Skill Packs |
+|----------|-------------|
+| **Languages** (5) | `go` · `python` · `typescript` · `java` · `rust` |
+| **Frameworks** (11) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · `express` · `nestjs` · **Frontend:** `react` · `nextjs` · `vue` · `tanstack-query` |
+| **Databases** (6) | `postgres` · `postgresql` · `mysql` · `mongodb` · `redis` · `sqlite` |
+| **Testing** (6) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` |
+| **UI** (2) | `shadcn` · `tailwind` |
+| **Infrastructure** (3) | `docker` · `github-actions` · `kubernetes` |
+| **Core** (4) | `api-design` · `security-owasp` · `testing-principles` · `git-workflow` |
 
-### Databases
-`postgres` · `mysql` · `mongodb` · `redis` · `sqlite`
+### Which agents load which skills
 
-### Infrastructure
-`docker` · `github-actions` · `kubernetes`
+Each agent loads a specific set of skill packs based on what it needs to do:
 
-Missing a skill pack? Add a `.md` file to `~/.claude/skills/<category>/` following the same format. The `agent_factory` will pick it up on the next `/init`.
+| Agent | Skills Loaded | What the skills teach the agent |
+|-------|--------------|--------------------------------|
+| **backend_developer** | `{{LANG}}`, `{{FRAMEWORK}}`, `{{DB_TECH}}` | Language idioms, framework patterns, query patterns, connection pooling |
+| **api_developer** | `{{LANG}}`, `{{FRAMEWORK}}`, `api-design`, `security-owasp` | Handler patterns, REST conventions, OWASP checks, response serialization |
+| **ui_developer** | `{{LANG}}`, `{{UI_FRAMEWORK}}`, `{{STATE_MANAGEMENT}}`, `{{UI_COMPONENTS}}` | Component patterns, hooks, state management, component library usage |
+| **unit_test_agent** | `{{LANG}}`, `{{TEST_FRAMEWORK}}`, `{{MOCK_FRAMEWORK}}`, `testing-principles` | Assert vs require, table-driven tests, mock setup, test isolation |
+| **integration_test_agent** | `{{LANG}}`, `{{DB_TECH}}`, `{{TEST_FRAMEWORK}}`, `testing-principles` | Container setup, DB fixtures, API endpoint testing, tenant isolation |
+| **ui_test_agent** | `{{LANG}}`, `{{UI_FRAMEWORK}}`, `{{TEST_FRAMEWORK}}`, `{{E2E_TOOL}}`, `{{API_MOCK_TOOL}}`, `testing-principles` | Component rendering, E2E browser tests, API mocking, accessible locators |
+| **code_optimizer** | `{{LANG}}`, `{{FRAMEWORK}}`, `{{DB_TECH}}`, `testing-principles` | Dead code tools per language, framework-specific anti-patterns, N+1 query detection |
+| **ui_code_optimizer** | `{{LANG}}`, `{{UI_FRAMEWORK}}`, `{{STATE_MANAGEMENT}}`, `{{UI_COMPONENTS}}`, `testing-principles` | Unused components, render optimization (memo/useMemo), bundle size patterns |
+| **code_reviewer_I** | `{{LANG}}`, `{{FRAMEWORK}}` | Language idioms to enforce, naming conventions, error handling patterns |
+| **code_reviewer_II** | `{{LANG}}`, `{{FRAMEWORK}}`, `{{DB_TECH}}` | Layer boundaries, dependency direction, repository pattern compliance |
+| **security_reviewer** | `{{LANG}}`, `security-owasp`, `{{DB_TECH}}` | Language-specific injection risks, SQL injection, auth patterns, secret handling |
+| **dependency_scanner** | `{{LANG}}`, `security-owasp` | Package manager audit commands, vulnerability triage |
+| **acceptance_test_agent** | `{{LANG}}`, `api-design`, `testing-principles` | API call patterns, persona-based testing, response validation |
+| **e2e_orchestrator** | `{{LANG}}`, `testing-principles` | Test execution commands, workflow test design |
+
+`{{PLACEHOLDER}}` values are resolved from `IMPLEMENTATION_GUIDELINES.md` during `/startup/init` by `agent_factory`.
+
+### Adding a custom skill pack
+
+Create a `.md` file in `~/.claude/skills/<category>/` following the format of any existing skill pack. Then run `/startup/init --update_agents` to regenerate project agents with the new skill.
+
+```bash
+# Example: add a skill pack for Prisma ORM
+cat > ~/.claude/skills/databases/prisma.md << 'EOF'
+# Prisma ORM patterns for TypeScript.
+## Schema definition
+...
+## Query patterns
+...
+## Migration commands
+...
+EOF
+
+# Regenerate agents to pick up the new skill
+/startup/init --update_agents
+```
 
 ---
 
@@ -454,8 +593,8 @@ Providing your own seed data gives you deterministic acceptance tests from day o
 | Tier | Agents | Rationale |
 |------|--------|-----------|
 | **opus** | `architecture_orchestrator`, `backend_developer`, `api_developer`, `ux_designer`, `code_reviewer_II`, `security_reviewer`, `acceptance_test_agent`, `spec_impl_reconciler`, `product_manager` | Deep reasoning: architecture design, complex code generation, security analysis, nuanced acceptance validation |
-| **sonnet** | Everything else (31 agents) | Structured output, document processing, spec generation, reconciliation, code review style |
-| **haiku** | `demo_executor`, `test_runner`, `status` | Lightweight execution, result formatting |
+| **sonnet** | `code_optimizer`, `ui_code_optimizer`, `code_reviewer_I`, all spec/reconciliation/planning agents (33 agents) | Structured output, document processing, spec generation, reconciliation, code review style, optimization |
+| **haiku** | `demo_executor`, `test_runner`, `status`, `dependency_scanner` | Lightweight execution, result formatting, audit tool invocation |
 
 To adjust: edit `~/.claude/settings.json` `agents.opus_agents` array.
 
@@ -574,3 +713,98 @@ requirements/
 ```
 
 `requirements/` is **read-only**. Agents never modify it. All generated output goes to `docs/`, `agent_state/`, and `.claude/agents/generated/`.
+
+---
+
+## User Guide
+
+### Your first project — step by step
+
+```
+1. INSTALL (once)          bash install.sh
+2. CREATE PROJECT          bash new-project.sh my-app ~/development
+3. ADD REQUIREMENTS        Drop specs/stories into my-app/requirements/
+4. INITIALIZE              /startup/init
+5. PLAN PHASE 1            /startup/plan
+6. BUILD PHASE 1           /startup/develop
+7. REPEAT 5-6              For each phase until all features are built
+8. FINAL VALIDATION        /startup/accept
+```
+
+That's it. Everything else is automatic.
+
+### What to run when
+
+| I want to... | Run this |
+|-------------|----------|
+| Start a new project | `bash new-project.sh my-app` then `/startup/init` |
+| Build the next feature set | `/startup/plan` then `/startup/develop` |
+| See where I am | `/startup/status` |
+| Run tests without building | `/startup/test` |
+| Review code quality | `/startup/review` |
+| Clean up and optimize code | `/startup/optimize` |
+| Preview optimizations without changing code | `/startup/optimize --dry_run` |
+| Deploy the app | `/startup/deploy --target=local` |
+| Validate the full product | `/startup/accept` |
+| Resume after a break | `/startup/status` then follow its recommendation |
+| Fix a bug and re-validate | Fix the code, then `/startup/test --phase=N` |
+| Add a feature mid-project | Use `product_manager` agent to update BRD, then `/startup/plan` |
+| Re-do a phase | `rm agent_state/phases/N/gate.passed` then `/startup/develop --phase=N` |
+| Force past a flaky test | `/startup/develop --force_gate` (logged as override) |
+
+### What you DON'T need to do
+
+- **Don't write BRD.md** — `/init` creates it from your requirements
+- **Don't pick which agent to use** — commands select the right agents automatically
+- **Don't manage phases manually** — commands auto-detect the current phase
+- **Don't write test data** — agents generate it (or use yours if you provide it)
+- **Don't configure skill packs** — `agent_factory` assigns them based on your tech stack
+- **Don't worry about context windows** — the framework manages token budgets internally
+
+### How the pipeline protects your code
+
+Every phase goes through 11 quality checks before it can pass:
+
+```
+Your code
+  ↓
+Unit tests                    ← does each function work?
+Integration tests             ← do services + DB work together?
+E2E tests                     ← does the full user workflow work?
+Cross-phase regression        ← did new code break old features?
+Spec ↔ Implementation check   ← is everything from the spec built?
+Spec ↔ Test check             ← is every behavior tested?
+Code optimization             ← dead code removed, code simplified
+Style review                  ← idiomatic, clean, consistent
+Architecture review           ← right patterns, right layers
+Security review               ← no OWASP vulnerabilities
+Acceptance tests              ← works for real users, real scenarios
+  ↓
+Phase gate PASSED ✅
+```
+
+If any check fails, the gate blocks and tells you exactly what to fix.
+
+### Commands at a glance
+
+```
+/startup/init       One-time project setup. Creates BRD + agents from your requirements.
+/startup/plan       Plans the next phase. Creates specs and wireframes.
+/startup/develop    Builds a phase end-to-end. Fully autonomous.
+/startup/test       Runs tests standalone. Many flags for targeting specific tiers.
+/startup/review     Code review: style + architecture + security.
+/startup/optimize   Code cleanup and optimization with before/after comparison.
+/startup/accept     Full-product validation after all phases complete.
+/startup/deploy     Build and deploy to local, staging, or production.
+/startup/status     Where am I? What should I run next?
+```
+
+### Tips
+
+- **Start small.** Your first requirements file can be a single paragraph. `/init` will ask clarifying questions.
+- **Check status often.** `/startup/status` always tells you the next action.
+- **Trust the gate.** If the gate blocks, read the blocker — it tells you the exact file, line, and fix.
+- **Use `--dry_run` for optimize.** See what would change before committing to it.
+- **Commit between phases.** Each phase is a natural commit point.
+- **Provide seed data for predictable tests.** Drop YAML files into `requirements/test-data/` for deterministic acceptance tests.
+- **Add your own skill packs.** Using a framework not in the defaults? Create a `.md` file in `~/.claude/skills/` and re-run `/startup/init --update_agents`.

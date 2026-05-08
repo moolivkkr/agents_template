@@ -20,6 +20,9 @@ output:
     - path: agent_state/e2e/workflows.json
 dependencies:
   upstream: [ui_test_agent, integration_test_agent]
+skill_packs:
+  - ".claude/skills/languages/{{LANG}}.md"
+  - ".claude/skills/core/testing-principles.md"
 ---
 
 # Agent: E2E Orchestrator

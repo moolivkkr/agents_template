@@ -56,11 +56,26 @@
       "specs_vs_impl": "agent_state/reconciliation/phase-{{PHASE}}/specs_vs_impl.md",
       "specs_vs_tests": "agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.md"
     },
+    "optimization": {
+      "backend": {
+        "dead_code": "agent_state/phases/{{PHASE}}/reports/dead_code.md",
+        "optimizations": "agent_state/phases/{{PHASE}}/reports/optimizations.md",
+        "combined": "agent_state/phases/{{PHASE}}/reports/code_optimization.md"
+      },
+      "ui": {
+        "dead_code": "agent_state/phases/{{PHASE}}/reports/ui_dead_code.md",
+        "optimizations": "agent_state/phases/{{PHASE}}/reports/ui_optimizations.md",
+        "combined": "agent_state/phases/{{PHASE}}/reports/ui_code_optimization.md"
+      }
+    },
     "test_results": {
       "unit": "agent_state/phases/{{PHASE}}/reports/unit_tests.md",
       "integration": "agent_state/phases/{{PHASE}}/reports/integration_tests.md",
       "e2e": "agent_state/e2e/results.md",
-      "acceptance": "agent_state/phases/{{PHASE}}/reports/acceptance_report.md"
+      "e2e_workflows": "agent_state/e2e/workflows.json",
+      "acceptance": "agent_state/phases/{{PHASE}}/reports/acceptance_report.md",
+      "regression": "agent_state/phases/{{PHASE}}/reports/regression_check.md",
+      "dependency_scan": "agent_state/phases/{{PHASE}}/reports/dependency_scan.md"
     },
     "seed_data": {
       "user_provided": "requirements/test-data/phase-{{PHASE}}.yaml",
@@ -73,6 +88,13 @@
     "auto_run_tests": true,
     "auto_apply_migrations": true,
     "auto_commit_after_phase": false,
-    "require_confirmation_for_prod_deploy": true
+    "require_confirmation_for_prod_deploy": true,
+    "allow": [
+      "Bash(bash install.sh)",
+      "Read(//^skill_packs:/,/**)"
+    ],
+    "additionalDirectories": [
+      "/Users/kishoremoli/development/startup-agents/.claude/skills/testing"
+    ]
   }
 }
