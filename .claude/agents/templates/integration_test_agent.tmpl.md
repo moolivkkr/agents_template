@@ -43,6 +43,7 @@ quality_gates:
   no_shared_state_between_tests: true
   api_contracts_verified: true
   response_shapes_match_contracts: true
+  cross_tenant_idor_tested: true
 dependencies:
   upstream:
     - backend_developer
@@ -80,6 +81,59 @@ Verifies **{{PROJECT_NAME}}** service↔DB interactions, service↔cache interac
 3. **API Endpoint Tests** — send real HTTP requests to a running test server; verify status codes, payloads, and side effects
 4. **Migration Verification** — run migrations up to current phase against test DB before any tests execute
 5. **Test Isolation** — each test or test suite gets a clean state; use transactions or namespace prefixes
+6. **Cross-Tenant IDOR Tests** — mandatory API-level verification that tenant isolation holds end-to-end
+
+---
+
+## MANDATORY: API-Level Cross-Tenant IDOR Tests
+
+**For every ID-based endpoint (`GET /resources/:id`, `PUT /resources/:id`, `DELETE /resources/:id`), write an API-level cross-tenant IDOR test.**
+
+Unit tests verify the service enforces ownership. Integration tests verify the full HTTP → auth middleware → handler → service → DB chain actually returns 404, not 403, not 200, when a different tenant's token is used.
+
+### Required test structure
+
+```
+// Pseudocode — adapt to {{TEST_FRAMEWORK}}
+
+test APILevel_CrossTenant_<Endpoint>:
+  // Setup — two tenants, each with their own auth token
+  tenant1 = create_tenant_with_token()
+  tenant2 = create_tenant_with_token()
+
+  // Seed — create resource owned by tenant1 (authenticated as tenant1)
+  created_response = POST /api/v1/resources
+    Authorization: Bearer tenant1.token
+    Body: { ... }
+  resource_id = created_response.data.id
+
+  // Act — tenant2 tries to access tenant1's resource
+  response = GET /api/v1/resources/{resource_id}
+    Authorization: Bearer tenant2.token
+
+  // Assert — 404, not 403, not 200
+  assert response.status == 404
+  assert response.body.error.code == "NOT_FOUND"
+  // Specifically NOT 200 (data leak) or 403 (existence leak)
+```
+
+**Why 404 and not 403?**
+
+- `403 Forbidden` reveals: "this resource exists at this ID, but you can't access it" — that IS tenant data leaking across boundaries
+- `404 Not Found` reveals: "no resource found at this ID for your account" — reveals nothing about other tenants
+
+### Standard cross-tenant integration tests to write
+
+For each resource type with ID-based endpoints:
+
+| Test | Method | Caller | Expected | Must NOT return |
+|------|--------|--------|---------|-----------------|
+| `CrossTenantGet` | `GET /:id` | tenant2's token | 404 | 200, 403 |
+| `CrossTenantUpdate` | `PUT /:id` | tenant2's token | 404 | 200, 403 |
+| `CrossTenantDelete` | `DELETE /:id` | tenant2's token | 404 | 204, 403 |
+| `CrossTenantList` | `GET /` | tenant2's token | empty list | items from tenant1 |
+
+---
 
 ## Infrastructure Requirements
 
@@ -105,6 +159,7 @@ tests/integration/repositories/
   - Delete removes record; subsequent read returns not-found
   - List with filters returns correct subset
   - Unique constraint violations return typed domain error
+  - Tenant filter: resource from tenant1 not returned for tenant2 query
 ```
 
 ### 2. Cache Integration Tests
@@ -141,9 +196,20 @@ tests/integration/contracts/
   - Error responses match declared error envelope
   - Empty state: list endpoint with no data returns { "data": [], ... } not { "data": null } or { "data": {} }
   - Pagination: if meta has page/limit/total, verify values are correct numbers
+  - Query params: param names match what api-contracts.md declares
 ```
 
 **Why this matters:** UI components are built against `api-contracts.md` shapes. If the actual API returns `{}` where the contract says `[]`, every UI list component breaks. These tests catch that drift BEFORE the UI is built.
+
+### 5. Cross-Tenant IDOR Tests (MANDATORY)
+
+```
+tests/integration/security/
+  For each ID-based endpoint:
+  - CrossTenant_Get: tenant2's token → tenant1's resource ID → 404
+  - CrossTenant_Mutate: tenant2's token → tenant1's resource ID → 404
+  - CrossTenant_List: tenant2's token → only tenant2's items returned, no cross-contamination
+```
 
 ## Isolation Patterns
 
@@ -171,6 +237,7 @@ On completion, write `agent_state/phases/{{PHASE}}/integration_test_agent/manife
   "db_tech": "{{DB_TECH}}",
   "cache_tech": "{{CACHE_TECH}}",
   "endpoints_tested": ["<METHOD /api/v1/...>"],
+  "cross_tenant_idor_tested": ["<METHOD /api/v1/.../:id>"],
   "bugs_found": []
 }
 ```

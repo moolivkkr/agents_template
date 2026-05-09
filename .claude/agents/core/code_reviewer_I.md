@@ -34,7 +34,59 @@ Reviews code against language conventions, project naming standards, and style r
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design Constraints — naming conventions, patterns
 3. `agent_state/agent_registry.json` — which language skill pack is active
 
-## What to Check
+---
+
+## Security-Adjacent Idiom Checks (BLOCKING — check first)
+
+These patterns look like style issues but are security defects. Flag before any other review.
+
+### A. Auth context extracted but result discarded
+
+The auth extraction is present but the actor/identity result is thrown away. The ok-check passes, but all authorization data (tenantID, userID, roles) is lost.
+
+| Language | Dangerous pattern | Correct pattern |
+|---|---|---|
+| Go | `_, ok := auth.FromContext(ctx)` | `actor, ok := auth.FromContext(ctx)` |
+| TypeScript | `const { } = req.user` (destructuring omits tenantId) | `const actor = req.user; actor.tenantId` |
+| Python | `_ = get_current_user(request)` | `actor = get_current_user(request)` |
+| Java | `authentication.getPrincipal()` result not assigned | `UserDetails user = (UserDetails) authentication.getPrincipal()` |
+
+**Severity: BLOCKING** — this is an IDOR vulnerability, not a style issue. Every handler that discards the actor allows any authenticated user to access any tenant's resources.
+
+### B. Unsafe double-cast / type bypass
+
+Bypasses all type safety to force a value into a target type without runtime verification.
+
+| Language | Dangerous pattern | Why dangerous |
+|---|---|---|
+| TypeScript | `value as unknown as TargetType` | Bypasses type system entirely; runtime type unchecked |
+| TypeScript | `value!.property` on API response | API can return null; this hides the crash |
+| Go | Bare type assertion `v := x.(ConcreteType)` | Panics if type differs; use comma-ok form |
+| Python | Direct `cast()` on untrusted data | Lies to type checker; no runtime check |
+
+**Severity: BLOCKING** in production code paths on untrusted data. MEDIUM if used on trusted internal data.
+
+### C. Raw error messages in HTTP responses
+
+Internal error details (database errors, panic messages, file paths, function names) must never appear in API responses. Only static strings or domain error codes may be returned.
+
+| Language | Dangerous pattern | Correct pattern |
+|---|---|---|
+| Go | `respond.Error(w, 500, err.Error())` | `respond.Error(w, 500, "INTERNAL_ERROR", "operation failed")` |
+| TypeScript/Express | `res.json({ error: err.message })` | `res.json({ error: "INTERNAL_ERROR" })` |
+| Python/FastAPI | `raise HTTPException(detail=str(e))` | `raise HTTPException(detail="operation failed")` |
+
+**Severity: BLOCKING** — leaks implementation details, aids attackers in crafting targeted exploits.
+
+### D. Placeholder values in privileged actions
+
+Any approval, rejection, escalation, or privilege-granting call that uses a hardcoded ID, empty string, or development placeholder.
+
+**Severity: BLOCKING** — privileged action called on wrong resource.
+
+---
+
+## Standard Style Checks
 
 - **Language idioms** — patterns from skill pack (e.g. error handling, context propagation, async patterns)
 - **Naming conventions** — consistent with IMPLEMENTATION_GUIDELINES and skill pack rules
@@ -43,6 +95,8 @@ Reviews code against language conventions, project naming standards, and style r
 - **Dead code** — unused variables, unreachable branches, commented-out code blocks
 - **Comments** — missing where logic is non-obvious; excessive where self-evident
 - **Magic values** — raw strings/numbers that should be named constants
+
+---
 
 ## Severity Levels
 - `BLOCKING` — must fix before phase gate passes
@@ -57,7 +111,11 @@ Reviews code against language conventions, project naming standards, and style r
 ## Summary
 PASS | N BLOCKING / N WARNING / N INFO
 
-## Issues
+## Security-Adjacent Issues (check first)
+| File | Line | Severity | Pattern | Recommendation |
+|------|------|----------|---------|----------------|
+
+## Style Issues
 | File | Line | Severity | Issue | Recommendation |
 |------|------|----------|-------|----------------|
 

@@ -13,11 +13,15 @@ arguments:
     required: false
     default: false
     description: "Run architecture review only"
+  - name: isolation_only
+    required: false
+    default: false
+    description: "Run tenant isolation verification only"
 ---
 
 # /review — Code Review
 
-Runs the three-layer review pipeline: style/idioms → architecture compliance → security.
+Runs the four-layer review pipeline: style/idioms → architecture compliance → tenant isolation → security.
 
 ---
 
@@ -47,6 +51,11 @@ Load context:
 **Reads:** Active language skill pack (`.claude/skills/languages/{{LANG}}.md`)
 
 Checks:
+- **Security-adjacent idioms (checked first, BLOCKING):**
+  - Auth context extracted but actor discarded (`_, ok` pattern; result thrown away)
+  - Unsafe double-cast (`as unknown as` in TypeScript; bare type assertion without comma-ok in Go)
+  - Raw error messages (`err.Error()`, `exception.message`) in HTTP responses
+  - Placeholder values in privileged actions (approve, reject)
 - Language idioms and conventions from skill pack
 - Naming conventions (from IMPLEMENTATION_GUIDELINES)
 - Error handling patterns
@@ -66,6 +75,11 @@ Writes: `agent_state/review/code_review_I.md`
 **Reads:** `docs/IMPLEMENTATION_GUIDELINES.md`, previous `code_review_I.md`
 
 Checks:
+- **Authorization chain integrity (checked first, VIOLATION):**
+  - Every service method with resource ID has tenantID in signature
+  - tenantID forwarded from handler through service into every data access call
+  - In-memory stores for multi-tenant data have ownership check on every read
+  - In-memory stores have concurrency protection (mutex/lock)
 - Repository pattern respected (no direct DB in handlers)
 - API versioning convention followed
 - Service layer has no framework-specific types
@@ -77,19 +91,45 @@ Writes: `agent_state/review/code_review_II.md`
 
 ---
 
+## Step 2.5 — Tenant Isolation Verification (`tenant_isolation_verifier`)
+
+**Agent:** `tenant_isolation_verifier`
+**Runs:** In parallel with Step 2, or immediately after if sequential
+
+This is a single-purpose mechanical tracer. For every route that accepts a resource ID parameter:
+
+1. Confirms auth context extraction result is NOT discarded
+2. Traces tenantID from auth context into every service call
+3. Traces tenantID from service signature into every data access call
+4. Confirms data access WHERE clause includes ownership predicate
+5. For in-memory stores: confirms ownership check before returning data
+
+Produces a per-route PASS/FAIL table.
+
+**CRITICAL findings block the phase gate immediately.** Do not proceed to Step 3 if any route fails.
+
+Writes: `agent_state/review/tenant_isolation.md`
+
+---
+
 ## Step 3 — Security (`security_reviewer`)
 
 **Agent:** `security_reviewer`
-**Reads:** `.claude/skills/core/security-owasp.md`, IMPLEMENTATION_GUIDELINES
+**Reads:** `.claude/skills/core/security-owasp.md`, IMPLEMENTATION_GUIDELINES, `agent_state/review/tenant_isolation.md`
 
-Checks (OWASP Top 10 + project-specific):
+Checks (adversarial property verification + OWASP Top 10):
+- **IDOR chain trace** — for every ID-based route, tenantID flows from auth context through every data access (references tenant_isolation.md)
+- **In-memory store audit** — multi-tenant stores have ownership check and concurrency protection
+- **Response leakage** — no `err.Error()` or internal details in API error responses
+- **Frontend/backend limit drift** — query param names and value ranges match between frontend client and backend handler
+- **Unsafe casts** — `as unknown as` (TypeScript), unguarded type assertions
+- **Query validation completeness** — if project has SQL builder: allowlist wired into validation, UNION/INTO/RETURNING in blocklist
 - Input validation at all API boundaries
-- Parameterized queries (no string concatenation with user input)
-- Auth checks on all protected routes
-- Secrets not hardcoded
-- Dependency vulnerabilities (flag any known CVEs in use)
-- CORS policy correct
-- JWT validation complete (expiry, signature, claims)
+- Auth checks on all protected routes; token validated (expiry + signature + claims)
+- No secrets in code; PII not logged
+- CORS policy explicitly configured; not wildcard
+- CSRF protection on state-changing endpoints
+- Rate limiting on auth endpoints
 
 Severity: HIGH (blocking), MEDIUM (should fix), LOW (informational)
 
@@ -104,6 +144,7 @@ Code Review Results
 
   Style & Idioms:       PASS / N warnings / N blocking
   Architecture:         PASS / N violations
+  Tenant Isolation:     PASS / N CRITICAL (gate blocked if any)
   Security:             PASS / N HIGH / N MEDIUM / N LOW
 
   Blocking issues (must fix before merge):
@@ -115,7 +156,12 @@ Code Review Results
   Reports:
     agent_state/review/code_review_I.md
     agent_state/review/code_review_II.md
+    agent_state/review/tenant_isolation.md
     agent_state/review/security_review.md
 ```
 
-HIGH security findings and BLOCKING style issues must be resolved before `/develop` gate can pass or before merging.
+**Gate policy:**
+- CRITICAL tenant isolation findings → phase gate BLOCKED immediately; fix before proceeding
+- HIGH security findings → phase gate BLOCKED; must fix before merge
+- BLOCKING style issues → phase gate BLOCKED; must fix before merge
+- VIOLATION architecture findings → phase gate BLOCKED; must fix before merge

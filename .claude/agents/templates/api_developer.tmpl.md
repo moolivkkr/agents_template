@@ -78,6 +78,65 @@ Implements API handlers, routing, middleware, and serialization for **{{PROJECT_
 
 ---
 
+## ⛔ FORBIDDEN Patterns (read before writing any handler code)
+
+### FORBIDDEN 1 — Auth context extracted but actor discarded
+
+```
+// ❌ FORBIDDEN — actor is thrown away; tenantID is lost; this is an IDOR vulnerability
+_, ok := authFromContext(ctx)          // Go: _ discards the actor
+const { } = req.user                   // TypeScript: destructuring omits tenantId
+_ = getCurrentUser(request)            // Python: result ignored
+
+// ✅ REQUIRED — actor captured and used
+actor, ok := authFromContext(ctx)      // Go
+const actor = req.user                 // TypeScript
+actor = getCurrentUser(request)        // Python
+
+// Then forward tenantID to every service call:
+result, err = service.GetResource(ctx, actor.TenantID, resourceID)
+```
+
+The pattern `_, ok` (or equivalent) is the most common source of IDOR in multi-tenant APIs. The auth check passes (user is authenticated), but the ownership data is discarded, allowing any user to access any tenant's resources.
+
+### FORBIDDEN 2 — Raw error messages in HTTP responses
+
+```
+// ❌ FORBIDDEN — leaks internal implementation details to callers
+respondError(w, 500, err.Error())                    // Go
+res.json({ error: err.message })                     // TypeScript/Express
+raise HTTPException(detail=str(e))                   // Python/FastAPI
+
+// ✅ REQUIRED — static message; implementation detail stays server-side
+respondError(w, 500, "INTERNAL_ERROR", "operation failed")
+res.json({ error: { code: "INTERNAL_ERROR", message: "operation failed" } })
+raise HTTPException(detail="operation failed")
+```
+
+Database errors, file paths, function names, stack frames, and SQL must NEVER appear in API responses.
+
+### FORBIDDEN 3 — Conditional fields based on request flags
+
+```
+// ❌ FORBIDDEN — conditional field inclusion based on request params
+resp := map[string]any{"results": results}
+if req.Explain {
+  resp["sql"] = result.SQL   // adds SQL to response when user requests debug info
+}
+
+// ✅ REQUIRED — always include all declared fields
+resp := map[string]any{
+  "results": results,
+  "sql": "",  // always present; empty string if not in explain mode
+}
+```
+
+Conditional fields break TypeScript types, cause frontend null-checks, and indicate an API design issue. If a field should be optional, declare it as `field | null` and always include it.
+
+**Exception:** If the field contains sensitive data (e.g., generated SQL from an NLP engine) that should ONLY appear in an explicit debug mode, document the decision explicitly and ensure the debug mode itself requires elevated authorization.
+
+---
+
 ## Core Responsibilities
 
 1. **Route Registration** — all routes under `/api/v1/`; group by resource
@@ -102,7 +161,7 @@ Implements API handlers, routing, middleware, and serialization for **{{PROJECT_
 - **No direct DB access** — handlers call services only; services own DB interaction
 - **Idempotency** — PUT and DELETE endpoints must be idempotent
 - **Pagination** — list endpoints support `?page=&limit=` (default limit: 50, max: 200)
-- **Auth** — every non-public route must validate `{{AUTH_METHOD}}` before handler logic
+- **Auth** — every non-public route must validate `{{AUTH_METHOD}}` before handler logic; actor MUST be captured and used
 - **Content-Type** — responses always `application/json`
 - **CORS** — configured from `IMPLEMENTATION_GUIDELINES.md`; not hardcoded in handlers
 
@@ -121,8 +180,8 @@ type ApiResponse {
 }
 
 type ApiError {
-  code:    string     // e.g. "NOT_FOUND", "VALIDATION_ERROR"
-  message: string
+  code:    string     // e.g. "NOT_FOUND", "VALIDATION_ERROR" — NEVER internal error text
+  message: string     // NEVER err.Error() or exception.message
   details: any[]     // field-level errors for 422
 }
 
@@ -150,25 +209,28 @@ respondNoContent()
 
 respondError(statusCode, code, message, details?)
   → { "data": null, "error": { "code": "...", "message": "...", "details": [...] }, "meta": null }
+  → CRITICAL: "message" must be a static string — never err.Error() or exception.message
 ```
 
 ### Step 2 — Handler pattern (EVERY handler follows this)
 
 ```
 func handleListResources(request):
-  // 1. Validate input
-  // 2. Call service: items, total, err = service.ListResources(ctx, filters, page, limit)
-  // 3. Map to DTOs if needed (don't expose internal models directly)
-  // 4. Return: respondList(items, { page, limit, total })
-  //    ↑ respondList guarantees items is [] not null
+  // 1. Extract auth context — MUST capture actor, not discard
+  actor = authFromContext(request) or return 401
+  // 2. Validate input
+  // 3. Call service with tenantID: items, total, err = service.ListResources(ctx, actor.TenantID, filters, page, limit)
+  // 4. Map to DTOs if needed (don't expose internal models directly)
+  // 5. Return: respondList(items, { page, limit, total })
 
 func handleGetResource(request):
-  // 1. Validate input
-  // 2. Call service: resource, err = service.GetResource(ctx, id)
-  // 3. If not found: respondError(404, "NOT_FOUND", "Resource not found")
-  // 4. Map to DTO
-  // 5. Return: respondOne(resource)
-  //    ↑ respondOne guarantees resource is {} not []
+  // 1. Extract auth context — MUST capture actor, not discard
+  actor = authFromContext(request) or return 401
+  // 2. Validate input
+  // 3. Call service with tenantID: resource, err = service.GetResource(ctx, actor.TenantID, id)
+  // 4. If not found (including cross-tenant mismatch): respondError(404, "NOT_FOUND", "Resource not found")
+  // 5. Map to DTO
+  // 6. Return: respondOne(resource)
 ```
 
 ### Step 3 — Nil/empty guard rules
@@ -228,16 +290,12 @@ Format — one entry per endpoint:
 **Response 200:**
 ```json
 {
-  "data": [                           // ← ARRAY (list endpoint)
+  "data": [
     {
       "id": "string (UUID)",
       "name": "string",
       "status": "string (enum: active|inactive)",
-      "created_at": "string (ISO 8601)",
-      "owner": {                      // ← nested objects fully expanded
-        "id": "string (UUID)",
-        "email": "string"
-      }
+      "created_at": "string (ISO 8601)"
     }
   ],
   "error": null,
@@ -248,34 +306,15 @@ Format — one entry per endpoint:
 **Empty response:** `{ "data": [], "error": null, "meta": { "page": 1, "limit": 50, "total": 0 } }`
 
 **Errors:** 401 Unauthorized, 403 Forbidden
-
----
-
-## GET /api/v1/resources/:id
-
-**Response 200:**
-```json
-{
-  "data": {                           // ← OBJECT (single-resource endpoint)
-    "id": "string (UUID)",
-    "name": "string",
-    ...
-  },
-  "error": null,
-  "meta": null
-}
-```
-
-**Not found:** `{ "data": null, "error": { "code": "NOT_FOUND", "message": "Resource not found" }, "meta": null }` (404)
 ```
 
 **Contract rules:**
 - Every endpoint implemented this phase MUST appear in this file
-- `data` shape must match EXACTLY what the handler serializes — run a sample request to verify if needed
+- Query param names in contract MUST exactly match what the backend reads (`r.URL.Query().Get("limit")` not `r.URL.Query().Get("n")`)
+- `data` shape must match EXACTLY what the handler serializes
 - List endpoints: `data` is ALWAYS `[]` (array), even when empty — NEVER `{}`, `null`, or omitted
 - Single-resource endpoints: `data` is ALWAYS `{}` (object) or `null` — NEVER `[{...}]`
-- All fields include explicit types: `string`, `number`, `boolean`, `string (ISO 8601)`, `string (UUID)`, `string (enum: a|b|c)`, `array<type>`, `type | null`
-- Nested objects fully expanded — no `"field": "object"` without showing the inner shape
+- All fields include explicit types
 
 ## Iteration Rules
 

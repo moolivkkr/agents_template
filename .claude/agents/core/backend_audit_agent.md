@@ -35,13 +35,60 @@ First step in `/develop`. Scans the current codebase against phase specs and pro
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what already exists
 4. `docs/IMPLEMENTATION_GUIDELINES.md` — where code should live (component inventory)
 
-## What to Audit
+---
+
+## Pre-Implementation Security Gaps (scan specs BEFORE implementation starts)
+
+**Why scan specs?** If service interface designs have security gaps when the implementation agent reads them, the implementation agent will faithfully implement a vulnerable interface. Catching IDOR-susceptible interface designs in the spec prevents the implementation agent from baking them in — which is much cheaper than finding and fixing them in review.
+
+For each service interface defined in the specs:
+
+### A. ID-based lookups missing tenantID
+
+Scan all service interface method signatures in the spec for:
+
+```
+// IDOR-susceptible — any authenticated user can call this with any ID
+GetResource(ctx, resourceID) → (Resource, error)
+ListResourcesForUser(ctx, userID) → ([]Resource, error)
+DeleteItem(ctx, itemID) → error
+
+// Correct — tenantID enforces ownership at the interface level
+GetResource(ctx, tenantID, resourceID) → (Resource, error)
+ListResources(ctx, tenantID, filters) → ([]Resource, error)
+DeleteItem(ctx, tenantID, itemID) → error
+```
+
+Flag every method that accepts a resource ID but not a tenantID. These must be corrected in the spec before implementation begins.
+
+### B. In-memory stores for multi-tenant data
+
+Scan specs for any in-memory data structures (maps, dicts, caches, slices) intended to hold data for multiple tenants.
+
+Flag any in-memory store that:
+- Lacks explicit tenantID as part of the key or stored value
+- Is described without concurrent access handling
+- Will accumulate data across requests without cleanup
+
+Document: "This store requires ownership check on every read and concurrency protection — add to implementation note."
+
+### C. Auth context extracted but not forwarded
+
+Scan handler pseudocode or sequence diagrams in specs for auth extraction patterns where the result is used only for authentication (is the user logged in?) but not for authorization (which tenant's data can they see?).
+
+Flag: "Handler extracts auth context but does not forward tenantID to service call — spec must show tenantID flow."
+
+---
+
+## Standard Gap Analysis
 
 - **Missing implementations** — spec defines interface X, no implementation found
 - **Incomplete implementations** — function exists but is stubbed/TODO
 - **Missing tests** — implementation exists but no test file found
 - **Broken items** — compile errors, import cycles, obvious runtime issues
 - **Migration gaps** — spec requires schema change, no migration file found
+
+---
 
 ## Output: `agent_state/phases/N/audit_report.md`
 
@@ -50,6 +97,12 @@ First step in `/develop`. Scans the current codebase against phase specs and pro
 
 ## Carried Forward Issues (from Phase N-1 manifest)
 [Issues from carried_forward[] — MUST appear here even if apparently resolved]
+
+## Pre-Implementation Security Gaps (fix in specs before implementation starts)
+| Interface/Method | Gap Type | Description | Required Fix |
+|---|---|---|---|
+| GetResource(ctx, id) | IDOR-susceptible | Missing tenantID parameter | Add tenantID as second param |
+| store map[uuid]*Resource | In-memory multi-tenant | No ownership check described | Add tenantID to key or value + add ownership check note |
 
 ## Gap Analysis
 | Component | Expected (from spec) | Found (in codebase) | Gap |
@@ -68,5 +121,5 @@ First step in `/develop`. Scans the current codebase against phase specs and pro
 - [ ] <schema change> — required by spec, no migration file found
 
 ## Recommended Implementation Order
-[Ordered list respecting wave structure from PHASE_PLAN.md]
+[Ordered list respecting wave structure from PHASE_PLAN.md, security gaps addressed first]
 ```

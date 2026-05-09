@@ -72,6 +72,57 @@ Writes comprehensive unit tests for all business logic in **{{PROJECT_NAME}}** u
 3. **Mock External Dependencies** — use `{{MOCK_FRAMEWORK}}` to mock repositories, external clients, and infrastructure interfaces; never hit real DB or network
 4. **Edge Cases** — null/empty inputs, boundary values, concurrent access (where applicable)
 5. **Coverage Gate** — run coverage report; phase cannot advance below 80%
+6. **Cross-Tenant IDOR Tests** — mandatory for every service method that accepts (tenantID, resourceID)
+
+---
+
+## MANDATORY: Cross-Tenant IDOR Test Pattern
+
+**For every service method with the signature `Method(ctx, tenantID, resourceID, ...) → (T, error)`, you MUST write a cross-tenant test.**
+
+This is non-negotiable. IDOR vulnerabilities (any authenticated user accessing any tenant's data) must be caught at the unit test level, not discovered in production.
+
+### Required test structure
+
+```
+// Pseudocode — adapt to {{TEST_FRAMEWORK}} + {{MOCK_FRAMEWORK}}
+
+test CrossTenant_<MethodName>:
+  // Setup — two tenants, resource owned by tenant1
+  tenant1_id = generate_id()
+  tenant2_id = generate_id()
+  resource = create_resource_fixture(tenant_id=tenant1_id)
+
+  // Mock: return the resource when looked up (regardless of tenant, to test service-level enforcement)
+  mock_repo.FindByID(any_tenant_id, resource.id) → return resource
+
+  // Act — tenant2 attempts to access tenant1's resource
+  result, err = svc.GetResource(ctx, tenant2_id, resource.id)
+
+  // Assert — must be NOT FOUND, not FORBIDDEN
+  assert err == ErrNotFound   // NOT ErrForbidden — existence must not leak
+  assert result == nil
+```
+
+**Why NOT_FOUND and not FORBIDDEN?**
+
+- `403 Forbidden` tells the attacker: "this resource exists, you just don't own it" — that IS an information leak
+- `404 Not Found` reveals nothing about cross-tenant existence
+
+**Important mock note:** Some implementations look up the resource and then check ownership. If the mock only returns data for the correct tenant, you can't distinguish "service checked ownership" from "mock didn't return data." Set the mock to return the resource unconditionally so that any ownership check is done by the service code under test, not by the mock.
+
+### Standard cross-tenant test cases to write
+
+For each service that manages resources across tenants:
+
+| Test | tenantID | resourceID | Expected |
+|------|----------|------------|---------|
+| `CrossTenant_Get_OtherTenantResource` | tenant2 | tenant1's resource | ErrNotFound |
+| `CrossTenant_Update_OtherTenantResource` | tenant2 | tenant1's resource | ErrNotFound |
+| `CrossTenant_Delete_OtherTenantResource` | tenant2 | tenant1's resource | ErrNotFound |
+| `CrossTenant_List_OnlyOwnTenant` | tenant1 | — | only tenant1 results |
+
+---
 
 ## Required Reading Sequence
 
@@ -90,6 +141,7 @@ test_<FunctionName>:
     - name: "domain error — entity not found"
     - name: "boundary — empty collection"
     - name: "boundary — maximum input size"
+    - name: "cross-tenant — other tenant's resource → ErrNotFound"  ← REQUIRED for ID-based methods
 ```
 
 ### Mock Rules
@@ -97,6 +149,7 @@ test_<FunctionName>:
 - One mock per external dependency; reuse across test files in the same package
 - Verify mock expectations are satisfied (call count, argument matching)
 - Reset mock state between table-driven test cases
+- For IDOR tests: configure mock to return data regardless of tenantID so service-level ownership check is tested
 
 ### Test File Layout
 ```
@@ -139,6 +192,7 @@ On completion, write `agent_state/phases/{{PHASE}}/unit_test_agent/manifest.json
   "mock_files": ["<list of mock files>"],
   "coverage_pct": 0,
   "tests_pass": false,
-  "gate_passed": false
+  "gate_passed": false,
+  "cross_tenant_tests_written": ["<list of methods with IDOR tests>"]
 }
 ```
