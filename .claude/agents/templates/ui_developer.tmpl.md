@@ -64,6 +64,7 @@ skill_packs:
   - ".claude/skills/ui/loading-states.md"
   - ".claude/skills/ui/component-composition.md"
   - ".claude/skills/ui/api-integration-patterns.md"
+  - ".claude/skills/ui/type-generation-protocol.md"
 ---
 
 # Agent: UI Developer — {{PROJECT_NAME}}
@@ -81,6 +82,15 @@ Implements professional-quality UI screens from wireframe specs for **{{PROJECT_
 | Build Tool | {{BUILD_TOOL}} |
 | Language | {{LANG}} |
 | Project | {{PROJECT_NAME}} |
+
+---
+
+### Type Safety Protocol
+- Import ALL API response types from `types/api.ts` (generated from data-contracts.md)
+- NEVER define response types inline in components
+- NEVER use `any` or `unknown` for API response data
+- If a type doesn't exist in types/api.ts, the endpoint is not contracted — BLOCK and report
+- See `.claude/skills/ui/type-generation-protocol.md` for full protocol details
 
 ---
 

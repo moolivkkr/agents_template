@@ -116,6 +116,81 @@ server.use(
 - Test: happy path of each workflow end-to-end, critical error paths (network failure, 401)
 - Requires full stack running (backend + DB + UI)
 
+### Tier 4 — Responsive Regression Tests (MANDATORY for all UI components)
+
+Every component with responsive behavior must be tested at 3 viewports:
+- Mobile: 375px width (iPhone SE)
+- Tablet: 768px width (iPad)
+- Desktop: 1280px width
+
+**Checks per viewport:**
+1. No horizontal overflow (document.body.scrollWidth <= viewport width)
+2. Touch targets >= 44x44px on mobile (measure computed button/link sizes)
+3. Text doesn't truncate unless intentionally designed with ellipsis
+4. Grid/flex layouts reflow correctly (1-column on mobile, multi on desktop)
+5. Navigation is accessible (hamburger menu on mobile, sidebar on desktop)
+
+**Implementation:**
+```typescript
+const viewports = [
+  { name: 'mobile', width: 375, height: 812 },
+  { name: 'tablet', width: 768, height: 1024 },
+  { name: 'desktop', width: 1280, height: 800 },
+];
+
+for (const vp of viewports) {
+  test(`renders correctly at ${vp.name} (${vp.width}px)`, async ({ page }) => {
+    await page.setViewportSize({ width: vp.width, height: vp.height });
+    await page.goto('/path');
+    // No horizontal overflow
+    const bodyWidth = await page.evaluate(() => document.body.scrollWidth);
+    expect(bodyWidth).toBeLessThanOrEqual(vp.width);
+    // Touch targets on mobile
+    if (vp.name === 'mobile') {
+      const buttons = await page.locator('button, a, [role="button"]').all();
+      for (const btn of buttons) {
+        const box = await btn.boundingBox();
+        if (box) expect(Math.min(box.width, box.height)).toBeGreaterThanOrEqual(44);
+      }
+    }
+  });
+}
+```
+
+Responsive tests are NOT optional. Skip only if component has no visual output (utility hooks, context providers).
+
+### Core Web Vitals — Layout Shift Detection
+
+After every page navigation or data load, measure Cumulative Layout Shift:
+
+```typescript
+test('page has acceptable CLS', async ({ page }) => {
+  // Navigate and wait for data
+  await page.goto('/users');
+  await page.waitForLoadState('networkidle');
+
+  // Measure CLS
+  const cls = await page.evaluate(() => {
+    return new Promise<number>((resolve) => {
+      let clsValue = 0;
+      const observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (!(entry as any).hadRecentInput) {
+            clsValue += (entry as any).value;
+          }
+        }
+      });
+      observer.observe({ type: 'layout-shift', buffered: true });
+      setTimeout(() => { observer.disconnect(); resolve(clsValue); }, 3000);
+    });
+  });
+
+  expect(cls).toBeLessThan(0.1); // Good CLS score
+});
+```
+
+CLS > 0.1 = WARNING, CLS > 0.25 = BLOCKING (skeleton doesn't match content layout).
+
 ## Required Reading Sequence
 
 1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — **READ FIRST** — exact response shapes. ALL Tier 2 mocks must match these shapes.

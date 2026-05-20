@@ -187,6 +187,42 @@ After all use cases: verify every persona defined in BRD §Personas has been exe
 
 ---
 
+### Browser-Based Acceptance (UI Phases)
+
+When the phase includes UI screens, acceptance tests MUST include browser-based verification using Playwright:
+
+1. **Navigate to each screen** specified in UI specs
+2. **Verify rendering** — page loads without JS errors, key elements visible
+3. **Execute user flows** — fill forms, click buttons, navigate between pages
+4. **Verify state transitions** — loading → populated, empty state when no data, error state on API failure
+5. **Cross-persona flows** — login as different personas, verify role-based UI differences
+
+```typescript
+// Example: acceptance test for User List screen
+test('Admin can view and manage users', async ({ page }) => {
+  // Login as admin persona
+  await page.goto('/login');
+  await page.fill('[name=email]', admin.email);
+  await page.fill('[name=password]', admin.password);
+  await page.click('button[type=submit]');
+
+  // Navigate to user list
+  await page.goto('/users');
+  await page.waitForSelector('[data-testid="user-table"]');
+
+  // Verify data renders (not empty, not error)
+  const rows = await page.locator('tr[data-testid="user-row"]').count();
+  expect(rows).toBeGreaterThan(0);
+
+  // Verify admin actions visible
+  await expect(page.locator('button:has-text("Add User")')).toBeVisible();
+});
+```
+
+Browser-based tests complement API-based acceptance tests — they catch UI rendering bugs that curl-based tests cannot.
+
+---
+
 ## Step 4 — Iteration
 
 On acceptance failure:

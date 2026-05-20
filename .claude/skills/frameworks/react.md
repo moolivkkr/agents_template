@@ -65,6 +65,36 @@ const { register, handleSubmit, formState: { errors } } = useForm({
 - `aria-label` on icon-only buttons; `aria-live` on dynamic status regions
 - Color: never convey meaning by color alone (WCAG 1.4.1)
 
+## Accessibility Enforcement (MANDATORY)
+
+### Required ESLint Plugin
+Every React project MUST include `eslint-plugin-jsx-a11y` in its ESLint config:
+
+```json
+{
+  "extends": ["plugin:jsx-a11y/recommended"],
+  "rules": {
+    "jsx-a11y/anchor-is-valid": "error",
+    "jsx-a11y/click-events-have-key-events": "error",
+    "jsx-a11y/no-static-element-interactions": "error",
+    "jsx-a11y/img-redundant-alt": "error",
+    "jsx-a11y/label-has-associated-control": "error",
+    "jsx-a11y/heading-has-content": "error"
+  }
+}
+```
+
+### Mandatory Patterns
+- Icon-only buttons MUST have `aria-label`: `<Button aria-label="Delete item"><Trash2 /></Button>`
+- All form inputs MUST have associated `<Label>`: `<Label htmlFor="email">Email</Label><Input id="email" />`
+- Heading hierarchy NEVER skips levels (h1 → h2 → h3, never h1 → h3)
+- Images MUST have `alt` text (decorative images: `alt=""`)
+- Modals/dialogs MUST trap focus and return focus on close
+- Lists of interactive items MUST be keyboard navigable (arrow keys)
+
+### Review Gate
+`code_reviewer_I` MUST flag missing accessibility attributes as BLOCKING, not WARNING.
+
 ## Rules
 - Functional components only — no class components
 - `React.memo` only with measured performance problem — don't pre-optimize
