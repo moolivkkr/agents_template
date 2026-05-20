@@ -107,7 +107,84 @@ Build the COMPLETE feature taxonomy for the product category. Every capability t
 [Continue for ALL capability areas]
 ```
 
-### 2b — Vendor × Capability Matrix
+### 2b — Capability Groups (CRITICAL — must be exhaustive)
+
+Group capabilities into logical clusters that map to product modules. Each group becomes a potential product pillar:
+
+```markdown
+## Capability Groups
+
+### Group 1: Endpoint Protection
+  Capabilities: [1.1.1, 1.1.2, 1.1.3, 1.1.4]
+  What it does: Prevent and detect threats on endpoints
+  Who needs it: Every customer (table stakes)
+  Buy vs Build: Most vendors have this — differentiation is in accuracy
+
+### Group 2: Network Visibility
+  Capabilities: [1.2.1, 1.2.2, 1.2.3]
+  What it does: Detect threats in network traffic
+  Who needs it: Mid-market+ with on-prem infrastructure
+  Buy vs Build: Consider integrating with existing NDR vendors
+
+### Group 3: Investigation & Hunting
+  Capabilities: [2.1, 2.2, 2.3]
+  What it does: Enable analysts to investigate and hunt threats
+  Who needs it: Organizations with SOC teams
+  Buy vs Build: Core differentiator — UX and speed matter most here
+
+### Group 4: Automation & Response
+  Capabilities: [2.4, ...]
+  What it does: Automate containment and remediation
+  Who needs it: Teams with limited staff (force multiplier)
+  Buy vs Build: Build core, integrate with SOAR vendors
+
+[Continue for ALL capability groups]
+```
+
+For each capability group, assess:
+- **Table stakes?** (must have to compete) vs **Differentiator?** (where we can win)
+- **Build vs Buy vs Integrate** — which capabilities to build natively vs integrate via vendor APIs
+
+### 2c — Detailed Capability Specifications
+
+For EACH capability (not just groups), document the FULL specification:
+
+```markdown
+## Capability 1.1.3: Behavioral Analysis
+
+### What It Does
+Monitors process behavior in real-time to detect malicious patterns without relying on signatures.
+
+### How Vendors Implement It
+| Vendor | Approach | Strengths | Weaknesses |
+|--------|----------|-----------|-----------|
+| CrowdStrike | Cloud-based ML on process trees | Low FP rate, fast updates | Requires cloud connectivity |
+| SentinelOne | On-agent AI engine | Works offline | Higher resource usage |
+| Microsoft Defender | Cloud + local heuristics | Built into OS | Detection gaps on non-Windows |
+
+### Data Requirements
+- Input: Process creation events, file operations, registry changes, network connections
+- Volume: ~50-200 events/second per endpoint
+- Retention: 7-30 days for correlation
+- Format: Structured JSON (process tree with parent-child relationships)
+
+### User Expectations
+- Alert within <5 seconds of malicious behavior
+- False positive rate <1% on standard enterprise workloads
+- Must detect: ransomware, credential theft, lateral movement, persistence mechanisms
+
+### Integration Points
+- Feeds INTO: Alert pipeline, SIEM, threat intelligence enrichment
+- Consumes FROM: Threat intel (IOC matching), policy engine (exception rules)
+
+### Our Implementation Consideration
+- Priority: HIGH (core differentiator)
+- Approach: [build/buy/integrate]
+- Estimated complexity: [low/medium/high]
+```
+
+### 2d — Vendor × Capability Matrix
+
 For EVERY vendor and EVERY capability, rate coverage:
 
 ```markdown
@@ -120,10 +197,115 @@ For EVERY vendor and EVERY capability, rate coverage:
 Legend: ●●●● = Best in class, ●●●○ = Strong, ●●○○ = Basic, ●○○○ = Minimal, ○○○○ = Not offered
 ```
 
-### 2c — Pricing & Packaging Comparison
+### 2e — Pricing & Packaging Comparison
 ```markdown
 | Vendor | Pricing Model | Entry Price | Mid-Market | Enterprise | Free Tier |
 |--------|--------------|-------------|-----------|-----------|-----------|
+```
+
+---
+
+## Phase 2.5: Integration Ecosystem Analysis (CRITICAL)
+
+### Vendor Integration Map
+
+For EVERY major vendor, document their COMPLETE integration ecosystem:
+
+```markdown
+## Integration Ecosystem: [Vendor]
+
+### Native Integrations (built-in, no extra cost)
+| Integration | Category | Direction | What It Does |
+|-------------|----------|-----------|-------------|
+| Splunk | SIEM | Outbound | Send alerts + telemetry to Splunk |
+| ServiceNow | Ticketing | Bidirectional | Create tickets, sync status |
+| Active Directory | Identity | Inbound | User/group context for alerts |
+| AWS CloudTrail | Cloud | Inbound | Ingest cloud audit logs |
+
+### API/SDK Integrations (build your own)
+| API Type | Authentication | Rate Limits | Documentation Quality |
+|----------|---------------|-------------|----------------------|
+| REST API | OAuth2 + API key | 1000 req/min | Excellent (OpenAPI spec) |
+| Streaming API | WebSocket | N/A | Good |
+| Python SDK | pip install vendor-sdk | N/A | Excellent |
+
+### Marketplace / App Store
+| Items | Categories | Developer Program | Revenue Share |
+|-------|-----------|-------------------|---------------|
+| 200+ apps | Detection rules, response actions, dashboards | Yes (free) | 70/30 |
+```
+
+### Integration Categories (research ALL of these)
+
+```markdown
+## Integration Categories
+
+### 1. Security Data Sources (INBOUND — we consume their data)
+| Source Type | Examples | Protocol | Data Format |
+|------------|---------|----------|-------------|
+| SIEM | Splunk, Elastic, Sentinel | Syslog, API, Kafka | CEF, JSON, ECS |
+| Cloud | AWS, Azure, GCP | CloudTrail API, Event Hub | JSON, Parquet |
+| Identity | AD, Okta, Entra ID | LDAP, SCIM, API | SAML, OIDC |
+| Network | Firewalls, Proxies, NDR | Syslog, NetFlow, API | CEF, IPFIX |
+| Email | M365, Google Workspace | Graph API, Gmail API | EML, JSON |
+| Threat Intel | MISP, OTX, VirusTotal | STIX/TAXII, API | STIX 2.1, JSON |
+| Vulnerability | Qualys, Tenable, Rapid7 | API | JSON, CSV |
+
+### 2. Security Actions (OUTBOUND — we trigger their actions)
+| Action Type | Examples | Protocol | Use Case |
+|-------------|---------|----------|----------|
+| Firewall | Block IP, isolate host | API | Containment |
+| EDR | Kill process, quarantine file | API | Response |
+| IAM | Disable account, force MFA | SCIM, API | Identity response |
+| Ticketing | Create incident, update status | API, webhook | Workflow |
+| Communication | Slack alert, email, PagerDuty | Webhook, API | Notification |
+
+### 3. Data Enrichment (BIDIRECTIONAL — we query for context)
+| Enrichment | Examples | What It Adds | Latency Budget |
+|-----------|---------|-------------|---------------|
+| Threat Intel | VirusTotal, AbuseIPDB | IOC reputation, malware family | <500ms |
+| GeoIP | MaxMind, IPinfo | Location, ASN, org | <50ms |
+| WHOIS | DomainTools | Domain registration, age | <200ms |
+| Asset | CMDB, Intune, Jamf | Asset owner, criticality, OS | <100ms |
+| User | HR system, AD | Department, role, manager | <100ms |
+
+### 4. Compliance & Reporting (OUTBOUND — we feed their dashboards)
+| System | Examples | Data | Format |
+|--------|---------|------|--------|
+| GRC | Archer, ServiceNow GRC | Compliance evidence | API, CSV |
+| SOAR | Palo Alto XSOAR, Tines | Playbook triggers | Webhook, API |
+| Board reporting | PowerBI, Tableau | Risk metrics | API, CSV |
+```
+
+### Integration Effort Assessment
+
+For our product, estimate integration complexity:
+
+```markdown
+## Integration Build Priority
+
+### Must-Have at Launch (blocks sales if missing)
+| Integration | Category | Effort | Reason |
+|-------------|----------|--------|--------|
+| Splunk/Elastic | SIEM | Medium | Every customer has a SIEM |
+| AD/Entra ID | Identity | Medium | Required for user context |
+| ServiceNow/Jira | Ticketing | Low | Workflow integration expected |
+
+### Must-Have by GA+6 months
+| Integration | Category | Effort | Reason |
+|-------------|----------|--------|--------|
+
+### Nice-to-Have (competitive advantage)
+| Integration | Category | Effort | Reason |
+|-------------|----------|--------|--------|
+
+### Build as Platform (enable community)
+| Integration Framework | What It Enables |
+|----------------------|-----------------|
+| Webhook system | Any system can receive our alerts |
+| REST API | Full CRUD + search for all entities |
+| Python SDK | Custom detection rules + response actions |
+| App marketplace | Third-party integrations |
 ```
 
 ---

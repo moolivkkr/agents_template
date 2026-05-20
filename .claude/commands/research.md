@@ -98,21 +98,31 @@ Each agent follows the `deep-research.md` skill pack format.
 
 ---
 
-## Step 2 — Capability Matrix
+## Step 2 — Capability Matrix + Integration Ecosystem
 
 **Depends on:** Step 1 (all vendor research complete)
 
-Synthesize all vendor research into the COMPLETE capability taxonomy:
+```
+Step 2 (PARALLEL sub-agents):
+  ├─ Agent: Capability Taxonomy Builder
+  │   Extract EVERY feature from ALL vendors → hierarchical taxonomy
+  │   Group into capability clusters (product pillars)
+  │   Rate each vendor on each capability
+  │   Output: requirements/research/07-capability-matrix.md
+  │
+  ├─ Agent: Capability Detail Researcher
+  │   For each capability: HOW vendors implement it, data requirements,
+  │   user expectations, integration points, build/buy/integrate assessment
+  │   Output: requirements/research/07b-capability-details.md
+  │
+  └─ Agent: Integration Ecosystem Analyzer
+      Map EVERY vendor's integration ecosystem
+      Catalog ALL integration categories (data sources, actions, enrichment, compliance)
+      Assess integration effort for our product (must-have vs nice-to-have)
+      Output: requirements/research/07c-integration-ecosystem.md
+```
 
-1. Read all vendor deep dive files from Step 1
-2. Extract every feature/capability mentioned by ANY vendor
-3. Organize into hierarchical taxonomy (Category → Subcategory → Feature)
-4. Build the Vendor × Capability matrix (every vendor rated on every capability)
-5. Identify capability clusters (features that always appear together)
-
-**Output:** `requirements/research/07-capability-matrix.md`
-
-This is the most valuable artifact — it becomes the foundation for FR-* requirements.
+This is the most valuable step — capabilities become FR-* requirements, integrations become architecture decisions.
 
 ---
 
