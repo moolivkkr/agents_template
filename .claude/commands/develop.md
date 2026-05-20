@@ -144,29 +144,40 @@ Log when:
 
 ### Mid-Execution Escalation Protocol
 
-When an agent encounters uncertainty that is NOT a full blocker but needs user input:
+When an agent encounters uncertainty, conflicting options, or missing data:
 
+**LOW impact** (reversible, single-option): continue with `continueWithDefault: true`
+```json
+{ "type": "escalation", "impact": "LOW", "recommendation": "A", "continueWithDefault": true }
+```
+
+**MEDIUM/HIGH impact** (architecture, security, data model): escalate to Debate Team
 ```json
 {
-  "type": "escalation",
-  "agent": "<agent name>",
-  "question": "<what needs clarification>",
+  "type": "debate_request",
+  "from_agent": "<agent name>",
+  "from_step": "<pipeline step>",
+  "decision": "<what needs deciding>",
   "options": [
-    {"label": "A", "description": "...", "tradeoff": "..."},
-    {"label": "B", "description": "...", "tradeoff": "..."}
+    { "id": "A", "label": "...", "initial_reasoning": "..." },
+    { "id": "B", "label": "...", "initial_reasoning": "..." }
   ],
-  "recommendation": "A",
-  "continueWithDefault": true
+  "context": "<BRD refs, constraints, what's known>",
+  "impact": "HIGH | MEDIUM",
+  "blocking": true
 }
 ```
 
-Write to `agent_state/phases/${PHASE}/escalations/<agent>-<N>.json`.
+Write to `agent_state/debates/<step>-<topic>.json`.
 
-If `continueWithDefault: true`: proceed with the recommended option. The user can review and override later — the correction injects into the next task's carry-forward context.
+The `debate_moderator` picks it up and runs:
+1. **Researchers** (parallel) — gather evidence for each option
+2. **Advocates** (parallel, HIGH only) — argue for each option adversarially
+3. **Arbitrator** — evaluates all arguments, produces scored verdict
 
-If `continueWithDefault: false`: STOP and surface to user immediately.
+Verdict written to `agent_state/debates/<topic>-verdict.json`. The requesting agent reads it and continues.
 
-**This replaces the binary "guess or block" with structured uncertainty handling.**
+**This replaces guessing with researched, debated, scored decisions.**
 
 ### Universal Agent Return Protocol
 
