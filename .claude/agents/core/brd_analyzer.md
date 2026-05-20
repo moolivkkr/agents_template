@@ -29,6 +29,10 @@ dependencies:
   downstream:
     - brd_interviewer
     - brd_writer
+skill_packs:
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/requirements/gap-analysis-checklist.md"
+  - ".claude/skills/requirements/conflict-detection.md"
 ---
 
 # Agent: BRD Analyzer

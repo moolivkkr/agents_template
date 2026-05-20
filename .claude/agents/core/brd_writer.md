@@ -29,6 +29,13 @@ dependencies:
     - product_manager
     - ux_designer
     - architecture_orchestrator
+skill_packs:
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/persona-definition.md"
+  - ".claude/skills/requirements/nfr-patterns.md"
+  - ".claude/skills/requirements/business-objectives.md"
+  - ".claude/skills/requirements/traceability-matrix.md"
 ---
 
 # Agent: BRD Writer

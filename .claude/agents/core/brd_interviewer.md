@@ -29,6 +29,11 @@ dependencies:
     - brd_analyzer
   downstream:
     - brd_writer
+skill_packs:
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/nfr-patterns.md"
+  - ".claude/skills/requirements/persona-definition.md"
 ---
 
 # Agent: BRD Interviewer

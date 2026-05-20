@@ -29,6 +29,12 @@ dependencies:
     - ux_designer
     - architecture_orchestrator
     - project_planner
+skill_packs:
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/persona-definition.md"
+  - ".claude/skills/requirements/conflict-detection.md"
+  - ".claude/skills/requirements/business-objectives.md"
 ---
 
 # Agent: Product Manager

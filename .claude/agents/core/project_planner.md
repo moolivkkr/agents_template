@@ -23,6 +23,10 @@ output:
 dependencies:
   upstream: [impl_guidelines_agent, brd_agent]
   downstream: [spec_verifier, backend_audit_agent]
+skill_packs:
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/traceability-matrix.md"
 ---
 
 # Agent: Project Planner

@@ -20,6 +20,10 @@ output:
 dependencies:
   upstream: [project_planner]
   downstream: [brd_spec_reconciler, spec_verifier]
+skill_packs:
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/edge-case-taxonomy.md"
+  - ".claude/skills/requirements/nfr-patterns.md"
 ---
 
 # Agent: Spec Writer

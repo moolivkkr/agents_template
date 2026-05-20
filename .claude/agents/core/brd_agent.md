@@ -29,6 +29,15 @@ dependencies:
     - ux_designer
     - architecture_orchestrator
     - impl_guidelines_agent
+skill_packs:
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/persona-definition.md"
+  - ".claude/skills/requirements/nfr-patterns.md"
+  - ".claude/skills/requirements/gap-analysis-checklist.md"
+  - ".claude/skills/requirements/conflict-detection.md"
+  - ".claude/skills/requirements/business-objectives.md"
+  - ".claude/skills/requirements/traceability-matrix.md"
 ---
 
 # Agent: BRD Agent (Orchestrator)
