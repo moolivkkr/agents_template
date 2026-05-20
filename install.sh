@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
 # startup-agents installer
-# Installs commands, core agents, templates, and skill packs to ~/.claude/
-# After install, /init /plan /develop are available in any project.
+# Installs commands, core agents, templates, skill packs, and docs to ~/.claude/
+# After install, /startup/<command> is available in any project.
 
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CLAUDE_DIR="$HOME/.claude"
 DEST_COMMANDS="$CLAUDE_DIR/commands/startup"
-DEST_AGENTS="$CLAUDE_DIR/agents"
-DEST_SKILLS="$CLAUDE_DIR/skills"
+DEST_AGENTS_CORE="$CLAUDE_DIR/agents"
+DEST_AGENTS_DOCS="$CLAUDE_DIR/agents"
 DEST_TEMPLATES="$CLAUDE_DIR/agents/templates"
+DEST_SKILLS="$CLAUDE_DIR/skills"
 
 echo "startup-agents installer"
 echo "========================"
@@ -22,26 +23,52 @@ echo
 echo "Installing commands → $DEST_COMMANDS/"
 mkdir -p "$DEST_COMMANDS"
 cp "$REPO_DIR/.claude/commands/"*.md "$DEST_COMMANDS/"
-echo "  ✅ $(ls "$REPO_DIR/.claude/commands/"*.md | wc -l | tr -d ' ') commands installed"
+CMD_COUNT=$(ls "$REPO_DIR/.claude/commands/"*.md | wc -l | tr -d ' ')
+echo "  ✅ $CMD_COUNT commands installed"
 
 # ── Core agents ───────────────────────────────────────────────────────────────
-echo "Installing core agents → $DEST_AGENTS/"
-mkdir -p "$DEST_AGENTS"
-cp "$REPO_DIR/.claude/agents/core/"*.md "$DEST_AGENTS/"
-echo "  ✅ $(ls "$REPO_DIR/.claude/agents/core/"*.md | wc -l | tr -d ' ') core agents installed"
+echo "Installing core agents → $DEST_AGENTS_CORE/"
+mkdir -p "$DEST_AGENTS_CORE"
+cp "$REPO_DIR/.claude/agents/core/"*.md "$DEST_AGENTS_CORE/"
+AGENT_COUNT=$(ls "$REPO_DIR/.claude/agents/core/"*.md | wc -l | tr -d ' ')
+echo "  ✅ $AGENT_COUNT core agents installed"
 
-# ── Agent templates ───────────────────────────────────────────────────────────
+# ── Agent documentation ───────────────────────────────────────────────────────
+echo "Installing agent docs → $DEST_AGENTS_DOCS/"
+if ls "$REPO_DIR/.claude/agents/"*.md &>/dev/null; then
+  cp "$REPO_DIR/.claude/agents/"*.md "$DEST_AGENTS_DOCS/"
+  DOC_COUNT=$(ls "$REPO_DIR/.claude/agents/"*.md | wc -l | tr -d ' ')
+  echo "  ✅ $DOC_COUNT agent docs installed (AGENT_SCHEMA.md, INVENTORY.md)"
+fi
+
+# ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"
 mkdir -p "$DEST_TEMPLATES"
-cp "$REPO_DIR/.claude/agents/templates/"*.md "$DEST_TEMPLATES/"
-echo "  ✅ $(ls "$REPO_DIR/.claude/agents/templates/"*.md | wc -l | tr -d ' ') templates installed"
+cp "$REPO_DIR/.claude/agents/generated/"*.tmpl.md "$DEST_TEMPLATES/"
+TMPL_COUNT=$(ls "$REPO_DIR/.claude/agents/generated/"*.tmpl.md | wc -l | tr -d ' ')
+echo "  ✅ $TMPL_COUNT agent templates installed"
 
-# ── Skill packs ───────────────────────────────────────────────────────────────
+# ── Skill packs (recursive — preserves subdirectory structure) ────────────────
 echo "Installing skill packs → $DEST_SKILLS/"
 mkdir -p "$DEST_SKILLS"
-cp -r "$REPO_DIR/.claude/skills/"* "$DEST_SKILLS/"
+# Use rsync if available for clean recursive copy, otherwise cp -r
+if command -v rsync &>/dev/null; then
+  rsync -a --include='*/' --include='*.md' --exclude='*' "$REPO_DIR/.claude/skills/" "$DEST_SKILLS/"
+else
+  cp -r "$REPO_DIR/.claude/skills/"* "$DEST_SKILLS/"
+fi
 SKILL_COUNT=$(find "$REPO_DIR/.claude/skills" -name "*.md" | wc -l | tr -d ' ')
 echo "  ✅ $SKILL_COUNT skill packs installed"
+
+# ── Breakdown by category ────────────────────────────────────────────────────
+echo "     Skill pack breakdown:"
+for dir in "$REPO_DIR/.claude/skills"/*/; do
+  if [ -d "$dir" ]; then
+    category=$(basename "$dir")
+    count=$(find "$dir" -name "*.md" | wc -l | tr -d ' ')
+    echo "       $category: $count"
+  fi
+done
 
 # ── settings.json (merge, don't overwrite) ────────────────────────────────────
 SETTINGS_SRC="$REPO_DIR/.claude/settings.json"
@@ -50,7 +77,6 @@ if [ ! -f "$SETTINGS_DEST" ]; then
   cp "$SETTINGS_SRC" "$SETTINGS_DEST"
   echo "  ✅ settings.json created"
 else
-  # Back up existing, then show diff so user knows what changed
   cp "$SETTINGS_DEST" "$SETTINGS_DEST.bak"
   echo "  ⚠  settings.json already exists — backed up to settings.json.bak"
   if command -v diff &>/dev/null; then
@@ -69,7 +95,12 @@ else
 fi
 
 echo
+echo "════════════════════════════════════════════════════════════"
 echo "✅ Installation complete"
+echo
+echo "  $CMD_COUNT commands | $AGENT_COUNT agents | $TMPL_COUNT templates | $SKILL_COUNT skill packs"
+echo
+echo "════════════════════════════════════════════════════════════"
 echo
 echo "Getting started:"
 echo "  1. cd <your-new-project>"
@@ -78,12 +109,24 @@ echo "  3. Copy your specs, user stories, or pitch deck into requirements/"
 echo "  4. Optionally add requirements/IMPLEMENTATION_GUIDELINES.md"
 echo "  5. Open Claude Code and run: /startup/init"
 echo
-echo "Command prefix: /startup/<command>"
-echo "  /startup/init     — create BRD + IMPLEMENTATION_GUIDELINES, generate agents"
-echo "  /startup/plan     — generate phase specs (TRDs + wireframes)"
-echo "  /startup/develop  — implement + test + review + gate"
-echo "  /startup/accept   — global acceptance after all phases"
-echo "  /startup/test     — run tests standalone"
-echo "  /startup/deploy   — build + migrate + deploy"
-echo "  /startup/status   — show phase progress"
-echo "  /startup/review   — standalone code review"
+echo "Commands (/startup/<command>):"
+echo "  ┌─────────────────┬────────────────────────────────────────────────┐"
+echo "  │ Pipeline         │                                                │"
+echo "  ├─────────────────┼────────────────────────────────────────────────┤"
+echo "  │ research         │ Deep market & product research                 │"
+echo "  │ init             │ Create BRD + IMPL_GUIDELINES, generate agents  │"
+echo "  │ plan             │ Generate phase specs (TRDs + wireframes)       │"
+echo "  │ develop          │ Implement + test + review + gate               │"
+echo "  │ deploy           │ Build + migrate + deploy                       │"
+echo "  │ autonomous       │ Full pipeline end-to-end (one checkpoint)      │"
+echo "  ├─────────────────┼────────────────────────────────────────────────┤"
+echo "  │ Standalone       │                                                │"
+echo "  ├─────────────────┼────────────────────────────────────────────────┤"
+echo "  │ test             │ Run tests standalone                           │"
+echo "  │ review           │ Code review on current changes                 │"
+echo "  │ optimize         │ Dead code removal + performance                │"
+echo "  │ accept           │ Global acceptance after all phases             │"
+echo "  │ status           │ Show phase progress                            │"
+echo "  │ reset-phase      │ Reset a phase for re-development              │"
+echo "  └─────────────────┴────────────────────────────────────────────────┘"
+echo
