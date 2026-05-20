@@ -219,6 +219,7 @@ Agents reading `{{PHASE-1}}` in their instructions should resolve this to `PHASE
 |------|------|----------|
 | `docs/design/phases/${PHASE}/phase_context.md` | ~6-8K | Complete tech stack, all conventions, security NFRs, full acceptance criteria, what already exists, gate checklist |
 | `docs/design/phases/${PHASE}/specs/<own-component>.md` | ~5-10K | Interface contracts, data model, edge cases, test requirements for THIS component only |
+| `docs/design/phases/${PHASE}/specs/data-contracts.md` | ~3-5K | Typed TypeScript interfaces for ALL API endpoints — ARRAY vs OBJECT explicit. Source of truth for response shapes. |
 | `agent_state/phases/$((PHASE-1))/manifest.json` | ~3-5K | Existing routes, schema, services — what NOT to re-implement |
 
 `phase_context.md` is intentionally complete — it contains the full tech stack, all coding conventions, all security requirements, and all acceptance criteria needed for correct implementation. **It is not a 50-line stub — it is a structured 6-8K extract that replaces the need to load the full BRD and IMPLEMENTATION_GUIDELINES.**
@@ -266,6 +267,12 @@ fi
 RECON_FILE="agent_state/reconciliation/phase-${PHASE}/brd_vs_specs.md"
 if [ -f "$RECON_FILE" ] && grep -q "MISSING" "$RECON_FILE"; then
   echo "⚠ WARNING: BRD↔Spec reconciliation has MISSING coverage. Review before implementing."
+fi
+
+# Check 5: data-contracts.md exists (typed API response shapes)
+CONTRACTS_FILE="docs/design/phases/${PHASE}/specs/data-contracts.md"
+if [ ! -f "$CONTRACTS_FILE" ]; then
+  echo "⚠ WARNING: data-contracts.md missing. API↔UI binding errors likely. Run /plan --phase=${PHASE} Step 2b."
 fi
 ```
 
@@ -331,7 +338,13 @@ Wave 1.5 (sequential gate — validates migrations before applying):
 Wave 2a (sequential — api_developer depends on backend service interfaces):
   └─ backend_developer  → domain models, services, repositories
        ↓ writes manifest with service method return types (list/single/none)
-Wave 2b (depends on 2a):
+
+Wave 2a.5 (BUILD CHECK — catches type errors before api_developer starts):
+  └─ Build verification: compile/typecheck the codebase
+       go build ./... | tsc --noEmit | python -m py_compile (per tech stack)
+       If FAILS → route back to backend_developer for fix (max 1 retry)
+
+Wave 2b (depends on 2a passing build):
   └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
        ↓ reads data-contracts.md from /plan as MANDATORY source of truth for response shapes
        ↓ api-contracts.md is DERIVED from data-contracts.md (validates, doesn't reinvent)
@@ -341,11 +354,17 @@ Wave 2b (depends on 2a):
 Wave 2.5 (sequential gate, UI phases only):
   └─ Contract Validation → verify api-contracts.md exists, all endpoints documented, shapes are unambiguous
 
-Wave 3 (parallel, UI phases only — BLOCKED until Wave 2.5 passes):
-  └─ ui_developer       → screen implementation from wireframes + api-contracts.md
+Wave 2.75 (SMOKE TEST — before expensive UI implementation):
+  └─ Quick smoke test: does the app start? Does GET /health respond?
+       docker compose up -d && curl -sf http://localhost:PORT/health
+       If FAILS → route back to api_developer for fix (max 1 retry)
+       This catches catastrophic failures before spending tokens on UI + test agents
 
-Wave 4 (parallel):
-  ├─ unit_test_agent     → unit tests for all new code
+Wave 3 (parallel, UI phases only — BLOCKED until Wave 2.75 passes):
+  └─ ui_developer       → screen implementation from UI specs + api-contracts.md + data-contracts.md
+
+Wave 4 (parallel — test agents read BOTH specs AND implementation code):
+  ├─ unit_test_agent     → unit tests for all new code (reads actual functions, not just specs)
   └─ integration_test_agent → integration tests for service↔infra + contract shape tests
 ```
 
@@ -451,11 +470,19 @@ Runs complete user workflow tests. Same iteration rules: fix → retry → max 2
 
 ---
 
-## Step 3d — Reconciliation Point C: Specs ↔ Implementation
+## Step 3d + 3e — Reconciliation (PARALLEL)
 
-**Agent:** `spec_impl_reconciler`
+Run BOTH reconciliation agents simultaneously — they read different inputs and don't depend on each other.
 
-Validates both directions:
+```
+Step 3d+3e (PARALLEL):
+  ├─ spec_impl_reconciler  → specs ↔ implementation (4-level verification)
+  └─ spec_test_reconciler  → specs ↔ test coverage
+```
+
+### 3d: Specs ↔ Implementation (`spec_impl_reconciler`)
+
+Validates both directions with 4-level verification (Existence → Substantiveness → Wiring → Data Flow):
 - **Forward:** spec-defined behaviors missing from the implementation
 - **Reverse:** unspecced implementation (behaviors added without spec justification)
 
@@ -468,11 +495,7 @@ Unspecced implementations = **LOGGED** with count in gate report. Not auto-block
 - `scope_creep` items surfaced to user with recommendation: add to BRD or remove
 - Manifest `carried_forward[]` includes unresolved unspecced items for next phase audit
 
----
-
-## Step 3e — Reconciliation Point D: Specs ↔ Tests
-
-**Agent:** `spec_test_reconciler`
+### 3e: Specs ↔ Tests (`spec_test_reconciler`)
 
 Validates both directions:
 - **Forward:** spec-defined edge cases and behaviors with no test coverage
@@ -544,11 +567,13 @@ Both agents follow the same safety protocol:
 
 ---
 
-## Step 3g — Post-Optimization Test Re-run (MANDATORY SAFETY GATE)
+## Step 3g — Post-Optimization Test Re-run (CONDITIONAL SAFETY GATE)
 
 **Runs after:** Step 3f optimization completes
 **Purpose:** Verify that NO optimization introduced a regression
-**This step is NOT optional** — optimization changes code after the original tests passed. Without re-running, subtle regressions can slip through to acceptance tests.
+**Skip if:** Both optimizers report zero changes (no dead code removed, no optimizations applied). Log: "Step 3g skipped — zero optimization changes."
+
+If ANY optimization was applied:
 
 ### Execution
 
@@ -602,7 +627,19 @@ The Phase Gate (Step 6) checks the post-optimization test status:
 
 ---
 
-## Step 4 — Code Review (Three-Stage Pipeline)
+## Step 4 — Code Review + Acceptance Tests (PARALLEL TRACKS)
+
+Review and acceptance testing run as **two parallel tracks** — both read the same code, neither modifies it.
+
+```
+Step 4 (PARALLEL TRACKS):
+  Track A: Code Review (three stages)
+  Track B: Acceptance Tests (persona-based)
+```
+
+Both tracks must pass for the gate. Running them in parallel saves a full step.
+
+### Track A: Code Review (Three-Stage Pipeline)
 
 Review runs as three sequential stages. Each stage catches a different class of defect. Stages are NOT combined.
 
@@ -678,11 +715,11 @@ Reports written to `agent_state/phases/${PHASE}/reports/`:
 
 ---
 
-## Step 5 — Acceptance Tests
+### Track B: Acceptance Tests (runs in PARALLEL with Track A)
 
 **Agent:** `acceptance_test_agent`
 
-Validates implementation at use case and persona level against BRD FR-* requirements scoped to this phase. Runs after code review — tests the complete, reviewed implementation from the user's perspective.
+Validates implementation at use case and persona level against BRD FR-* requirements scoped to this phase. Runs in parallel with code review — both read the same code, neither modifies it.
 
 ### Data Seeding
 1. Check `requirements/test-data/phase-${PHASE}.yaml` — use if present (user-provided data takes priority)
@@ -693,6 +730,14 @@ Validates implementation at use case and persona level against BRD FR-* requirem
 - Each in-scope FR-* with user-facing acceptance criteria is executed as its declared persona
 - Every BRD persona must be exercised by ≥1 use case this phase (if in scope)
 - Results: PASS / PARTIAL (N of M criteria met) / FAIL per use case
+
+### Contract Shape Assertions (runs alongside persona tests)
+For EVERY API endpoint called during acceptance testing, verify:
+- Response matches `data-contracts.md` TypeScript interface (field names, types)
+- List endpoints return `data: []` (array), not object
+- Single endpoints return `data: {}` (object), not array
+- Empty list returns `{ data: [], meta: { total: 0 } }`, not `null` or `{}`
+- Log mismatches as `CONTRACT_VIOLATION` — these are the exact bugs that crash the UI
 
 ### Iteration
 - Acceptance failure → implementation agent fixes → re-test → max 2 rounds

@@ -254,6 +254,32 @@ Criteria:
 
 ---
 
+## Contract Shape Assertions
+
+For EVERY API call made during acceptance testing, verify the response shape against `data-contracts.md`:
+
+```
+For each API call:
+1. Read the expected TypeScript interface from data-contracts.md
+2. Verify response.data is ARRAY for list endpoints (not object, not null)
+3. Verify response.data is OBJECT for single endpoints (not array, not null for existing resources)
+4. Verify all field names in response match the interface exactly
+5. Verify empty list returns { data: [], meta: { total: 0 } } not null or {}
+```
+
+Log mismatches as `CONTRACT_VIOLATION` in the acceptance report — these are the exact bugs that crash the UI.
+
+```markdown
+## Contract Shape Assertions
+| Endpoint | Expected Type | Actual Type | Fields Match | Result |
+|----------|--------------|-------------|-------------|--------|
+| GET /users | User[] (array) | array | yes | PASS |
+| GET /users/:id | User (object) | object | yes | PASS |
+| GET /users (empty) | [] | null | NO | CONTRACT_VIOLATION |
+```
+
+CONTRACT_VIOLATION = **BLOCKER** — same severity as a failing acceptance criterion.
+
 ## Rules
 
 - Read `requirements/test-data/` first — always respect user-provided data over generated
@@ -262,3 +288,4 @@ Criteria:
 - Seed data is isolated (test-only email patterns, test namespace) — safe to clean up
 - Report partial passes explicitly — "2/3 criteria met" not just PASS/FAIL
 - Acceptance test failures are **phase gate blockers** — gate does not pass with unresolved failures
+- CONTRACT_VIOLATION findings are **phase gate blockers** — these cause UI↔API integration failures
