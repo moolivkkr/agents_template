@@ -41,24 +41,40 @@ For each interface contract, behavior, or constraint defined in the specs:
 ## Output: `agent_state/reconciliation/phase-N/brd_vs_specs.md`
 
 ```markdown
-# BRD ↔ Spec Reconciliation — Phase N
+# BRD ↔ Spec Reconciler — Phase N
 
 ## Summary
-PASS | N gaps | N misalignments
+| Metric | Value |
+|--------|-------|
+| Status | PASS / GAPS / DEVIATIONS |
+| Forward checks (BRD → specs) | N passed, N gaps |
+| Reverse checks (specs → BRD) | N passed, N untraced |
+| Blocking issues | N |
+| Warnings | N |
 
-## Missing Spec Coverage (BRD → Specs)
+## Blocking Issues
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Warnings
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Full Results
+
+### Missing Spec Coverage (BRD → Specs)
 | BRD ID | Requirement | Covered by Spec | Gap Description |
 |--------|-------------|-----------------|-----------------|
 
-## Out-of-Scope in Specs (Specs → BRD)
+### Out-of-Scope in Specs (Specs → BRD)
 | Spec File | Behavior Defined | BRD Source | Action |
 |-----------|-----------------|------------|--------|
 | auth-flow.md | Password complexity rules | None — not in BRD | REMOVE or ADD to BRD |
 
-## Misalignments (different interpretation)
+### Misalignments (different interpretation)
 | BRD ID | BRD Statement | Spec Interpretation | Verdict |
 
-## Confirmed Mappings
+### Confirmed Mappings
 | FR-* | Spec File | Section |
 
 ## Recommendation

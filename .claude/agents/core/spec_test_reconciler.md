@@ -57,23 +57,39 @@ Checks:
 ## Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md`
 
 ```markdown
-# Spec ↔ Test Reconciliation — Phase N
+# Spec ↔ Test Reconciler — Phase N
 
 ## Summary
-PASS | N untested spec behaviors | N specless tests
+| Metric | Value |
+|--------|-------|
+| Status | PASS / GAPS / DEVIATIONS |
+| Forward checks (specs → tests) | N passed, N gaps |
+| Reverse checks (tests → specs) | N passed, N untraced |
+| Blocking issues | N |
+| Warnings | N |
 
-## Untested Spec Behaviors (Spec → Tests)
+## Blocking Issues
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Warnings
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Full Results
+
+### Untested Spec Behaviors (Spec → Tests)
 | Spec File | Behavior / Edge Case | Test Required | Priority |
 |-----------|---------------------|---------------|----------|
 
-## Specless Tests (Tests → Spec)
+### Specless Tests (Tests → Spec)
 | Test File | Test Name | Spec Source | Action |
 |-----------|-----------|-------------|--------|
 
-## Misaligned Tests (test contradicts spec)
+### Misaligned Tests (test contradicts spec)
 | Test | Asserts | Spec Says | Verdict |
 
-## Coverage by Spec
+### Coverage by Spec
 | Spec File | Behaviors Defined | Tested | Coverage % |
 |-----------|-----------------|--------|------------|
 

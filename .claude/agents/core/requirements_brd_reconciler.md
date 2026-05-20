@@ -39,20 +39,36 @@ For each FR-*, NFR-*, OBJ-* in `docs/BRD.md`:
 ## Output: `agent_state/reconciliation/requirements_vs_brd.md`
 
 ```markdown
-# Requirements ↔ BRD Reconciliation
+# Requirements ↔ BRD Reconciler — Phase N
 
 ## Summary
-PASS | N gaps found
+| Metric | Value |
+|--------|-------|
+| Status | PASS / GAPS / DEVIATIONS |
+| Forward checks (requirements → BRD) | N passed, N gaps |
+| Reverse checks (BRD → requirements) | N passed, N untraced |
+| Blocking issues | N |
+| Warnings | N |
 
-## Missing from BRD (in requirements but not in BRD)
+## Blocking Issues
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Warnings
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Full Results
+
+### Missing from BRD (in requirements but not in BRD)
 | Source File | Requirement/Feature | Action Required |
 |-------------|---------------------|-----------------|
 
-## Invented in BRD (in BRD but not in requirements)
+### Invented in BRD (in BRD but not in requirements)
 | BRD ID | Statement | Source Found? | Action Required |
 |--------|-----------|---------------|-----------------|
 
-## Confirmed Mappings
+### Confirmed Mappings
 | BRD ID | Source Document | Source Location |
 
 ## Recommendation

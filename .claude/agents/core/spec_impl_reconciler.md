@@ -103,10 +103,27 @@ Checks:
 ## Output: `agent_state/reconciliation/phase-N/specs_vs_impl.md`
 
 ```markdown
-# Spec ↔ Implementation Reconciliation — Phase N
+# Spec ↔ Implementation Reconciler — Phase N
 
 ## Summary
-PASS | N deviations | N unspecced items
+| Metric | Value |
+|--------|-------|
+| Status | PASS / GAPS / DEVIATIONS |
+| Forward checks (specs → implementation) | N passed, N gaps |
+| Reverse checks (implementation → specs) | N passed, N untraced |
+| Blocking issues | N |
+| Warnings | N |
+
+## Blocking Issues
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Warnings
+| # | Direction | Item | Details |
+|---|-----------|------|---------|
+
+## Full Results
+
 Verification depth: 4-level (Existence → Substantiveness → Wiring → Data Flow)
 
 ## Four-Level Verification Results
