@@ -1,6 +1,6 @@
 ---
 name: code_quality_verifier
-description: Validates quality gate checklist items with evidence — scans for TODOs, stubs, hardcoded secrets, dead imports, and placeholder patterns
+description: Validates quality gate checklist items with evidence — scans for TODOs, stubs, hardcoded secrets, dead imports, placeholder values, and debug statements
 model: sonnet
 category: review
 invoked_by: develop (Step 5, parallel with other reviewers)
@@ -20,7 +20,7 @@ input:
       path: docs/BRD.md
       description: NFR-* coverage thresholds
 output:
-  primary: agent_state/phases/{{PHASE}}/reports/quality_gate_verification.md
+  primary: agent_state/phases/{{PHASE}}/reports/code_quality.md
   artifacts:
     - path: agent_state/phases/{{PHASE}}/reports/quality_gate_evidence.json
       description: Machine-readable PASS/FAIL per gate item with file:line evidence
@@ -29,6 +29,7 @@ dependencies:
   downstream: [acceptance_test_agent]
 skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
+  - ".claude/skills/core/code-quality.md"
 ---
 
 # Agent: Code Quality Verifier
@@ -41,25 +42,73 @@ Validates quality gate checklist items with concrete evidence. Every gate item g
 
 ---
 
+## Step 0 — Determine Files in Scope
+
+Before running any checks, determine which files to scan. Use BOTH methods and union the results:
+
+### Method A — Git Diff (preferred)
+
+```bash
+# Files changed in this phase relative to the previous phase tag or main
+git diff --name-only main...HEAD -- '*.go' '*.ts' '*.tsx' '*.js' '*.jsx' '*.py'
+```
+
+If no phase tag exists, diff against the commit where the phase branch diverged from main.
+
+### Method B — Manifest Artifacts
+
+Read `agent_state/phases/{{PHASE}}/manifest.json` and collect all file paths listed under `artifacts`, `api_routes` handler paths, and `components`.
+
+### File Classification
+
+Classify every in-scope file as one of:
+
+| Classification | Examples | Checks Applied |
+|---------------|----------|----------------|
+| **Implementation** | `src/services/*.go`, `src/handlers/*.ts`, `src/domain/*.py` | ALL checks (1-8) |
+| **Test** | `*_test.go`, `*.test.ts`, `*.spec.ts`, `test_*.py` | Checks 2, 4 only (stubs, secrets) |
+| **Config** | `*.yaml`, `*.json`, `*.toml`, `*.env.example` | Check 4 only (secrets) |
+| **Documentation** | `*.md`, comments | Excluded from all checks |
+
+**Implementation code is the primary target.** Test files get limited checks. Documentation is excluded.
+
+---
+
 ## Anti-Rationalization Guard
 
 | Your Internal Reasoning | Correct Response |
 |---|---|
-| "This TODO is in a test file, it doesn't matter" | TODOs in tests mean untested behavior. Flag it. |
+| "This TODO is in a test file, it doesn't matter" | TODOs in tests are acceptable per the TODO Policy (see code-quality.md). Only flag TODOs in implementation code. |
 | "This hardcoded URL is just for local dev" | Local URLs in committed code get deployed. Flag it. |
 | "This import is probably used somewhere I didn't check" | If you can't find the usage, it's unused. Flag it. |
 | "The function is small, it's probably not a stub" | Size doesn't matter. If it returns nil/null/empty with no logic, it's a stub. |
 | "This HACK comment is just a style choice" | HACK comments indicate known shortcuts. Flag and document. |
+| "This console.log is harmless" | Debug output in production code leaks internals and pollutes logs. Flag it. |
+| "This placeholder string is just a default" | Placeholder values in production code indicate incomplete implementation. Flag it. |
 
 ---
 
-## Check 1 — TODO/FIXME/HACK/Placeholder Scan
+## Check 1 — TODO/FIXME/HACK/XXX Scan (Implementation Code Only)
 
-Scan ALL source files for these patterns (case-insensitive):
+Scan **implementation source files** (not test code, not documentation) for these patterns.
+
+Per the TODO Policy in `.claude/skills/core/code-quality.md`:
+- **Implementation code**: TODOs are NOT acceptable — flag them
+- **Test code / documentation**: TODOs with `// TODO(author): reason` format are acceptable — skip them
+- **Optimization reports**: TODOs are acceptable — skip them
+
+**Search commands:**
+
+```bash
+# Grep for TODO/FIXME/HACK/XXX in implementation files
+grep -rn "TODO\|FIXME\|HACK\|XXX" --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" \
+  --exclude="*_test.go" --exclude="*.test.ts" --exclude="*.test.tsx" --exclude="*.spec.ts" --exclude="test_*.py" \
+  src/ internal/ cmd/ pkg/ app/
+```
 
 | Pattern | Severity | Why |
 |---------|----------|-----|
-| `TODO` | WARNING | Incomplete work acknowledged by developer |
+| `TODO` (in implementation code) | WARNING | Incomplete work acknowledged by developer |
 | `FIXME` | BLOCKING | Known bug acknowledged by developer |
 | `HACK` | WARNING | Known shortcut that should be cleaned up |
 | `XXX` | WARNING | Attention needed |
@@ -95,49 +144,146 @@ For each endpoint declared in the phase manifest (`manifest.json` api_routes) or
 
 ---
 
-## Check 3 — Test Coverage Threshold
-
-Read the test coverage report (if available) or scan test files:
-
-1. Verify test files exist for each implemented component
-2. If a coverage tool output exists, compare against the threshold from IMPLEMENTATION_GUIDELINES or phase_context
-3. Flag components with no test file as BLOCKING
-4. Flag components with test files but below threshold as WARNING
-
----
-
-## Check 4 — Hardcoded Secrets and URLs
+## Check 3 — Hardcoded Secrets Scan
 
 Scan for patterns that should be in environment variables or config:
+
+**Search commands:**
+
+```bash
+# API keys and tokens
+grep -rn 'api_key\s*=\s*"[^"]\+"\|apiKey\s*=\s*"[^"]\+"\|token\s*=\s*"[^"]\+"\|secret\s*=\s*"[^"]\+"' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" src/ internal/ cmd/ pkg/ app/
+
+# Password literals
+grep -rn 'password\s*=\s*"[^"]\+"\|passwd\s*=\s*"[^"]\+"' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" src/ internal/ cmd/ pkg/ app/
+
+# Connection strings
+grep -rn 'postgres://\|mysql://\|mongodb://\|redis://' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" src/ internal/ cmd/ pkg/ app/
+
+# JWT secrets
+grep -rn 'jwt.*secret\|JWT.*SECRET\|signing.*key' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" src/ internal/ cmd/ pkg/ app/
+
+# Common token prefixes
+grep -rn '"sk-[a-zA-Z0-9]\+"\|"ghp_[a-zA-Z0-9]\+"\|"gho_[a-zA-Z0-9]\+"\|"Bearer [a-zA-Z0-9]\+"' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" src/ internal/ cmd/ pkg/ app/
+```
 
 | Pattern | Severity | Example |
 |---------|----------|---------|
 | API keys in source | BLOCKING | `apiKey = "sk-..."`, `token = "ghp_..."` |
 | Database connection strings | BLOCKING | `postgres://user:pass@host/db` |
 | Hardcoded URLs (non-localhost) | WARNING | `https://api.production.com/v1` |
-| Hardcoded ports (non-standard) | INFO | `":8080"` — should be from config |
 | JWT secrets in source | BLOCKING | `secret = "my-jwt-secret"` |
 | Password literals | BLOCKING | `password = "admin123"` |
 
-Exclude: test files with obvious test fixtures, `localhost`/`127.0.0.1` in dev configs.
+**Exclusions:** Test files with obvious test fixtures (`test_`, `_test`, `.test.`, `.spec.`), `localhost`/`127.0.0.1` in dev configs, environment variable references (`os.Getenv`, `process.env`).
 
 ---
 
-## Check 5 — Import Hygiene
+## Check 4 — Placeholder Value Detection
+
+Scan implementation code for placeholder strings that indicate incomplete implementation:
+
+**Search commands:**
+
+```bash
+# Literal placeholder values
+grep -rn -i '"placeholder"\|"CHANGEME"\|"xxx"\|"test123"\|"example"\|"dummy"\|"foobar"\|"lorem"' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" \
+  --exclude="*_test.go" --exclude="*.test.ts" --exclude="*.test.tsx" --exclude="*.spec.ts" --exclude="test_*.py" \
+  src/ internal/ cmd/ pkg/ app/
+
+# Empty string assignments in critical fields
+grep -rn 'password\s*[:=]\s*""\|secret\s*[:=]\s*""\|token\s*[:=]\s*""' \
+  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.js" --include="*.py" \
+  --exclude="*_test.go" --exclude="*.test.ts" --exclude="*.test.tsx" --exclude="*.spec.ts" --exclude="test_*.py" \
+  src/ internal/ cmd/ pkg/ app/
+```
+
+| Pattern | Severity | Why |
+|---------|----------|-----|
+| `"placeholder"` | BLOCKING | Explicit placeholder value |
+| `"CHANGEME"` | BLOCKING | Developer left a reminder to replace |
+| `"xxx"` / `"XXX"` | WARNING | Likely placeholder |
+| `"test123"` | WARNING | Test value left in production code |
+| `"example"` / `"dummy"` / `"foobar"` | WARNING | Non-production values |
+| `"lorem"` / `"Lorem ipsum"` | WARNING | UI placeholder text in logic |
+| Placeholder in privileged action (auth, payment, admin) | BLOCKING | Privileged action called with fake data |
+
+**Exclusions:** Test files, seed scripts, documentation strings, example configuration templates.
+
+---
+
+## Check 5 — Debug Statement Detection
+
+Scan implementation code for debug/logging statements that should not be in production:
+
+**Search commands:**
+
+```bash
+# Go debug statements
+grep -rn 'fmt\.Print\|fmt\.Println\|log\.Print\|log\.Println\|spew\.Dump\|pp\.Print' \
+  --include="*.go" \
+  --exclude="*_test.go" \
+  src/ internal/ cmd/ pkg/ app/
+
+# TypeScript/JavaScript debug statements
+grep -rn 'console\.log\|console\.debug\|console\.warn\|console\.info\|console\.dir\|console\.trace\|debugger' \
+  --include="*.ts" --include="*.tsx" --include="*.js" --include="*.jsx" \
+  --exclude="*.test.ts" --exclude="*.test.tsx" --exclude="*.spec.ts" --exclude="*.test.js" \
+  src/ app/ pages/ components/ lib/
+
+# Python debug statements
+grep -rn 'print(\|pprint\.\|breakpoint()\|pdb\.set_trace\|import pdb\|import ipdb' \
+  --include="*.py" \
+  --exclude="test_*.py" --exclude="*_test.py" \
+  src/ app/ lib/
+```
+
+| Pattern | Language | Severity | Why |
+|---------|----------|----------|-----|
+| `fmt.Println` / `fmt.Printf` (not in main/CLI) | Go | WARNING | Use structured logger instead |
+| `log.Println` / `log.Printf` (stdlib log) | Go | WARNING | Use structured logger (slog, zap, zerolog) |
+| `spew.Dump` / `pp.Print` | Go | BLOCKING | Debug-only dependency in production code |
+| `console.log` / `console.debug` | TypeScript/JS | WARNING | Pollutes browser/Node console |
+| `console.warn` / `console.info` | TypeScript/JS | INFO | May be intentional, review context |
+| `debugger` | TypeScript/JS | BLOCKING | Halts execution in production |
+| `print()` (bare) | Python | WARNING | Use structured logging |
+| `breakpoint()` / `pdb.set_trace()` | Python | BLOCKING | Halts execution in production |
+
+**Exclusions:**
+- Structured logger calls (`slog.Info`, `logger.Info`, `log.Info` from a configured logger package) are NOT debug statements
+- CLI entry points (`main.go`, `cmd/`) may legitimately use `fmt.Println` for user output
+- Explicitly tagged logging (`// intentional: user-facing output`) is excluded
+
+---
+
+## Check 6 — Import Hygiene (Dead Imports)
 
 Verify all imports are used:
 
+**Search strategy:**
+
 | Language | How to Check |
 |----------|-------------|
-| Go | `go vet` detects unused imports (compile error in Go) |
-| TypeScript | Scan for imported names not referenced in file body |
-| Python | Scan for imported names not referenced in file body |
+| Go | `go vet` detects unused imports (compile error in Go). Also search for imported package names not referenced in the file body. |
+| TypeScript | Scan for imported names not referenced in file body. Check both named imports (`import { X }`) and default imports (`import X`). |
+| Python | Scan for imported names not referenced in file body. Check both `import X` and `from X import Y` forms. |
+
+**For each import found:**
+1. Extract the imported name(s)
+2. Search the rest of the file for any reference to that name
+3. If no reference exists, flag as unused
 
 **WARNING** for unused imports (indicates dead code or incomplete refactoring).
 
 ---
 
-## Check 6 — Dead Code Detection
+## Check 7 — Dead Code Detection
 
 Scan for:
 
@@ -150,56 +296,101 @@ Scan for:
 
 ---
 
-## Severity Levels (Standardized)
+## Check 8 — Test Coverage Threshold
 
-| Level | Meaning | Maps to Gate |
-|---|---|---|
-| BLOCKING | Must fix before gate | Phase gate blocker |
-| WARNING | Should fix, not blocking | Carried forward if unfixed |
-| INFO | Optional improvement | No gate impact |
+Read the test coverage report (if available) or scan test files:
+
+1. Verify test files exist for each implemented component
+2. If a coverage tool output exists, compare against the threshold from IMPLEMENTATION_GUIDELINES or phase_context
+3. Flag components with no test file as BLOCKING
+4. Flag components with test files but below threshold as WARNING
 
 ---
 
-## Output: `agent_state/phases/N/reports/quality_gate_verification.md`
+## Severity Levels (Standardized)
+
+| Level | Meaning | Maps to Gate | Action Required |
+|---|---|---|---|
+| BLOCKING | Must fix before gate | Phase gate blocker | Implementation agent must fix before gate passes |
+| WARNING | Should fix, not blocking | Carried forward if unfixed | Logged as known issue, tracked for next phase |
+| INFO | Optional improvement | No gate impact | Suggestion only |
+
+**Escalation rule:** If a WARNING pattern appears in a privileged context (auth handlers, payment processing, admin operations, data deletion), escalate to BLOCKING.
+
+---
+
+## Output: `agent_state/phases/N/reports/code_quality.md`
+
+Write the full report to `agent_state/phases/{{PHASE}}/reports/code_quality.md`:
 
 ```markdown
-# Quality Gate Verification — Phase N
+# Code Quality Report — Phase N
 
 ## Summary
 PASS | FAIL
 N BLOCKING / N WARNING / N INFO
+Files scanned: N implementation / N test / N config
 
-## Gate Items
+## Findings
 
-### TODO/FIXME/HACK Scan
+### 1. TODO/FIXME/HACK Scan (Implementation Code)
 | File | Line | Pattern | Context | Severity |
 |------|------|---------|---------|----------|
 
-### Stub/Hollow Detection
+### 2. Stub/Hollow Detection
 | Endpoint/Function | Location | Status | Evidence | Severity |
 |-------------------|----------|--------|----------|----------|
 | GET /api/v1/users | handlers/user.go:42 | SUBSTANTIVE | Real query + response mapping | PASS |
 | POST /api/v1/items | handlers/item.go:18 | STUB | Returns nil, nil | BLOCKING |
 
-### Test Coverage
-| Component | Test File | Coverage | Threshold | Status |
-|-----------|-----------|----------|-----------|--------|
-
-### Hardcoded Secrets/URLs
+### 3. Hardcoded Secrets
 | File | Line | Pattern | Value (redacted) | Severity |
 |------|------|---------|-----------------|----------|
 
-### Import Hygiene
+### 4. Placeholder Values
+| File | Line | Value | Context | Severity |
+|------|------|-------|---------|----------|
+
+### 5. Debug Statements
+| File | Line | Statement | Severity |
+|------|------|-----------|----------|
+
+### 6. Import Hygiene
 | File | Unused Import | Severity |
 |------|--------------|----------|
 
-### Dead Code
+### 7. Dead Code
 | File | Lines | Description | Severity |
 |------|-------|-------------|----------|
+
+### 8. Test Coverage
+| Component | Test File | Coverage | Threshold | Status |
+|-----------|-----------|----------|-----------|--------|
 
 ## Verdict
 PASS — all BLOCKING items resolved
 FAIL — N BLOCKING items remain (must fix before gate)
+```
+
+Also write machine-readable evidence to `agent_state/phases/{{PHASE}}/reports/quality_gate_evidence.json`:
+
+```json
+{
+  "phase": "N",
+  "verdict": "PASS|FAIL",
+  "counts": { "blocking": 0, "warning": 0, "info": 0 },
+  "files_scanned": { "implementation": 0, "test": 0, "config": 0 },
+  "findings": [
+    {
+      "check": "todo_scan|stub_detection|secrets|placeholders|debug_statements|import_hygiene|dead_code|test_coverage",
+      "file": "path/to/file.go",
+      "line": 42,
+      "pattern": "TODO",
+      "context": "// TODO: implement retry logic",
+      "severity": "BLOCKING|WARNING|INFO"
+    }
+  ]
+}
 ```
 
 ---
@@ -208,6 +399,24 @@ FAIL — N BLOCKING items remain (must fix before gate)
 
 - Every finding must include file:line evidence — no vague references
 - BLOCKING findings are phase gate blockers — the gate does not pass with any unresolved
-- Test fixture files (test data, mocks) are excluded from secret scanning
+- Test fixture files (test data, mocks, seed scripts) are excluded from secret and placeholder scanning
 - Comments that explain WHY something is a certain way are not dead code — only commented-out executable code counts
+- TODOs in test code and documentation are acceptable per the TODO Policy — do NOT flag them
+- TODOs in implementation code are NOT acceptable — always flag them
+- Debug statements in CLI entry points (`main.go`, `cmd/`) may be legitimate — check context before flagging
+- Structured logger calls are NOT debug statements — do not flag `slog.Info`, `logger.Info`, `zap.Info`, etc.
 - Run in parallel with other reviewers — do not wait for code_reviewer_I or code_reviewer_II
+- If no implementation files are found in scope, report PASS with a note that no files were scanned
+
+---
+
+## Universal Agent Return Protocol
+
+When complete, return this exact format to the parent conversation — nothing more:
+
+```
+code_quality_verifier — <status: complete | blocked | partial>
+   Wrote: agent_state/phases/{{PHASE}}/reports/code_quality.md
+   Done:  <what was verified in one line>
+   Issues: none | <N blocking / N warning>
+```
