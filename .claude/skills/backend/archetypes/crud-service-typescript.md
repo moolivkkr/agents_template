@@ -80,10 +80,8 @@ export interface UpdateWidgetInput {
   version: number;
 }
 
-/**
  * WidgetService defines the business operations for widgets.
  * Rule: Keep interfaces small (3-7 methods). Split if > 7.
- */
 export interface IWidgetService {
   create(tenantId: string, userId: string, input: CreateWidgetInput): Promise<Widget>;
   get(tenantId: string, id: string): Promise<Widget>;
@@ -102,10 +100,8 @@ export interface IWidgetService {
 import type { Widget } from "../domain/entity";
 import type { ListFilters, ListResult, OffsetListFilters, OffsetListResult } from "../types/pagination";
 
-/**
  * Repository defines the data access contract. Owned by the consumer (service).
  * Accept interfaces, return structs — constructor takes interfaces, returns concrete type.
- */
 export interface IWidgetRepository {
   create(widget: Widget): Promise<Widget>;
   findById(tenantId: string, id: string): Promise<Widget | null>;
@@ -388,10 +384,8 @@ export class WidgetService implements IWidgetService {
 import { PrismaClient } from "@prisma/client";
 import type { Widget } from "../domain/entity";
 
-/**
  * Multi-step creation within a Prisma transaction.
  * All operations succeed or all roll back.
- */
 export async function createWithRelations(
   prisma: PrismaClient,
   input: {
@@ -429,9 +423,7 @@ export async function createWithRelations(
   });
 }
 
-/**
  * Prisma interactive transaction with custom timeout and isolation level.
- */
 export async function updateWithInventoryCheck(
   prisma: PrismaClient,
   tenantId: string,
@@ -477,10 +469,8 @@ import { type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { widgets, components } from "../db/schema";
 import type { Widget } from "../domain/entity";
 
-/**
  * Multi-step creation within a Drizzle transaction.
  * All operations succeed or all roll back.
- */
 export async function createWithRelations(
   db: PostgresJsDatabase,
   input: {
@@ -521,9 +511,7 @@ export async function createWithRelations(
   });
 }
 
-/**
  * Drizzle transaction with savepoints for partial rollback.
- */
 export async function transferWidget(
   db: PostgresJsDatabase,
   tenantId: string,
@@ -574,10 +562,8 @@ export async function transferWidget(
 ```typescript
 // src/lib/logger.ts
 
-/**
  * Structured logger interface — compatible with pino, winston, or console.
  * Every service accepts this via constructor injection.
- */
 export interface Logger {
   debug(message: string, meta?: Record<string, unknown>): void;
   info(message: string, meta?: Record<string, unknown>): void;
@@ -649,10 +635,8 @@ import { RedisCache } from "./lib/redis-cache";
 import { AuditWriter } from "./lib/audit-writer";
 import { createLogger } from "./lib/logger";
 
-/**
  * Composition root — wire all dependencies.
  * Every dependency is explicit. No global state.
- */
 export function createServices() {
   const prisma = new PrismaClient();
   const redis = new Redis(process.env.REDIS_URL!);

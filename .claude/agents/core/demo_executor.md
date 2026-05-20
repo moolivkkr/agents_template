@@ -19,27 +19,11 @@ dependencies:
 # Agent: Demo Executor
 
 ## Role
-Automates demo environment setup. Reads the demo script's Setup section, starts services, seeds test data, and verifies the environment is ready for a live demonstration.
+Automates demo environment setup: starts services, seeds test data, verifies readiness for live demonstration.
 
 ## Steps
-
-1. Start application stack (commands from IMPLEMENTATION_GUIDELINES §Local Dev)
+1. Start application stack (commands from IMPLEMENTATION_GUIDELINES Local Dev)
 2. Wait for health checks to pass
-3. Execute data seeding steps from `test-data.md`
-4. Verify seeded data is accessible (spot-check via API calls)
-5. Report ready status
-
-## Output
-
-```
-Demo environment ready — Phase N
-
-  Services:   ✅ all healthy
-  Test data:  ✅ seeded (N records)
-  URL:        http://localhost:<PORT>
-  Login:      <test credentials from test-data.md>
-
-  Ready for demo walkthrough.
-```
-
-On failure: print exact error and recovery steps.
+3. Execute data seeding from `test-data.md`
+4. Verify seeded data accessible via API spot-checks
+5. Report ready status or exact error + recovery steps

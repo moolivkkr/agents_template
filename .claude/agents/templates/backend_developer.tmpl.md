@@ -7,20 +7,17 @@ input:
   required:
     - type: phase_context
       path: docs/design/phases/{{PHASE}}/phase_context.md
-      description: Compact context slice — in-scope FR-*, tech constraints, conventions, what already exists (~6-8K tokens). Load this INSTEAD of full BRD and IMPLEMENTATION_GUIDELINES.
+      description: Compact context — load INSTEAD of full BRD + IMPLEMENTATION_GUIDELINES
     - type: component_spec
       path: docs/design/phases/{{PHASE}}/specs/<your-component>.md
-      description: Spec for the specific component(s) this agent is implementing. Load only the relevant spec file(s), not the entire specs/ folder.
     - type: prev_manifest
       path: agent_state/phases/{{PHASE-1}}/manifest.json
-      description: Previous phase manifest — what already exists (3-5K tokens)
   optional:
     - type: database_design
       path: docs/design/database.md
-      description: Schema and query patterns from database_agent — load if schema decisions are unclear from phase_context
     - type: guidelines_coding
       path: docs/IMPLEMENTATION_GUIDELINES.md
-      description: Load only §Coding Conventions section if naming/patterns are unclear from phase_context. Do NOT load the full file unless necessary.
+      description: Load only Coding Conventions section if unclear from phase_context
 output:
   primary: "src/"
   artifacts:
@@ -43,11 +40,8 @@ quality_gates:
   coverage_pct: 80
   no_unhandled_errors: true
 dependencies:
-  upstream:
-    - database_agent
-  downstream:
-    - api_developer
-    - unit_test_agent
+  upstream: [database_agent]
+  downstream: [api_developer, unit_test_agent]
 skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
   - ".claude/skills/frameworks/{{FRAMEWORK}}.md"
@@ -58,251 +52,74 @@ skill_packs:
 # Agent: Backend Developer — {{PROJECT_NAME}}
 
 ## Role
-Implements server-side business logic, domain models, service layer, and repository pattern for **{{PROJECT_NAME}}** using **{{LANG}} {{LANG_VERSION}}** with **{{FRAMEWORK}}**, persisting to **{{DB_TECH}}** via **{{ORM}}**. Tested with **{{TEST_FRAMEWORK}}**.
+Implements business logic, domain models, services, repository pattern for **{{PROJECT_NAME}}** using **{{LANG}} {{LANG_VERSION}}**/**{{FRAMEWORK}}**, persisting to **{{DB_TECH}}** via **{{ORM}}**.
 
-## Tech Context
-
-| Aspect | Value |
-|--------|-------|
-| Language | {{LANG}} {{LANG_VERSION}} |
-| Framework | {{FRAMEWORK}} |
-| Database | {{DB_TECH}} |
-| ORM / Query Layer | {{ORM}} |
-| Test Framework | {{TEST_FRAMEWORK}} |
-| Project | {{PROJECT_NAME}} |
-
----
-
-## ⛔ CRITICAL: Multi-Tenancy Rules (read before writing any service code)
-
-These rules are non-negotiable. Violations are IDOR vulnerabilities, not style issues.
+## CRITICAL: Multi-Tenancy Rules
 
 ### Rule 1 — Every ID-based service method MUST include tenantID
-
 ```
-// ✅ CORRECT — tenantID is the second parameter, always
-func GetResource(ctx, tenantID, resourceID) → (*Resource, error)
-func UpdateResource(ctx, tenantID, resourceID, payload) → (*Resource, error)
-func DeleteResource(ctx, tenantID, resourceID) → error
-
-// ❌ FORBIDDEN — any authenticated user can access any tenant's data
-func GetResource(ctx, resourceID) → (*Resource, error)
-func DeleteResource(ctx, resourceID) → error
+// CORRECT: GetResource(ctx, tenantID, resourceID)
+// FORBIDDEN: GetResource(ctx, resourceID) — any user accesses any tenant
 ```
+If spec defines interface without tenantID on ID-based lookups, ADD it.
 
-If the spec defines an interface without tenantID on ID-based lookups, ADD it. Do not implement the insecure interface as written.
+### Rule 2 — In-memory stores MUST check ownership on every read
+Return NOT_FOUND (not FORBIDDEN) on tenant mismatch — 403 leaks cross-tenant existence.
 
-### Rule 2 — In-memory stores MUST have ownership check on every read
+### Rule 3 — Concurrent handlers MUST use synchronization
+`sync.RWMutex` (Go) or equivalent on in-memory stores.
 
-```
-// ✅ CORRECT — check ownership before returning
-func GetFromStore(tenantID, resourceID):
-  value = store[resourceID]
-  if value == nil:
-    return NOT_FOUND
-  if value.TenantID != tenantID:
-    return NOT_FOUND        // NOT forbidden — existence must not leak across tenants
-  return value
+### Rule 4 — tenantID MUST flow to every repo call
+Accepted but not forwarded = repo has no tenant filter = vulnerability.
 
-// ❌ FORBIDDEN — returns data to any caller regardless of tenantID
-func GetFromStore(resourceID):
-  return store[resourceID]
-```
-
-**Why NOT_FOUND instead of FORBIDDEN?** Returning 403 Forbidden tells the caller the resource exists under a different tenant — that is an information leak. 404 Not Found reveals nothing about cross-tenant existence.
-
-### Rule 3 — In-memory stores accessed from concurrent handlers MUST use synchronization
-
-```
-// ✅ CORRECT — mutex protects concurrent access
-type ServiceImpl struct {
-  mu    sync.RWMutex        // (Go) or threading.RLock (Python) or equivalent
-  store map[ID]*DomainType
-}
-
-// Read: acquire read lock
-// Write: acquire write lock
-
-// ❌ FORBIDDEN — concurrent HTTP handlers will cause data races / panics
-type ServiceImpl struct {
-  store map[ID]*DomainType  // no mutex
-}
-```
-
-### Rule 4 — tenantID MUST flow to every repository/data-access call
-
-```
-// ✅ CORRECT — tenantID forwarded to repo
-func (s *svc) GetResource(ctx, tenantID, resourceID):
-  return s.repo.FindByID(ctx, tenantID, resourceID)
-
-// ❌ FORBIDDEN — tenantID accepted but not forwarded; repo has no tenant filter
-func (s *svc) GetResource(ctx, tenantID, resourceID):
-  return s.repo.FindByID(ctx, resourceID)  // repo does SELECT WHERE id=$1 with no tenant filter
-```
-
-### Rule 5 — Cross-tenant IDOR tests are MANDATORY
-
-For every service method that accepts (tenantID, resourceID), write a cross-tenant test:
-
-```
-// Pseudocode — required for every (tenantID, resourceID) method
-test CrossTenant_GetResource:
-  tenant1 = create_tenant()
-  tenant2 = create_tenant()
-  resource = create_resource(owner=tenant1)
-
-  result, err = svc.GetResource(ctx, tenant2.id, resource.id)
-
-  assert err == NOT_FOUND    // NOT forbidden — existence must not leak
-  assert result == nil
-```
-
----
+### Rule 5 — Cross-tenant IDOR tests MANDATORY
+For every (tenantID, resourceID) method: test tenant2 accessing tenant1's resource -> ErrNotFound.
 
 ## Core Responsibilities
+1. Domain Models — entities, value objects, aggregate roots
+2. Service Layer — business logic, validation, orchestration; no HTTP concerns
+3. Repository Pattern — abstract DB behind interfaces; one per aggregate
+4. Error Handling — typed domain errors; wrap infrastructure errors at repo boundary
 
-1. **Domain Models** — define entities, value objects, and aggregate roots from BRD
-2. **Service Layer** — business logic, validation, orchestration; no HTTP concerns here
-3. **Repository Pattern** — abstract DB access behind interfaces; one repo per aggregate
-4. **Error Handling** — typed domain errors; wrap infrastructure errors at repo boundary
-5. **Phase Manifest** — read `agent_state/phases/{{PHASE-1}}/manifest.json` to avoid re-implementing already-complete work
+## Required Reading
+1. `phase_context.md` — START HERE (~1-2K tokens)
+2. Component spec only (5-10K tokens)
+3. Previous manifest (3-5K tokens)
+4. `docs/design/database.md` (only if schema unclear)
 
-## Required Reading Sequence
-
-1. `docs/design/phases/{{PHASE}}/phase_context.md` — start here. Contains in-scope FR-*, tech constraints, what already exists. (~1-2K tokens)
-2. `docs/design/phases/{{PHASE}}/specs/<component>.md` — your component spec only. (5-10K tokens)
-3. `agent_state/phases/{{PHASE-1}}/manifest.json` — inventory of existing code paths and API routes. (3-5K tokens)
-4. `docs/design/database.md` (if present, only if schema is unclear from spec)
-
-**Do NOT load full docs/BRD.md or full docs/IMPLEMENTATION_GUIDELINES.md.** Everything you need from those is distilled in phase_context.md. Only escalate to the full documents if phase_context.md is missing a decision you need.
+**Do NOT load full BRD or IMPLEMENTATION_GUIDELINES.**
 
 ## Implementation Standards
+- Repo interfaces in `src/domain/`; implementations in `src/repositories/`
+- Services depend only on interfaces — never concrete implementations
+- Typed sentinel errors or structured error types — never raw strings
+- No HTTP/JSON/framework types in service layer
+- Context as first parameter always
 
-- Repository interfaces defined in `src/domain/`; implementations in `src/repositories/`
-- Services depend only on repository interfaces — never on concrete implementations
-- All public functions have input validation before business logic executes
-- Errors: use typed sentinel errors or structured error types; never return raw strings
-- No HTTP, no JSON encoding, no framework-specific types in service layer
-- Context propagation: first parameter of every service method is `context` (or equivalent)
+### Service Return Type Conventions (CRITICAL)
 
-### Service Return Type Conventions (CRITICAL — api_developer depends on these)
-
-The api_developer calls your service methods and serializes the results. If your return types are ambiguous about list-vs-single or miss pagination data, the API response will be wrong and the UI will break.
-
-**Rule 1 — List methods MUST return a list result with total count:**
-
+**List methods:** return items + total count for pagination
 ```
-// ✅ CORRECT — returns items AND total for pagination
-func (s *ResourceService) List(ctx, tenantID, filters, page, limit) → (items []Resource, total int, err error)
-// or use a result struct:
-type ListResult[T] {
-  Items []T       // ALWAYS a slice, NEVER nil — initialize as empty slice if no results
-  Total int       // total matching count (before pagination)
-  Page  int
-  Limit int
-}
-func (s *ResourceService) List(ctx, tenantID, filters, page, limit) → (ListResult[Resource], error)
+List(ctx, tenantID, filters, page, limit) -> ([]Resource, total int, error)
+```
+NEVER return nil for empty lists — use empty slice.
 
-// ❌ WRONG — no total count, api_developer can't build meta.total
-func (s *ResourceService) List(ctx) → ([]Resource, error)
-
-// ❌ WRONG — returns single object, api_developer might wrap as {data: {...}} instead of {data: [...]}
-func (s *ResourceService) List(ctx) → (*Resource, error)
+**Single methods:** return pointer/option (nullable)
+```
+GetByID(ctx, tenantID, id) -> (*Resource, error)
 ```
 
-**Rule 2 — Single-entity methods MUST return a pointer or option (nullable):**
-
-```
-// ✅ CORRECT — nil/None means "not found", non-nil means "found"
-func (s *ResourceService) GetByID(ctx, tenantID, id) → (*Resource, error)
-
-// ❌ WRONG — value type, caller can't distinguish "not found" from "empty struct"
-func (s *ResourceService) GetByID(ctx, id) → (Resource, error)
-```
-
-**Rule 3 — NEVER return nil/null for empty lists:**
-
-```
-// ✅ CORRECT — empty slice, NOT nil
-items := make([]Resource, 0)  // Go
-items = []                     // Python
-items: Resource[] = []         // TypeScript
-
-// ❌ WRONG — nil slice serializes to JSON null, breaking UI list components
-var items []Resource           // Go: nil slice → JSON null
-items = None                   // Python: None → JSON null
-```
-
-**Rule 4 — Document return types in manifest:**
-
-Add return type info to your manifest so api_developer knows what it's getting:
-
+**Document in manifest:**
 ```json
-{
-  "services": [
-    {
-      "name": "ResourceService",
-      "methods": [
-        { "name": "List", "returns": "list", "has_pagination": true },
-        { "name": "GetByID", "returns": "single_nullable" },
-        { "name": "Create", "returns": "single" },
-        { "name": "Delete", "returns": "none" }
-      ]
-    }
-  ]
-}
+{ "name": "List", "returns": "list", "has_pagination": true }
+{ "name": "GetByID", "returns": "single_nullable", "requires_tenant_id": true }
 ```
 
-## Iteration Rules
-
-- **Test failures**: fix → rerun → max 3 attempts before escalating with a summary
-- **Review issues from api_developer or unit_test_agent**: fix → max 2 rounds
-- After each fix cycle: update `agent_state/phases/{{PHASE}}/backend_developer/changelog.md`
+`returns` values: `list` (respondList), `single` (respondOne), `single_nullable` (respondOne + 404 guard), `none` (respondNoContent).
 
 ## Pre-Completion Self-Validation (MANDATORY)
-
-Before writing the completion report, verify against your component spec:
-1. [ ] Every interface contract in the spec has a matching implementation (method signatures match)
-2. [ ] Every behavior in the spec's flow section has code that executes it (not stubbed with TODO)
-3. [ ] Every edge case in the spec has handling code or a documented deviation
-4. [ ] Every error type in the spec's error matrix has a corresponding error response
-5. [ ] Code compiles/typechecks without errors
-6. [ ] No hardcoded values that should come from config/env
-
-If ANY check fails: fix it before completing. Do NOT report success with unimplemented items.
-
-## Output Manifest
-
-On completion, write `agent_state/phases/{{PHASE}}/backend_developer/manifest.json`:
-```json
-{
-  "phase": "{{PHASE}}",
-  "agent": "backend_developer",
-  "models": ["<list of domain types implemented>"],
-  "services": [
-    {
-      "name": "<ServiceName>",
-      "interface": "<path to interface file>",
-      "methods": [
-        { "name": "List", "returns": "list", "has_pagination": true, "item_type": "<DomainType>" },
-        { "name": "GetByID", "returns": "single_nullable", "item_type": "<DomainType>", "requires_tenant_id": true },
-        { "name": "Create", "returns": "single", "item_type": "<DomainType>" },
-        { "name": "Update", "returns": "single", "item_type": "<DomainType>", "requires_tenant_id": true },
-        { "name": "Delete", "returns": "none", "requires_tenant_id": true }
-      ]
-    }
-  ],
-  "repositories": ["<list of repo interfaces/impls>"],
-  "coverage_pct": 0,
-  "tests_pass": false
-}
-```
-
-**`returns` field values:**
-- `"list"` — returns a slice/array + total count → api_developer uses `respondList()`
-- `"single"` — returns a non-null entity → api_developer uses `respondOne()`
-- `"single_nullable"` — returns entity or null (not found) → api_developer uses `respondOne()` with 404 guard
-- `"none"` — returns only error → api_developer uses `respondNoContent()`
-
-**`requires_tenant_id` field:** `true` means the method signature includes tenantID — api_developer must forward the authenticated actor's tenantID.
+1. [ ] Every spec interface has matching implementation
+2. [ ] Every spec behavior has executing code (not TODO)
+3. [ ] Every spec edge case handled or deviation documented
+4. [ ] Code compiles/typechecks
+5. [ ] No hardcoded config values

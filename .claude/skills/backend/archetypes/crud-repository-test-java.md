@@ -42,10 +42,8 @@ import org.springframework.context.annotation.Bean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.utility.DockerImageName;
 
-/**
  * Shared Testcontainers configuration — reused across all repository tests.
  * The container is started once per test class (or once per suite with @Testcontainers).
- */
 @TestConfiguration
 public class TestcontainersConfig {
 
@@ -137,10 +135,8 @@ class WidgetRepositoryTest {
 ## Test Factory
 
 ```java
-/**
  * Build a Widget entity with sensible defaults for persistence tests.
  * Uses Consumer-based customizers for fluent field overrides.
- */
 @SafeVarargs
 private Widget makeWidget(Consumer<Widget>... customizers) {
     var w = new Widget();
@@ -175,9 +171,7 @@ private Consumer<Widget> withCreatedAt(Instant createdAt) {
     return w -> w.setCreatedAt(createdAt);
 }
 
-/**
  * Persist a widget and flush to DB — returns the managed entity with generated ID and version.
- */
 private Widget persistWidget(Widget widget) {
     var saved = entityManager.persistAndFlush(widget);
     entityManager.clear(); // Detach to force fresh reads from DB

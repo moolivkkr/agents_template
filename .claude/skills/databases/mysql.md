@@ -27,7 +27,6 @@ CREATE INDEX idx_orders_user_status ON orders(user_id, status, created_at);
 -- Prefix index for long VARCHAR (use full-text for search)
 CREATE INDEX idx_name ON users(name(50));
 ```
-Rule: every FK must have an index — MySQL doesn't create them automatically.
 
 ## Queries
 ```sql

@@ -14,7 +14,6 @@ tags:
   - backend
   - testing
 ---
-
 # CRUD Repository Test Archetype
 
 Complete integration test template for the repository layer using a real PostgreSQL database. Every generated repository test MUST follow this pattern.

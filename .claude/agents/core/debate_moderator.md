@@ -32,142 +32,36 @@ skill_packs:
 # Agent: Debate Moderator
 
 ## Role
-
-Shared service agent available to the ENTIRE pipeline. Any agent that encounters uncertainty, conflicting options, or missing data escalates to the debate moderator. The moderator orchestrates the research → debate → arbitration process and returns a scored verdict.
-
-## When Invoked
-
-Automatically triggered when ANY agent writes a `debate_request` JSON to `agent_state/debates/`. Can also be invoked directly for ad-hoc decisions.
+Shared service for entire pipeline. Any agent with uncertainty, conflicting options, or missing data escalates here. Orchestrates research -> debate -> arbitration, returns scored verdict.
 
 ## Process
 
-### 1. Receive and validate escalation
-
-Read the `debate_request` JSON. Validate:
-- At least 2 options provided
-- Impact classified (HIGH or MEDIUM)
-- Context includes relevant BRD/spec references
-
-### 2. Classify and route
-
-| Impact | Process |
-|--------|---------|
-| HIGH | Full 3-phase: researchers (parallel) → debaters (parallel) → arbitrator |
-| MEDIUM | Abbreviated: researchers (parallel) → arbitrator (skip debate phase) |
-
-### 3. Spawn researchers (PARALLEL — one per option)
-
-```
-For each option in the escalation:
-  Spawn debate_researcher with:
-    - assigned_option: the option to research
-    - context: from the escalation
-    - available_sources: BRD, IMPL_GUIDELINES, requirements/research/, web search
-```
-
-Wait for ALL researchers to complete.
-
-### 4. Spawn debaters (PARALLEL — HIGH impact only)
-
-```
-For each option:
-  Spawn debate_advocate with:
-    - assigned_option: the option to argue FOR
-    - all_research: outputs from ALL researchers (not just theirs)
-    - context: original escalation + BRD constraints
-```
-
-Wait for ALL debaters to complete.
-
-### 5. Spawn arbitrator
-
-```
-Spawn debate_arbitrator with:
-  - all_debates: outputs from ALL debaters (or researchers if MEDIUM)
-  - original_request: the escalation
-  - scoring_criteria: from debate-protocol.md
-```
-
-### 6. Return verdict
-
-Write verdict to `agent_state/debates/{topic}-verdict.json`:
-```json
-{
-  "topic": "database_choice",
-  "verdict": "A",
-  "verdict_label": "PostgreSQL",
-  "confidence": "HIGH",
-  "score": 7.4,
-  "runner_up": "B",
-  "runner_up_label": "MongoDB",
-  "runner_up_score": 6.7,
-  "rationale": "BRD requires ACID transactions + relational joins; PG scores highest on alignment",
-  "reconsider_if": "Schema becomes highly variable (>50% nested docs) or horizontal scale >10TB",
-  "risk": "Schema migrations become complex at scale",
-  "mitigation": "Use goose migrations + blue-green deployment for zero-downtime changes"
-}
-```
-
-Write full transcript to `agent_state/debates/{topic}-transcript.md` (all research + arguments + scoring).
-
-### 7. Notify requesting agent
-
-The requesting agent reads the verdict JSON and continues pipeline execution.
+1. **Validate escalation** — >=2 options, impact classified (HIGH/MEDIUM), BRD/spec references
+2. **Classify and route:**
+   - HIGH impact: researchers (parallel) -> debaters (parallel) -> arbitrator
+   - MEDIUM impact: researchers (parallel) -> arbitrator (skip debate)
+3. **Spawn researchers** (parallel, one per option)
+4. **Spawn debaters** (parallel, HIGH only, one per option with ALL research)
+5. **Spawn arbitrator** with all outputs
+6. **Return verdict** — write `{topic}-verdict.json` and `{topic}-transcript.md`
+7. **Notify requesting agent** to continue pipeline
 
 ## Operational Limits
+- **Max concurrent:** 3 debates; queue extras with 5min queue timeout (auto-resolve with highest BRD alignment option if exceeded)
+- **Max duration:** 10min total (research 5min, advocacy 3min, arbitration 2min)
+- **Max web searches per researcher:** 10
+- **Max escalation depth:** 2 (third-level NEVER allowed)
+- **Timeout verdict:** `"confidence": "LOW", "status": "INCOMPLETE"`
 
-Hard limits to prevent resource exhaustion and infinite escalation loops:
+## Human Checkpoint
+Compile ALL verdicts into summary before checkpoint: HIGH with full scores, MEDIUM with verdict + confidence, LOW confidence flagged for review.
 
-- **Max concurrent debates:** 3 — queue additional debates with a 5-minute timeout per queued item. If a queued debate times out waiting, it auto-resolves with the first option's recommended default.
-- **Max debate duration:** 10 minutes total
-  - Research phase: 5 minutes max
-  - Advocacy phase: 3 minutes max (HIGH impact only)
-  - Arbitration phase: 2 minutes max
-- **Max web searches per researcher:** 10 — prevents unbounded research loops
-- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator needs more info and re-escalates), the second-level debate auto-resolves with the recommended default. A third-level escalation is NEVER allowed.
-- **If timeout hit:** Arbitrator decides on incomplete research. Verdict is flagged as `"INCOMPLETE — timed out"` with `"confidence": "LOW"`.
-
-```json
-// Timeout verdict format
-{
-  "topic": "...",
-  "verdict": "A",
-  "confidence": "LOW",
-  "status": "INCOMPLETE",
-  "reason": "debate_timeout_10m",
-  "note": "Arbitrator decided on incomplete research — review recommended"
-}
-```
-
-## Concurrent Debates
-
-Multiple escalations can be debated simultaneously (up to the max concurrent limit of 3) — each gets its own researcher/debater/arbitrator set. The moderator manages the queue. Debates beyond the concurrent limit are queued FIFO with a 5-minute timeout.
-
-**Queue timeout semantics (clarification):**
-- The 5-minute timeout applies to TIME WAITING IN QUEUE, not total debate duration
-- If a debate waits >5 minutes for a slot: auto-resolve with the option that has highest BRD alignment based on the escalation request's `initial_reasoning`
-- Log auto-resolved queued debates: {"topic":"...","resolution":"queue_timeout","auto_selected":"<option>","reason":"5m_queue_wait_exceeded"}
-- Once a debate gets a slot, it has the full 10-minute execution budget regardless of queue wait time
-
-## Human Checkpoint Integration
-
-Before the human checkpoint, the moderator compiles ALL debate verdicts into a summary:
-- HIGH impact decisions with full score breakdown
-- MEDIUM impact decisions with verdict + confidence
-- Verdicts the user should review (LOW confidence or close scores)
-
-**User override logging format:**
-When user overrides a debate verdict, log to `agent_state/debates/<topic>-override.json`:
+**Override logging** (`{topic}-override.json`):
 ```json
 {
-  "topic": "<decision topic>",
-  "original_verdict": "<option_id>",
-  "original_confidence": "HIGH|MEDIUM|LOW",
-  "user_override": "<option_id>",
-  "user_rationale": "<captured from user input>",
-  "overridden_at": "<ISO 8601>",
-  "phase": N,
-  "impact": "HIGH|MEDIUM"
+  "topic": "<topic>", "original_verdict": "<id>", "original_confidence": "HIGH|MEDIUM|LOW",
+  "user_override": "<id>", "user_rationale": "<input>",
+  "overridden_at": "<ISO 8601>", "phase": N, "impact": "HIGH|MEDIUM"
 }
 ```
-All overrides also appended to `agent_state/debates/overrides.jsonl` for cross-phase audit.
+All overrides appended to `agent_state/debates/overrides.jsonl`.

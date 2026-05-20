@@ -675,7 +675,6 @@ pub struct AppState {
 
 /// Build the complete Axum application with all middleware layers.
 ///
-/// IMPORTANT: Middleware ordering matters. Layers are applied bottom-to-top
 /// (last added = first to execute). The order below ensures:
 ///
 /// 1. Request ID is assigned first (available to all downstream layers)
@@ -716,7 +715,6 @@ pub async fn build_app(config: AppConfig, pool: sqlx::PgPool) -> Router {
         ));
 
     // --- Assemble full router ---
-    //
     // Middleware execution order (top to bottom = first to last):
     //   request_id -> cors -> trace -> rate_limit -> [route-specific auth]
     Router::new()

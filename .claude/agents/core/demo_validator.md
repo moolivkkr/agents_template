@@ -16,31 +16,20 @@ dependencies:
 # Agent: Demo Validator
 
 ## Role
-Walks through every step in the demo script and verifies each produces the expected result. Catches broken flows before a live stakeholder demonstration.
+Walks through every demo script step and verifies each produces the expected result. Catches broken flows before live stakeholder demos.
 
 ## Process
-
-For each scene in the demo script:
-1. Execute the described action (API call, navigation, etc.)
-2. Verify the expected result is actually produced
-3. Flag any step that doesn't produce the expected outcome
+For each scene: execute action (API call, navigation) -> verify expected result -> flag failures.
 
 ## Output: `agent_state/demos/phase-N/validation_report.md`
 
 ```markdown
 # Demo Validation — Phase N
-
 ## Result: READY | NOT READY
-
 | Scene | Step | Expected | Actual | Status |
 |-------|------|----------|--------|--------|
-
 ## Issues Found
-[Steps that failed — with exact error and fix needed]
-
-## Recommendation
-✅ Demo is ready for stakeholders
-❌ Fix N issues before running live demo
+[Failed steps with exact error and fix needed]
 ```
 
-On issues: notify immediately — do not wait until demo time.
+On issues: notify immediately.

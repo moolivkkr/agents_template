@@ -50,14 +50,10 @@ import {
   ConflictError,
 } from "../errors/domain-errors";
 
-/**
  * Test database setup.
- *
  * Option A: Use TEST_DATABASE_URL env var pointing to a local/CI Postgres.
  * Option B: Use testcontainers (see testcontainers setup below).
- *
  * The test database is created fresh for each test run via `prisma migrate deploy`.
- */
 let prisma: PrismaClient;
 let repo: PrismaWidgetRepository;
 
@@ -102,10 +98,8 @@ import { execSync } from "node:child_process";
 let container: StartedPostgreSqlContainer;
 let prisma: PrismaClient;
 
-/**
  * Starts a PostgreSQL container and runs Prisma migrations.
  * Call from beforeAll in your test suite.
- */
 export async function setupTestDatabase(): Promise<{
   prisma: PrismaClient;
   connectionUrl: string;
@@ -132,10 +126,8 @@ export async function setupTestDatabase(): Promise<{
   return { prisma, connectionUrl };
 }
 
-/**
  * Tears down the test database and container.
  * Call from afterAll in your test suite.
- */
 export async function teardownTestDatabase(): Promise<void> {
   await prisma.$disconnect();
   await container.stop();

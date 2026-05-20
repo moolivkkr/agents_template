@@ -119,10 +119,8 @@ import java.util.List;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-/**
  * Validates JWT Bearer tokens and sets the Spring Security authentication context.
  * Extends OncePerRequestFilter to guarantee single execution per request.
- */
 @Component
 public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
@@ -178,9 +176,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
     }
 
-    /**
      * Skip JWT filter for public endpoints to avoid unnecessary parsing.
-     */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         var path = request.getServletPath();
@@ -242,10 +238,8 @@ import org.springframework.security.core.userdetails.UserDetails;
 import java.util.Collection;
 import java.util.UUID;
 
-/**
  * Custom UserDetails implementation carrying tenant and user context.
  * Injected into controllers via @AuthenticationPrincipal.
- */
 public record UserPrincipal(
     UUID userId,
     UUID tenantId,
@@ -283,10 +277,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.Map;
 
-/**
  * Handles 401 Unauthorized responses with consistent JSON error format.
  * Called when an unauthenticated user tries to access a protected resource.
- */
 @Component
 public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
 
@@ -330,10 +322,8 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.Map;
 
-/**
  * Handles 403 Forbidden responses with consistent JSON error format.
  * Called when an authenticated user lacks required roles/permissions.
- */
 @Component
 public class CustomAccessDeniedHandler implements AccessDeniedHandler {
 
@@ -427,10 +417,8 @@ import org.springframework.stereotype.Component;
 
 import java.util.UUID;
 
-/**
  * Custom authorization logic referenced from @PreAuthorize SpEL expressions.
  * Usage: @PreAuthorize("@widgetAuthz.isOwner(#id, authentication)")
- */
 @Component("widgetAuthz")
 public class WidgetAuthorizationService {
 
@@ -440,9 +428,7 @@ public class WidgetAuthorizationService {
         this.widgetRepository = widgetRepository;
     }
 
-    /**
      * Check if the authenticated user is the creator of the widget.
-     */
     public boolean isOwner(UUID widgetId, Authentication authentication) {
         if (authentication == null || !(authentication.getPrincipal() instanceof UserPrincipal principal)) {
             return false;
@@ -475,10 +461,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
  * Per-tenant rate limiting using bucket4j token bucket algorithm.
  * Each tenant gets its own bucket with configurable rate and burst.
- */
 @Component
 public class RateLimitFilter implements Filter {
 
@@ -587,13 +571,10 @@ import org.springframework.stereotype.Component;
 import java.io.IOException;
 import java.util.UUID;
 
-/**
  * Generates or extracts a unique request ID for distributed tracing.
  * Checks X-Request-ID header first (client correlation), generates UUID if absent.
  * Sets MDC for structured logging and echos back on response header.
- *
  * Order: HIGHEST_PRECEDENCE — must run before all other filters.
- */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestIdFilter implements Filter {
@@ -643,13 +624,10 @@ import java.io.IOException;
 import java.security.MessageDigest;
 import java.util.List;
 
-/**
  * API key authentication as an alternative to JWT.
  * Checks X-API-Key header and resolves to a tenant/user context.
- *
  * API keys are stored as SHA-256 hashes in the database — never store plaintext.
  * Uses constant-time comparison to prevent timing attacks.
- */
 @Component
 public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 

@@ -23,7 +23,6 @@ Complete error handling system for Python backend services (FastAPI, Starlette).
 
 from typing import Any
 
-
 class AppError(Exception):
     """
     Base application error type.
@@ -83,7 +82,6 @@ class AppError(Exception):
 
 from app.errors.base import AppError
 
-
 # --- 400 Bad Request: Malformed Request (JSON parse errors, wrong content type) ---
 
 class BadRequestError(AppError):
@@ -96,7 +94,6 @@ class BadRequestError(AppError):
             http_status=400,
             cause=cause,
         )
-
 
 # --- 422 Unprocessable Entity: Business Validation Errors ---
 # Use 422 for well-formed requests that fail domain/business validation rules.
@@ -114,7 +111,6 @@ class ValidationError(AppError):
             cause=cause,
         )
 
-
 class MultiValidationError(AppError):
     """Multiple field validation failures."""
 
@@ -125,7 +121,6 @@ class MultiValidationError(AppError):
             http_status=422,
             details={"fields": field_errors},
         )
-
 
 # --- 401 Unauthorized: Authentication Errors ---
 
@@ -139,7 +134,6 @@ class UnauthorizedError(AppError):
             http_status=401,
         )
 
-
 # --- 403 Forbidden: Authorization Errors ---
 
 class ForbiddenError(AppError):
@@ -152,7 +146,6 @@ class ForbiddenError(AppError):
             http_status=403,
             details={"action": action, "resource": resource},
         )
-
 
 # --- 404 Not Found ---
 
@@ -168,7 +161,6 @@ class NotFoundError(AppError):
             details={"resource": resource, "identifier": identifier},
         )
 
-
 # --- 409 Conflict: Duplicate / Version Mismatch ---
 
 class ConflictError(AppError):
@@ -181,7 +173,6 @@ class ConflictError(AppError):
             http_status=409,
             details={"resource": resource, "reason": reason},
         )
-
 
 # --- 429 Too Many Requests ---
 
@@ -197,7 +188,6 @@ class RateLimitError(AppError):
         )
         self.retry_after_seconds = retry_after_seconds
 
-
 # --- 500 Internal Server Error ---
 
 class InternalError(AppError):
@@ -210,7 +200,6 @@ class InternalError(AppError):
             http_status=500,
             cause=cause,
         )
-
 
 # --- 502 Bad Gateway: Upstream Failure ---
 
@@ -277,7 +266,6 @@ from app.errors.base import AppError
 from app.errors.domain import RateLimitError
 
 logger = logging.getLogger(__name__)
-
 
 def register_exception_handlers(app: FastAPI) -> None:
     """
@@ -447,36 +435,26 @@ All error responses use the same envelope format as the Go and TypeScript archet
 
 ```python
 # --- WRAPPING RULES ---
-#
 # 1. Raise domain errors at the BOUNDARY where you KNOW the error type.
-#
 #    # In repository — this is where we know IntegrityError means conflict:
 #    except IntegrityError as exc:
 #        raise ConflictError(resource="widget", reason="duplicate name") from exc
 #    # NOT in the handler — the handler shouldn't know about SQLAlchemy.
-#
 # 2. Use `raise ... from exc` to preserve the exception chain for debugging.
-#
 #    try:
 #        await repo.create(widget)
 #    except IntegrityError as exc:
 #        raise ConflictError(resource="widget", reason="duplicate") from exc
 #    # The __cause__ is preserved for logging in the exception handler.
-#
 # 3. Never double-wrap domain errors — if the error is already an AppError, re-raise it.
-#
 #    except Exception as exc:
 #        if isinstance(exc, AppError):
 #            raise  # already a domain error — don't re-wrap
 #        raise InternalError(cause=exc) from exc  # unknown error — wrap as internal
-#
 # 4. Log the wrapped error at the TOP of the call stack (exception handler), not at every layer.
-#
 #    # ✅ Exception handler logs once with full context
 #    # ❌ Don't logger.error() at every layer — you get duplicate log lines
-#
 # 5. Preserve the exception chain for debugging.
-#
 #    # The chain should read like a traceback:
 #    # ConflictError("widget conflict: duplicate name")
 #    #   caused by IntegrityError("unique_violation on idx_widgets_name")
@@ -494,7 +472,6 @@ from app.errors import (
     UnauthorizedError,
     ValidationError,
 )
-
 
 class WidgetService:
     def __init__(self, repo: WidgetRepository) -> None:

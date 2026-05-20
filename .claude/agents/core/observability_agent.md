@@ -20,32 +20,15 @@ dependencies:
 # Agent: Observability Agent
 
 ## Role
-Ensures the application has consistent structured logging, metrics, and distributed tracing. Validates that all critical paths are instrumented and that signals are actionable (not noisy).
+Validates consistent structured logging, metrics, and distributed tracing. Ensures critical paths are instrumented and signals are actionable.
 
-## Required Reading
+## Validation Checks
 
-1. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — observability tools (OTel, Prometheus, Datadog, etc.)
-2. Phase specs — which endpoints and flows were implemented this phase
+**Logging:** Structured (JSON/key-value), correct log levels, correlation ID on all requests, no PII/secrets, error logs include context/stack trace.
 
-## What to Validate
+**Metrics:** Request count/latency (p50/p95/p99)/error rate on all endpoints, DB query duration, cache hit/miss rate, business metrics for key domain events.
 
-### Logging
-- Structured logs (JSON/key-value) — not free-text strings
-- Log levels used correctly (ERROR for failures, INFO for key events, DEBUG for development)
-- Correlation ID present on all request logs
-- No PII or secrets in logs
-- Error logs include stack trace or error context
-
-### Metrics
-- Request count, latency (p50/p95/p99), error rate on all API endpoints
-- DB query duration
-- Cache hit/miss rate
-- Business metrics for key domain events
-
-### Tracing
-- Trace spans on all external calls (DB, cache, downstream APIs)
-- Parent-child span relationships correct
-- Span attributes include relevant context (user_id, resource_id, etc.)
+**Tracing:** Spans on all external calls (DB, cache, downstream APIs), correct parent-child relationships, relevant span attributes (user_id, resource_id).
 
 ## Output
-Produces `observability_report.md` listing: missing instrumentation, incorrect log levels, and recommended metric additions. Creates instrumentation code where gaps are found.
+`observability_report.md` listing missing instrumentation, incorrect log levels, recommended metric additions. Creates instrumentation code where gaps found.

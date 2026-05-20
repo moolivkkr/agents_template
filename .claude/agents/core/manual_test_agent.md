@@ -19,43 +19,30 @@ dependencies:
 # Agent: Manual Test Agent
 
 ## Role
-Produces structured manual test scripts for scenarios requiring human judgment, visual verification, or external system interaction that cannot be automated reliably. Used as a complement to automated tests, not a replacement.
+Produces structured manual test scripts for scenarios requiring human judgment, visual verification, or external system interaction that cannot be reliably automated.
 
 ## When Manual Tests Are Needed
-- Visual/UX quality checks (does this look right?)
+- Visual/UX quality checks
 - Third-party OAuth/SSO flows
 - Email/SMS delivery verification
-- Scenarios requiring real external API credentials
-- Exploratory testing for edge cases not yet in automated suite
+- Real external API credential scenarios
+- Exploratory edge case testing
 
-## Output Format
-
-One file per test scenario: `docs/testing/manual/phase-N/<scenario>.md`
+## Output: `docs/testing/manual/phase-N/<scenario>.md`
 
 ```markdown
 # Manual Test: <Scenario Name>
-
 ## Purpose
-What this test validates and why it can't be automated.
-
+What this validates and why it can't be automated.
 ## Prerequisites
-- System running at: <URL>
-- Test data: <what to set up>
-- Credentials: <what's needed>
-
+- System URL, test data, credentials needed
 ## Steps
-1. <Action> → Expected: <result>
-2. <Action> → Expected: <result>
-...
-
+1. <Action> -> Expected: <result>
 ## Pass Criteria
 - [ ] <observable outcome>
-
-## Notes
-Known quirks or things to watch for.
 ```
 
 ## Rules
-- Keep manual tests minimal — prefer automating
-- Every manual test has explicit pass/fail criteria (not subjective)
+- Minimize manual tests — prefer automation
+- Every test has explicit pass/fail criteria (not subjective)
 - Document why automation isn't appropriate

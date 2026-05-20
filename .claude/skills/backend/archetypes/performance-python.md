@@ -35,12 +35,10 @@ async def hash_password(password: str) -> str:
     # This runs on the event loop — blocks ALL concurrent requests
     return hashlib.pbkdf2_hmac("sha256", password.encode(), b"salt", 100_000).hex()
 
-
 # ---- CORRECT: offload CPU work to a thread pool ----
 import asyncio
 import hashlib
 from functools import partial
-
 
 async def hash_password(password: str) -> str:
     loop = asyncio.get_running_loop()
@@ -49,17 +47,14 @@ async def hash_password(password: str) -> str:
         partial(hashlib.pbkdf2_hmac, "sha256", password.encode(), b"salt", 100_000),
     )
 
-
 # ---- CORRECT: heavy CPU work → ProcessPoolExecutor ----
 from concurrent.futures import ProcessPoolExecutor
 
 _process_pool = ProcessPoolExecutor(max_workers=4)
 
-
 async def generate_report(data: list[dict]) -> bytes:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(_process_pool, _build_pdf, data)
-
 
 def _build_pdf(data: list[dict]) -> bytes:
     """CPU-intensive — runs in a separate process to avoid GIL."""
@@ -74,7 +69,6 @@ def _build_pdf(data: list[dict]) -> bytes:
 
 import asyncpg
 
-
 async def create_pg_pool() -> asyncpg.Pool:
     return await asyncpg.create_pool(
         dsn="postgresql://user:pass@localhost:5432/mydb",
@@ -84,11 +78,9 @@ async def create_pg_pool() -> asyncpg.Pool:
         command_timeout=30,  # kill queries taking longer than 30s
     )
 
-
 # ── aioredis / redis.asyncio pool ────────────────────────────────────
 
 import redis.asyncio as aioredis
-
 
 def create_redis_pool() -> aioredis.Redis:
     return aioredis.Redis(
@@ -100,7 +92,6 @@ def create_redis_pool() -> aioredis.Redis:
         socket_timeout=5,
         retry_on_timeout=True,
     )
-
 
 # ── httpx connection pool for outbound API calls ─────────────────────
 
@@ -125,7 +116,6 @@ import asyncio
 # Limit concurrent calls to a downstream service
 _payment_semaphore = asyncio.Semaphore(10)
 
-
 async def charge_payment(order_id: str, amount: float) -> PaymentResult:
     async with _payment_semaphore:
         # At most 10 concurrent calls to the payment service
@@ -133,7 +123,6 @@ async def charge_payment(order_id: str, amount: float) -> PaymentResult:
             "https://payment.internal/charge",
             json={"order_id": order_id, "amount": amount},
         )
-
 
 # ── Bulk operations with bounded concurrency ─────────────────────────
 
@@ -152,7 +141,6 @@ async def process_batch(items: list[Item], max_concurrent: int = 20) -> list[Res
 ```python
 import asyncio
 
-
 # ── asyncio.gather — use when you want all results, even if some fail ──
 
 async def fetch_dashboard_data(tenant_id: str) -> DashboardData:
@@ -167,7 +155,6 @@ async def fetch_dashboard_data(tenant_id: str) -> DashboardData:
         alerts=alerts if not isinstance(alerts, Exception) else None,
         recent=recent if not isinstance(recent, Exception) else None,
     )
-
 
 # ── TaskGroup (Python 3.11+) — use when ALL must succeed ─────────────
 
@@ -186,7 +173,6 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 import csv
 import io
-
 
 async def export_orders_csv(tenant_id: str):
     """Stream CSV rows instead of buffering the entire file in memory."""
@@ -222,7 +208,6 @@ async def export_orders_csv(tenant_id: str):
 ```python
 from dataclasses import dataclass
 
-
 # ---- WRONG: default dataclass — each instance has a __dict__ (~200 bytes overhead) ----
 @dataclass
 class OrderLine:
@@ -230,14 +215,12 @@ class OrderLine:
     quantity: int
     unit_price: float
 
-
 # ---- CORRECT: slots=True — fixed memory layout, ~40% less memory per instance ----
 @dataclass(frozen=True, slots=True)
 class OrderLine:
     product_id: str
     quantity: int
     unit_price: float
-
 
 # For Pydantic models on hot paths, use model_config
 from pydantic import BaseModel, ConfigDict
@@ -258,7 +241,6 @@ async def get_all_orders(tenant_id: str) -> list[Order]:
     result = await session.execute(select(OrderModel).where(OrderModel.tenant_id == tenant_id))
     return [Order.from_model(row) for row in result.scalars().all()]  # OOM on large tenants
 
-
 # ---- CORRECT: async generator — yields batches ----
 async def iter_orders(tenant_id: str, batch_size: int = 1000):
     """Yield orders in batches to keep memory bounded."""
@@ -276,7 +258,6 @@ async def iter_orders(tenant_id: str, batch_size: int = 1000):
         yield [Order.from_model(row) for row in rows]
         offset += batch_size
 
-
 # ---- CORRECT: server-side cursor (asyncpg) — true streaming ----
 async def stream_orders(pool: asyncpg.Pool, tenant_id: str):
     async with pool.acquire() as conn:
@@ -292,7 +273,6 @@ async def stream_orders(pool: asyncpg.Pool, tenant_id: str):
 
 ```python
 import weakref
-
 
 class EntityCache:
     """
@@ -317,11 +297,9 @@ class EntityCache:
 import tracemalloc
 import linecache
 
-
 def start_memory_profiling():
     """Enable tracemalloc for debugging memory leaks. Do NOT use in production."""
     tracemalloc.start(25)  # store 25 frames per allocation
-
 
 def get_memory_snapshot() -> str:
     """
@@ -335,7 +313,6 @@ def get_memory_snapshot() -> str:
     for stat in top_stats[:20]:
         lines.append(f"  {stat}")
     return "\n".join(lines)
-
 
 # FastAPI debug endpoint
 from fastapi import APIRouter
@@ -357,12 +334,10 @@ def get_active_order_ids(orders: list[Order]) -> list[str]:
     sorted_orders = sorted(filtered, key=lambda o: o.created_at) # list 2
     return [o.id for o in sorted_orders]                         # list 3
 
-
 # ---- BETTER: use generator expressions where possible ----
 def get_active_order_ids(orders: list[Order]) -> list[str]:
     active = (o for o in orders if o.status == "active")  # generator, no allocation
     return [o.id for o in sorted(active, key=lambda o: o.created_at)]  # 1 list
-
 
 # ---- ALSO: use itertools for chaining operations ----
 from itertools import islice
@@ -384,7 +359,6 @@ def get_top_active_ids(orders: list[Order], limit: int = 100) -> list[str]:
 
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
-
 def create_engine():
     return create_async_engine(
         "postgresql+asyncpg://user:pass@localhost:5432/mydb",
@@ -401,10 +375,8 @@ def create_engine():
         echo_pool="debug",      # log pool checkout/checkin events (remove in production)
     )
 
-
 engine = create_engine()
 async_session = async_sessionmaker(engine, expire_on_commit=False)
-
 
 async def get_session() -> AsyncSession:
     async with async_session() as session:
@@ -417,7 +389,6 @@ async def get_session() -> AsyncSession:
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy import select
 
-
 # ---- WRONG: lazy loading causes N+1 ----
 async def get_orders(session: AsyncSession, tenant_id: str) -> list[Order]:
     result = await session.execute(
@@ -429,7 +400,6 @@ async def get_orders(session: AsyncSession, tenant_id: str) -> list[Order]:
         print(order.items)
     return orders
 
-
 # ---- CORRECT: selectinload — one extra query (SELECT ... WHERE id IN (...)) ----
 async def get_orders_with_items(session: AsyncSession, tenant_id: str) -> list[Order]:
     result = await session.execute(
@@ -439,7 +409,6 @@ async def get_orders_with_items(session: AsyncSession, tenant_id: str) -> list[O
     )
     return result.scalars().all()
 
-
 # ---- CORRECT: joinedload — single query with JOIN (use for to-one relationships) ----
 async def get_order_with_customer(session: AsyncSession, order_id: str) -> Order:
     result = await session.execute(
@@ -448,7 +417,6 @@ async def get_order_with_customer(session: AsyncSession, order_id: str) -> Order
         .options(joinedload(OrderModel.customer))
     )
     return result.scalar_one_or_none()
-
 
 # ── When to use which ────────────────────────────────────────────────
 # selectinload → to-many relationships (order → items) — avoids cartesian explosion
@@ -463,12 +431,10 @@ async def get_order_with_customer(session: AsyncSession, order_id: str) -> Order
 from sqlalchemy import insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-
 # ── Bulk insert with executemany (SQLAlchemy) ─────────────────────────
 async def bulk_create_orders(session: AsyncSession, orders: list[dict]) -> None:
     await session.execute(insert(OrderModel), orders)
     await session.commit()
-
 
 # ── Upsert (INSERT ... ON CONFLICT) ──────────────────────────────────
 async def upsert_products(session: AsyncSession, products: list[dict]) -> None:
@@ -483,7 +449,6 @@ async def upsert_products(session: AsyncSession, products: list[dict]) -> None:
     )
     await session.execute(stmt)
     await session.commit()
-
 
 # ── COPY for maximum throughput (raw asyncpg) ────────────────────────
 async def bulk_load_via_copy(pool: asyncpg.Pool, records: list[tuple]) -> int:
@@ -506,7 +471,6 @@ async def bulk_load_via_copy(pool: asyncpg.Pool, records: list[tuple]) -> int:
 
 from sqlalchemy.ext.asyncio import create_async_engine
 
-
 primary_engine = create_async_engine(
     "postgresql+asyncpg://user:pass@primary:5432/mydb",
     pool_size=10,
@@ -519,14 +483,12 @@ replica_engine = create_async_engine(
     max_overflow=20,
 )
 
-
 # ── Route reads to replica, writes to primary ────────────────────────
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 write_session = async_sessionmaker(primary_engine, expire_on_commit=False)
 read_session = async_sessionmaker(replica_engine, expire_on_commit=False)
-
 
 # In repository:
 class OrderRepository:
@@ -556,7 +518,6 @@ _query_count: contextvars.ContextVar[int] = contextvars.ContextVar("query_count"
 
 N_PLUS_ONE_THRESHOLD = 10  # warn if a single request fires more than 10 queries
 
-
 def install_query_counter(engine):
     """Attach to engine to count queries per request."""
 
@@ -564,10 +525,8 @@ def install_query_counter(engine):
     def _count(conn, cursor, statement, parameters, context, executemany):
         _query_count.set(_query_count.get(0) + 1)
 
-
 def reset_query_counter():
     _query_count.set(0)
-
 
 def check_query_count(request_path: str):
     count = _query_count.get(0)
@@ -578,7 +537,6 @@ def check_query_count(request_path: str):
             threshold=N_PLUS_ONE_THRESHOLD,
             path=request_path,
         )
-
 
 # ── Wire into middleware ──────────────────────────────────────────────
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -613,7 +571,6 @@ python -m cProfile -o output.prof app/scripts/benchmark.py
 import cProfile
 import pstats
 import io
-
 
 def profile_function(func, *args, **kwargs):
     """Profile a single function call and print top 20 cumulative time consumers."""
@@ -681,14 +638,12 @@ loop.set_debug(True)
 # Decorate the function you want to profile
 from line_profiler import profile
 
-
 @profile
 def calculate_order_total(items: list[OrderLine]) -> Decimal:
     subtotal = sum(item.quantity * item.unit_price for item in items)
     tax = subtotal * Decimal("0.08")
     discount = calculate_discount(items)
     return subtotal + tax - discount
-
 
 # Run: kernprof -l -v app/services/pricing.py
 # Output shows time spent on each LINE of the function
@@ -701,7 +656,6 @@ def calculate_order_total(items: list[OrderLine]) -> Decimal:
 
 import pytest
 
-
 def test_order_creation_performance(benchmark, order_factory):
     """Ensure order creation stays under 1ms."""
     order_data = order_factory.build_request()
@@ -712,7 +666,6 @@ def test_order_creation_performance(benchmark, order_factory):
     #   min, max, mean, stddev, median, rounds, iterations
     # Fail if mean exceeds threshold:
     assert benchmark.stats["mean"] < 0.001  # 1ms
-
 
 def test_bulk_insert_performance(benchmark, db_session, order_factory):
     """Benchmark bulk insert of 1000 orders."""
@@ -749,7 +702,6 @@ import redis.asyncio as aioredis
 
 T = TypeVar("T")
 
-
 class RedisCache:
     def __init__(self, redis: aioredis.Redis, default_ttl: int = 300):
         self._redis = redis
@@ -783,7 +735,6 @@ class RedisCache:
         await self._redis.set(key, serialize(value), ex=ttl or self._default_ttl)
         return value
 
-
 # ── Usage ─────────────────────────────────────────────────────────────
 
 class OrderService:
@@ -811,18 +762,15 @@ from functools import lru_cache
 from cachetools import TTLCache
 import threading
 
-
 # ── lru_cache — for pure functions with immutable args ────────────────
 @lru_cache(maxsize=1024)
 def parse_feature_flags(raw_config: str) -> dict[str, bool]:
     """Parse feature flag config. Cached because config rarely changes."""
     return json.loads(raw_config)
 
-
 # ── TTLCache — for data that expires ──────────────────────────────────
 _tenant_config_cache = TTLCache(maxsize=500, ttl=300)  # 5 min TTL
 _cache_lock = threading.Lock()
-
 
 async def get_tenant_config(tenant_id: str) -> TenantConfig:
     with _cache_lock:
@@ -837,13 +785,11 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
         _tenant_config_cache[tenant_id] = config
     return config
 
-
 # ── Async-safe TTLCache with asyncio.Lock ─────────────────────────────
 import asyncio
 
 _async_cache = TTLCache(maxsize=500, ttl=300)
 _async_lock = asyncio.Lock()
-
 
 async def get_tenant_config_async(tenant_id: str) -> TenantConfig:
     async with _async_lock:
@@ -867,7 +813,6 @@ import asyncio
 from typing import TypeVar, Callable, Awaitable
 
 T = TypeVar("T")
-
 
 class SingleFlight:
     """
@@ -896,11 +841,9 @@ class SingleFlight:
         finally:
             self._in_flight.pop(key, None)
 
-
 # ── Usage with RedisCache ─────────────────────────────────────────────
 
 _single_flight = SingleFlight()
-
 
 class OrderService:
     async def get_order(self, ctx: RequestContext, order_id: str) -> Order:
@@ -929,7 +872,6 @@ import msgpack
 import pickle
 import timeit
 
-
 data = {"id": "order_123", "items": [{"sku": f"SKU_{i}", "qty": i} for i in range(100)]}
 
 # ── Benchmark results (typical, 10000 iterations) ────────────────────
@@ -938,7 +880,6 @@ data = {"id": "order_123", "items": [{"sku": f"SKU_{i}", "qty": i} for i in rang
 # | json    | 1.00x     | 1.00x       | 3,200        | Safe      |
 # | msgpack | 2-3x fast | 2-3x fast   | 2,100 (34%)  | Safe      |
 # | pickle  | 3-5x fast | 3-5x fast   | 2,800        | UNSAFE *  |
-#
 # * pickle can execute arbitrary code on deserialization — NEVER use
 #   for data from untrusted sources (user input, external APIs, Redis
 #   shared between services).
@@ -977,7 +918,6 @@ async def compress_image_wrong(data: bytes) -> bytes:
     # Threads take turns holding the GIL — no actual parallelism
     return await loop.run_in_executor(_thread_pool, _compress, data)
 
-
 # ---- CORRECT: ProcessPoolExecutor for CPU work — each process has its own GIL ----
 _process_pool = ProcessPoolExecutor(max_workers=4)
 
@@ -985,7 +925,6 @@ async def compress_image(data: bytes) -> bytes:
     loop = asyncio.get_running_loop()
     # Separate processes = true parallelism for CPU work
     return await loop.run_in_executor(_process_pool, _compress, data)
-
 
 def _compress(data: bytes) -> bytes:
     """Pure CPU work — runs in a separate process."""
@@ -1026,7 +965,6 @@ _pool = ProcessPoolExecutor(max_workers=4)
 async def handle_request():
     result = await asyncio.get_running_loop().run_in_executor(_pool, cpu_task)
     return result
-
 
 # ── Celery — use for long-running or distributed background jobs ──────
 # Good for: email sending, report generation, data pipelines, webhooks

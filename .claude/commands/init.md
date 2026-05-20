@@ -18,22 +18,21 @@ arguments:
 
 # /init — Project Initialization
 
-Bootstraps a new project from scratch. Reads `./requirements/`, produces `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md`, generates project-specific agents, and writes `CLAUDE.md`.
+Bootstraps a new project from `./requirements/`. Produces `docs/BRD.md`, `docs/IMPLEMENTATION_GUIDELINES.md`, generates project-specific agents, writes `CLAUDE.md`.
 
 **Run once at project start. Use `/plan` to begin phase work.**
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `.claude/skills/core/context-budget-protocol.md`
 
-**Read discipline:** `brd_agent` and `impl_guidelines_agent` run in parallel — each reads only its own input files. They do NOT read each other's outputs mid-run.
+**Read discipline:** `brd_agent` and `impl_guidelines_agent` run in parallel — each reads only its own inputs.
 
-**Agent result discipline:** Each agent returns a 3-line summary to the parent. Full BRD and IMPLEMENTATION_GUIDELINES content stays in files — never echoed back.
+**Agent result discipline:** 3-line summary to parent. Full content stays in files.
 
-**Per-step targets:**
 | Step | Target input tokens |
 |------|---------------------|
-| Step 1+2 BRD + IMPL | ~20K (requirements/ files only) |
+| Step 1+2 BRD + IMPL | ~20K (requirements/ only) |
 | Step 2b Reconcile | ~15K (requirements index + BRD summary) |
 | Step 3 Agent factory | ~10K (IMPL §Tech Stack + §Components only) |
 
@@ -45,177 +44,63 @@ Bootstraps a new project from scratch. Reads `./requirements/`, produces `docs/B
 ls -la requirements/
 ```
 
-Inventory all files found. Categorize each:
-- Functional specs, user stories, feature lists → feed `brd_agent`
-- `IMPLEMENTATION_GUIDELINES.md` → feed `impl_guidelines_agent`
-- API contracts, wireframes, architecture docs → feed both agents as context
+Categorize files: functional specs/user stories → `brd_agent`, `IMPLEMENTATION_GUIDELINES.md` → `impl_guidelines_agent`, API/wireframe/arch docs → both as context.
 
-Print inventory:
-```
-Found in ./requirements/:
-  functional-spec.md           → BRD seed
-  user-stories.md              → BRD seed
-  IMPLEMENTATION_GUIDELINES.md → Tech stack seed
-  wireframes/dashboard.png     → BRD context
-  (empty)                      → Will conduct full interview
-```
-
-If `--update_agents` flag: skip to Step 3.
-If `--brd_only` flag: skip to Step 1 only, then stop.
+If `--update_agents`: skip to Step 3. If `--brd_only`: run Step 1 only, then stop.
 
 ---
 
 ## Step 1 + 2 — BRD and IMPLEMENTATION_GUIDELINES (PARALLEL)
 
-Run both agents simultaneously — they read from `./requirements/` independently.
-
 ### Step 1: `brd_agent`
+**Input:** All `./requirements/` except IMPLEMENTATION_GUIDELINES.md | **Output:** `docs/BRD.md`
 
-**Agent:** `brd_agent`
-**Input:** All files in `./requirements/` except `IMPLEMENTATION_GUIDELINES.md`
-**Output:** `docs/BRD.md`
-
-The agent:
-1. Reads all requirement documents found in Step 0
-2. Extracts and maps content to BRD sections (objectives, features, NFRs, personas)
-3. Identifies gaps — what's missing for a complete, numbered BRD
-4. Asks the user targeted questions ONLY for genuine gaps (not a full re-interview if docs exist)
-5. Writes `docs/BRD.md` with:
-   - Numbered objectives (OBJ-01, OBJ-02, ...)
-   - Numbered functional requirements (FR-001, FR-002, ...)
-   - Numbered non-functional requirements (NFR-PERF-01, NFR-SEC-01, ...)
-   - User personas
-   - Out of scope section
-   - Quality gate checklists (Gate 1 / 2 / 3)
-   - Traceability matrix (requirement → phase mapping, filled after Step 4)
+Reads requirement docs, extracts/maps to BRD sections, identifies gaps, asks targeted questions for genuine gaps only. Writes BRD with: numbered OBJ-*, FR-*, NFR-*, personas, out-of-scope, gate checklists, traceability matrix.
 
 ### Step 2: `impl_guidelines_agent`
+**Input:** `./requirements/IMPLEMENTATION_GUIDELINES.md` + technical docs | **Output:** `docs/IMPLEMENTATION_GUIDELINES.md`
 
-**Agent:** `impl_guidelines_agent`
-**Input:** `./requirements/IMPLEMENTATION_GUIDELINES.md` (if present), any architecture/technical docs in `./requirements/`
-**Output:** `docs/IMPLEMENTATION_GUIDELINES.md`
+Evaluates for missing context (components without tech decisions, unclear architecture, missing migration tool, no local dev setup, missing design constraints). Asks targeted clarifying questions. Writes: Tech Stack table, Architecture Overview (with Mermaid), Component Inventory, Design Constraints, Local Dev Environment.
 
-The agent:
-1. Reads `./requirements/IMPLEMENTATION_GUIDELINES.md` if it exists
-2. Evaluates for missing or ambiguous context:
-   - Components listed without tech decisions?
-   - Architecture pattern unclear?
-   - Database selected but no migration tool?
-   - Infrastructure mentioned but no local dev setup?
-   - Missing design constraints (API versioning, test coverage targets)?
-3. Asks targeted clarifying questions for gaps only
-4. Writes confirmed `docs/IMPLEMENTATION_GUIDELINES.md` with sections:
-
-```markdown
-## 1. Tech Stack
-| Layer    | Technology | Version | Notes |
-
-## 2. Architecture Overview
-- Pattern: (Monolith / Modular Monolith / Microservices)
-- [Mermaid component diagram]
-
-## 3. Component Inventory
-| Component | Responsibility | Technology | Depends On |
-
-## 4. Design Constraints
-- API versioning convention
-- Test coverage requirements
-- Code conventions (repository pattern, no direct DB in handlers, etc.)
-
-## 5. Local Dev Environment
-| Service | Port | Start Command |
-```
-
-**⚠ Both agents run in parallel. Step 3 waits for BOTH to complete.**
+**Both agents run in parallel. Step 3 waits for BOTH.**
 
 ---
 
-## Step 1.5 — Post-Clarification Cross-Validation (CLOSED LOOP)
-
-**Runs after:** Both `brd_agent` and `impl_guidelines_agent` have completed their user interviews and produced draft outputs.
-**Purpose:** Catch contradictions between user answers given to different agents, and internal inconsistencies within the BRD.
+## Step 1.5 — Post-Clarification Cross-Validation
 
 **Checks:**
-1. **BRD internal consistency:**
-   - No FR-* references NFR-* IDs that don't exist (and vice versa)
-   - No persona references features not in scope
-   - No contradictory constraints (e.g., "offline-first" + "real-time sync required" without reconciliation)
-2. **BRD ↔ IMPLEMENTATION_GUIDELINES consistency:**
-   - Tech stack in IMPL_GUIDELINES can support all NFR-* (e.g., if NFR says "sub-50ms latency", IMPL_GUIDELINES doesn't specify a language/framework known to be slow for that workload)
-   - Component inventory covers all FR-* (no feature without a component to implement it)
-   - Auth mechanism in IMPL_GUIDELINES matches auth requirements in BRD
-3. **User answer consistency:**
-   - If user told `brd_agent` "users are internal only" but told `impl_guidelines_agent` "public-facing API with rate limiting" → contradiction
+1. **BRD internal:** No dangling FR↔NFR references, no contradictory constraints
+2. **BRD ↔ IMPL_GUIDELINES:** Tech stack supports all NFRs, component inventory covers all FR-*, auth mechanism matches
+3. **User answer consistency:** contradictions between answers given to different agents
 
-**On contradiction found:**
-- Surface the specific contradiction to user with both conflicting statements
-- Ask user to resolve: "You mentioned X in the BRD interview but Y in the tech stack interview. Which is correct?"
-- Max 1 round of clarification → update the affected document
-
-**On pass:** Proceed to Step 2b.
+**On contradiction:** Surface both conflicting statements, ask user to resolve (max 1 round), update affected document.
 
 ---
 
 ## Step 2b — Reconciliation Point A: Requirements ↔ BRD
 
-**Agent:** `requirements_brd_reconciler` (runs immediately after Step 1+2 complete)
+**Agent:** `requirements_brd_reconciler`
 
 Validates both directions:
-- **Forward:** features/constraints in `./requirements/` that didn't make it into `docs/BRD.md`
-- **Reverse:** requirements in `docs/BRD.md` with no source in `./requirements/` (invented)
+- **Forward:** features in `./requirements/` not in `docs/BRD.md`
+- **Reverse:** requirements in BRD with no source (invented)
 
-Output: `agent_state/reconciliation/requirements_vs_brd.md`
-
-If MISSING or INVENTED items found: surface to user before continuing.
-User decides: update BRD, or accept with rationale. Does not auto-proceed if gaps exist.
+Output: `agent_state/reconciliation/requirements_vs_brd.md`. MISSING/INVENTED → surface to user before continuing.
 
 ---
 
 ## Step 3 — Generate Project-Specific Agents
 
 **Agent:** `agent_factory`
-**Input:** `docs/IMPLEMENTATION_GUIDELINES.md`
-**Output:** `.claude/agents/generated/*.md`, `agent_state/agent_registry.json`
+**Input:** `docs/IMPLEMENTATION_GUIDELINES.md` | **Output:** `.claude/agents/generated/*.md`, `agent_state/agent_registry.json`
 
-Reads Section 1 (Tech Stack) and Section 3 (Component Inventory) from the confirmed IMPLEMENTATION_GUIDELINES. Populates templates from `.claude/agents/templates/` and writes generated agents to `.claude/agents/generated/`.
-
-See `agent_factory.md` for full template-population logic.
+Reads Tech Stack + Component Inventory, populates templates from `.claude/agents/templates/`, writes generated agents.
 
 ---
 
 ## Step 4 — Write CLAUDE.md
 
-Write `CLAUDE.md` at the project root with:
-
-```markdown
-# <PROJECT_NAME> — Project Context
-
-## What We're Building
-<One paragraph from BRD executive summary>
-
-## Tech Stack
-<Condensed table from IMPLEMENTATION_GUIDELINES Section 1>
-
-## Key Documents
-| Document | Path | Purpose |
-|----------|------|---------|
-| BRD | docs/BRD.md | Numbered requirements — all agents cite FR-*, NFR-*, OBJ-* |
-| Implementation Guidelines | docs/IMPLEMENTATION_GUIDELINES.md | Tech stack, components, constraints |
-| Phase specs | docs/design/phases/N/specs/ | TRDs and wireframes per phase |
-| Agent registry | agent_state/agent_registry.json | Generated agents and skill packs |
-
-## Active Agents
-<List of generated agents from agent_registry.json>
-
-## Phase Gate State
-<Current state — "No phases started. Run /plan --phase=1 to begin.">
-
-## Local Dev Setup
-<From IMPLEMENTATION_GUIDELINES Section 5>
-
-## Common Tasks
-<Auto-generated from tech stack — e.g. docker compose up, go test ./..., npm test>
-```
+Write project root `CLAUDE.md` with: project summary (from BRD), tech stack table, key documents table, active agents list, phase gate state, local dev setup, common tasks.
 
 ---
 
@@ -223,18 +108,9 @@ Write `CLAUDE.md` at the project root with:
 
 ```
 ✅ Project initialized: <PROJECT_NAME>
-
-  Documents created:
-    docs/BRD.md                          (N requirements)
-    docs/IMPLEMENTATION_GUIDELINES.md    (confirmed tech stack + components)
-
-  Agents generated:
-    .claude/agents/generated/            (N project-specific agents)
-    agent_state/agent_registry.json
-
-  Project context:
-    CLAUDE.md                            (all future sessions start here)
-
+  Documents: docs/BRD.md (N requirements), docs/IMPLEMENTATION_GUIDELINES.md
+  Agents: .claude/agents/generated/ (N agents), agent_state/agent_registry.json
+  Context: CLAUDE.md
   ▶ Next: /plan --phase=1
 ```
 
@@ -242,9 +118,9 @@ Write `CLAUDE.md` at the project root with:
 
 ## Notes
 
-- `/init` is idempotent for BRD and IMPLEMENTATION_GUIDELINES — re-running asks only about changes
-- Use `/init --update_agents` after changing tech stack in IMPLEMENTATION_GUIDELINES
-- `./requirements/` is never modified — it is read-only input
-- All generated content goes to `docs/` and `.claude/agents/generated/`
-- To handle new feature requests after `/init`: use `product_manager` agent to evaluate the change, update `docs/BRD.md`, then re-run `/plan` for the affected phase
-- Agents generated by `agent_factory` during Step 3 are required by `/develop`. Run `/init` before running `/plan` or `/develop` on a new project
+- `/init` is idempotent — re-running asks only about changes
+- `--update_agents` after tech stack changes
+- `./requirements/` is read-only input, never modified
+- Generated content → `docs/` and `.claude/agents/generated/`
+- New feature requests after `/init` → `product_manager` agent → update BRD → re-run `/plan`
+- Agents from Step 3 are required by `/develop`

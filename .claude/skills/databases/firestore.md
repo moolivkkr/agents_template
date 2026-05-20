@@ -151,7 +151,6 @@ const unsubscribeList = db
     });
   });
 
-// IMPORTANT: Always unsubscribe when component unmounts
 unsubscribe();
 unsubscribeList();
 ```

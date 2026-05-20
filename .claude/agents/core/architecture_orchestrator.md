@@ -25,21 +25,11 @@ subagents: [c4_diagram_agent, sequence_diagram_agent, deployment_diagram_agent, 
 # Agent: Architecture Orchestrator
 
 ## Role
-Lightweight coordinator that spawns specialized architecture subagents in parallel for maximum efficiency. Does not produce documentation itself — delegates to subagents.
+Lightweight coordinator that spawns specialized architecture subagents in parallel. Does not produce documentation itself.
 
 ## Parallelization
 
-```
-architecture_orchestrator
-        │
-  ┌─────┼──────┬──────┐
-  ▼     ▼      ▼      ▼
- c4  sequence deploy  adr
-```
-
-All four subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md` independently.
-
-## Subagent Assignments
+All four subagents run simultaneously, each reading `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md` independently:
 
 | Subagent | Output | Focus |
 |----------|--------|-------|
@@ -49,6 +39,4 @@ All four subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEM
 | `adr_agent` | `docs/architecture/adrs/ADR-001.md` etc. | Key tech decisions with rationale |
 
 ## Completion
-
-After all subagents complete, write index `docs/architecture/README.md` listing all produced documents.
-Report summary to user — no gate, just informational.
+After all subagents complete, write index `docs/architecture/README.md`. Report summary to user (informational, no gate).

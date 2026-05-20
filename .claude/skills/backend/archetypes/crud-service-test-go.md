@@ -12,7 +12,6 @@ tags:
   - backend
   - testing
 ---
-
 # CRUD Service Test Archetype
 
 Complete unit test template for the service layer. Every generated service test file MUST follow this pattern.
@@ -27,8 +26,6 @@ internal/widget/
   mock_cache.go
   mock_audit.go
 ```
-
-Rule: Test file lives next to production code in the same package.
 
 ## Test Factory Pattern
 
@@ -221,7 +218,6 @@ func (m *mockAuditWriter) Write(ctx context.Context, entry domain.AuditEntry) er
 // --- Metrics Stub ---
 // For unit tests, use noop counters/histograms from OTel SDK's noop package.
 // import "go.opentelemetry.io/otel/metric/noop"
-//
 // func noopMetrics() Metrics {
 //     mp := noop.NewMeterProvider()
 //     meter := mp.Meter("test")

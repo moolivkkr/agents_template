@@ -90,7 +90,6 @@ from app.worker.celery_app import app
 
 logger = get_task_logger(__name__)
 
-
 class BaseTask(Task):
     """Base task with structured logging and error handling."""
 
@@ -130,7 +129,6 @@ class BaseTask(Task):
                 "task_name": self.name,
             },
         )
-
 
 @app.task(base=BaseTask, bind=True, name="app.tasks.email.send_email")
 def send_email(
@@ -192,7 +190,6 @@ broker.add_middleware(Retries(max_retries=5, min_backoff=1000, max_backoff=300_0
 broker.add_middleware(TimeLimits())
 dramatiq.set_broker(broker)
 
-
 @dramatiq.actor(
     queue_name="email",
     max_retries=5,
@@ -243,7 +240,6 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-
 @dataclass
 class Job:
     id: str
@@ -253,7 +249,6 @@ class Job:
     attempt: int = 1
     max_retries: int = 5
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
 
 class AsyncWorker:
     """In-process async worker using asyncio.Queue. For single-process apps."""
@@ -348,7 +343,6 @@ import structlog
 
 logger = structlog.get_logger(__name__)
 
-
 def create_scheduler(lock_store) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone="UTC")
 
@@ -371,7 +365,6 @@ def create_scheduler(lock_store) -> AsyncIOScheduler:
 
     return scheduler
 
-
 def run_with_lock(lock_store, fn):
     """Wrapper that acquires a distributed lock before executing."""
 
@@ -393,12 +386,10 @@ def run_with_lock(lock_store, fn):
 
     return wrapper
 
-
 async def cleanup_expired_sessions() -> None:
     """Remove sessions older than 24 hours."""
     # implementation here
     pass
-
 
 async def generate_daily_report() -> None:
     """Generate and store daily usage report."""
@@ -418,7 +409,6 @@ from typing import Any
 from fastapi import APIRouter
 
 router = APIRouter(tags=["health"])
-
 
 @dataclass
 class WorkerHealth:
@@ -454,7 +444,6 @@ class WorkerHealth:
             },
         }
 
-
 # Expose as FastAPI endpoint for k8s probes
 @router.get("/health/worker")
 async def worker_health() -> dict:
@@ -469,7 +458,6 @@ async def worker_health() -> dict:
 
 import uuid
 from datetime import datetime, timezone
-
 
 def enqueue_email(
     tenant_id: str,

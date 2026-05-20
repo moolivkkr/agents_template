@@ -34,7 +34,6 @@ from fastapi import WebSocket
 
 logger = logging.getLogger(__name__)
 
-
 @dataclass
 class Connection:
     """Represents a single WebSocket client connection."""
@@ -46,7 +45,6 @@ class Connection:
     websocket: WebSocket
     rooms: set[str] = field(default_factory=set)
     connected_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
-
 
 class ConnectionManager:
     """Manages all active WebSocket connections, rooms, and broadcasting."""
@@ -136,7 +134,6 @@ class ConnectionManager:
     def active_rooms(self) -> int:
         return len(self._rooms)
 
-
 # Singleton instance
 manager = ConnectionManager()
 ```
@@ -159,7 +156,6 @@ logger = structlog.get_logger(__name__)
 router = APIRouter()
 
 MAX_MESSAGE_SIZE = 65536  # 64KB
-
 
 @router.websocket("/ws")
 async def websocket_endpoint(
@@ -230,7 +226,6 @@ from app.ws.manager import Connection, manager
 
 logger = structlog.get_logger(__name__)
 
-
 async def handle_message(conn: Connection, msg: dict[str, Any]) -> None:
     """Dispatch incoming WebSocket messages by type."""
     msg_type = msg.get("type")
@@ -280,7 +275,6 @@ async def handle_message(conn: Connection, msg: dict[str, Any]) -> None:
         case _:
             await send_error(conn, ref, "UNKNOWN_TYPE", f"unknown message type: {msg_type}")
 
-
 def can_join_room(conn: Connection, room: str) -> bool:
     """Check if the connection is authorized to join this room."""
     # Implement room-level authorization:
@@ -288,11 +282,9 @@ def can_join_room(conn: Connection, room: str) -> bool:
     # e.g., "project:{id}" requires project membership
     return True  # Replace with actual logic
 
-
 async def send_ack(conn: Connection, ref: str | None) -> None:
     if ref:
         await conn.websocket.send_json({"type": "ack", "ref": ref})
-
 
 async def send_error(conn: Connection, ref: str | None, code: str, message: str) -> None:
     msg = {"type": "error", "code": code, "message": message}
@@ -312,7 +304,6 @@ from channels.generic.websocket import AsyncJsonWebSocketConsumer
 from channels.db import database_sync_to_async
 
 logger = logging.getLogger(__name__)
-
 
 class NotificationConsumer(AsyncJsonWebSocketConsumer):
     """Django Channels WebSocket consumer for real-time notifications."""
@@ -387,7 +378,6 @@ import asyncio
 
 from app.ws.manager import manager
 
-
 async def heartbeat_loop(interval: float = 30.0) -> None:
     """Send periodic pings to detect dead connections.
     FastAPI/Starlette handles protocol-level pings, but this
@@ -409,13 +399,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from app.ws.endpoint import router as ws_router
 
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
     yield
     # Shutdown: manager cleanup happens via WebSocketDisconnect handlers
-
 
 def create_app() -> FastAPI:
     app = FastAPI(title="WebSocket API", lifespan=lifespan)

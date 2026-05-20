@@ -273,13 +273,10 @@ import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.UUID;
 
-/**
  * Java-based migration for complex data transformations that cannot be
  * expressed in pure SQL (e.g., calling external services, conditional logic,
  * multi-step transforms with rollback).
- *
  * Naming: V5__ComplexDataMigration.java — follows Flyway conventions.
- */
 public class V5__ComplexDataMigration extends BaseJavaMigration {
 
     private static final Logger log = LoggerFactory.getLogger(V5__ComplexDataMigration.class);
@@ -385,9 +382,7 @@ public class FlywayConfig {
 
     private static final Logger log = LoggerFactory.getLogger(FlywayConfig.class);
 
-    /**
      * Customize Flyway beyond what application.yml supports.
-     */
     @Bean
     public FlywayConfigurationCustomizer flywayCustomizer() {
         return configuration -> configuration
@@ -395,9 +390,7 @@ public class FlywayConfig {
             .loggers("slf4j");
     }
 
-    /**
      * Custom callback for logging migration events.
-     */
     static class FlywayLoggingCallback implements Callback {
         @Override
         public boolean supports(Event event, Context context) {
@@ -505,10 +498,8 @@ import java.sql.SQLException;
 
 import static org.assertj.core.api.Assertions.*;
 
-/**
  * Tests that Flyway migrations apply cleanly against a real PostgreSQL database.
  * Verifies schema correctness, constraint definitions, and index existence.
- */
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Import(TestcontainersConfig.class)

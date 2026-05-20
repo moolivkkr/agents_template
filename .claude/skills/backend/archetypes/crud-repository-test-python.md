@@ -56,10 +56,7 @@ from testcontainers.postgres import PostgresContainer
 
 from app.models.widget import Base, WidgetModel
 
-
-# ---------------------------------------------------------------------------
 # Session-scoped PostgreSQL container — shared across all tests in this module
-# ---------------------------------------------------------------------------
 
 @pytest.fixture(scope="session")
 def event_loop():
@@ -67,7 +64,6 @@ def event_loop():
     loop = asyncio.new_event_loop()
     yield loop
     loop.close()
-
 
 @pytest.fixture(scope="session")
 def pg_container():
@@ -77,7 +73,6 @@ def pg_container():
     """
     with PostgresContainer("postgres:16-alpine") as pg:
         yield pg
-
 
 @pytest.fixture(scope="session")
 def pg_url(pg_container) -> str:
@@ -89,7 +84,6 @@ def pg_url(pg_container) -> str:
     password = pg_container.password
     db = pg_container.dbname
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db}"
-
 
 @pytest_asyncio.fixture(scope="session")
 async def engine(pg_url: str) -> AsyncIterator[AsyncEngine]:
@@ -103,7 +97,6 @@ async def engine(pg_url: str) -> AsyncIterator[AsyncEngine]:
     yield eng
 
     await eng.dispose()
-
 
 @pytest_asyncio.fixture(scope="session")
 async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
@@ -127,7 +120,6 @@ async def session(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIte
             yield sess
             # Rollback on exit — changes from this test are discarded
             await sess.rollback()
-
 
 @pytest_asyncio.fixture
 async def clean_session(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[async_sessionmaker[AsyncSession]]:
@@ -166,7 +158,6 @@ from app.domain.widget import Widget, WidgetStatus
 from app.errors import ConflictError, NotFoundError
 from app.repositories.widget import WidgetRepository
 
-
 def make_widget(
     *,
     id: uuid.UUID | None = None,
@@ -192,7 +183,6 @@ def make_widget(
         version=version,
     )
 
-
 async def seed_widgets(
     repo: WidgetRepository,
     *widgets: Widget,
@@ -200,7 +190,6 @@ async def seed_widgets(
     """Bulk-seed widgets into the database for test setup."""
     for w in widgets:
         await repo.create(w)
-
 
 @pytest.fixture
 def repo(clean_session: async_sessionmaker[AsyncSession]) -> WidgetRepository:
@@ -251,7 +240,6 @@ class TestCreate:
         with pytest.raises((ConflictError, Exception)):
             await repo.create(w2)
 
-
 class TestGetByID:
     """Test widget retrieval against real PostgreSQL."""
 
@@ -284,7 +272,6 @@ class TestGetByID:
         got = await repo.get_by_id(widget.tenant_id, widget.id)
         assert got is None
 
-
 class TestUpdate:
     """Test widget updates with optimistic locking against real PostgreSQL."""
 
@@ -312,7 +299,6 @@ class TestUpdate:
         widget = make_widget(version=2)
         success = await repo.update(widget)
         assert success is False
-
 
 class TestSoftDelete:
     """Test soft delete against real PostgreSQL."""

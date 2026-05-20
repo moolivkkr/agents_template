@@ -361,11 +361,9 @@ export const prisma = new PrismaClient({
   // Configure via DATABASE_URL query params:
   //   connection_limit: Max pool size (default: num_cpus * 2 + 1)
   //   pool_timeout:     Seconds to wait for connection (default: 10)
-  //
   // For a 4-core machine, default pool = 9.
   // For high-concurrency services, increase:
   //   ?connection_limit=20&pool_timeout=15
-  //
   // WARNING: Total connections across all instances must not exceed
   // PostgreSQL max_connections (default: 100).
   // Formula: connection_limit * num_instances < max_connections
@@ -1444,10 +1442,8 @@ import { Sema } from 'async-sema';
 // Map of in-flight requests: key → promise
 const inflight = new Map<string, Promise<unknown>>();
 
-/**
  * Ensures only one execution of `fn` per key at a time.
  * Concurrent callers with the same key share the same promise.
- */
 export async function singleFlight<T>(
   key: string,
   fn: () => Promise<T>,

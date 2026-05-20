@@ -29,11 +29,9 @@ from uuid import UUID
 from sqlalchemy import DateTime, Integer, String, Uuid, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-
 class Base(DeclarativeBase):
     """Base class for all SQLAlchemy models."""
     pass
-
 
 class WidgetModel(Base):
     """SQLAlchemy model for the widgets table."""
@@ -70,7 +68,6 @@ _POOL_CONFIG = {
     "pool_pre_ping": True,       # health-check connection before use
 }
 
-
 def create_engine(database_url: str):
     """
     Create an async SQLAlchemy engine.
@@ -78,7 +75,6 @@ def create_engine(database_url: str):
     database_url format: postgresql+asyncpg://user:password@host:5432/dbname
     """
     return create_async_engine(database_url, **_POOL_CONFIG, echo=False)
-
 
 def create_session_factory(engine) -> async_sessionmaker[AsyncSession]:
     """Create a session factory bound to the engine."""
@@ -94,7 +90,6 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
-
 
 @asynccontextmanager
 async def transaction(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
@@ -134,7 +129,6 @@ from app.models.widget import WidgetModel
 
 logger = logging.getLogger(__name__)
 
-
 class WidgetRepository:
     """
     PostgreSQL repository for widgets using SQLAlchemy async sessions.
@@ -151,9 +145,7 @@ class WidgetRepository:
         self._redis = redis
         self._logger = logging.getLogger(f"{__name__}.WidgetRepository")
 
-    # -----------------------------------------------------------------------
     # Mapping helpers
-    # -----------------------------------------------------------------------
 
     @staticmethod
     def _to_domain(model: WidgetModel) -> Widget:
@@ -705,7 +697,6 @@ from uuid import UUID
 
 from app.domain.widget import Widget
 from app.errors import NotFoundError
-
 
 class WidgetRawRepository:
     """

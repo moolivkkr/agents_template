@@ -54,14 +54,10 @@ from app.dependencies.auth import CurrentUser, get_current_user
 from app.main import create_app
 from app.services.widget import WidgetService
 
-
-# ---------------------------------------------------------------------------
 # Auth fixtures
-# ---------------------------------------------------------------------------
 
 DEFAULT_TENANT_ID = uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 DEFAULT_USER_ID = uuid.UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-
 
 def make_user(
     *,
@@ -76,16 +72,12 @@ def make_user(
         roles=roles or ["user"],
     )
 
-
-# ---------------------------------------------------------------------------
 # Application + Client fixtures
-# ---------------------------------------------------------------------------
 
 @pytest_asyncio.fixture
 async def mock_service() -> AsyncMock:
     """Fresh AsyncMock for WidgetService — reset per test."""
     return AsyncMock(spec=WidgetService)
-
 
 @pytest_asyncio.fixture
 async def app_with_overrides(mock_service: AsyncMock):
@@ -113,7 +105,6 @@ async def app_with_overrides(mock_service: AsyncMock):
 
     app.dependency_overrides.clear()
 
-
 @pytest_asyncio.fixture
 async def client(app_with_overrides) -> AsyncIterator[AsyncClient]:
     """httpx AsyncClient wired to the test app — no real HTTP server needed."""
@@ -134,7 +125,6 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from app.domain.widget import Widget, WidgetStatus
-
 
 def make_widget(
     *,
@@ -182,10 +172,7 @@ from app.errors import ConflictError, NotFoundError, ValidationError
 from tests.conftest import DEFAULT_TENANT_ID, DEFAULT_USER_ID
 from tests.factories import make_widget
 
-
-# ---------------------------------------------------------------------------
 # Helper assertions
-# ---------------------------------------------------------------------------
 
 def assert_envelope(body: dict, status: int = 200) -> dict:
     """Assert the standard success envelope shape and return data."""
@@ -195,7 +182,6 @@ def assert_envelope(body: dict, status: int = 200) -> dict:
     assert "timestamp" in body["meta"]
     return body["data"]
 
-
 def assert_error_envelope(body: dict, expected_code: str) -> dict:
     """Assert the standard error envelope shape and return error detail."""
     assert "error" in body, f"expected 'error' key in response: {body}"
@@ -204,10 +190,7 @@ def assert_error_envelope(body: dict, expected_code: str) -> dict:
     assert "message" in err
     return err
 
-
-# ---------------------------------------------------------------------------
 # CREATE — POST /api/v1/widgets/
-# ---------------------------------------------------------------------------
 
 class TestCreateWidget:
     """Tests for POST /api/v1/widgets/."""

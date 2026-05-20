@@ -125,7 +125,6 @@ database_url = os.getenv(
 )
 config.set_main_option("sqlalchemy.url", database_url)
 
-
 def run_migrations_offline() -> None:
     """
     Run migrations in 'offline' mode.
@@ -145,7 +144,6 @@ def run_migrations_offline() -> None:
     with context.begin_transaction():
         context.run_migrations()
 
-
 def do_run_migrations(connection) -> None:
     """Run migrations with a live connection."""
     context.configure(
@@ -161,7 +159,6 @@ def do_run_migrations(connection) -> None:
 
     with context.begin_transaction():
         context.run_migrations()
-
 
 async def run_async_migrations() -> None:
     """
@@ -179,11 +176,9 @@ async def run_async_migrations() -> None:
 
     await connectable.dispose()
 
-
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode with async engine."""
     asyncio.run(run_async_migrations())
-
 
 if context.is_offline_mode():
     run_migrations_offline()
@@ -237,11 +232,8 @@ down_revision = None
 branch_labels = None
 depends_on = None
 
-
 def upgrade() -> None:
-    # -----------------------------------------------------------------
     # Table: widgets
-    # -----------------------------------------------------------------
     op.create_table(
         "widgets",
         sa.Column("id", sa.Uuid(), primary_key=True, server_default=sa.text("gen_random_uuid()")),
@@ -260,9 +252,7 @@ def upgrade() -> None:
         sa.CheckConstraint("version > 0", name="chk_widgets_version"),
     )
 
-    # -----------------------------------------------------------------
     # Indexes
-    # -----------------------------------------------------------------
 
     # Tenant isolation — EVERY query filters by tenant_id
     op.create_index("idx_widgets_tenant_id", "widgets", ["tenant_id"])
@@ -295,9 +285,7 @@ def upgrade() -> None:
         WHERE deleted_at IS NULL
     """)
 
-    # -----------------------------------------------------------------
     # Row-Level Security (Multi-Tenant Isolation)
-    # -----------------------------------------------------------------
 
     op.execute("ALTER TABLE widgets ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE widgets FORCE ROW LEVEL SECURITY")
@@ -307,9 +295,7 @@ def upgrade() -> None:
             WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID)
     """)
 
-    # -----------------------------------------------------------------
     # Triggers — auto-update updated_at
-    # -----------------------------------------------------------------
 
     op.execute("""
         CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -328,14 +314,11 @@ def upgrade() -> None:
             EXECUTE FUNCTION update_updated_at_column()
     """)
 
-    # -----------------------------------------------------------------
     # Comments
-    # -----------------------------------------------------------------
 
     op.execute("COMMENT ON TABLE widgets IS 'Core widget entities — multi-tenant, soft-deletable'")
     op.execute("COMMENT ON COLUMN widgets.deleted_at IS 'Soft delete timestamp — NULL means active'")
     op.execute("COMMENT ON COLUMN widgets.version IS 'Optimistic lock counter — increment on every update'")
-
 
 def downgrade() -> None:
     """Exact reverse of upgrade — drop everything in reverse order."""
@@ -373,7 +356,6 @@ import sqlalchemy as sa
 
 revision = "b2c3d4e5f6a7"
 down_revision = "a1b2c3d4e5f6"
-
 
 def upgrade() -> None:
     # Create categories table
@@ -417,7 +399,6 @@ def upgrade() -> None:
         WHERE deleted_at IS NULL AND category_id IS NOT NULL
     """)
 
-
 def downgrade() -> None:
     op.execute("DROP INDEX IF EXISTS idx_widgets_category")
     op.drop_constraint("fk_widgets_category", "widgets", type_="foreignkey")
@@ -448,7 +429,6 @@ from alembic import op
 revision = "c3d4e5f6a7b8"
 down_revision = "b2c3d4e5f6a7"
 
-
 def upgrade() -> None:
     """
     Insert default categories for each existing tenant.
@@ -475,7 +455,6 @@ def upgrade() -> None:
         ) AS category(name, slug, description, sort_order)
         ON CONFLICT DO NOTHING
     """)
-
 
 def downgrade() -> None:
     """Remove only the seeded default categories (by slug pattern)."""
@@ -505,7 +484,6 @@ from alembic import op
 revision = "d4e5f6a7b8c9"
 down_revision = "c3d4e5f6a7b8"
 
-
 def upgrade() -> None:
     """
     Small tables (< 100K rows): single UPDATE.
@@ -515,7 +493,6 @@ def upgrade() -> None:
         SET status = 'active', updated_at = NOW()
         WHERE status IS NULL AND deleted_at IS NULL
     """)
-
 
 def downgrade() -> None:
     """
@@ -571,7 +548,6 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-
 async def set_tenant_context(session: AsyncSession, tenant_id: UUID) -> None:
     """
     Set the RLS context variable before each query.
@@ -604,14 +580,12 @@ import pytest
 from alembic import command
 from alembic.config import Config
 
-
 @pytest.fixture(scope="session")
 def alembic_config(pg_url: str) -> Config:
     """Alembic config pointing at the test database."""
     cfg = Config("alembic.ini")
     cfg.set_main_option("sqlalchemy.url", pg_url.replace("+asyncpg", ""))
     return cfg
-
 
 class TestMigrations:
     """Integration tests for migration round-trips."""

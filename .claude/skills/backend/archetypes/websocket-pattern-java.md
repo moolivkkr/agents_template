@@ -169,10 +169,8 @@ public class WebSocketController {
         this.roomAuthService = roomAuthService;
     }
 
-    /**
      * Handle messages sent to /app/room/{roomId}
      * Broadcasts to all subscribers of /topic/room/{roomId}
-     */
     @MessageMapping("/room/{roomId}")
     public void handleRoomMessage(
             @DestinationVariable String roomId,
@@ -202,10 +200,8 @@ public class WebSocketController {
         messagingTemplate.convertAndSend("/topic/room/" + roomId, message);
     }
 
-    /**
      * Subscription handler — called when a client subscribes to /topic/room/{roomId}.
      * Return value is sent as the initial message to the subscriber.
-     */
     @SubscribeMapping("/room/{roomId}")
     public Map<String, Object> onSubscribe(
             @DestinationVariable String roomId,
@@ -348,9 +344,7 @@ import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
  * Use this when STOMP is overkill — e.g., simple notification streaming.
- */
 public class RawWebSocketHandler extends TextWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RawWebSocketHandler.class);

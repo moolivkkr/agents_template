@@ -283,11 +283,9 @@ import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-/**
  * JIT warmup — exercise critical paths after startup so the JIT compiler
  * optimizes hot code before real traffic arrives.
  * Only needed for latency-sensitive services behind a load balancer.
- */
 @Component
 public class WarmupRunner {
 
@@ -372,10 +370,8 @@ import org.apache.commons.pool2.impl.DefaultPooledObject;
 import org.apache.commons.pool2.impl.GenericObjectPool;
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig;
 
-/**
  * Pool expensive-to-create objects (PDF generators, XML parsers, crypto instances).
  * Do NOT pool lightweight objects — the pool overhead exceeds the allocation cost.
- */
 public class PdfGeneratorPool {
 
     private final ObjectPool<PdfGenerator> pool;
@@ -423,11 +419,9 @@ public class PdfGeneratorPool {
 import java.lang.ref.SoftReference;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
  * SoftReference cache — entries are evicted when the JVM is under memory pressure.
  * Use for expensive-to-compute but recreatable data (e.g., parsed templates, compiled regex).
  * For production caches, prefer Caffeine (§7a) — this is for niche cases only.
- */
 public class SoftReferenceCache<K, V> {
 
     private final ConcurrentHashMap<K, SoftReference<V>> cache = new ConcurrentHashMap<>();
@@ -476,10 +470,8 @@ spring:
 ```
 
 ```java
-/**
  * Batch insert with manual flush to control memory.
  * Without periodic flush, Hibernate accumulates all entities in the persistence context.
- */
 @Transactional
 public void importOrders(String tenantId, List<OrderImport> imports) {
     int batchSize = 50;
@@ -514,16 +506,12 @@ Or use `GenerationType.UUID` — UUIDs are generated in-memory and batch perfect
 ```java
 public interface OrderRepository extends JpaRepository<Order, UUID> {
 
-    /**
      * Fetch order with items in a single query — avoids N+1.
      * The @EntityGraph tells JPA to LEFT JOIN FETCH the items collection.
-     */
     @EntityGraph(attributePaths = {"items", "items.product"})
     Optional<Order> findWithItemsById(UUID id);
 
-    /**
      * Named entity graph for complex fetch strategies.
-     */
     @EntityGraph(value = "Order.withItemsAndCustomer")
     List<Order> findByTenantIdAndStatus(UUID tenantId, OrderStatus status);
 }
@@ -555,10 +543,8 @@ public class Order {
 ### 4c. Projection Interfaces/DTOs to Avoid SELECT *
 
 ```java
-/**
  * Projection interface — JPA generates SQL that selects only these columns.
  * Use for list/summary endpoints where you don't need the full entity.
- */
 public interface OrderSummaryProjection {
     UUID getId();
     String getStatus();
@@ -569,14 +555,10 @@ public interface OrderSummaryProjection {
 
 public interface OrderRepository extends JpaRepository<Order, UUID> {
 
-    /**
      * Returns only id, status, total, created_at, and item_count — NOT SELECT *.
-     */
     List<OrderSummaryProjection> findByTenantId(UUID tenantId, Pageable pageable);
 
-    /**
      * JPQL with DTO constructor expression — even more control.
-     */
     @Query("""
         SELECT new com.example.app.dto.OrderListItem(
             o.id, o.status, o.total, o.createdAt, SIZE(o.items)
@@ -737,10 +719,8 @@ spring:
 ```
 
 ```java
-/**
  * Log slow queries and N+1 detection in non-production environments.
  * Add this bean only in dev/staging profiles.
- */
 @Component
 @Profile({"local", "staging"})
 public class HibernateStatisticsLogger {
@@ -919,11 +899,9 @@ spring:
 That single line replaces the need for reactive programming (WebFlux) for most IO-bound workloads. Virtual threads are cheap (< 1 KB stack), so thousands can run concurrently.
 
 ```java
-/**
  * With virtual threads enabled, this blocking code runs efficiently.
  * Each blocking call (DB query, HTTP call) parks the virtual thread
  * and releases the carrier platform thread — no thread pool exhaustion.
- */
 @RestController
 public class OrderController {
 
@@ -943,11 +921,9 @@ public class OrderController {
 ```java
 import java.util.concurrent.StructuredTaskScope;
 
-/**
  * Structured concurrency — fan-out, fan-in with proper lifecycle management.
  * If any subtask fails, all others are cancelled. No leaked threads.
  * Requires: --enable-preview
- */
 public EnrichedOrder getEnrichedOrder(UUID orderId) throws Exception {
     Order order = orderRepository.findById(orderId).orElseThrow();
 
@@ -980,10 +956,8 @@ public class OrderEnrichmentService {
 
     private final Executor taskExecutor;
 
-    /**
      * Fan-out to multiple services concurrently, combine results.
      * Use when you need async composition outside of virtual threads.
-     */
     public CompletableFuture<EnrichedOrder> enrichAsync(String tenantId, Order order) {
         CompletableFuture<CustomerProfile> profileFuture =
                 CompletableFuture.supplyAsync(
@@ -1024,11 +998,9 @@ import java.util.concurrent.ThreadPoolExecutor;
 @EnableAsync
 public class AsyncConfig {
 
-    /**
      * ALWAYS use a bounded queue for @Async executors.
      * Unbounded queues (LinkedBlockingQueue default) will cause OOM under load
      * because tasks accumulate faster than they are processed.
-     */
     @Bean("taskExecutor")
     public Executor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -1102,9 +1074,7 @@ public class CacheConfig {
         return manager;
     }
 
-    /**
      * Named caches with different configurations.
-     */
     @Bean
     public CacheManager multiCacheManager() {
         CaffeineCacheManager manager = new CaffeineCacheManager();
@@ -1138,11 +1108,9 @@ public class CacheConfig {
 @Service
 public class ProductService {
 
-    /**
      * @Cacheable — result is cached after first invocation.
      * Subsequent calls with the same tenantId+productId return the cached value.
      * Key is auto-generated from method parameters.
-     */
     @Cacheable(value = "products", key = "#tenantId + ':' + #productId")
     public Product getProduct(String tenantId, UUID productId) {
         log.debug("Cache miss for product tenantId={} productId={}", tenantId, productId);
@@ -1150,10 +1118,8 @@ public class ProductService {
                 .orElseThrow(() -> new ResourceNotFoundException("Product", productId.toString()));
     }
 
-    /**
      * @CachePut — always executes the method and updates the cache.
      * Use after create/update to keep the cache fresh.
-     */
     @CachePut(value = "products", key = "#tenantId + ':' + #result.id")
     public Product updateProduct(String tenantId, UUID productId, UpdateProductRequest request) {
         Product product = productRepository.findByTenantIdAndId(
@@ -1162,19 +1128,15 @@ public class ProductService {
         return productRepository.save(product);
     }
 
-    /**
      * @CacheEvict — removes the entry from the cache.
      * Use after delete or when data is known to be stale.
-     */
     @CacheEvict(value = "products", key = "#tenantId + ':' + #productId")
     public void deleteProduct(String tenantId, UUID productId) {
         productRepository.deleteByTenantIdAndId(UUID.fromString(tenantId), productId);
     }
 
-    /**
      * @CacheEvict with allEntries — clear the entire cache.
      * Use for bulk operations or admin cache-clear endpoints.
-     */
     @CacheEvict(value = "products", allEntries = true)
     public void clearProductCache() {
         log.info("Product cache cleared");
@@ -1185,11 +1147,9 @@ public class ProductService {
 ### 7c. Cache Stampede Prevention with sync=true
 
 ```java
-/**
  * sync=true — only one thread computes the value on cache miss.
  * Other concurrent requests for the same key wait for the first computation.
  * Prevents cache stampede (thundering herd) on popular keys after expiry.
- */
 @Cacheable(value = "products", key = "#tenantId + ':' + #productId", sync = true)
 public Product getProduct(String tenantId, UUID productId) {
     return productRepository.findByTenantIdAndId(UUID.fromString(tenantId), productId)
@@ -1263,11 +1223,9 @@ public class RedisCacheConfig {
 ### 7e. Two-Tier Cache (Caffeine L1 + Redis L2)
 
 ```java
-/**
  * Two-tier cache: Caffeine (in-process, microseconds) -> Redis (distributed, milliseconds).
  * Check Caffeine first; on miss, check Redis; on miss, call the database.
  * Write-through: updates write to both caches.
- */
 @Service
 public class TwoTierCacheService<K, V> {
 

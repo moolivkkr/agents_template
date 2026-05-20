@@ -52,7 +52,6 @@ accessibility:
 ```
 
 ---
-
 ## Component Tree — Typed Data Source References
 
 ### List Page Example

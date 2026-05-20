@@ -40,7 +40,6 @@ export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 ```
 
 ---
-
 ## Rules
 
 ### Field Name Matching

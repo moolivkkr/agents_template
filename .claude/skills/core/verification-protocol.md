@@ -12,453 +12,115 @@ tags:
 
 # Verification Protocol
 
-Systematic process for verifying that implementations are complete, correct, and production-ready. Every task completion claim must pass this protocol.
+Systematic process for verifying implementations are complete, correct, and production-ready.
 
 ## Assignment-Delivery Checklist
 
-Before marking **any** implementation task as done, verify every item. No exceptions.
-
 ### 1. Requirement Coverage
 
-```
-For each requirement in the spec:
-  [ ] Corresponding code exists
-  [ ] Code implements the full requirement, not a subset
-  [ ] Edge cases mentioned in the spec are handled
-  [ ] Acceptance criteria can be demonstrated
-```
-
-**How to verify:**
-```bash
-# Extract all requirement IDs from spec
-grep -E "^(FR|NFR|OBJ)-[0-9]+" docs/BRD.md | sort > /tmp/spec_reqs.txt
-
-# Search codebase for each requirement reference
-while read -r req; do
-  count=$(grep -r "$req" src/ --include="*.go" --include="*.ts" -l | wc -l)
-  if [ "$count" -eq 0 ]; then
-    echo "MISSING: $req has no implementation reference"
-  fi
-done < /tmp/spec_reqs.txt
-```
+For each spec requirement: code exists, implements FULL requirement, edge cases handled, acceptance criteria demonstrable.
 
 ### 2. API Completeness
 
-```
-For each endpoint in the API spec:
-  [ ] Route is registered in the router
-  [ ] Handler function exists and has real logic
-  [ ] Request validation is implemented
-  [ ] Response matches the documented schema
-  [ ] Error cases return documented error codes
-  [ ] Authentication/authorization checks are in place
-```
-
-**How to verify:**
-```bash
-# List all routes defined in OpenAPI spec
-grep -E "^\s+/(api|v[0-9])" openapi.yaml | sort > /tmp/spec_routes.txt
-
-# List all routes registered in code
-grep -rE "(GET|POST|PUT|PATCH|DELETE)\s+\"/" src/ --include="*.go" | sort > /tmp/code_routes.txt
-
-# Compare
-diff /tmp/spec_routes.txt /tmp/code_routes.txt
-```
+For each endpoint: route registered, handler has real logic, request validation, response matches schema, error codes correct, auth checks present.
 
 ### 3. Data Model Completeness
 
-```
-For each model/entity in the spec:
-  [ ] Database migration exists with all fields
-  [ ] Go/TS struct has all fields with correct types
-  [ ] Validation rules match spec constraints
-  [ ] Indexes exist for queried fields
-  [ ] Foreign keys and constraints are defined
-```
-
-**How to verify:**
-```go
-// Compare struct fields to migration columns
-// In tests:
-func TestUserModelMatchesMigration(t *testing.T) {
-    // Query information_schema for table columns
-    rows, _ := db.Query(`
-        SELECT column_name, data_type, is_nullable
-        FROM information_schema.columns
-        WHERE table_name = 'users'
-        ORDER BY ordinal_position
-    `)
-    // Compare against struct fields
-    // Flag any mismatches
-}
-```
+For each entity: migration exists with all fields, struct has correct types, validation matches constraints, indexes for queried fields, FKs/constraints defined.
 
 ### 4. Error Handling Completeness
 
-```
-For each error case documented in the spec:
-  [ ] Error is caught/handled in code
-  [ ] Correct HTTP status code is returned
-  [ ] Error response includes machine-readable code
-  [ ] Error is logged with appropriate level
-  [ ] User-facing message is helpful, not exposing internals
-```
+For each error case: caught/handled, correct HTTP status, machine-readable code, logged at right level, user-facing message safe.
 
 ### 5. UI Completeness
 
-```
-For each component in the wireframe:
-  [ ] Component file exists
-  [ ] Component renders all specified elements
-  [ ] Interactive elements have event handlers
-  [ ] Loading states are implemented
-  [ ] Error states are implemented
-  [ ] Empty states are implemented
-  [ ] Responsive behavior matches spec
-  [ ] Accessibility attributes are present (aria-*, roles)
-```
+For each component: file exists, renders all elements, event handlers wired, loading/error/empty states, responsive, a11y attributes.
 
 ### 6. Code Hygiene
 
-```
-[ ] No TODO/FIXME/HACK comments left behind
-[ ] No placeholder/mock data in production code paths
-[ ] All imports are used — no dead imports
-[ ] No dead code (unreachable functions, unused variables)
-[ ] No hardcoded secrets, URLs, or environment-specific values
-[ ] No console.log / fmt.Println debugging left behind
-[ ] Tests pass — zero failures
-[ ] Coverage meets project threshold
-```
+No TODO/FIXME/HACK, no placeholder data, no unused imports, no dead code, no hardcoded secrets/URLs, no debug logging, tests pass, coverage meets threshold.
 
-**How to verify:**
 ```bash
-# Scan for leftover markers
-grep -rn "TODO\|FIXME\|HACK\|XXX\|PLACEHOLDER\|TEMP\|mock.*data" src/ \
-  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.py"
-
-# Scan for hardcoded values
-grep -rn "localhost\|127\.0\.0\.1\|password.*=.*\"" src/ \
-  --include="*.go" --include="*.ts" --include="*.py" | \
-  grep -v "_test\." | grep -v "test_" | grep -v "\.test\."
-
-# Scan for debugging leftovers
-grep -rn "console\.log\|fmt\.Print\|print(" src/ \
-  --include="*.go" --include="*.ts" --include="*.tsx" --include="*.py" | \
-  grep -v "_test\." | grep -v "logger\." | grep -v "log\."
+# Scan for issues
+grep -rn "TODO\|FIXME\|HACK\|PLACEHOLDER" src/ --include="*.go" --include="*.ts"
+grep -rn "console\.log\|fmt\.Print" src/ --include="*.go" --include="*.ts" | grep -v "_test\." | grep -v "logger\."
 ```
 
 ## 4-Level Verification
 
-Each level builds on the previous. All four must pass.
+All four must pass.
 
 ### Level 1: Existence
 
-> "Do all the files, functions, and endpoints exist?"
-
-```
-Check:
-  - Every file mentioned in the design doc exists on disk
-  - Every function/method in the spec has a corresponding implementation
-  - Every route is registered in the router
-  - Every database table has a migration
-  - Every UI page/component has a file
-
-How to detect failures:
-  - File not found
-  - Function signature missing
-  - Route returns 404 (not registered)
-  - Table doesn't exist in schema
-```
-
-```bash
-# Automated existence check example
-check_file_exists() {
-  if [ ! -f "$1" ]; then
-    echo "FAIL Level 1: Missing file: $1"
-    return 1
-  fi
-  echo "PASS: $1 exists"
-}
-
-# Check all expected files
-check_file_exists "internal/handler/user_handler.go"
-check_file_exists "internal/service/user_service.go"
-check_file_exists "internal/repository/user_repository.go"
-check_file_exists "migrations/001_create_users.sql"
-```
+Do all files, functions, endpoints, migrations, components exist?
 
 ### Level 2: Substance
 
-> "Do implementations have real logic, not stubs?"
-
-```
-Check:
-  - Functions contain more than `return nil` or `// TODO`
-  - Database queries actually query the database (not return empty results)
-  - Business logic performs real calculations/transformations
-  - Validation actually validates (not always returns true)
-  - Error handling returns meaningful errors (not swallows them)
-
-How to detect failures:
-  - Function body is < 3 lines for complex operations
-  - Only `return nil, nil` or `return []T{}, nil`
-  - Contains `// TODO`, `// FIXME`, `panic("not implemented")`
-  - Tests pass but only because they test happy path with stubs
-```
+Do implementations have real logic, not stubs? Check for: `return nil`, `// TODO`, `panic("not implemented")`, functions <3 lines for complex ops.
 
 ```go
-// FAILS Level 2 — stub implementation
-func (s *OrderService) CalculateTotal(items []LineItem) (float64, error) {
-    return 0, nil // stub
-}
+// FAILS — stub
+func (s *OrderService) CalculateTotal(items []LineItem) (float64, error) { return 0, nil }
 
-// PASSES Level 2 — real implementation
+// PASSES — real logic with validation
 func (s *OrderService) CalculateTotal(items []LineItem) (float64, error) {
-    if len(items) == 0 {
-        return 0, ErrEmptyOrder
-    }
+    if len(items) == 0 { return 0, ErrEmptyOrder }
     var total float64
     for _, item := range items {
-        if item.Quantity <= 0 {
-            return 0, &ValidationError{Field: "quantity", Message: "must be positive"}
-        }
+        if item.Quantity <= 0 { return 0, &ValidationError{Field: "quantity", Message: "must be positive"} }
         total += item.Price * float64(item.Quantity)
     }
-    return math.Round(total*100) / 100, nil // round to cents
+    return math.Round(total*100) / 100, nil
 }
 ```
 
 ### Level 3: Wiring
 
-> "Are components connected? Can data flow end-to-end?"
-
-```
-Check:
-  - HTTP handler calls service, service calls repository, repository calls DB
-  - Dependencies are injected — not nil, not mocked in production
-  - Middleware is registered in the correct order
-  - Frontend components call actual API endpoints (not mock data)
-  - Environment variables are read and passed to the right components
-
-How to detect failures:
-  - Handler instantiated but not registered on router
-  - Service has nil repository (dependency not injected)
-  - Middleware registered after routes (never executes)
-  - Frontend fetches from hardcoded localhost URL
-  - Config struct has zero values for required fields
-```
+Are components connected? Handler→service→repo chain wired, dependencies injected (not nil), middleware registered in correct order, frontend calls real endpoints, config values populated.
 
 ```go
-// Wiring verification test — the "smoke test"
+// Smoke test — build full dep graph, hit every endpoint
 func TestServerWiring(t *testing.T) {
-    // Build the full dependency graph
-    cfg := config.LoadTest()
-    db := postgres.ConnectTest(t, cfg.DSN)
-
-    userRepo := repository.NewUserRepository(db)
-    userSvc := service.NewUserService(userRepo)
-    handler := handler.NewUserHandler(userSvc)
-
-    router := server.NewRouter(handler)
-
-    // Hit every endpoint — verify non-500 response
-    endpoints := []struct {
-        method string
-        path   string
-        want   int // expected status (or range)
-    }{
-        {"GET", "/api/v1/users", 200},
-        {"POST", "/api/v1/users", 422}, // missing body = validation error, not 500
-        {"GET", "/api/v1/users/nonexistent", 404},
-    }
-    for _, ep := range endpoints {
-        t.Run(ep.method+" "+ep.path, func(t *testing.T) {
-            req := httptest.NewRequest(ep.method, ep.path, nil)
-            rec := httptest.NewRecorder()
-            router.ServeHTTP(rec, req)
-            assert.Equal(t, ep.want, rec.Code, "unexpected status for %s %s", ep.method, ep.path)
-        })
-    }
+    // Build deps, create router, verify each endpoint returns expected status (not 500)
 }
 ```
 
 ### Level 4: Data Flow
 
-> "Does actual data move correctly through the system?"
-
-```
-Check:
-  - POST creates a record that GET can retrieve
-  - Mutations are persisted to the database (not just in memory)
-  - Computed fields are calculated correctly with real data
-  - Pagination returns correct pages with correct cursors
-  - Filters actually filter (not return everything)
-  - Sorting actually sorts (not random order)
-
-How to detect failures:
-  - POST returns 201 but GET returns 404 (data not persisted)
-  - Update changes response but database still has old value
-  - Pagination cursor always returns the same page
-  - Filter parameter is accepted but ignored in query
-```
+Does actual data move correctly? POST creates record GET can retrieve, mutations persist to DB, computed fields correct, pagination/filters/sorting work.
 
 ```go
-// Data flow integration test
+// CRUD data flow test
 func TestUserDataFlow(t *testing.T) {
-    // 1. Create
-    createResp := httpPost(t, "/api/v1/users", `{"email":"test@example.com","name":"Test"}`)
-    assert.Equal(t, 201, createResp.StatusCode)
-
-    var created struct{ Data User }
-    json.NewDecoder(createResp.Body).Decode(&created)
-    userID := created.Data.ID
-    assert.NotEmpty(t, userID)
-
-    // 2. Read back — verify persistence
-    getResp := httpGet(t, "/api/v1/users/"+userID)
-    assert.Equal(t, 200, getResp.StatusCode)
-
-    var fetched struct{ Data User }
-    json.NewDecoder(getResp.Body).Decode(&fetched)
-    assert.Equal(t, "test@example.com", fetched.Data.Email)
-    assert.Equal(t, "Test", fetched.Data.Name)
-
-    // 3. Update — verify mutation persists
-    patchResp := httpPatch(t, "/api/v1/users/"+userID, `{"name":"Updated"}`)
-    assert.Equal(t, 200, patchResp.StatusCode)
-
-    getResp2 := httpGet(t, "/api/v1/users/"+userID)
-    var updated struct{ Data User }
-    json.NewDecoder(getResp2.Body).Decode(&updated)
-    assert.Equal(t, "Updated", updated.Data.Name)
-
-    // 4. List — verify appears in collection
-    listResp := httpGet(t, "/api/v1/users")
-    var list struct{ Data []User; Meta ListMeta }
-    json.NewDecoder(listResp.Body).Decode(&list)
-    assert.True(t, containsID(list.Data, userID))
-
-    // 5. Delete — verify removal
-    deleteResp := httpDelete(t, "/api/v1/users/"+userID)
-    assert.Equal(t, 204, deleteResp.StatusCode)
-
-    getResp3 := httpGet(t, "/api/v1/users/"+userID)
-    assert.Equal(t, 404, getResp3.StatusCode)
+    // 1. POST create → 201 → 2. GET read back → verify fields
+    // 3. PATCH update → verify persists → 4. LIST → verify appears
+    // 5. DELETE → verify GET returns 404
 }
 ```
 
 ## Anti-Rationalization Rules
 
-The most dangerous verification failures are the ones you talk yourself out of checking.
-
-### Don't Accept "It Works" Without Evidence
-
-```
-BAD:  "The endpoint works" (never tested it)
-GOOD: "GET /api/v1/users returns 200 with correct JSON shape — here's the curl output"
-
-BAD:  "Tests pass" (ran tests that test mocks, not real behavior)
-GOOD: "Integration tests pass against real PostgreSQL — here's the test output"
-
-BAD:  "Error handling is implemented" (caught one error type)
-GOOD: "Tested all 5 error paths: not found, validation, conflict, auth, server error"
-```
-
-### Don't Skip Edge Cases
-
-```
-Always test:
-  - Empty collections (no data yet)
-  - Single item collections
-  - Boundary values (0, -1, max_int, empty string)
-  - Concurrent operations (two users create same resource)
-  - Large payloads (10MB body, 10000 items)
-  - Invalid UTF-8, special characters, SQL injection attempts
-  - Expired tokens, missing headers, wrong content type
-```
-
-### Don't Assume Tests Cover What They Claim
-
-```
-Read the test body, not just the test name:
-
-BAD test:
-  func TestCreateUser(t *testing.T) {
-      user := createUser()  // calls the function
-      assert.NotNil(t, user) // only checks it returns something
-  }
-
-GOOD test:
-  func TestCreateUser(t *testing.T) {
-      user, err := svc.CreateUser(ctx, CreateUserRequest{
-          Email: "test@example.com",
-          Name:  "Test User",
-      })
-      require.NoError(t, err)
-      assert.Equal(t, "test@example.com", user.Email)
-      assert.Equal(t, "Test User", user.Name)
-      assert.NotEmpty(t, user.ID)
-      assert.WithinDuration(t, time.Now(), user.CreatedAt, time.Second)
-
-      // Verify persisted
-      fetched, err := repo.FindByID(ctx, user.ID)
-      require.NoError(t, err)
-      assert.Equal(t, user.Email, fetched.Email)
-  }
-```
-
-### Don't Rationalize Gaps
-
-```
-Common rationalizations (all wrong):
-  - "We'll add tests later" → Tests exist to verify correctness NOW
-  - "That edge case won't happen" → It will, in production, at 3am
-  - "The framework handles that" → Verify the framework actually does
-  - "It's just a minor feature" → Minor features with bugs erode user trust
-  - "We're behind schedule" → Shipping broken code creates more schedule pressure
-```
+- Don't accept "it works" without evidence (curl output, test output)
+- Don't skip edge cases (empty, boundary, concurrent, large, invalid)
+- Don't assume tests cover what they claim — read the test body
+- Don't rationalize gaps: "we'll add later" / "won't happen" / "framework handles it"
 
 ## Verification Report Template
 
-After completing verification, produce this summary:
-
 ```markdown
-## Verification Report — [Feature/Phase Name]
-
-### Level 1: Existence ✅/❌
-- Files: X/Y present
-- Endpoints: X/Y registered
-- Models: X/Y migrated
-- Missing: [list]
-
-### Level 2: Substance ✅/❌
-- Stubs found: [list or "none"]
-- TODO/FIXME remaining: [count]
-- Placeholder data: [list or "none"]
-
-### Level 3: Wiring ✅/❌
-- Dependency injection: verified
-- Middleware chain: verified
-- Route registration: verified
-- Gaps: [list or "none"]
-
-### Level 4: Data Flow ✅/❌
-- CRUD cycle: tested
-- Pagination: tested with N records
-- Filters: tested X/Y filters
-- Edge cases: [list tested]
-
-### Checklist Score: X/10
-### Verdict: PASS / FAIL (with reasons)
+## Verification Report — [Feature/Phase]
+### Level 1: Existence — Files: X/Y, Endpoints: X/Y, Models: X/Y
+### Level 2: Substance — Stubs: [list], TODOs: [count], Placeholders: [list]
+### Level 3: Wiring — DI: verified, Middleware: verified, Routes: verified
+### Level 4: Data Flow — CRUD: tested, Pagination: tested, Filters: X/Y
+### Score: X/10 | Verdict: PASS / FAIL
 ```
 
 ## Critical Rules
 
-- Never mark a task done without running through the full checklist
-- All four verification levels must pass — Level 1 alone is not enough
-- Actually execute the checks — don't just read the code and assume
-- Produce evidence (test output, curl responses, screenshots) for each claim
-- If any check fails, fix it before reporting completion
-- Anti-rationalization: if you catch yourself saying "it's probably fine," verify
+- Never mark done without full checklist
+- All four levels must pass — Level 1 alone insufficient
+- Actually execute checks — don't just read code and assume
+- Produce evidence (test output, curl responses) for each claim
+- Fix failures before reporting completion
+- If you think "it's probably fine" — verify

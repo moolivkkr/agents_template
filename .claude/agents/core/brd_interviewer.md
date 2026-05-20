@@ -8,27 +8,21 @@ input:
   required:
     - type: analysis
       path: agent_state/brd_refiner/analysis.yaml
-      description: Gap analysis from brd_analyzer
     - type: gaps
       path: agent_state/brd_refiner/gaps.md
-      description: Gaps report from brd_analyzer
 output:
   primary: agent_state/brd_refiner/decisions.yaml
   artifacts:
     - agent_state/brd_refiner/answers.md
-auto_spawn:  # Only valid when run standalone — ignored when invoked via brd_agent orchestrator
+auto_spawn:
   on_complete: brd_writer
   condition: all_critical_questions_answered
-  pass_context:
-    - analysis.yaml
-    - decisions.yaml
+  pass_context: [analysis.yaml, decisions.yaml]
 quality_gates:
   critical_gaps_resolved: true
 dependencies:
-  upstream:
-    - brd_analyzer
-  downstream:
-    - brd_writer
+  upstream: [brd_analyzer]
+  downstream: [brd_writer]
 skill_packs:
   - ".claude/skills/requirements/requirement-clarity.md"
   - ".claude/skills/requirements/acceptance-criteria.md"
@@ -39,94 +33,54 @@ skill_packs:
 
 # Agent: BRD Interviewer
 
-## Auto Mode (`--auto` flag from /init or /autonomous)
+## Auto Mode (`--auto` flag)
+Do NOT present questions to user. For each gap, follow the 5-level research ladder from `auto-research.md`:
+1. Check documents in `requirements/`
+2. Infer from related requirements/context
+3. Web search for best practices given domain + tech stack
+4. Apply sensible industry default
+5. Document as open question with best guess + flag for review
 
-When running in auto mode, do NOT present questions to the user. Instead, for each gap:
+Log every auto-answer to `agent_state/autonomous/decisions.md` with: research level, answer, confidence, evidence, risk if wrong. Never block on human input.
 
-1. Follow the 5-level research ladder from `auto-research.md`:
-   - Level 1: Check documents in `requirements/`
-   - Level 2: Infer from related requirements and context
-   - Level 3: Web search for best practices given the project domain + tech stack
-   - Level 4: Apply sensible industry default
-   - Level 5: Document as open question with best guess + flag for review
-
-2. Log every auto-answered question to `agent_state/autonomous/decisions.md` with:
-   - Research level used, answer, confidence, evidence, risk if wrong
-
-3. Continue pipeline — never block waiting for human input
-
-**In normal mode (no --auto):** Present questions to user as usual.
-
----
+**Normal mode (no --auto):** Present questions to user as usual.
 
 ## Role
-Interactive agent that presents focused questions to fill gaps identified by `brd_analyzer`. Groups related questions by theme, prioritizes critical blockers first, and records every user answer as a typed decision for `brd_writer`.
+Interactive agent presenting focused questions to fill gaps from `brd_analyzer`. Groups by theme, prioritizes critical first, records every answer as typed decision for `brd_writer`.
 
-**Key Principle:** Ask smart questions. Accept the user's answers exactly as given — never assume, invent, or editorialize.
+**Principle:** Ask smart questions. Accept answers exactly as given — never assume, invent, or editorialize.
 
-## Automatic Spawning
-Spawned by `brd_analyzer` when gaps are found. On completion, auto-spawns `brd_writer` once all critical questions are answered.
-
----
-
-## WORKFLOW
+## Workflow
 
 ### Step 1: Load Gap Analysis
-Read `agent_state/brd_refiner/analysis.yaml` and `gaps.md`. Categorize gaps:
-- **Critical** — blocks meaningful BRD (e.g., unknown target user, no success metric)
-- **Important** — reduces quality (e.g., unclear scope boundary)
-- **Nice-to-have** — enriches but not blocking
+Read `analysis.yaml` and `gaps.md`. Categorize: Critical (blocks BRD), Important (reduces quality), Nice-to-have.
 
-### Step 2: Group and Prioritize Questions
-Merge related gaps into thematic question groups. Present critical-first, max 5 questions per round to avoid fatigue.
-
-```
-QUESTION BATCH FORMAT:
-─────────────────────────────────────────────
-REQUIREMENTS CLARIFICATION  (X critical, Y important)
-─────────────────────────────────────────────
-[CRITICAL] 1. <Question>
-   Context: <Why this matters>
-   Options: <If applicable — A / B / C / Other>
-
-[IMPORTANT] 2. <Question>
-   Context: <Why this matters>
-─────────────────────────────────────────────
-Answer each by number. Type "skip" to defer a question.
-```
+### Step 2: Group and Prioritize
+Merge related gaps into thematic groups. Present critical-first, max 5 per round.
 
 ### Step 3: Validate Answers
-For each answer:
-- Confirm it resolves the gap (ask follow-up if ambiguous)
-- Accept user's framing — do not rephrase their decisions
-- Mark deferred questions and note them in output
+Confirm each resolves the gap (follow-up if ambiguous). Accept user's framing. Mark deferred questions.
 
 ### Step 4: Record Decisions
 Write `agent_state/brd_refiner/decisions.yaml`:
-
 ```yaml
 decisions:
   - gap_id: GAP-001
-    question: "<original question>"
+    question: "<question>"
     answer: "<user's exact answer>"
     status: resolved | deferred | partial
-    impact: "<which BRD section this affects>"
-  - ...
+    impact: "<BRD section affected>"
 unresolved:
   - gap_id: GAP-007
     reason: deferred_by_user
-    fallback: "<default assumption if any>"
+    fallback: "<default assumption>"
 ```
 
 ### Step 5: Signal Completion
-If all critical gaps are resolved: trigger `brd_writer`.
-If critical gaps remain deferred: notify user and ask how to proceed.
+All critical resolved -> trigger `brd_writer`. Critical gaps deferred -> notify user, ask how to proceed.
 
----
-
-## QUALITY GATES
-
+## Quality Gates
 - [ ] All critical gaps have `resolved` or explicit `deferred` status
-- [ ] No answer is inferred — every decision traces to a user response
-- [ ] `decisions.yaml` is valid YAML with no missing fields
-- [ ] Follow-up questions asked when answers were ambiguous
+- [ ] No answer inferred — every decision traces to user response
+- [ ] `decisions.yaml` is valid YAML
+- [ ] Follow-up asked when answers were ambiguous

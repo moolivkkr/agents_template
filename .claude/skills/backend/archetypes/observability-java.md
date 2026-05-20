@@ -193,10 +193,8 @@ public class OrderService {
         this.inventoryClient = inventoryClient;
     }
 
-    /**
      * @WithSpan creates a span named "OrderService.createOrder" by default.
      * @SpanAttribute adds the parameter as a span attribute automatically.
-     */
     @WithSpan
     public Order createOrder(
             @SpanAttribute("tenant_id") String tenantId,
@@ -317,10 +315,8 @@ import java.util.concurrent.Executor;
 @EnableAsync
 public class AsyncConfig {
 
-    /**
      * Custom executor that propagates OTel context to async threads.
      * Without this, @Async methods lose trace_id and span_id.
-     */
     @Bean("taskExecutor")
     public Executor taskExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -350,9 +346,7 @@ import io.opentelemetry.context.Context;
 
 public class ContextAwareCompletableFuture {
 
-    /**
      * Run async work with OTel context propagated.
-     */
     public static <T> CompletableFuture<T> supplyAsync(
             Supplier<T> supplier, Executor executor) {
         Context otelContext = Context.current();
@@ -404,10 +398,8 @@ import io.opentelemetry.sdk.trace.SpanProcessor;
 import org.slf4j.MDC;
 import org.springframework.stereotype.Component;
 
-/**
  * Injects tenant_id from MDC into every span (including auto-instrumented ones).
  * This ensures JDBC, Redis, and HTTP client spans carry tenant context.
- */
 @Component
 public class TenantSpanProcessor implements SpanProcessor {
 
@@ -497,10 +489,8 @@ public class AppMetrics {
         this.meterRegistry = meterRegistry;
     }
 
-    /**
      * Increment a request counter with route and status dimensions.
      * Use for tracking request volume per endpoint.
-     */
     public void recordRequest(String tenantId, String route, String method, int status) {
         Counter.builder("http.requests.total")
                 .description("Total HTTP requests")
@@ -512,9 +502,7 @@ public class AppMetrics {
                 .increment();
     }
 
-    /**
      * Business event counter — track domain events for KPI dashboards.
-     */
     public void recordBusinessEvent(String tenantId, String eventType, String outcome) {
         meterRegistry.counter("business.events.total",
                 "tenant_id", tenantId,
@@ -523,9 +511,7 @@ public class AppMetrics {
         ).increment();
     }
 
-    /**
      * Record order value for revenue tracking.
-     */
     public void recordOrderValue(String tenantId, double amount, String paymentMethod) {
         meterRegistry.counter("business.order.revenue",
                 "tenant_id", tenantId,
@@ -546,10 +532,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class OrderService {
 
-    /**
      * @Timed creates a Timer metric that records invocation duration.
      * histogram=true enables percentile histograms for p50/p95/p99 queries.
-     */
     @Timed(
         value = "order.create.duration",
         description = "Time to create an order",
@@ -815,10 +799,8 @@ import org.springframework.web.filter.OncePerRequestFilter;
 import java.io.IOException;
 import java.util.UUID;
 
-/**
  * Populates MDC with correlation IDs for every request.
  * Must run early in the filter chain (low order number).
- */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class CorrelationFilter extends OncePerRequestFilter {
@@ -851,7 +833,6 @@ public class CorrelationFilter extends OncePerRequestFilter {
             }
 
             // OTel trace/span IDs (if OTel agent is active, these are already in MDC;
-            // this is a fallback for non-agent setups)
             SpanContext spanContext = Span.current().getSpanContext();
             if (spanContext.isValid()) {
                 MDC.put("trace_id", spanContext.getTraceId());
@@ -956,11 +937,9 @@ import java.io.IOException;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-/**
  * Masks sensitive fields in JSON log output.
  * Fields like "password", "token", "secret", "authorization", "ssn", "credit_card"
  * are replaced with "***MASKED***".
- */
 public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
 
     private static final Set<String> SENSITIVE_FIELDS = Set.of(
@@ -1090,26 +1069,20 @@ import io.opentelemetry.api.metrics.Meter;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/**
  * When using the opentelemetry-spring-boot-starter, OpenTelemetry, Tracer,
  * and Meter beans are auto-configured. This class shows explicit bean
  * definitions for cases where you need custom configuration.
- */
 @Configuration
 public class OtelConfig {
 
-    /**
      * Tracer bean for programmatic span creation.
      * Inject this into services that need manual spans.
-     */
     @Bean
     public Tracer tracer(OpenTelemetry openTelemetry) {
         return openTelemetry.getTracer("order-service", "1.0.0");
     }
 
-    /**
      * Meter bean for programmatic metric creation.
-     */
     @Bean
     public Meter meter(OpenTelemetry openTelemetry) {
         return openTelemetry.getMeter("order-service");
@@ -1275,11 +1248,9 @@ import org.springframework.stereotype.Component;
 import javax.sql.DataSource;
 import java.sql.Connection;
 
-/**
  * Custom health indicator that checks database connectivity.
  * Spring Boot auto-registers DataSourceHealthIndicator, but this shows
  * the pattern for custom dependencies (Redis, external APIs, etc.).
- */
 @Component("database")
 public class DatabaseHealthIndicator implements HealthIndicator {
 

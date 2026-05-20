@@ -21,7 +21,7 @@ arguments:
 
 # /review — Code Review
 
-Runs the four-layer review pipeline: style/idioms → architecture compliance → tenant isolation → security.
+Four-layer review pipeline: style/idioms → architecture compliance → tenant isolation → security.
 
 ---
 
@@ -29,37 +29,23 @@ Runs the four-layer review pipeline: style/idioms → architecture compliance �
 
 ```bash
 if [ -n "$ARG_PHASE" ]; then
-  # Review all code produced in the specified phase (from manifest artifacts)
   SCOPE=$(cat agent_state/phases/${ARG_PHASE}/manifest.json | jq -r '.artifacts.code[]')
 else
-  # Review uncommitted changes
   SCOPE=$(git diff --name-only HEAD)
 fi
-echo "Review scope: $SCOPE"
 ```
 
-Load context:
-- `docs/BRD.md`
-- `docs/IMPLEMENTATION_GUIDELINES.md`
-- `agent_state/agent_registry.json` (for active skill packs)
+Load: `docs/BRD.md`, `docs/IMPLEMENTATION_GUIDELINES.md`, `agent_state/agent_registry.json`
 
 ---
 
-## Step 0.5 — Spec Compliance (if phase specified)
+## Step 0.5 — Spec Compliance (phase reviews only)
 
-**Runs when:** `$ARG_PHASE` is set (reviewing a phase, not just uncommitted changes)
-**Skip when:** reviewing uncommitted changes (no specs to compare against)
+**Skip when:** reviewing uncommitted changes
 
-Independently verify the implementation matches the phase specs. Uses explicit distrust:
-> "The implementer's manifest reports success. Verify everything independently by reading the actual code."
+Independently verify implementation matches specs with explicit distrust: "The implementer's manifest reports success. Verify everything independently."
 
-Checks:
-- Every interface contract in specs has a matching implementation
-- Every behavior described in spec flow sections is implemented (not stubbed)
-- Every edge case in specs has handling code
-- API contracts match wireframe API bindings (if UI phase)
-
-On mismatch: log as `spec_deviation` with file, expected, actual.
+Checks: interface contracts implemented, behaviors not stubbed, edge cases handled, API contracts match wireframe bindings.
 
 Writes: `agent_state/review/spec_compliance_review.md`
 
@@ -67,45 +53,21 @@ Writes: `agent_state/review/spec_compliance_review.md`
 
 ## Step 1 — Style & Idioms (`code_reviewer_I`)
 
-**Agent:** `code_reviewer_I`
-**Reads:** Active language skill pack (`.claude/skills/languages/{{LANG}}.md`)
+**Reads:** Active language skill pack
 
-Checks:
-- **Security-adjacent idioms (checked first, BLOCKING):**
-  - Auth context extracted but actor discarded (`_, ok` pattern; result thrown away)
-  - Unsafe double-cast (`as unknown as` in TypeScript; bare type assertion without comma-ok in Go)
-  - Raw error messages (`err.Error()`, `exception.message`) in HTTP responses
-  - Placeholder values in privileged actions (approve, reject)
-- Language idioms and conventions from skill pack
-- Naming conventions (from IMPLEMENTATION_GUIDELINES)
-- Error handling patterns
-- Code complexity (functions > 50 lines flagged)
-- Dead code, unused variables
-- Comment quality (missing on non-obvious logic)
+**Security-adjacent idioms (checked first, BLOCKING):** auth context result discarded, unsafe double-cast, raw error messages in responses, placeholder values in privileged actions.
 
-Severity: BLOCKING (must fix) / WARNING (should fix) / INFO (consider)
+**Also checks:** language idioms, naming conventions, error handling, complexity (>50 lines flagged), dead code, comment quality.
 
-Writes: `agent_state/review/code_review_I.md`
+Severity: BLOCKING / WARNING / INFO. Writes: `agent_state/review/code_review_I.md`
 
 ---
 
 ## Step 2 — Architecture Compliance (`code_reviewer_II`)
 
-**Agent:** `code_reviewer_II`
-**Reads:** `docs/IMPLEMENTATION_GUIDELINES.md`, previous `code_review_I.md`
+**Authorization chain integrity (checked first, VIOLATION):** every service method with resource ID has tenantID, tenantID forwarded through all layers, in-memory stores have ownership check + concurrency protection.
 
-Checks:
-- **Authorization chain integrity (checked first, VIOLATION):**
-  - Every service method with resource ID has tenantID in signature
-  - tenantID forwarded from handler through service into every data access call
-  - In-memory stores for multi-tenant data have ownership check on every read
-  - In-memory stores have concurrency protection (mutex/lock)
-- Repository pattern respected (no direct DB in handlers)
-- API versioning convention followed
-- Service layer has no framework-specific types
-- Dependency direction (domain ← service ← handler, never reversed)
-- No circular dependencies
-- Component boundaries respected (from component inventory)
+**Also checks:** repository pattern, API versioning, service layer purity, dependency direction, no circular deps, component boundaries.
 
 Writes: `agent_state/review/code_review_II.md`
 
@@ -113,20 +75,13 @@ Writes: `agent_state/review/code_review_II.md`
 
 ## Step 2.5 — Tenant Isolation Verification (`tenant_isolation_verifier`)
 
-**Agent:** `tenant_isolation_verifier`
-**Runs:** In parallel with Step 2, or immediately after if sequential
+Single-purpose mechanical tracer. For every route with resource ID parameter:
+1. Auth context extraction result NOT discarded
+2. tenantID traced from auth → service → data access
+3. Data access WHERE clause includes ownership predicate
+4. In-memory stores: ownership check before returning data
 
-This is a single-purpose mechanical tracer. For every route that accepts a resource ID parameter:
-
-1. Confirms auth context extraction result is NOT discarded
-2. Traces tenantID from auth context into every service call
-3. Traces tenantID from service signature into every data access call
-4. Confirms data access WHERE clause includes ownership predicate
-5. For in-memory stores: confirms ownership check before returning data
-
-Produces a per-route PASS/FAIL table.
-
-**CRITICAL findings block the phase gate immediately.** Do not proceed to Step 3 if any route fails.
+Per-route PASS/FAIL table. **CRITICAL findings block gate immediately.**
 
 Writes: `agent_state/review/tenant_isolation.md`
 
@@ -134,26 +89,11 @@ Writes: `agent_state/review/tenant_isolation.md`
 
 ## Step 3 — Security (`security_reviewer`)
 
-**Agent:** `security_reviewer`
-**Reads:** `.claude/skills/core/security-owasp.md`, IMPLEMENTATION_GUIDELINES, `agent_state/review/tenant_isolation.md`
+**Reads:** `.claude/skills/core/security-owasp.md`, IMPLEMENTATION_GUIDELINES, `tenant_isolation.md`
 
-Checks (adversarial property verification + OWASP Top 10):
-- **IDOR chain trace** — for every ID-based route, tenantID flows from auth context through every data access (references tenant_isolation.md)
-- **In-memory store audit** — multi-tenant stores have ownership check and concurrency protection
-- **Response leakage** — no `err.Error()` or internal details in API error responses
-- **Frontend/backend limit drift** — query param names and value ranges match between frontend client and backend handler
-- **Unsafe casts** — `as unknown as` (TypeScript), unguarded type assertions
-- **Query validation completeness** — if project has SQL builder: allowlist wired into validation, UNION/INTO/RETURNING in blocklist
-- Input validation at all API boundaries
-- Auth checks on all protected routes; token validated (expiry + signature + claims)
-- No secrets in code; PII not logged
-- CORS policy explicitly configured; not wildcard
-- CSRF protection on state-changing endpoints
-- Rate limiting on auth endpoints
+Checks: IDOR chain trace, in-memory store audit, response leakage, frontend/backend limit drift, unsafe casts, query validation completeness, input validation, auth/token validation, no secrets in code, PII not logged, CORS not wildcard, CSRF protection, rate limiting on auth.
 
-Severity: HIGH (blocking), MEDIUM (should fix), LOW (informational)
-
-Writes: `agent_state/review/security_review.md`
+Severity: HIGH (blocking) / MEDIUM / LOW. Writes: `agent_state/review/security_review.md`
 
 ---
 
@@ -161,82 +101,33 @@ Writes: `agent_state/review/security_review.md`
 
 ```
 Code Review Results
-
   Style & Idioms:       PASS / N warnings / N blocking
   Architecture:         PASS / N violations
-  Tenant Isolation:     PASS / N CRITICAL (gate blocked if any)
+  Tenant Isolation:     PASS / N CRITICAL
   Security:             PASS / N HIGH / N MEDIUM / N LOW
-
-  Blocking issues (must fix before merge):
-    ❌ [file:line] <issue> — <recommendation>
-
-  Warnings (should fix):
-    ⚠  [file:line] <issue> — <recommendation>
-
-  Reports:
-    agent_state/review/code_review_I.md
-    agent_state/review/code_review_II.md
-    agent_state/review/tenant_isolation.md
-    agent_state/review/security_review.md
+  Blocking issues: ❌ [file:line] <issue>
+  Warnings: ⚠ [file:line] <issue>
 ```
 
-**Gate policy:**
-- CRITICAL tenant isolation findings → phase gate BLOCKED immediately; fix before proceeding
-- HIGH security findings → phase gate BLOCKED; must fix before merge
-- BLOCKING style issues → phase gate BLOCKED; must fix before merge
-- VIOLATION architecture findings → phase gate BLOCKED; must fix before merge
+**Gate policy:** CRITICAL/HIGH/BLOCKING/VIOLATION → phase gate BLOCKED, must fix.
 
 ---
 
-## Step 5 — Fix and Re-Verify Loop (CLOSED LOOP)
+## Step 5 — Fix and Re-Verify Loop
 
-**When:** ANY BLOCKING, VIOLATION, CRITICAL, or HIGH findings exist from Steps 1-3
-
-This step converts `/review` from a read-only reporter into a **closed feedback loop**.
-
-### Iteration Protocol
+**When:** ANY BLOCKING/VIOLATION/CRITICAL/HIGH findings exist
 
 ```
-For each BLOCKING/CRITICAL/HIGH finding:
-  1. Route finding to the appropriate implementation agent:
-     - Style/idiom → backend_developer or ui_developer (depending on file)
-     - Architecture → backend_developer or api_developer
-     - Tenant isolation → api_developer + backend_developer
-     - Security → security-relevant agent (whoever owns the file)
-  2. Agent fixes the specific issue (targeted fix, not refactor)
-  3. Re-run ONLY the reviewer that found the issue (not all reviewers)
-  4. If fixed → mark as RESOLVED in report
-  5. If still failing → retry (max 2 rounds total per finding)
-  6. After 2 rounds: log as unresolved in report
+For each finding:
+  1. Route to appropriate implementation agent
+  2. Agent applies targeted fix
+  3. Re-run ONLY the reviewer that found it
+  4. RESOLVED or retry (max 2 rounds per finding)
+  5. After 2 rounds: log as unresolved
 ```
 
-### Max Iteration Limits
-- **Per finding:** 2 fix-and-verify rounds
-- **Per review session:** 10 total fix cycles (across all findings)
-- **If limit exceeded:** Stop fixing, report remaining blockers with `⚠ UNRESOLVED after max retries`
+**Limits:** 2 rounds per finding, 10 total cycles per session.
 
-### Updated Report (after iteration)
+Updated report shows fixed items + remaining blockers.
 
-```
-Code Review Results (after fix iteration)
-
-  Style & Idioms:       PASS — 2 BLOCKING fixed (round 1: 1, round 2: 1)
-  Architecture:         PASS — 1 VIOLATION fixed
-  Tenant Isolation:     PASS — 0 CRITICAL
-  Security:             1 HIGH unresolved after 2 rounds
-
-  Fixed in this session:
-    ✅ [file:line] <issue> — fixed in round N
-    ✅ [file:line] <issue> — fixed in round N
-
-  Remaining blockers:
-    ❌ [file:line] <issue> — unresolved after 2 attempts
-
-  Reports:
-    agent_state/review/code_review_I.md (updated)
-    agent_state/review/code_review_II.md (updated)
-    agent_state/review/tenant_isolation.md (updated)
-    agent_state/review/security_review.md (updated)
-```
-
-**Anti-rationalization:** "The fix looks right, no need to re-run the reviewer" → Wrong. The reviewer must independently verify. Authors don't catch their own mistakes.
+**Anti-rationalization:** "The fix looks right, no need to re-run the reviewer" → Wrong. Reviewer must independently verify.

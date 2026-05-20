@@ -187,16 +187,13 @@ export type UpdateWidgetInput = z.infer<typeof updateWidgetSchema>;
 
 import type { Request, Response, NextFunction } from "express";
 
-/**
  * Wraps async Express route handlers to catch rejected promises
  * and forward them to error middleware.
- *
  * Usage:
  *   router.get("/widgets/:id", asyncHandler(async (req, res) => {
  *     const widget = await widgetService.get(req.params.id);
  *     res.json({ data: widget });
  *   }));
- */
 export function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
 ) {
@@ -233,15 +230,12 @@ import { MultiValidationError } from "../errors/domain-errors";
 
 type ValidationTarget = "body" | "params" | "query";
 
-/**
  * Express middleware that validates the specified request target against a Zod schema.
  * On success, replaces the target with the parsed (and sanitized) value.
  * On failure, throws a MultiValidationError caught by error middleware.
- *
  * Usage:
  *   router.post("/widgets", validate("body", createWidgetSchema), createHandler);
  *   router.get("/widgets/:id", validate("params", idParamSchema), getHandler);
- */
 export function validate(target: ValidationTarget, schema: ZodSchema) {
   return (req: Request, _res: Response, next: NextFunction) => {
     const result = schema.safeParse(req[target]);
@@ -293,10 +287,8 @@ import type {
 } from "../types/response";
 import type { Widget } from "../domain/widget";
 
-/**
  * Creates the widget router with all CRUD endpoints mounted.
  * Mount into the main app: app.use("/api/v1/widgets", createWidgetRouter(widgetService));
- */
 export function createWidgetRouter(svc: WidgetService): Router {
   const router = Router();
 
@@ -461,11 +453,9 @@ export function createWidgetRouter(svc: WidgetService): Router {
 
 const ALLOWED_FILTER_FIELDS = new Set(["status", "priority", "category"]);
 
-/**
  * Parses dynamic field filters from query string.
  * Accepts: ?filter[status]=active&filter[priority]=high
  * Only allow-listed fields are accepted — arbitrary params are dropped.
- */
 function parseFieldFilters(req: { query: Record<string, unknown> }): Record<string, string> {
   const fields: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.query)) {
@@ -743,12 +733,9 @@ export class OffsetPaginationDto {
 import { createParamDecorator, ExecutionContext } from "@nestjs/common";
 import type { AuthUser } from "../types/auth";
 
-/**
  * Extracts the authenticated user from the request.
  * Populated by JwtAuthGuard.
- *
  * Usage: @CurrentUser() user: AuthUser
- */
 export const CurrentUser = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): AuthUser => {
     const request = ctx.switchToHttp().getRequest();
@@ -760,11 +747,8 @@ export const CurrentUser = createParamDecorator(
 
 import { createParamDecorator, ExecutionContext } from "@nestjs/common";
 
-/**
  * Extracts the request ID from headers or generates one.
- *
  * Usage: @RequestId() requestId: string
- */
 export const RequestId = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): string => {
     const request = ctx.switchToHttp().getRequest();

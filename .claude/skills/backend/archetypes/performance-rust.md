@@ -114,7 +114,6 @@ use reqwest::Client;
 use std::time::Duration;
 
 /// Create a shared HTTP client. Reqwest keeps connections alive by default.
-/// IMPORTANT: Create ONE client and share it (via Arc<AppState>) — do NOT create per-request.
 pub fn create_http_client() -> Client {
     Client::builder()
         // Connection pool: reqwest reuses connections per host automatically.

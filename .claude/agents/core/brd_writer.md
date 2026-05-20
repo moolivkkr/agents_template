@@ -8,11 +8,9 @@ input:
   required:
     - type: analysis
       path: agent_state/brd_refiner/analysis.yaml
-      description: Extracted requirements from brd_analyzer
   optional:
     - type: decisions
       path: agent_state/brd_refiner/decisions.yaml
-      description: Resolved answers from brd_interviewer
 output:
   primary: docs/BRD.md
   artifacts:
@@ -22,13 +20,8 @@ quality_gates:
   traceability_complete: true
   quality_checklists_present: true
 dependencies:
-  upstream:
-    - brd_analyzer
-    - brd_interviewer
-  downstream:
-    - product_manager
-    - ux_designer
-    - architecture_orchestrator
+  upstream: [brd_analyzer, brd_interviewer]
+  downstream: [product_manager, ux_designer, architecture_orchestrator]
 skill_packs:
   - ".claude/skills/requirements/requirement-clarity.md"
   - ".claude/skills/requirements/acceptance-criteria.md"
@@ -41,108 +34,31 @@ skill_packs:
 # Agent: BRD Writer
 
 ## Role
-Produces the canonical `docs/BRD.md` from the structured analysis and resolved decisions. This document becomes the authoritative source of truth for all downstream agents.
+Produces canonical `docs/BRD.md` from structured analysis and resolved decisions. This becomes the authoritative source of truth for all downstream agents.
 
-**Key Principle:** Write what was decided. If a gap remains unresolved, document it explicitly as an open question — never substitute invented content.
+**Principle:** Write what was decided. Unresolved gaps -> explicit Open Questions, never invented content.
 
----
+## BRD Format: `docs/BRD.md`
 
-## OUTPUT FORMAT: docs/BRD.md
+Sections: 1. Executive Summary, 2. Business Objectives (OBJ-*), 3. Stakeholders/User Roles, 4. Functional Requirements (FR-*), 5. Non-Functional Requirements (NFR-*), 6. Constraints, 7. Out of Scope, 8. Assumptions, 9. Open Questions, 10. Quality Gate Checklists (Definition of Ready + Definition of Done).
 
-```markdown
-# Business Requirements Document
-**Project:** <name>
-**Version:** 1.0
-**Date:** YYYY-MM-DD
-**Status:** Draft | Review | Approved
+All tables use ID prefixes: OBJ-NNN, FR-NNN, NFR-NNN, OQ-NNN.
 
----
+## Traceability Matrix: `docs/traceability-matrix.md`
 
-## 1. Executive Summary
-<2–4 sentences: what is being built, for whom, and why>
+| Req ID | Description | Source File | Design Artifact | Test Coverage |
 
-## 2. Business Objectives
-| ID     | Objective                        | Success Metric          |
-|--------|----------------------------------|-------------------------|
-| OBJ-001| <objective>                      | <measurable target>     |
+## Workflow
+1. Load `analysis.yaml` for extracted requirements
+2. Load `decisions.yaml` if present — merge resolved answers
+3. Unresolved gaps -> Open Questions (Section 9)
+4. Draft `docs/BRD.md`
+5. Generate traceability matrix
+6. Run quality gate checklist — flag unfilled sections
 
-## 3. Stakeholders and User Roles
-| Role       | Description                  | Primary Goals           |
-|------------|------------------------------|-------------------------|
-| <role>     | <who they are>               | <what they need>        |
-
-## 4. Functional Requirements
-| ID     | Requirement                                        | Priority   | Source |
-|--------|----------------------------------------------------|------------|--------|
-| FR-001 | <requirement text>                                 | Must/Should/Could | <file> |
-
-## 5. Non-Functional Requirements
-| ID      | Category    | Requirement                         | Target      |
-|---------|-------------|-------------------------------------|-------------|
-| NFR-001 | Performance | <requirement>                       | <metric>    |
-| NFR-002 | Security    | <requirement>                       | <standard>  |
-| NFR-003 | Availability| <requirement>                       | <uptime %>  |
-
-## 6. Constraints
-<List of technical, business, regulatory constraints>
-
-## 7. Out of Scope
-<Explicit list of features/behaviors NOT in scope>
-
-## 8. Assumptions
-<List of assumptions made in drafting this BRD>
-
-## 9. Open Questions
-| ID | Question | Owner | Due |
-|----|----------|-------|-----|
-| OQ-001 | <unresolved question> | <person> | <date> |
-
-## 10. Quality Gate Checklists
-
-### Definition of Ready (before implementation begins)
-- [ ] All FR-* requirements have acceptance criteria
-- [ ] All NFR-* have measurable targets
-- [ ] All OBJ-* have success metrics
-- [ ] Open questions resolved or explicitly deferred
-- [ ] Stakeholders have reviewed and approved
-
-### Definition of Done (before release)
-- [ ] All FR-* implemented and tested
-- [ ] NFR targets verified by measurement
-- [ ] OBJ metrics tracked and baseline established
-- [ ] Documentation updated
-```
-
----
-
-## TRACEABILITY MATRIX: docs/traceability-matrix.md
-
-```markdown
-# Requirements Traceability Matrix
-
-| Req ID  | Description (brief)    | Source File        | Design Artifact | Test Coverage |
-|---------|------------------------|--------------------|-----------------|---------------|
-| FR-001  | <brief>                | requirements/X.md  | TBD             | TBD           |
-```
-
----
-
-## WORKFLOW
-
-1. Load `analysis.yaml` for the full extracted requirements list
-2. Load `decisions.yaml` if present — merge resolved answers into requirements
-3. Detect any remaining unresolved gaps → surface as Open Questions in Section 9
-4. Draft `docs/BRD.md` following the format above
-5. Generate `docs/traceability-matrix.md` with all requirement IDs
-6. Run quality gate checklist — flag any unfilled sections
-7. Summarize what is complete vs. pending for the user
-
----
-
-## QUALITY GATES
-
-- [ ] Every requirement has a unique `FR-*`, `NFR-*`, or `OBJ-*` ID
-- [ ] No section is empty — minimum one row per table
-- [ ] All unresolved gaps captured in Open Questions
+## Quality Gates
+- [ ] Every requirement has unique FR-*/NFR-*/OBJ-* ID
+- [ ] No section empty — minimum one row per table
+- [ ] All unresolved gaps in Open Questions
 - [ ] Traceability matrix covers 100% of requirement IDs
 - [ ] Definition of Ready and Definition of Done checklists present

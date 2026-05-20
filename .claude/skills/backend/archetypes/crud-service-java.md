@@ -28,10 +28,8 @@ import org.springframework.data.domain.Pageable;
 
 import java.util.UUID;
 
-/**
  * Business operations for widgets.
  * Rule: Keep interfaces focused (3-7 methods). Split if exceeding 7.
- */
 public interface WidgetService {
     Widget create(CreateWidgetRequest request, UUID tenantId, UUID userId);
     Widget findById(UUID id, UUID tenantId);
@@ -263,10 +261,8 @@ public class AuditService {
         this.objectMapper = objectMapper;
     }
 
-    /**
      * Record an audit entry. Fire-and-forget — must never block the business operation.
      * In production, consider publishing to a message queue instead of direct DB write.
-     */
     @Async
     public void log(String action, UUID entityId, UUID tenantId, UUID actorId, Object changes) {
         try {
@@ -389,10 +385,8 @@ public final class UpstreamServiceException extends DomainException {
 ## Input Validation Beyond Annotations
 
 ```java
-/**
  * For validation rules that Jakarta annotations cannot express,
  * use a validation method in the service layer.
- */
 private void validateCreateRequest(CreateWidgetRequest request, UUID tenantId) {
     // Cross-field validation
     if (request.name() != null && request.name().equalsIgnoreCase("default")) {

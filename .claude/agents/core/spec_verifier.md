@@ -27,67 +27,36 @@ skill_packs:
 # Agent: Spec Verifier
 
 ## Role
-Quality gate for specs. Runs after all phase specs are generated. Ensures nothing is missing before `/develop` starts — catching gaps here is cheaper than discovering them mid-implementation.
+Quality gate for specs. Runs after all phase specs are generated, catches gaps before `/develop` starts.
 
 ## Checks
 
 ### BRD Coverage
-- Every FR-* assigned to this phase in `PHASE_PLAN.md` is addressed by ≥1 spec
-- All cited FR-*/NFR-*/OBJ-* IDs exist verbatim in `docs/BRD.md` (no invented IDs)
-- All exit criteria from `PHASE_PLAN.md` are covered by ≥1 spec's acceptance criteria
+- Every FR-* assigned to this phase addressed by >=1 spec
+- All cited FR-*/NFR-*/OBJ-* IDs exist verbatim in `docs/BRD.md`
+- All PHASE_PLAN exit criteria covered by >=1 spec's acceptance criteria
 
 ### Internal Consistency
-- UI wireframe API bindings reference endpoints defined in backend specs (no dangling refs)
-- **Wireframe data type matching:** for each wireframe API binding:
-  - If the wireframe component is a table/list/grid → the bound endpoint spec must declare `data: []` (array response)
-  - If the wireframe component is a detail view/form → the bound endpoint spec must declare `data: {}` (object response)
-  - Mismatches are **BLOCKING** — this is the #1 cause of UI↔API integration failures
-- Performance targets in specs reference specific NFR-PERF-* IDs from BRD
-- Data types used in specs are consistent across related specs (same field name = same type)
-- Response field names in backend specs match field names referenced in wireframe API bindings
+- Wireframe API bindings reference endpoints in backend specs
+- **Wireframe data type matching (BLOCKING):** table/list -> array response, detail/form -> object response
+- Performance targets reference specific NFR-PERF-* IDs
+- Consistent data types across related specs (same field name = same type)
+- Response field names in backend specs match wireframe API bindings
 
 ### Data Contract Validation
-- `data-contracts.md` exists in `docs/design/phases/${PHASE}/specs/` and is non-empty
-- Every endpoint defined in backend specs has a matching entry in `data-contracts.md`
-- Every TypeScript interface has explicit field types (no `any`, no `object`)
-- List endpoints explicitly annotated with `// ARRAY`, single with `// OBJECT`
-- Empty states documented for every endpoint
-- If UI specs exist: every API binding references a real field path in `data-contracts.md`
-- If UI specs exist: list components bind to ARRAY endpoints, detail components bind to OBJECT endpoints (**BLOCKING** mismatch)
+- `data-contracts.md` exists and is non-empty
+- Every endpoint has matching entry; TypeScript interfaces have explicit types (no `any`)
+- List endpoints annotated `// ARRAY`, single `// OBJECT`
+- Empty states documented
+- UI bindings reference real field paths; list components bind ARRAY endpoints (**BLOCKING** mismatch)
 
 ### Completeness
-- Every spec has: interface contracts, edge cases (≥10 meaningful), test coverage requirements
-- Edge cases are specific (not generic "invalid input")
-- Acceptance criteria are testable (verifiable by single yes/no automated test)
+- Every spec has: interface contracts, edge cases (>=10 meaningful), test coverage requirements
+- Acceptance criteria testable (single yes/no automated test)
 - Specs with DB changes declare migrations needed
-- Every spec with API endpoints has a "Data Contracts" section with TypeScript interfaces
 
 ## Reconciliation Sequence
-
-This agent is step 1 of 4 in the reconciliation pipeline:
-1. **spec_verifier** (this) -- validates specs are complete and internally consistent (runs after /plan)
-2. **brd_spec_reconciler** -- validates BRD<->specs alignment (runs after spec_verifier)
-3. **spec_impl_reconciler** -- validates specs<->code alignment (runs during /develop Step 5)
-4. **spec_test_reconciler** -- validates specs<->tests coverage (runs during /develop Step 5)
-
----
+Step 1 of 4: 1. **spec_verifier** (this), 2. brd_spec_reconciler, 3. spec_impl_reconciler, 4. spec_test_reconciler
 
 ## Auto-Retry
-For each verification failure: flag the specific spec, describe the gap, allow the originating agent to fix it. Max 2 retries per spec before escalating to user.
-
-## Output: `docs/design/phases/N/VERIFICATION_REPORT.md`
-
-```markdown
-# Verification Report — Phase N
-
-## Summary: PASS | N issues found
-
-## BRD Coverage
-| FR-* ID | Covered by Spec | Status |
-
-## Consistency Issues
-[list]
-
-## Auto-fix Attempts
-[list of what was retried and outcome]
-```
+Flag specific spec + gap, allow originating agent to fix. Max 2 retries before escalating.

@@ -34,8 +34,6 @@ src/routes/
   widget.routes.test.ts      <- THIS file
 ```
 
-Rule: Test file lives next to production code with `.test.ts` suffix.
-
 ## Service Mock
 
 ```typescript
@@ -46,10 +44,8 @@ import type { IWidgetService } from "../../services/widget.service.interface";
 import type { Widget } from "../../domain/entity";
 import type { ListResult, OffsetListResult } from "../../types/pagination";
 
-/**
  * Creates a fully typed mock of the widget service.
  * Every method is a vi.fn() — configure return values per test.
- */
 export function createMockWidgetService(): {
   [K in keyof IWidgetService]: ReturnType<typeof vi.fn>;
 } {
@@ -97,10 +93,8 @@ function makeWidget(overrides: Partial<Widget> = {}): Widget {
   };
 }
 
-/**
  * Creates an Express app with mocked auth middleware and widget routes.
  * Auth middleware injects userId, tenantId, requestId into the request.
- */
 function createTestApp(svc: ReturnType<typeof createMockWidgetService>) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));
@@ -123,9 +117,7 @@ function createTestApp(svc: ReturnType<typeof createMockWidgetService>) {
   return app;
 }
 
-/**
  * Creates an Express app WITHOUT auth middleware — for testing missing auth.
- */
 function createTestAppNoAuth(svc: ReturnType<typeof createMockWidgetService>) {
   const app = express();
   app.use(express.json({ limit: "1mb" }));

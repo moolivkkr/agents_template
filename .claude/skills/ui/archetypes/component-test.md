@@ -28,8 +28,6 @@ src/features/widgets/
     handlers.ts            <- MSW request handlers
 ```
 
-Rule: Test file lives next to the component with `.test.tsx` suffix.
-
 ## Test Setup and Providers
 
 ```tsx

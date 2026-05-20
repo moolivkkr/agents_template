@@ -54,7 +54,6 @@ from app.grpc.errors import map_error
 
 logger = logging.getLogger(__name__)
 
-
 class WidgetServicer(pb_grpc.WidgetServiceServicer):
     """gRPC service implementation for WidgetService."""
 
@@ -158,7 +157,6 @@ class WidgetServicer(pb_grpc.WidgetServiceServicer):
             errors=errors,
         )
 
-
 def _to_proto(widget) -> pb.Widget:
     ts_created = Timestamp()
     ts_created.FromDatetime(widget.created_at)
@@ -196,7 +194,6 @@ SKIP_AUTH_METHODS = {
     "/grpc.health.v1.Health/Watch",
 }
 
-
 class AuthInterceptor(aio.ServerInterceptor):
     """Validates JWT from metadata and injects tenant context."""
 
@@ -233,7 +230,6 @@ class AuthInterceptor(aio.ServerInterceptor):
 
         return await continuation(handler_call_details)
 
-
 class LoggingInterceptor(aio.ServerInterceptor):
     """Logs every RPC with duration and status."""
 
@@ -250,7 +246,6 @@ class LoggingInterceptor(aio.ServerInterceptor):
         })
 
         return handler
-
 
 def _abort_handler(code, message):
     """Create a handler that immediately aborts with the given status."""
@@ -270,7 +265,6 @@ from uuid import UUID
 
 import grpc
 
-
 def tenant_id_from_context(context: grpc.aio.ServicerContext) -> UUID:
     """Extract tenant_id injected by auth interceptor."""
     metadata = dict(context.invocation_metadata())
@@ -278,7 +272,6 @@ def tenant_id_from_context(context: grpc.aio.ServicerContext) -> UUID:
     if not tid:
         raise grpc.aio.AbortError(grpc.StatusCode.UNAUTHENTICATED, "missing tenant context")
     return UUID(tid)
-
 
 def user_id_from_context(context: grpc.aio.ServicerContext) -> UUID:
     """Extract user_id injected by auth interceptor."""
@@ -310,7 +303,6 @@ _ERROR_MAP = {
     ForbiddenError: grpc.StatusCode.PERMISSION_DENIED,
 }
 
-
 def map_error(exc: Exception) -> grpc.RpcError:
     """Convert a domain error to a gRPC error."""
     if isinstance(exc, AppError):
@@ -340,7 +332,6 @@ from app.grpc.widget_server import WidgetServicer
 from app.grpc.interceptors import AuthInterceptor, LoggingInterceptor
 
 logger = logging.getLogger(__name__)
-
 
 async def serve(port: int = 50051) -> None:
     server = aio.server(
@@ -388,7 +379,6 @@ async def serve(port: int = 50051) -> None:
     await stop_event.wait()
     await server.stop(grace=5)
     logger.info("gRPC server stopped")
-
 
 if __name__ == "__main__":
     asyncio.run(serve())

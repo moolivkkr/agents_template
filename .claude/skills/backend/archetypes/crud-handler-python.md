@@ -30,13 +30,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 T = TypeVar("T")
 
-
 class Meta(BaseModel):
     """Standard response metadata."""
 
     request_id: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=None))
-
 
 class ListMeta(Meta):
     """Metadata for cursor-paginated list responses."""
@@ -44,7 +42,6 @@ class ListMeta(Meta):
     cursor: str | None = None
     has_more: bool
     total: int
-
 
 class OffsetListMeta(Meta):
     """Metadata for offset-paginated list responses."""
@@ -54,20 +51,17 @@ class OffsetListMeta(Meta):
     total: int
     total_pages: int
 
-
 class Envelope(BaseModel, Generic[T]):
     """Wraps a single resource response."""
 
     data: T
     meta: Meta
 
-
 class ListEnvelope(BaseModel, Generic[T]):
     """Wraps a cursor-paginated list response."""
 
     data: list[T]
     meta: ListMeta
-
 
 class PageLinks(BaseModel):
     """HATEOAS navigation links for offset pagination."""
@@ -80,7 +74,6 @@ class PageLinks(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
-
 class OffsetListEnvelope(BaseModel, Generic[T]):
     """Wraps an offset-paginated list response."""
 
@@ -88,14 +81,12 @@ class OffsetListEnvelope(BaseModel, Generic[T]):
     meta: OffsetListMeta
     links: PageLinks
 
-
 class ErrorDetail(BaseModel):
     """Standard error response detail."""
 
     code: str
     message: str
     details: dict[str, Any] | None = None
-
 
 class ErrorBody(BaseModel):
     """Standard error response envelope."""
@@ -113,7 +104,6 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-
 class WidgetResponse(BaseModel):
     """Wire format for widget responses."""
 
@@ -130,7 +120,6 @@ class WidgetResponse(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-
 class CreateWidgetRequest(BaseModel):
     """Request body for creating a widget."""
 
@@ -146,7 +135,6 @@ class CreateWidgetRequest(BaseModel):
     @classmethod
     def sanitize_description(cls, v: str) -> str:
         return v.strip()
-
 
 class UpdateWidgetRequest(BaseModel):
     """Request body for updating a widget."""
@@ -181,7 +169,6 @@ from app.errors import UnauthorizedError
 
 bearer_scheme = HTTPBearer()
 
-
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
     """Authenticated user extracted from JWT."""
@@ -189,7 +176,6 @@ class CurrentUser:
     user_id: UUID
     tenant_id: UUID
     roles: list[str]
-
 
 async def get_current_user(
     request: Request,
@@ -214,7 +200,6 @@ async def get_current_user(
         return user
     except Exception as exc:
         raise UnauthorizedError("invalid or expired token") from exc
-
 
 def require_role(*roles: str):
     """
@@ -248,11 +233,9 @@ from starlette.responses import Response
 
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
 
-
 def get_request_id() -> str:
     """Retrieve the current request ID from context."""
     return request_id_ctx.get()
-
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """Injects a unique request_id into every request and response."""
@@ -299,10 +282,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/widgets", tags=["widgets"])
 
-
-# ---------------------------------------------------------------------------
 # Dependency: inject the service
-# ---------------------------------------------------------------------------
 
 def get_widget_service() -> WidgetService:
     """
@@ -311,10 +291,7 @@ def get_widget_service() -> WidgetService:
     """
     raise NotImplementedError("wire WidgetService in app startup")
 
-
-# ---------------------------------------------------------------------------
 # CREATE
-# ---------------------------------------------------------------------------
 
 @router.post(
     "/",
@@ -343,10 +320,7 @@ async def create_widget(
         meta=Meta(request_id=req_id),
     )
 
-
-# ---------------------------------------------------------------------------
 # GET
-# ---------------------------------------------------------------------------
 
 @router.get(
     "/{widget_id}",
@@ -367,10 +341,7 @@ async def get_widget(
         meta=Meta(request_id=req_id),
     )
 
-
-# ---------------------------------------------------------------------------
 # UPDATE
-# ---------------------------------------------------------------------------
 
 @router.put(
     "/{widget_id}",
@@ -400,10 +371,7 @@ async def update_widget(
         meta=Meta(request_id=req_id),
     )
 
-
-# ---------------------------------------------------------------------------
 # DELETE
-# ---------------------------------------------------------------------------
 
 @router.delete(
     "/{widget_id}",
@@ -437,7 +405,6 @@ async def delete_widget(
 # Allowed sort and filter fields — prevents SQL injection by allow-listing
 ALLOWED_SORT_FIELDS = {"created_at", "updated_at", "name"}
 ALLOWED_FILTER_FIELDS = {"status", "priority", "category"}
-
 
 @router.get(
     "/",
@@ -567,7 +534,6 @@ from app.errors import AppError
 
 logger = logging.getLogger(__name__)
 
-
 def register_exception_handlers(app: FastAPI) -> None:
     """Mount all custom exception handlers on the FastAPI app."""
 
@@ -657,7 +623,6 @@ from fastapi import FastAPI
 from app.api.v1 import widgets
 from app.errors.handlers import register_exception_handlers
 from app.middleware.request_id import RequestIDMiddleware
-
 
 def create_app() -> FastAPI:
     app = FastAPI(title="Widget API", version="1.0.0")
