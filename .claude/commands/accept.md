@@ -279,6 +279,66 @@ CONDITIONAL — N partial passes, product owner acceptance required
 
 ---
 
+## Step 6 — Release Notes Generation
+
+After acceptance report is produced, auto-generate release notes from project artifacts:
+
+1. **Read all phase manifests** — extract `brd_requirements_met` per phase
+   ```bash
+   for MANIFEST in agent_state/phases/*/manifest.json; do
+     # Extract brd_requirements_met array
+   done
+   ```
+
+2. **Read BRD** — get FR-* titles and OBJ-* descriptions for implemented items
+   ```bash
+   # Parse docs/BRD.md for each FR-* and OBJ-* referenced in manifests
+   ```
+
+3. **Read decision logs** — surface significant architectural decisions
+   ```bash
+   # Read agent_state/debates/*-verdict.json for key ADRs
+   # Read agent_state/phases/*/reports/ for optimization decisions
+   ```
+
+4. **Read known issues** — from all `carried_forward[]` and forced gates
+   ```bash
+   # Parse manifests for carried_forward[]
+   # Parse gate.passed files for FORCED flags
+   ```
+
+Write `docs/RELEASE_NOTES.md`:
+
+```markdown
+# Release Notes — <PROJECT_NAME> v<VERSION>
+
+## What's New
+- <FR-001>: <one-line description from BRD>
+- <FR-002>: <one-line description>
+- ...
+
+## Improvements
+- <optimization summaries from code_optimizer reports>
+
+## Known Issues
+- <carried_forward items with context>
+- <forced gate items with justification>
+
+## Technical Decisions
+- <key ADRs summarized — one line each>
+
+## Contributors
+- Agents: <list of agents that contributed across all phases>
+- Human reviews: <checkpoint decisions from gate files>
+```
+
+**Version numbering:**
+- If all phases complete with no forced gates: `v1.0.0`
+- If any forced gates: `v1.0.0-rc.1`
+- If partial phases: `v0.<highest-phase>.0`
+
+---
+
 ## Rules
 
 - `/accept` does not replace per-phase acceptance tests — it complements them
