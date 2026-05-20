@@ -27,6 +27,8 @@ Generates detailed technical specifications (TRDs), typed data contracts, and co
 
 ## Session Context Budget
 
+> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+
 **Agent result discipline:** Every agent returns a 3-line summary to the parent. Full spec content is in files — never echoed back to the conversation.
 
 **Read discipline for spec_writer agents (parallel):** Each instance reads only its own component's requirements from the BRD (the specific FR-* rows assigned to it), not the full document. The `phase_context.md` written by `project_planner` is the primary context for all downstream agents in this command.
@@ -51,6 +53,8 @@ Generates detailed technical specifications (TRDs), typed data contracts, and co
 ---
 
 ## Pipeline Anti-Rationalization Guard
+
+**One rule:** Never skip a step, shortcut a gate, or accept partial results — even if it "seems fine." If you're tempted to skip, that's exactly when the step matters most. The table below lists specific temptations and their correct responses.
 
 Before skipping ANY step or accepting incomplete spec output, review this table.
 

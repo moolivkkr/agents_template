@@ -29,9 +29,13 @@ Fully autonomous phase implementation. Detects where you are, implements all spe
 
 **One decision point:** at the end — advance to the next phase or not.
 
+**⚠ Concurrent access:** This command assumes a single developer per phase. If two developers run `/develop --phase=2` simultaneously, file conflicts will occur in `agent_state/phases/2/` and git commits may conflict. To coordinate: use separate phases, or ensure only one developer runs `/develop` at a time for a given phase number.
+
 ---
 
 ## Session Context Budget
+
+> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 `/develop` is a long-running pipeline. Follow these rules to stay within the conversation context window:
 
@@ -73,6 +77,8 @@ Note: `phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. L
 ---
 
 ## Pipeline Anti-Rationalization Guard
+
+**One rule:** Never skip a step, shortcut a gate, or accept partial results — even if it "seems fine." If you're tempted to skip, that's exactly when the step matters most. The table below lists specific temptations and their correct responses.
 
 Before skipping ANY step, shortcutting ANY gate, or accepting partial results, review this table.
 

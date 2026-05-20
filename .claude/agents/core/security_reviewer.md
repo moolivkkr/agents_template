@@ -212,6 +212,8 @@ HIGH: data exfiltration keywords (`UNION`, `INTO`) absent from blocklist.
 
 ---
 
+> **Severity mapping:** This agent's native severities map to the unified model in `.claude/skills/core/code-quality.md` §Unified Severity Model.
+
 ## Severity Levels (Standardized)
 
 | Level | Meaning | Maps to Gate |

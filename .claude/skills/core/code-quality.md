@@ -400,6 +400,18 @@ cfg        // ambiguous — config? configuration? configure?
 
 **Allowed abbreviations:** `id`, `url`, `http`, `api`, `db`, `ctx` (Go context only), `err`, `req`, `res`, `msg`, `pkg`, `cmd`, `env`, `src`, `dst`, `max`, `min`, `len`, `num`, `str`, `fmt`
 
+## Unified Severity Model
+
+All agents in the SDLC pipeline use different native severity names, but they ALL map to this unified model for gate decisions:
+
+| Unified Level | Gate Impact | Agent-Native Mappings |
+|---------------|------------|----------------------|
+| **BLOCKING** | Gate fails. Must fix before phase can pass. | code_reviewer_I: BLOCKING, code_reviewer_II: VIOLATION, security_reviewer: HIGH, tenant_isolation_verifier: CRITICAL, spec_impl_reconciler: MISSING, spec_test_reconciler: HIGH-priority untested |
+| **WARNING** | Should fix. Logged in known_issues if unresolved after 2 rounds. Does not block gate. | code_reviewer_I: WARNING, code_reviewer_II: WARNING, security_reviewer: MEDIUM, spec_impl_reconciler: UNSPECCED (scope_creep), spec_test_reconciler: MEDIUM-priority untested |
+| **INFO** | Consider. No gate impact. | code_reviewer_I: INFO, security_reviewer: LOW, spec_test_reconciler: LOW-priority untested |
+
+When reading review reports, the gate step (develop.md Step 6) uses this mapping to determine pass/fail. The native severity names remain in individual reports for specificity, but the gate decision uses the unified model.
+
 ## Critical Rules
 
 - Self-review is mandatory, not optional — run through the checklist before completing any task

@@ -24,6 +24,8 @@ Bootstraps a new project from scratch. Reads `./requirements/`, produces `docs/B
 
 ## Session Context Budget
 
+> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+
 **Read discipline:** `brd_agent` and `impl_guidelines_agent` run in parallel — each reads only its own input files. They do NOT read each other's outputs mid-run.
 
 **Agent result discipline:** Each agent returns a 3-line summary to the parent. Full BRD and IMPLEMENTATION_GUIDELINES content stays in files — never echoed back.
