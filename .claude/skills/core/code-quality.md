@@ -20,11 +20,19 @@ Before marking ANY task done, re-read every file you touched. Check for:
 
 1. **Unused imports** — remove them, they cause lint failures and confusion
 2. **Dead code** — no commented-out blocks, no unreachable branches
-3. **TODO/FIXME placeholders** — replace with real implementation or remove
+3. **TODO/FIXME placeholders** — replace with real implementation or remove (see TODO Policy below)
 4. **Hardcoded values** — extract to config, constants, or environment variables
 5. **Missing error handling** — every error path must be handled explicitly (see `backend/archetypes/error-handling.md` for the canonical error handling reference)
 6. **Inconsistent naming** — all names in a file should follow the same convention
 7. **Missing tests** — new public functions need at least one test
+
+## TODO Policy — Context Matters
+
+TODOs are NOT universally banned. The rule depends on where and why:
+
+### IMPLEMENTATION CODE — No TODOs Allowed
+
+In production source code (handlers, services, repositories, domain models, middleware, CLI entry points), **TODOs are never acceptable**. Every behavior described in the spec must be fully implemented, not deferred. A TODO in implementation code means the feature is incomplete.
 
 ```go
 // BAD — left behind after development
@@ -44,6 +52,42 @@ func ProcessOrder(ctx context.Context, order *Order) error {
     return s.repo.Save(ctx, order)
 }
 ```
+
+### TEST CODE & DOCUMENTATION — TODOs Acceptable for Future Work
+
+In test files and documentation, `// TODO(author): reason` is acceptable to mark known future work that is out of scope for the current phase. These TODOs must include an author and a clear reason.
+
+```go
+// ACCEPTABLE in test files — marks known future test coverage
+// TODO(jsmith): add table-driven tests for edge cases in Phase 3
+func TestProcessOrder_Basic(t *testing.T) {
+    // ... existing passing test ...
+}
+```
+
+```markdown
+<!-- ACCEPTABLE in documentation — references planned improvements -->
+<!-- TODO(team): document retry semantics after Phase 4 adds resilience -->
+```
+
+### OPTIMIZATION REPORTS — TODOs Acceptable for Future Opportunities
+
+In optimization reports, code review reports, and performance analysis documents, TODOs referencing future optimization opportunities are acceptable.
+
+```markdown
+## Optimization Opportunities
+- TODO: Evaluate batch insert for bulk imports (potential 3x throughput gain)
+- TODO: Add Redis cache layer for hot-path reads after usage patterns stabilize
+```
+
+### Summary Table
+
+| Context | TODOs Allowed? | Format Required |
+|---------|---------------|-----------------|
+| Implementation code (src/) | NO — implement or remove | N/A |
+| Test code (*_test.go, *.test.ts) | YES — future test work | `// TODO(author): reason` |
+| Documentation (*.md, comments) | YES — planned improvements | `// TODO(author): reason` or `<!-- TODO: ... -->` |
+| Optimization/review reports | YES — future opportunities | Freeform |
 
 ## Function Size — 40 Lines Max
 
