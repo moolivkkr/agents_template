@@ -67,6 +67,7 @@ services:
 ```
 
 ---
+
 ## Environment Configuration
 
 ### Application Config (Local Development)

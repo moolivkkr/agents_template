@@ -41,7 +41,10 @@ logger = logging.getLogger(__name__)
 
 bearer_scheme = HTTPBearer()
 
+
+# ---------------------------------------------------------------------------
 # JWT Configuration
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class JWTConfig:
@@ -52,15 +55,20 @@ class JWTConfig:
     issuer: str = ""              # Expected 'iss' claim
     audience: str = ""            # Expected 'aud' claim
 
+
 # Module-level config — set during app startup
 _jwt_config: JWTConfig | None = None
+
 
 def configure_jwt(config: JWTConfig) -> None:
     """Call once during application startup to set JWT config."""
     global _jwt_config
     _jwt_config = config
 
+
+# ---------------------------------------------------------------------------
 # CurrentUser dataclass
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class CurrentUser:
@@ -74,7 +82,10 @@ class CurrentUser:
     roles: list[str]
     permissions: list[str] | None = None
 
+
+# ---------------------------------------------------------------------------
 # JWT Decode
+# ---------------------------------------------------------------------------
 
 def _decode_token(token: str) -> dict[str, Any]:
     """
@@ -112,7 +123,10 @@ def _decode_token(token: str) -> dict[str, Any]:
     except jwt.InvalidTokenError as exc:
         raise UnauthorizedError("invalid token") from exc
 
+
+# ---------------------------------------------------------------------------
 # FastAPI Dependency: get_current_user
+# ---------------------------------------------------------------------------
 
 async def get_current_user(
     request: Request,
@@ -175,6 +189,7 @@ def require_role(*required_roles: str):
 
     return _check_role
 
+
 def require_permission(*required_permissions: str):
     """
     Dependency factory that enforces permission-based access.
@@ -220,6 +235,7 @@ logger = logging.getLogger(__name__)
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
+
 class APIKeyStore(Protocol):
     """Protocol for API key lookup. Implementations query a hashed key store."""
 
@@ -227,13 +243,16 @@ class APIKeyStore(Protocol):
         """Resolve a hashed API key to a CurrentUser. Returns None if invalid."""
         ...
 
+
 # Module-level store — set during app startup
 _api_key_store: APIKeyStore | None = None
+
 
 def configure_api_key_store(store: APIKeyStore) -> None:
     """Set the API key store during application startup."""
     global _api_key_store
     _api_key_store = store
+
 
 def _hash_api_key(raw_key: str) -> str:
     """
@@ -242,6 +261,7 @@ def _hash_api_key(raw_key: str) -> str:
     For higher security, use bcrypt/argon2 and compare on every request.
     """
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
 
 async def get_current_user_from_api_key(
     request: Request,
@@ -290,6 +310,7 @@ from starlette.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class TokenBucket:
     """Simple token bucket rate limiter."""
@@ -310,6 +331,7 @@ class TokenBucket:
             self.tokens -= 1.0
             return True
         return False
+
 
 class TenantRateLimitMiddleware(BaseHTTPMiddleware):
     """
@@ -377,6 +399,7 @@ from dataclasses import dataclass, field
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+
 @dataclass
 class CORSConfig:
     """CORS configuration — mirrors the Go archetype's CORSConfig."""
@@ -387,6 +410,7 @@ class CORSConfig:
     exposed_headers: list[str] = field(default_factory=lambda: ["X-Request-ID", "X-RateLimit-Limit", "X-RateLimit-Remaining"])
     allow_credentials: bool = True
     max_age: int = 3600  # preflight cache in seconds
+
 
 def setup_cors(app: FastAPI, config: CORSConfig | None = None) -> None:
     """
@@ -431,9 +455,11 @@ from starlette.responses import Response
 # ContextVar for request-scoped ID — accessible from any async frame
 request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
 
+
 def get_request_id() -> str:
     """Retrieve the current request ID from context. Safe to call from any coroutine."""
     return request_id_ctx.get()
+
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
     """
@@ -471,6 +497,7 @@ from starlette.responses import Response
 from app.middleware.request_id import get_request_id
 
 logger = logging.getLogger("app.access")
+
 
 class AccessLogMiddleware(BaseHTTPMiddleware):
     """
@@ -520,15 +547,18 @@ from app.middleware.logging import AccessLogMiddleware
 from app.middleware.rate_limit import TenantRateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 
+
 def create_app() -> FastAPI:
     app = FastAPI(title="Widget API", version="1.0.0")
 
+    # ---------------------------------------------------------------------------
     # Middleware — order matters: outermost runs first
     # Stack (top = outermost):
     #   1. CORS (handles preflight before auth)
     #   2. RequestID (generate/extract before anything else)
     #   3. AccessLog (wraps everything for timing)
     #   4. RateLimit (per-tenant, after auth sets tenant context)
+    # ---------------------------------------------------------------------------
 
     setup_cors(app, CORSConfig(
         allowed_origins=["http://localhost:3000", "https://app.example.com"],
@@ -538,7 +568,9 @@ def create_app() -> FastAPI:
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(TenantRateLimitMiddleware, rate=100.0, burst=200)
 
+    # ---------------------------------------------------------------------------
     # JWT configuration
+    # ---------------------------------------------------------------------------
 
     configure_jwt(JWTConfig(
         secret_key="your-secret-key",  # load from env in production
@@ -547,11 +579,15 @@ def create_app() -> FastAPI:
         audience="widget-api",
     ))
 
+    # ---------------------------------------------------------------------------
     # Exception handlers
+    # ---------------------------------------------------------------------------
 
     register_exception_handlers(app)
 
+    # ---------------------------------------------------------------------------
     # Routes
+    # ---------------------------------------------------------------------------
 
     app.include_router(widgets.router, prefix="/api/v1")
 

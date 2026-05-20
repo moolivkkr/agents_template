@@ -146,6 +146,7 @@ function ResourceList() {
 ```
 
 ---
+
 ## Professional Polish Patterns
 
 ### Interactive Elements — ALL must have these states

@@ -123,6 +123,7 @@ COPY alembic.ini ./
 # Install the project itself
 RUN uv sync --frozen --no-dev
 
+
 # =============================================================================
 # Stage 2: Runtime — minimal production image
 # =============================================================================
@@ -226,6 +227,7 @@ COPY app/ ./app/
 COPY alembic/ ./alembic/
 COPY alembic.ini ./
 
+
 # =============================================================================
 # Stage 2: Runtime — minimal production image
 # =============================================================================
@@ -285,10 +287,12 @@ router = APIRouter(tags=["health"])
 # Module-level reference — set during app startup
 _session_factory: async_sessionmaker[AsyncSession] | None = None
 
+
 def configure_health(session_factory: async_sessionmaker[AsyncSession]) -> None:
     """Set the session factory for health check DB ping."""
     global _session_factory
     _session_factory = session_factory
+
 
 @router.get("/health")
 async def health_check() -> dict:
@@ -321,7 +325,9 @@ async def health_check() -> dict:
 # docker-compose.yml
 
 services:
+  # ---------------------------------------------------------------------------
   # PostgreSQL
+  # ---------------------------------------------------------------------------
   db:
     image: postgres:16-alpine
     environment:
@@ -338,7 +344,9 @@ services:
       timeout: 5s
       retries: 5
 
+  # ---------------------------------------------------------------------------
   # Redis (cache)
+  # ---------------------------------------------------------------------------
   redis:
     image: redis:7-alpine
     ports:
@@ -349,7 +357,9 @@ services:
       timeout: 3s
       retries: 5
 
+  # ---------------------------------------------------------------------------
   # Application
+  # ---------------------------------------------------------------------------
   api:
     build:
       context: .
@@ -374,7 +384,9 @@ services:
       start_period: 15s
       retries: 3
 
+  # ---------------------------------------------------------------------------
   # Migration runner (one-shot)
+  # ---------------------------------------------------------------------------
   migrate:
     build:
       context: .

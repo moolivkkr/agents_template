@@ -234,6 +234,7 @@ type ErrorDetail struct {
 }
 
 // Example error responses:
+//
 // 400 Bad Request (malformed input):
 // {
 //   "error": {
@@ -241,6 +242,7 @@ type ErrorDetail struct {
 //     "message": "invalid JSON in request body"
 //   }
 // }
+//
 // 422 Validation Error (business rule violation):
 // {
 //   "error": {
@@ -249,6 +251,7 @@ type ErrorDetail struct {
 //     "details": { "field": "email", "reason": "invalid format" }
 //   }
 // }
+//
 // 404 Not Found:
 // {
 //   "error": {
@@ -257,6 +260,7 @@ type ErrorDetail struct {
 //     "details": { "resource": "widget", "identifier": "abc-123" }
 //   }
 // }
+//
 // 409 Conflict:
 // {
 //   "error": {
@@ -265,6 +269,7 @@ type ErrorDetail struct {
 //     "details": { "resource": "widget", "reason": "version mismatch" }
 //   }
 // }
+//
 // 500 Internal Error:
 // {
 //   "error": {
@@ -357,25 +362,33 @@ func ErrorMapper(w http.ResponseWriter, err error) {
 
 ```go
 // --- WRAPPING RULES ---
+//
 // 1. Wrap at boundaries — add context when crossing layers (handler → service → repo).
+//
 //    // In service layer:
 //    cert, err := s.repo.GetByID(ctx, id)
 //    if err != nil {
 //        return nil, fmt.Errorf("certificate get: %w", err) // adds context, preserves original
 //    }
+//
 // 2. Never double-wrap domain errors — if the error is already an AppError, return it directly.
+//
 //    var appErr *AppError
 //    if errors.As(err, &appErr) {
 //        return nil, err // already a domain error — don't re-wrap
 //    }
 //    return nil, NewInternalError(err) // unknown error — wrap as internal
+//
 // 3. Create domain errors at the boundary where you KNOW the error type.
+//
 //    // In repository — this is where we know "no rows" means "not found":
 //    if errors.Is(err, pgx.ErrNoRows) {
 //        return nil, apperr.NewNotFoundError("widget", id.String())
 //    }
 //    // NOT in the handler — the handler shouldn't know about pgx.
+//
 // 4. Log the wrapped error at the TOP of the call stack (handler/middleware), not at every layer.
+//
 //    // ✅ Handler logs once:
 //    result, err := h.svc.Create(ctx, input)
 //    if err != nil {
@@ -383,8 +396,11 @@ func ErrorMapper(w http.ResponseWriter, err error) {
 //        ErrorMapper(w, err)
 //        return
 //    }
+//
 //    // ❌ Don't log at every layer — you get duplicate log lines.
+//
 // 5. Preserve the error chain for debugging.
+//
 //    // The error chain should read like a call stack:
 //    // "widget create: persistence: unique_violation on idx_widgets_name"
 //    //  ↑ service      ↑ repo         ↑ pgx mapping

@@ -150,8 +150,10 @@ import { promisify } from "node:util";
 
 const execAsync = promisify(exec);
 
+/**
  * Run Prisma migrations programmatically.
  * Use in deployment scripts or application startup.
+ */
 export async function runMigrations(): Promise<void> {
   try {
     const { stdout, stderr } = await execAsync("npx prisma migrate deploy");
@@ -163,7 +165,9 @@ export async function runMigrations(): Promise<void> {
   }
 }
 
+/**
  * Check migration status — useful for health checks.
+ */
 export async function checkMigrationStatus(): Promise<boolean> {
   try {
     const { stdout } = await execAsync("npx prisma migrate status");
@@ -224,6 +228,7 @@ COMMENT ON COLUMN widgets.version IS 'Optimistic lock counter — increment on e
 
 ```typescript
 // prisma/seed.ts
+//
 // Run with: npx prisma db seed
 // Configure in package.json:
 // "prisma": { "seed": "tsx prisma/seed.ts" }
@@ -351,7 +356,9 @@ import {
 } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
+// =============================================================================
 // Core Entity: Widget
+// =============================================================================
 
 export const widgets = pgTable(
   "widgets",
@@ -405,7 +412,9 @@ export const tenants = pgTable("tenants", {
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
 });
 
+// =============================================================================
 // Relations
+// =============================================================================
 
 export const widgetRelations = relations(widgets, ({ many, one }) => ({
   components: many(components),
@@ -420,7 +429,9 @@ export const tenantRelations = relations(tenants, ({ many }) => ({
   widgets: many(widgets),
 }));
 
+// =============================================================================
 // Type Inference Helpers
+// =============================================================================
 
 export type WidgetInsert = typeof widgets.$inferInsert;
 export type WidgetSelect = typeof widgets.$inferSelect;
@@ -499,8 +510,10 @@ import postgres from "postgres";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 
+/**
  * Run Drizzle migrations programmatically.
  * Use in deployment scripts or application startup.
+ */
 export async function runMigrations(connectionString: string): Promise<void> {
   // Use a dedicated connection for migrations (not the pool)
   const migrationClient = postgres(connectionString, { max: 1 });
@@ -568,6 +581,7 @@ CREATE TRIGGER trg_widgets_updated_at
 
 ```typescript
 // src/db/seed.ts
+//
 // Run with: tsx src/db/seed.ts
 
 import postgres from "postgres";

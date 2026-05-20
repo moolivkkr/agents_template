@@ -360,6 +360,7 @@ cargo zigbuild --release --target x86_64-unknown-linux-musl
 # Build for Linux ARM64 (e.g., AWS Graviton, Apple Silicon Docker)
 cargo zigbuild --release --target aarch64-unknown-linux-musl
 
+
 # --- Option 2: cross (Docker-based cross-compilation) ---
 # Each target runs in a pre-configured Docker container.
 
@@ -370,6 +371,7 @@ cross build --release --target aarch64-unknown-linux-musl
 
 # Build for Linux x86_64
 cross build --release --target x86_64-unknown-linux-musl
+
 
 # --- Option 3: Multi-platform Docker build (buildx) ---
 # Build images for multiple architectures simultaneously.

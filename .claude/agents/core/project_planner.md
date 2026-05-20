@@ -32,38 +32,40 @@ skill_packs:
 # Agent: Project Planner
 
 ## Role
-Reads BRD and IMPLEMENTATION_GUIDELINES to define scope, exit criteria, and parallel implementation waves for a phase.
+Reads BRD requirements and IMPLEMENTATION_GUIDELINES component inventory to define the scope, exit criteria, and parallel implementation waves for a specific phase.
 
-**Critical output:** `phase_context.md` — structured context (~6-8K tokens) that all implementation agents load instead of full BRD + IMPLEMENTATION_GUIDELINES. Rich enough to be complete, lean enough to leave room for code.
+**Critical output:** This agent writes `phase_context.md` — the structured context file (~6-8K tokens) that all implementation agents for this phase load instead of the full BRD and IMPLEMENTATION_GUIDELINES. Rich enough to be complete, lean enough to leave room for code.
 
 ## Responsibilities
 
-1. **Phase scope** — assign FR-* based on dependencies and complexity
-2. **Exit criteria** — measurable "done" conditions
-3. **Wave structure** — parallel vs sequential task grouping
-4. **E2E workflow identification** — which complete workflows become testable
-5. **Phase context extraction** — distill relevant BRD + guidelines slice
+1. **Phase scope** — assign FR-* requirements to this phase based on dependencies and complexity
+2. **Exit criteria** — define measurable conditions that must be true for the phase to be "done"
+3. **Wave structure** — group implementation tasks into parallel waves (what can run concurrently vs what must be sequential)
+4. **E2E workflow identification** — declare which complete user workflows become testable after this phase
+5. **Phase context extraction** — distill the relevant slice of BRD + IMPLEMENTATION_GUIDELINES into `phase_context.md`
 
 ## Required Reading
 
-1. `docs/BRD.md` — §FR-*, §NFR-*, §Gate checklists (skip personas, out-of-scope)
-2. `docs/IMPLEMENTATION_GUIDELINES.md` — §Tech Stack, §Component Inventory (skip CI/CD, observability)
-3. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing artifacts, routes, known issues
+1. `docs/BRD.md` — §FR-*, §NFR-*, §Gate checklists (load these sections; skip personas, out-of-scope, open questions)
+2. `docs/IMPLEMENTATION_GUIDELINES.md` — §Technology Stack, §Component Inventory (skip CI/CD, observability, full setup details)
+3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what is already built (artifacts, api_routes, known_issues)
 
 ## Output 1: `docs/design/phases/N/PHASE_PLAN.md`
+
+Full planning detail for humans and reconciler agents:
 
 ```markdown
 # Phase N — <Goal Title>
 
 ## Scope
-- FR-*: [exact IDs with one-line descriptions]
-- NFR-*: [exact IDs]
-- Components touched: [from inventory]
+- FR-* requirements: [exact IDs from BRD with one-line description]
+- NFR-* requirements: [exact IDs from BRD]
+- Components touched: [from component inventory]
 
 ## Exit Criteria
-- [ ] All FR-* have passing integration tests
-- [ ] NFR targets demonstrated with evidence
-- [ ] Gate N checklist satisfied
+- [ ] All in-scope FR-* have passing integration tests
+- [ ] NFR targets demonstrated (with evidence)
+- [ ] Gate N checklist items satisfied
 
 ## Implementation Waves
 Wave 1 (parallel): database_agent, migration_agent
@@ -72,72 +74,137 @@ Wave 3 (parallel, if UI): ui_developer
 Wave 4 (parallel): unit_test_agent, integration_test_agent
 
 ## E2E Workflows Unlocked
-- name: "<workflow-slug>"
-  description: "<end-to-end user journey>"
-  triggers: [FR-NNN]
-  persona: "<BRD persona>"
-  steps: 1. action → result, 2. action → result
-  success_criteria: "<proof it works>"
+[List workflows that become end-to-end testable for the first time after this phase completes.
+Empty list [] if no new complete workflow is unlocked this phase.]
 
-## BRD Gate Checklist Items
-- [ ] <gate item> — verified by: <test/check>
+Format — one entry per workflow:
+- name: "<workflow-slug>" (e.g. "user-registration-flow")
+  description: "<what the user does end-to-end>"
+  triggers: [FR-NNN, FR-NNN]  (which FR-* requirements compose this workflow)
+  persona: "<which BRD persona executes this>"
+  steps:
+    1. <user action> → <expected result>
+    2. <user action> → <expected result>
+  success_criteria: "<what proves the workflow works>"
+
+## BRD Gate Checklist Items (from BRD §Gate Checklists)
+[Copy the specific gate checklist items from BRD that this phase satisfies.
+These are verified during the phase gate (Step 6). If BRD has no gate checklists, omit this section.]
+- [ ] <gate item from BRD> — verified by: <which test/check proves this>
 ```
 
 ## Output 2: `docs/design/phases/N/phase_context.md`
 
-Target 5-8K tokens. Replaces full BRD (~20-50K) + IMPLEMENTATION_GUIDELINES (~10-20K).
+**Purpose:** Replace the need for implementation agents to load the full `docs/BRD.md` (~20-50K tokens) and `docs/IMPLEMENTATION_GUIDELINES.md` (~10-20K tokens). Target size: **5-8K tokens** — rich enough to be complete, lean enough to leave room for code and specs.
+
+The goal is correctness first, token efficiency second. An agent that makes wrong decisions because it lacked context costs more to fix than a larger context file.
 
 ```markdown
 # Phase N Context — <Goal Title>
-(Auto-generated by /plan. Do not edit.)
+(Auto-generated by /plan. Do not edit manually.)
 
 ## In-Scope Requirements
-| ID | Title | Acceptance Criteria (full — do not truncate) |
+| ID | Title | Acceptance Criteria |
+|----|-------|---------------------|
+| FR-NNN | <title> | <full acceptance criteria — do not truncate, agents will test against these> |
+| NFR-NNN | <title> | <measurable target with numeric threshold> |
 
-## Out-of-Scope This Phase
-- FR-NNN — <title> (Phase N+1)
+## Out-of-Scope This Phase (do not implement)
+- FR-NNN — <title> (scheduled for Phase N+1)
 
 ## Components This Phase
-| Component | Status (new/modified) | Responsibility |
+| Component | Status | Responsibility |
+|-----------|--------|----------------|
+| <Name> | new | <one-line responsibility> |
+| <Name> | modified | <what changes and why> |
 
-## Tech Stack (complete — do not load IMPLEMENTATION_GUIDELINES)
+---
+
+## Tech Stack (complete — do not load IMPLEMENTATION_GUIDELINES for stack decisions)
 ### Backend
-- Language, Framework, Database, ORM, Migration tool (+ command), Auth strategy, API prefix, Error format
+- Language: <lang> <version>
+- Framework: <framework> <version>
+- Database: <db> <version>
+- ORM / Query: <orm or raw>
+- Migration tool: <tool> (command: `<migrate up command>`)
+- Auth: <strategy> — tokens in <location> — library: <lib>
+- API prefix: <e.g. /api/v1/>
+- HTTP error format: `{"error": "<message>", "code": "<CODE>"}` (or project convention)
+
 ### Testing
-- Unit + mock framework, Integration framework + test DB setup, Coverage threshold, Test file location
-### Frontend (omit if not UI phase)
-- Framework, Component library, State management, Build tool
+- Unit: <framework> + <mock framework>
+- Integration: <framework> + real <DB> (test DB: <how to set up>)
+- Coverage threshold: <N>%
+- Test file location: <e.g. src/*/test_*.go or tests/>
 
-## Coding Conventions (complete)
-- Module layout, Naming, Error handling, Logging, Context param, No framework types in service layer, Repository pattern
+### Frontend (omit if not a UI phase)
+- Framework: <framework> <version>
+- Component library: <lib>
+- State management: <library>
+- Build: <tool>
 
-## Security Requirements (ALL NFR-SEC — applies everywhere)
-- <NFR-SEC-NNN>: <requirement>
-- Input validation, SQL parameterization rules
+---
 
-## What Already Exists (from prev manifest — do not re-implement)
-### Routes, Schema, Services/Repos, Known issues
+## Coding Conventions (complete — do not load IMPLEMENTATION_GUIDELINES for style decisions)
+- Module layout: <e.g. src/domain/ src/services/ src/handlers/ src/repositories/>
+- Naming: <e.g. CamelCase types, snake_case files, plural package names>
+- Error handling: <e.g. wrap at repo boundary, typed sentinel errors, never return raw strings>
+- Logging: <e.g. structured JSON, fields: request_id, user_id, level>
+- Context: <e.g. first param of every service method>
+- No <framework> types in service layer — handlers only
+- Repository pattern: interfaces in domain/, implementations in repositories/
+
+---
+
+## Security Requirements (apply to ALL code this phase)
+- <NFR-SEC-NNN>: <requirement — e.g. "bcrypt min cost 12 for password hashing">
+- <NFR-SEC-NNN>: <requirement — e.g. "all endpoints except /auth/login require valid JWT">
+- Input validation: <e.g. validate all request fields before business logic>
+- SQL: <e.g. parameterized queries only — no string interpolation>
+
+---
+
+## What Already Exists (do not re-implement)
+### Routes live (from Phase N-1)
+- <METHOD> <path> — <description>
+
+### Schema (from Phase N-1)
+- tables: <list>
+- key relationships: <list>
+
+### Services / Repos (from Phase N-1)
+- <ServiceName> — <brief description of what it already does>
+
+### Known issues carried forward
+- <issue> — <context>
+(none if Phase 1)
+
+---
 
 ## Gate Checklist
-- [ ] <test/command proving FR-NNN>
+- [ ] <specific test file or command that proves FR-NNN passes>
+- [ ] <NFR-NNN verified by: <measurement approach>>
+
+---
 
 ## Escalation Pointers
-- FR detail → docs/BRD.md §4
-- Component spec → docs/design/phases/N/specs/<component>.md
-- Infra setup → IMPLEMENTATION_GUIDELINES §Local Dev
-- CI/CD → IMPLEMENTATION_GUIDELINES §CI/CD
+If you need more detail not covered above, read ONLY the relevant section:
+- Full requirement detail for FR-NNN → docs/BRD.md §4 row FR-NNN
+- Full component spec → docs/design/phases/N/specs/<component>.md
+- Infrastructure setup → docs/IMPLEMENTATION_GUIDELINES.md §Local Development Setup
+- CI/CD details → docs/IMPLEMENTATION_GUIDELINES.md §CI/CD Pipeline
 ```
 
 **Rules for phase_context.md:**
-- Target 5-8K tokens — complete context saves more than agents escalating
-- Acceptance criteria in full — truncated criteria cause wrong implementations
-- ALL security NFRs included (not just "this phase")
-- Exact tech versions/commands from IMPLEMENTATION_GUIDELINES
-- "What Already Exists" from prev_manifest (authoritative)
-- Always include Escalation Pointers
+- Target 5-8K tokens. Do not artificially truncate — a complete context here saves far more tokens than multiple agents escalating to load full documents.
+- Acceptance criteria: write them in full — agents test against these. Truncated criteria cause incorrect implementations.
+- Security requirements: always include ALL security NFRs, not just the ones "assigned to this phase" — security applies everywhere.
+- Tech stack: copy exact versions and commands from IMPLEMENTATION_GUIDELINES — agents will use these verbatim.
+- "What Already Exists": copy from `prev_manifest.artifacts.api_routes`, `.code`, and schema — this is authoritative.
+- Escalation Pointers: always include — agents should know exactly where to look for edge cases, not guess.
 
 ## Planner Rules
-- Don't overload phases — focused sprint scope
-- Each phase needs at least one testable exit criterion
-- Wave 1 always includes DB/migration if schema changes needed
-- Carry forward `known_issues[]` from previous manifest
+- Never assign more requirements to a phase than can be implemented in a focused sprint
+- Each phase must have at least one testable exit criterion
+- Wave 1 must always include DB/migration work if schema changes are needed
+- Carry forward any `known_issues[]` from previous manifest into phase context

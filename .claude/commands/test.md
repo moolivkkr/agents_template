@@ -43,53 +43,105 @@ arguments:
 
 # /test — Standalone Test Runner
 
-Runs tests outside of `/develop`. Useful after hotfixes, on-demand e2e, or pre-release regression testing.
+Runs tests outside of `/develop`. Useful for validating after a hotfix, running e2e on demand, or regression testing before a release.
 
 ---
 
 ## Step 0 — Orient
 
 ```bash
-if [ -n "$ARG_PHASE" ]; then PHASES=($ARG_PHASE)
-else PHASES=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n); fi
-# No tier flags = run all tiers
+# Determine which phases to test
+if [ -n "$ARG_PHASE" ]; then
+  PHASES=($ARG_PHASE)
+else
+  PHASES=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n)
+fi
+
+# Determine test tiers
+RUN_UNIT=$([ "$ARG_UNIT" = true ] || [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E" ] && echo true)
+RUN_INTEGRATION=$([ "$ARG_INTEGRATION" = true ] || [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E" ] && echo true)
+RUN_E2E=$([ "$ARG_E2E" = true ] || [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E" ] && echo true)
 ```
 
-Start infrastructure if running integration/e2e/acceptance/performance tests.
+Start infrastructure if running integration or e2e tests (read startup commands from `docs/IMPLEMENTATION_GUIDELINES.md`).
 
 ---
 
 ## Step 1 — Unit Tests
-**Agent:** `unit_test_agent` | **When:** `--unit` or no tier flags
-Reads IMPLEMENTATION_GUIDELINES for test commands. Reports pass/fail per component.
+
+**Agent:** Generated `unit_test_agent`
+**When:** `RUN_UNIT = true`
+
+Reads: `docs/IMPLEMENTATION_GUIDELINES.md` for test commands, `agent_state/agent_registry.json` for test framework.
+
+Runs all unit tests. Reports pass/fail per component.
+
+---
 
 ## Step 2 — Integration Tests
-**Agent:** `integration_test_agent` | **When:** `--integration` or no tier flags
-Requires infra. Uses isolated test database — never touches production data.
+
+**Agent:** Generated `integration_test_agent`
+**When:** `RUN_INTEGRATION = true`
+
+Requires infra running. Uses isolated test database/namespace — never touches production data.
+
+---
 
 ## Step 3 — E2E Tests
-**Agent:** `e2e_orchestrator` + `ui_test_agent` | **When:** `--e2e` or no tier flags
-Reads manifests for `e2e_workflows_unlocked`. `--workflow` → specific workflow only. Full stack required. **Iteration:** diagnose → fix → rerun (max 2 attempts).
-Results: `agent_state/e2e/results.md`
 
-## Step 3b — Acceptance Tests
-**Agent:** `acceptance_test_agent` | **When:** `--acceptance` or no tier flags
-Reads BRD personas + use cases for targeted phase(s). Checks `requirements/test-data/` for seed data, generates if absent. Iterates on failures (max 2 rounds).
+**Agent:** `e2e_orchestrator` + generated `ui_test_agent` (if frontend enabled)
+**When:** `RUN_E2E = true`
+
+Reads `agent_state/phases/*/manifest.json` to identify all `e2e_workflows_unlocked`.
+If `--workflow` specified: runs only that workflow.
+
+Full stack must be running. Writes results to `agent_state/e2e/results.md`.
+
+**Iteration:** On failure, diagnose → fix → rerun (max 2 attempts). Surface unresolved to user.
+
+---
+
+## Step 3b — Acceptance Tests (when --acceptance flag or no tier flags)
+
+**Agent:** `acceptance_test_agent`
+**When:** `RUN_ACCEPTANCE = true` (explicit `--acceptance` flag, or no tier flags = run all)
+
+Reads BRD personas and in-scope use cases for the targeted phase(s).
+Checks `requirements/test-data/` for user-provided seed data, generates if absent.
+Executes use cases as each persona. Iterates on failures (max 2 rounds).
+
 Results: `agent_state/phases/N/reports/acceptance_report.md`
+Seed data: `agent_state/phases/N/test-data/generated-seed.yaml`
 
-## Step 3c — Performance Tests
-**Agent:** `performance_agent` | **When:** `--performance`
-Reads NFR-* targets from BRD. Validates p95 latency + throughput per endpoint.
+---
+
+## Step 3c — Performance Tests (when --performance flag)
+
+**Agent:** `performance_agent`
+
+Reads NFR-* performance targets from `docs/BRD.md`. Runs load tests against the running stack.
+Validates p95 latency and throughput targets per-endpoint.
+
 Results: `agent_state/phases/N/reports/performance_report.md`
 
-## Step 3d — System Tests
-**Agent:** `system_test_agent` | **When:** `--system`
-Smoke tests across all phase boundaries — validates end-to-end data flow without UI.
+---
+
+## Step 3d — System Tests (when --system flag)
+
+**Agent:** `system_test_agent`
+
+Runs smoke tests across all phase boundaries — validates end-to-end data flow across services without UI interaction. Confirms the full system hangs together as phases accumulate.
+
 Results: `agent_state/reports/system_tests.md`
 
-## Step 3e — Manual Test Plan
-**Agent:** `manual_test_agent` | **When:** `--manual`
-Generates human-executable QA checklist from BRD personas + FR-*.
+---
+
+## Step 3e — Manual Test Plan (when --manual flag)
+
+**Agent:** `manual_test_agent`
+
+Generates a structured manual test plan from BRD personas and FR-* requirements. Output is a human-executable QA checklist, not automated tests.
+
 Output: `agent_state/phases/N/reports/manual_test_plan.md`
 
 ---
@@ -98,8 +150,19 @@ Output: `agent_state/phases/N/reports/manual_test_plan.md`
 
 ```
 Test Results — Phase(s): N
-  Unit: X/X | Integration: X/X | E2E: X/X | Acceptance: X/X
-  Failures: ❌ <test> — <reason> (reproduction steps)
-  Reports: agent_state/e2e/results.md, agent_state/phases/N/reports/...
-  ▶ After all phases: /accept (global acceptance)
+
+  Unit Tests:        X/X passed  (or FAILED: N failures)
+  Integration Tests: X/X passed  (or FAILED: N failures)
+  E2E Tests:         X/X passed  (or FAILED: N failures)
+  Acceptance Tests:  X/X use cases passed | N personas exercised
+
+  Failures (if any):
+    ❌ <test name / use case> — <failure reason>
+       Reproduction: <minimal reproduction steps>
+
+  Reports:
+    agent_state/e2e/results.md
+    agent_state/phases/N/reports/acceptance_report.md
+
+  ▶ After all phases complete: /accept (global full-product acceptance)
 ```

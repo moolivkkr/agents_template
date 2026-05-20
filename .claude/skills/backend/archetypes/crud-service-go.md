@@ -11,6 +11,7 @@ tags:
   - archetype
   - backend
 ---
+
 # CRUD Service Archetype
 
 Complete, production-ready Go service layer template. Every generated service MUST follow this pattern.

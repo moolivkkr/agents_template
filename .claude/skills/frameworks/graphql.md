@@ -2,88 +2,273 @@
 skill: graphql
 description: GraphQL skill pack — schema design, resolvers, DataLoader, auth, pagination, subscriptions, error handling, testing, performance across gqlgen (Go), Strawberry (Python), graphql-java, async-graphql (Rust), Apollo Server (TS)
 version: "1.0"
-tags: [graphql, api, schema, dataloader, apollo, gqlgen, strawberry, framework]
+tags:
+  - graphql
+  - api
+  - schema
+  - dataloader
+  - apollo
+  - gqlgen
+  - strawberry
+  - framework
 ---
 
 # GraphQL Skill Pack
+
+Comprehensive GraphQL patterns for production APIs. Covers schema design, resolver patterns, N+1 prevention, auth, pagination, subscriptions, and per-language library recommendations.
 
 ## Schema-First vs Code-First
 
 | Approach | When to Use | Libraries |
 |----------|------------|-----------|
-| **Schema-first** (default) | Multi-team, public APIs, client-first | gqlgen (Go), Apollo Server (TS), graphql-java |
-| **Code-first** | Single team, rapid iteration | Strawberry (Python), async-graphql (Rust), Nexus (TS) |
+| **Schema-first** (recommended) | Multi-team, public APIs, client-first design | gqlgen (Go), Apollo Server (TS), graphql-java |
+| **Code-first** | Single team, rapid iteration, language-native types | Strawberry (Python), async-graphql (Rust), Nexus (TS) |
+
+**Recommendation**: Default to schema-first. The `.graphql` files serve as a contract between frontend and backend teams, and tools like GraphQL Inspector can detect breaking changes.
 
 ## Schema Design
 
+### Type Definitions
+
 ```graphql
+# schema.graphql
+
 type Query {
+  """Fetch a single widget by ID."""
   widget(id: ID!): Widget
-  widgets(first: Int = 20, after: String, filter: WidgetFilter, orderBy: WidgetOrderBy = CREATED_AT_DESC): WidgetConnection!
+
+  """List widgets with cursor pagination and optional filters."""
+  widgets(
+    first: Int = 20
+    after: String
+    filter: WidgetFilter
+    orderBy: WidgetOrderBy = CREATED_AT_DESC
+  ): WidgetConnection!
+
+  """Current authenticated user."""
   me: User!
 }
 
 type Mutation {
+  """Create a new widget."""
   createWidget(input: CreateWidgetInput!): CreateWidgetPayload!
+
+  """Update an existing widget."""
   updateWidget(input: UpdateWidgetInput!): UpdateWidgetPayload!
+
+  """Delete a widget (soft delete)."""
   deleteWidget(id: ID!): DeleteWidgetPayload!
 }
 
 type Subscription {
+  """Subscribe to widget changes in real-time."""
   widgetChanged(filter: WidgetFilter): WidgetEvent!
 }
+```
 
+### Entity Types
+
+```graphql
+"""A widget resource."""
 type Widget implements Node {
+  """Global unique identifier."""
   id: ID!
   name: String!
   description: String!
   status: WidgetStatus!
   createdAt: DateTime!
   updatedAt: DateTime!
-  createdBy: User!       # resolved via DataLoader
+  createdBy: User!
   version: Int!
-  tags: [Tag!]!           # resolved via DataLoader
+
+  """Related items — resolved via DataLoader to prevent N+1."""
+  tags: [Tag!]!
   category: Category
 }
 
-interface Node { id: ID! }
-enum WidgetStatus { ACTIVE INACTIVE ARCHIVED }
+interface Node {
+  id: ID!
+}
 
-input CreateWidgetInput { name: String!; description: String = ""; categoryId: ID; tagIds: [ID!] }
-input UpdateWidgetInput { id: ID!; name: String; description: String; version: Int! }  # version for optimistic locking
-input WidgetFilter { status: WidgetStatus; categoryId: ID; search: String; createdAfter: DateTime }
+enum WidgetStatus {
+  ACTIVE
+  INACTIVE
+  ARCHIVED
+}
 
-# Every mutation returns payload with typed errors
-type CreateWidgetPayload { widget: Widget; errors: [UserError!]! }
-type UserError { field: String; message: String!; code: ErrorCode! }
-enum ErrorCode { VALIDATION_ERROR NOT_FOUND CONFLICT FORBIDDEN }
-
-scalar DateTime
-scalar UUID
-
-# Relay cursor pagination
-type WidgetConnection { edges: [WidgetEdge!]!; pageInfo: PageInfo!; totalCount: Int! }
-type WidgetEdge { node: Widget!; cursor: String! }
-type PageInfo { hasNextPage: Boolean!; hasPreviousPage: Boolean!; startCursor: String; endCursor: String }
+enum WidgetOrderBy {
+  CREATED_AT_ASC
+  CREATED_AT_DESC
+  UPDATED_AT_ASC
+  UPDATED_AT_DESC
+  NAME_ASC
+  NAME_DESC
+}
 ```
 
-- Default page size 20, max 100; cursors are opaque base64-encoded strings
-- `first`+`after` for forward pagination
+### Input Types
 
-## Resolver Patterns (per language)
+```graphql
+input CreateWidgetInput {
+  name: String!
+  description: String = ""
+  categoryId: ID
+  tagIds: [ID!]
+}
+
+input UpdateWidgetInput {
+  id: ID!
+  name: String
+  description: String
+  categoryId: ID
+  tagIds: [ID!]
+  """Optimistic locking — must match current version."""
+  version: Int!
+}
+
+input WidgetFilter {
+  status: WidgetStatus
+  categoryId: ID
+  search: String
+  createdAfter: DateTime
+  createdBefore: DateTime
+}
+```
+
+### Mutation Payloads
+
+```graphql
+"""
+Every mutation returns a payload type with the result and potential errors.
+This pattern allows returning partial success and typed errors.
+"""
+type CreateWidgetPayload {
+  widget: Widget
+  errors: [UserError!]!
+}
+
+type UpdateWidgetPayload {
+  widget: Widget
+  errors: [UserError!]!
+}
+
+type DeleteWidgetPayload {
+  deletedId: ID
+  errors: [UserError!]!
+}
+
+"""Typed user-facing error (not system errors)."""
+type UserError {
+  field: String
+  message: String!
+  code: ErrorCode!
+}
+
+enum ErrorCode {
+  VALIDATION_ERROR
+  NOT_FOUND
+  CONFLICT
+  FORBIDDEN
+}
+```
+
+### Custom Scalars
+
+```graphql
+"""ISO 8601 date-time string."""
+scalar DateTime
+
+"""UUID string."""
+scalar UUID
+
+"""URL string."""
+scalar URL
+
+"""JSON object (for dynamic metadata)."""
+scalar JSON
+```
+
+## Relay Cursor-Based Pagination
+
+```graphql
+"""Relay-style connection for cursor pagination."""
+type WidgetConnection {
+  edges: [WidgetEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type WidgetEdge {
+  node: Widget!
+  cursor: String!
+}
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+```
+
+### Pagination Rules
+
+- Default page size: 20, max: 100
+- Cursors are opaque strings (base64-encoded `{field}:{value}`)
+- Always return `totalCount` for UI display
+- `first` + `after` for forward pagination
+- `last` + `before` for backward pagination (optional, add when needed)
+
+## Resolver Patterns
 
 ### Go (gqlgen)
+
 ```go
-func (r *queryResolver) Widget(ctx context.Context, id string) (*model.Widget, error) {
-    return r.widgetSvc.Get(ctx, auth.TenantIDFromContext(ctx), id)
+// graph/resolver.go
+
+type Resolver struct {
+    widgetSvc  WidgetService
+    userLoader *dataloader.Loader[string, *User]  // DataLoader
+    tagLoader  *dataloader.Loader[string, []*Tag]
 }
+
+// graph/widget.resolvers.go — generated by gqlgen
+
+func (r *queryResolver) Widget(ctx context.Context, id string) (*model.Widget, error) {
+    tenantID := auth.TenantIDFromContext(ctx)
+    return r.widgetSvc.Get(ctx, tenantID, id)
+}
+
+func (r *queryResolver) Widgets(ctx context.Context, first *int, after *string, filter *model.WidgetFilter, orderBy *model.WidgetOrderBy) (*model.WidgetConnection, error) {
+    tenantID := auth.TenantIDFromContext(ctx)
+    pageSize := 20
+    if first != nil {
+        pageSize = min(*first, 100)
+    }
+    return r.widgetSvc.List(ctx, tenantID, pageSize, after, filter, orderBy)
+}
+
+// Field resolver — uses DataLoader to batch
 func (r *widgetResolver) CreatedBy(ctx context.Context, obj *model.Widget) (*model.User, error) {
     return r.userLoader.Load(ctx, obj.CreatedByID)()
+}
+
+func (r *widgetResolver) Tags(ctx context.Context, obj *model.Widget) ([]*model.Tag, error) {
+    return r.tagLoader.Load(ctx, obj.ID)()
 }
 ```
 
 ### Python (Strawberry)
+
 ```python
+# app/graphql/schema.py
+
+import strawberry
+from strawberry.types import Info
+
+from app.auth.context import get_current_user
+from app.graphql.dataloaders import UserLoader, TagLoader
+
 @strawberry.type
 class Query:
     @strawberry.field
@@ -91,119 +276,459 @@ class Query:
         user = get_current_user(info)
         return await info.context.widget_svc.get(user.tenant_id, id)
 
+    @strawberry.field
+    async def widgets(
+        self,
+        info: Info,
+        first: int = 20,
+        after: str | None = None,
+        filter: WidgetFilter | None = None,
+    ) -> WidgetConnection:
+        user = get_current_user(info)
+        first = min(first, 100)
+        return await info.context.widget_svc.list(user.tenant_id, first, after, filter)
+
 @strawberry.type
 class Widget:
+    id: strawberry.ID
+    name: str
+    description: str
+    status: WidgetStatus
+    created_by_id: strawberry.Private[str]  # not exposed, used for DataLoader
+
     @strawberry.field
     async def created_by(self, info: Info) -> User:
         return await info.context.user_loader.load(self.created_by_id)
+
+    @strawberry.field
+    async def tags(self, info: Info) -> list[Tag]:
+        return await info.context.tag_loader.load(self.id)
 ```
 
 ### TypeScript (Apollo Server)
+
 ```typescript
+// src/graphql/resolvers/widget.ts
+
+import { GraphQLResolveInfo } from 'graphql';
+import { Context } from '../context';
+
 export const widgetResolvers = {
   Query: {
-    widget: async (_: unknown, args: { id: string }, ctx: Context) => ctx.widgetService.get(ctx.tenantId, args.id),
-    widgets: async (_: unknown, args: { first?: number; after?: string; filter?: WidgetFilter }, ctx: Context) => {
-      return ctx.widgetService.list(ctx.tenantId, Math.min(args.first ?? 20, 100), args.after, args.filter);
+    widget: async (_: unknown, args: { id: string }, ctx: Context) => {
+      return ctx.widgetService.get(ctx.tenantId, args.id);
+    },
+
+    widgets: async (
+      _: unknown,
+      args: { first?: number; after?: string; filter?: WidgetFilter },
+      ctx: Context,
+    ) => {
+      const first = Math.min(args.first ?? 20, 100);
+      return ctx.widgetService.list(ctx.tenantId, first, args.after, args.filter);
     },
   },
+
   Widget: {
-    createdBy: (parent: Widget, _: unknown, ctx: Context) => ctx.loaders.userLoader.load(parent.createdById),
+    // Field resolver with DataLoader — batches across all widgets in the query
+    createdBy: (parent: Widget, _: unknown, ctx: Context) => {
+      return ctx.loaders.userLoader.load(parent.createdById);
+    },
+
+    tags: (parent: Widget, _: unknown, ctx: Context) => {
+      return ctx.loaders.tagLoader.load(parent.id);
+    },
   },
+
   Mutation: {
     createWidget: async (_: unknown, args: { input: CreateWidgetInput }, ctx: Context) => {
-      try { const widget = await ctx.widgetService.create(ctx.tenantId, ctx.userId, args.input); return { widget, errors: [] }; }
-      catch (err) { return { widget: null, errors: [mapToUserError(err)] }; }
+      try {
+        const widget = await ctx.widgetService.create(ctx.tenantId, ctx.userId, args.input);
+        return { widget, errors: [] };
+      } catch (err) {
+        return { widget: null, errors: [mapToUserError(err)] };
+      }
     },
   },
 };
 ```
 
-### Java (DGS)
+### Java (graphql-java with Spring)
+
 ```java
 @DgsComponent
 public class WidgetDataFetcher {
+
+    private final WidgetService widgetService;
+
     @DgsQuery
     public Widget widget(@InputArgument String id, DgsDataFetchingEnvironment dfe) {
-        return widgetService.findById(UUID.fromString(id), AuthContext.getTenantId(dfe));
+        UUID tenantId = AuthContext.getTenantId(dfe);
+        return widgetService.findById(UUID.fromString(id), tenantId);
     }
+
+    @DgsQuery
+    public WidgetConnection widgets(
+            @InputArgument Integer first,
+            @InputArgument String after,
+            @InputArgument WidgetFilter filter,
+            DgsDataFetchingEnvironment dfe) {
+        UUID tenantId = AuthContext.getTenantId(dfe);
+        int pageSize = Math.min(first != null ? first : 20, 100);
+        return widgetService.list(tenantId, pageSize, after, filter);
+    }
+
     @DgsData(parentType = "Widget", field = "createdBy")
     public CompletableFuture<User> createdBy(DgsDataFetchingEnvironment dfe) {
-        return dfe.<String, User>getDataLoader("userLoader").load(((Widget) dfe.getSource()).getCreatedById().toString());
+        DataLoader<String, User> loader = dfe.getDataLoader("userLoader");
+        Widget widget = dfe.getSource();
+        return loader.load(widget.getCreatedById().toString());
     }
 }
 ```
 
 ### Rust (async-graphql)
+
 ```rust
 #[Object]
 impl QueryRoot {
     async fn widget(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Widget>> {
         let tenant_id = ctx.data::<AuthContext>()?.tenant_id;
-        Ok(ctx.data::<Arc<WidgetService>>()?.get(tenant_id, &id).await?)
+        let svc = ctx.data::<Arc<WidgetService>>()?;
+        Ok(svc.get(tenant_id, &id).await?)
+    }
+
+    async fn widgets(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = 20)] first: i32,
+        after: Option<String>,
+        filter: Option<WidgetFilter>,
+    ) -> Result<WidgetConnection> {
+        let tenant_id = ctx.data::<AuthContext>()?.tenant_id;
+        let svc = ctx.data::<Arc<WidgetService>>()?;
+        let first = first.min(100);
+        Ok(svc.list(tenant_id, first, after, filter).await?)
     }
 }
+
 #[Object]
 impl Widget {
     async fn created_by(&self, ctx: &Context<'_>) -> Result<User> {
-        ctx.data::<DataLoader<UserLoader>>()?.load_one(self.created_by_id).await?.ok_or("user not found".into())
+        let loader = ctx.data::<DataLoader<UserLoader>>()?;
+        loader.load_one(self.created_by_id).await?.ok_or("user not found".into())
     }
 }
 ```
 
-## DataLoader
+## N+1 Problem Prevention — DataLoader
+
+The N+1 problem occurs when a field resolver makes one database query per parent object.
 
 ```
-Contract: Input [key1, key2, ...] -> Output [value1, value2, ...] (same order, same length)
-- Missing items = null at their index position
-- Instances are per-request (not shared across requests)
-- Batch function called once per event loop tick
+// WITHOUT DataLoader:
+Query widgets(first: 10) → 1 query for 10 widgets
+  Widget.createdBy → 10 individual user queries (N+1!)
+
+// WITH DataLoader:
+Query widgets(first: 10) → 1 query for 10 widgets
+  Widget.createdBy → 1 batched query for all 10 users
 ```
+
+### DataLoader Contract
+
+```
+DataLoader batch function:
+    Input:  [key1, key2, key3, ...]
+    Output: [value1, value2, value3, ...]  (same order, same length)
+
+Rules:
+    - Output array MUST have the same length as input
+    - Output items MUST be in the same order as input keys
+    - Missing items should be null/None at their index position
+    - DataLoader instances are per-request (not shared across requests)
+    - Batch function is called once per event loop tick (automatic batching)
+```
+
+### DataLoader Example (TypeScript)
 
 ```typescript
+import DataLoader from 'dataloader';
+
+// Create per-request
 export function createLoaders(db: Database) {
   return {
     userLoader: new DataLoader<string, User>(async (ids) => {
       const users = await db.users.findByIds([...ids]);
-      const map = new Map(users.map(u => [u.id, u]));
-      return ids.map(id => map.get(id) ?? null);
+      const userMap = new Map(users.map(u => [u.id, u]));
+      return ids.map(id => userMap.get(id) ?? null);
+    }),
+
+    tagLoader: new DataLoader<string, Tag[]>(async (widgetIds) => {
+      const tags = await db.tags.findByWidgetIds([...widgetIds]);
+      const tagMap = new Map<string, Tag[]>();
+      for (const tag of tags) {
+        const list = tagMap.get(tag.widgetId) ?? [];
+        list.push(tag);
+        tagMap.set(tag.widgetId, list);
+      }
+      return widgetIds.map(id => tagMap.get(id) ?? []);
     }),
   };
 }
 ```
 
-## Auth
-- Authentication in context setup (validate JWT, extract user/tenant)
-- Authorization in resolvers or directives
-- `tenant_id` from auth context, NEVER from query arguments
-- Subscriptions MUST filter by tenant_id
+## Authentication and Authorization
+
+```
+Authentication: Validate JWT on every request, extract user/tenant.
+Authorization: Check permissions in resolvers or directives.
+
+// Context setup (runs once per request)
+function createContext(req):
+    token = req.headers.authorization
+    user = validate_jwt(token)
+    return {
+        user_id:   user.id,
+        tenant_id: user.tenant_id,
+        roles:     user.roles,
+        loaders:   create_dataloaders(),
+    }
+
+// Authorization in resolver
+function resolve_widget(ctx, args):
+    widget = db.get_widget(ctx.tenant_id, args.id)
+    if widget is null:
+        return null  // GraphQL returns null, not 404
+
+    // Field-level authorization
+    if "admin" not in ctx.roles:
+        widget.internal_notes = null  // redact sensitive field
+
+    return widget
+
+// Directive-based authorization (schema-first)
+directive @auth(requires: Role!) on FIELD_DEFINITION
+
+type Mutation {
+    deleteWidget(id: ID!): DeleteWidgetPayload! @auth(requires: ADMIN)
+}
+```
 
 ## Error Handling
-- **System errors** in top-level `errors` array (auth failures, internal errors)
-- **User errors** in mutation payload `errors` field (business rule violations)
-- Never expose internal error messages; use error codes for programmatic handling
+
+```
+GraphQL has two error categories:
+
+1. System Errors (in "errors" array):
+    - Authentication failures
+    - Internal server errors
+    - Validation that prevents resolution
+    - Returned in the top-level "errors" field
+
+2. User Errors (in mutation payload):
+    - Business rule violations
+    - Not-found for specific items
+    - Validation of user input
+    - Returned in the mutation payload's "errors" field
+
+// Response with system error:
+{
+    "data": { "widget": null },
+    "errors": [{
+        "message": "Not authenticated",
+        "extensions": { "code": "UNAUTHENTICATED" },
+        "path": ["widget"]
+    }]
+}
+
+// Response with user error (in payload):
+{
+    "data": {
+        "createWidget": {
+            "widget": null,
+            "errors": [{
+                "field": "name",
+                "message": "Name already exists",
+                "code": "CONFLICT"
+            }]
+        }
+    }
+}
+
+Rules:
+    - Never expose internal error messages to clients
+    - Use error codes (extensions.code) for programmatic handling
+    - Use the errors array for auth and system errors
+    - Use mutation payload errors for business logic errors
+    - Always return partial data when possible (null out errored fields)
+```
+
+## Subscriptions (WebSocket Transport)
+
+```graphql
+type Subscription {
+    widgetChanged(filter: WidgetFilter): WidgetEvent!
+}
+
+type WidgetEvent {
+    type: EventType!
+    widget: Widget!
+    timestamp: DateTime!
+}
+
+enum EventType {
+    CREATED
+    UPDATED
+    DELETED
+}
+```
+
+```
+// Server publishes events when mutations occur:
+mutation_resolver.createWidget():
+    widget = service.create(...)
+    pubsub.publish("WIDGET_CHANGED", { type: CREATED, widget: widget })
+    return { widget, errors: [] }
+
+// Subscription resolver filters by tenant and optional status:
+subscription_resolver.widgetChanged(filter):
+    return pubsub.subscribe("WIDGET_CHANGED")
+        .filter(event => event.widget.tenant_id == ctx.tenant_id)
+        .filter(event => filter.status == null || event.widget.status == filter.status)
+```
 
 ## Performance
-- Query complexity limits (assign cost per field, reject over threshold)
-- Depth limiting (default max 10)
-- Persisted queries in production (hash instead of full query, prevents arbitrary queries)
 
-## Library Reference
+### Query Complexity Limiting
+
+```
+// Assign complexity cost to fields:
+type Widget {
+    id: ID!                           # cost: 0 (scalar)
+    name: String!                     # cost: 0 (scalar)
+    tags: [Tag!]!                     # cost: 10 (list, triggers DataLoader)
+    relatedWidgets(first: Int): [Widget!]! # cost: first * 10 (nested list)
+}
+
+// Reject queries exceeding max complexity:
+max_complexity = 1000
+
+// Example rejected query:
+query {
+    widgets(first: 100) {           # 100 * base
+        relatedWidgets(first: 50) { # 100 * 50 * base = way over limit
+            tags { name }
+        }
+    }
+}
+```
+
+### Depth Limiting
+
+```
+// Reject queries deeper than N levels (default: 10):
+max_depth = 10
+
+// This prevents recursive queries like:
+query {
+    widget(id: "1") {
+        relatedWidgets {
+            relatedWidgets {
+                relatedWidgets {  # ...and so on
+                }
+            }
+        }
+    }
+}
+```
+
+### Persisted Queries
+
+```
+// Client sends a hash instead of the full query string:
+POST /graphql
+{
+    "extensions": {
+        "persistedQuery": {
+            "version": 1,
+            "sha256Hash": "abc123..."
+        }
+    },
+    "variables": { "id": "widget-1" }
+}
+
+Benefits:
+    - Smaller request payload (hash vs full query)
+    - Prevents arbitrary queries (allowlist only known queries)
+    - Better caching (CDN can cache by hash)
+
+Implementation:
+    1. Extract queries at build time from frontend code
+    2. Register them in the server's query allowlist
+    3. Reject unknown hashes in production
+```
+
+## Testing
+
+```
+// Schema validation: ensure schema is valid and has no breaking changes
+test("schema is valid"):
+    assert schema.validate() passes
+
+// Resolver unit tests: mock service, test resolver logic
+test("widget resolver returns widget"):
+    mock_service.get.returns(widget)
+    result = resolve_widget(ctx, { id: "1" })
+    assert result.name == "Test Widget"
+
+// Integration tests: full query execution against test DB
+test("widgets query with pagination"):
+    response = execute_query("""
+        query {
+            widgets(first: 5) {
+                edges { node { id name } }
+                pageInfo { hasNextPage endCursor }
+                totalCount
+            }
+        }
+    """)
+    assert len(response.data.widgets.edges) == 5
+    assert response.data.widgets.pageInfo.hasNextPage == true
+
+// DataLoader test: verify batching
+test("user DataLoader batches queries"):
+    result = execute_query("""
+        query {
+            widgets(first: 10) {
+                edges { node { createdBy { name } } }
+            }
+        }
+    """)
+    assert db.query_count("users") == 1  # batched, not 10
+```
+
+## Language-Specific Library Reference
 
 | Language | Schema-First | Code-First | DataLoader |
 |----------|-------------|------------|------------|
-| Go | gqlgen | — | graph-gophers/dataloader |
-| Python | Ariadne | Strawberry | aiodataloader |
-| Java | DGS (Netflix) | graphql-java-kickstart | java-dataloader |
-| Rust | — | async-graphql | built-in |
-| TypeScript | Apollo Server | Nexus, TypeGraphQL | dataloader (npm) |
+| **Go** | gqlgen | — | graph-gophers/dataloader |
+| **Python** | Ariadne | Strawberry | aiodataloader |
+| **Java** | DGS (Netflix) | graphql-java-kickstart | java-dataloader |
+| **Rust** | — | async-graphql | built-in DataLoader |
+| **TypeScript** | Apollo Server | Nexus, TypeGraphQL | dataloader (npm) |
 
 ## Critical Rules
-- Relay cursor pagination, not offset
-- Every mutation returns payload with `errors: [UserError!]!`
-- Every list field MUST use DataLoader
-- DataLoader instances are per-request
-- Set complexity + depth limits
-- Schema changes MUST be backward compatible (GraphQL Inspector in CI)
-- Subscriptions filter by tenant_id
-- Use persisted queries in production
+
+- Use Relay cursor-based pagination — not offset
+- Every mutation returns a payload type with `errors: [UserError!]!` — not GraphQL errors
+- Every list field MUST use DataLoader — prevent N+1 queries
+- DataLoader instances are per-request — create new ones in context setup
+- Set query complexity limits and depth limits — prevent DoS via expensive queries
+- Authentication happens in context setup — not in individual resolvers
+- Authorization happens in resolvers or directives — check tenant isolation
+- Never expose internal error details — use error codes for programmatic handling
+- Schema changes MUST be backward compatible — use GraphQL Inspector for CI checks
+- `tenant_id` comes from auth context — NEVER from query arguments
+- Subscriptions MUST filter by `tenant_id` — never leak cross-tenant events
+- Use persisted queries in production — prevents arbitrary query execution

@@ -43,6 +43,7 @@ from datetime import datetime
 from app.domain.base import ListFilters, ListResult
 from app.domain.widget import Widget, WidgetStatus
 
+
 def make_widget(
     *,
     id: uuid.UUID | None = None,
@@ -68,6 +69,7 @@ def make_widget(
         updated_by=updated_by or uuid.uuid4(),
         version=version,
     )
+
 
 def make_list_result(
     items: list[Widget] | None = None,
@@ -106,7 +108,10 @@ from app.errors import ConflictError, NotFoundError, UnauthorizedError, Validati
 from app.services.widget import WidgetService
 from tests.factories import make_list_result, make_widget
 
+
+# ---------------------------------------------------------------------------
 # Fixtures
+# ---------------------------------------------------------------------------
 
 @pytest.fixture
 def mock_repo() -> AsyncMock:
@@ -119,6 +124,7 @@ def mock_repo() -> AsyncMock:
     repo.list = AsyncMock()
     return repo
 
+
 @pytest.fixture
 def mock_cache() -> AsyncMock:
     """Mock cache implementing Cache protocol."""
@@ -128,12 +134,14 @@ def mock_cache() -> AsyncMock:
     cache.delete = AsyncMock()
     return cache
 
+
 @pytest.fixture
 def mock_audit() -> AsyncMock:
     """Mock audit writer implementing AuditWriter protocol."""
     audit = AsyncMock()
     audit.write = AsyncMock()
     return audit
+
 
 @pytest.fixture
 def service(mock_repo: AsyncMock, mock_cache: AsyncMock, mock_audit: AsyncMock) -> WidgetService:
@@ -144,9 +152,11 @@ def service(mock_repo: AsyncMock, mock_cache: AsyncMock, mock_audit: AsyncMock) 
         audit_writer=mock_audit,
     )
 
+
 @pytest.fixture
 def tenant_id() -> uuid.UUID:
     return uuid.uuid4()
+
 
 @pytest.fixture
 def user_id() -> uuid.UUID:

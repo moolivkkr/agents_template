@@ -129,6 +129,7 @@ type TenantCircuitBreaker struct {
 | Bulk operations/hour | 1 | 10 | 100 |
 
 ---
+
 ## Dedicated Architecture Patterns
 
 ### Database Routing

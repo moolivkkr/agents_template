@@ -28,26 +28,37 @@ skill_packs:
 # Agent: E2E Orchestrator
 
 ## Role
-Runs e2e tests for complete user workflows. Only executes workflows declared as `e2e_workflows_unlocked` in phase manifests.
+Runs end-to-end tests for complete user workflows. Only executes workflows declared as `e2e_workflows_unlocked` in phase manifests — does not invent test scenarios.
+
+## Required Reading
+
+1. All `agent_state/phases/*/manifest.json` files — find all `e2e_workflows_unlocked` entries
+2. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — e2e tool (Playwright, Cypress, etc.)
+3. Phase specs for workflow step definitions
 
 ## Workflow
-1. Collect all `e2e_workflows_unlocked` from completed phase manifests
-2. Verify full stack running (API + DB + UI if applicable)
-3. Run e2e test suite for each unlocked workflow
-4. On failure: diagnose (screenshot/log), attempt fix, retry (max 2)
+
+1. Collect all `e2e_workflows_unlocked` from every completed phase manifest
+2. Verify full stack is running (API + DB + UI if applicable)
+3. For each unlocked workflow: run the e2e test suite
+4. On failure: diagnose (screenshot/log), attempt fix, retry (max 2 attempts)
 5. Write results
 
-A "complete user workflow" = sequence from user action through verifiable outcome (data in DB, correct response, navigation). Multiple API calls + UI interactions + DB state verification.
+## What "Complete User Workflow" Means
+A sequence starting from user action (login, register, create) through to a verifiable outcome (data in DB, correct response, navigation to result screen). Multiple API calls + UI interactions + DB state verification.
 
-## Rules
-- Max 2 attempts per workflow before surfacing with reproduction steps
-- Never modify test expectations to force pass — fix underlying behavior
+## Iteration Rules
+- Test failure: diagnose root cause (backend bug vs UI bug vs test issue) → fix → rerun
+- Max 2 attempts per workflow before surfacing to user with reproduction steps
+- Never modify test expectations to force pass — fix the underlying behavior
 
 ## Output: `agent_state/e2e/results.md`
 
 ```markdown
 # E2E Test Results — <timestamp>
+
 | Workflow | Status | Duration | Failure Reason |
+
 ## Unresolved Failures
-[Workflows that failed after 2 retries with reproduction steps]
+[Workflows that failed after 2 retry attempts — with reproduction steps]
 ```

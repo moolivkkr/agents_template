@@ -23,10 +23,13 @@ Complete error handling system for TypeScript backend services (Express, NestJS,
 ```typescript
 // src/errors/app-error.ts
 
+/**
  * AppError is the base application error type.
  * All domain errors MUST extend this class so error middleware can map them to HTTP responses.
+ *
  * Produces the same JSON envelope as the Go archetype:
  * {"error": {"code": "...", "message": "...", "details": {...}}}
+ */
 export class AppError extends Error {
   public readonly code: string;
   public readonly httpStatus: number;
@@ -252,10 +255,13 @@ import { AppError } from "../errors/app-error";
 import { RateLimitError } from "../errors/domain-errors";
 import { logger } from "../lib/logger"; // structured logger (pino, winston, etc.)
 
+/**
  * Express error middleware. Mount LAST in the middleware stack.
  * Maps AppError instances to structured HTTP responses.
+ *
  * Usage:
  *   app.use(errorHandler);
+ */
 export function errorHandler(
   err: Error,
   req: Request,
@@ -309,12 +315,15 @@ export function errorHandler(
   });
 }
 
+/**
  * Async route handler wrapper — catches rejected promises and forwards to error middleware.
+ *
  * Usage:
  *   router.get("/users/:id", asyncHandler(async (req, res) => {
  *     const user = await userService.get(req.params.id);
  *     res.json({ data: user });
  *   }));
+ */
 export function asyncHandler(
   fn: (req: Request, res: Response, next: NextFunction) => Promise<void>,
 ) {

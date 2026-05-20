@@ -11,51 +11,122 @@ tags:
 
 # Git Workflow
 
-Trunk-based development with conventional commits.
+Trunk-based development with conventional commits for all projects.
 
-## Branching
+## Branching Strategy
 
-- `main` always deployable — never commit directly
-- Short-lived feature branches off `main`; merge within 1-2 days
-- No long-lived branches; use feature flags for incomplete work; delete after merge
+- `main` is always deployable — never commit directly to `main`
+- Short-lived feature branches off `main`; merge back within 1–2 days
+- No long-lived feature branches; use feature flags for incomplete work
+- Delete branches immediately after merge
 
 ## Branch Naming
 
 ```
 <type>/<ticket-id>-<short-description>
+
 feat/AUTH-42-oauth-google-login
 fix/BUG-17-null-pointer-session-middleware
+chore/INFRA-8-upgrade-go-1-22
+docs/DOC-3-api-authentication-guide
+refactor/CORE-55-extract-payment-service
 ```
-Kebab-case, include ticket ID, description <50 chars.
+
+- Use kebab-case for the description
+- Include ticket/issue ID when one exists
+- Keep descriptions under 50 characters after the prefix
 
 ## Conventional Commits
 
 Format: `<type>(<scope>): <subject>`
 
-| Type | When |
-|------|------|
-| `feat` | New feature | `fix` | Bug fix |
-| `chore` | Maintenance/deps | `docs` | Documentation |
-| `refactor` | Neither fix nor feat | `test` | Tests |
-| `perf` | Performance | `ci` | CI/CD |
-| `style` | Formatting only | `revert` | Reverting |
+```
+feat(auth): add Google OAuth login
+fix(payments): handle null card token on retry
+chore(deps): upgrade Go to 1.22
+docs(api): add rate limiting examples to README
+refactor(user): extract email validation to shared package
+test(orders): add integration tests for refund flow
+perf(query): add composite index on orders(user_id, created_at)
+ci(github): cache Go modules in workflow
+```
 
-**Subject:** imperative mood, no period, 72 chars max, lowercase after colon. Reference issues: `fix(auth): handle expired JWT (#142)`
+### Types
 
-**Body (when needed):** Explain why, not what. Include `Closes #N`.
+| Type | When to use |
+|------|-------------|
+| `feat` | New feature for the user |
+| `fix` | Bug fix for the user |
+| `chore` | Maintenance, tooling, dependency updates |
+| `docs` | Documentation only |
+| `refactor` | Code change that is neither a fix nor a feature |
+| `test` | Adding or updating tests |
+| `perf` | Performance improvement |
+| `ci` | CI/CD pipeline changes |
+| `style` | Formatting, whitespace (no logic change) |
+| `revert` | Reverting a previous commit |
 
-## PR Process
+### Subject Rules
 
-- Title = conventional commit format; description: what, why, how to test
-- Min 1 reviewer (2 for security); no self-merge; all CI must pass
-- Squash merge for features; rebase merge for meaningful history
+- Use imperative mood: "add feature" not "added feature"
+- No period at end
+- 72 characters max
+- Lowercase after the colon
+- Reference issue/ticket: `fix(auth): handle expired JWT (#142)`
 
-## Tags & Releases
+### Commit Body (when needed)
 
-`v1.2.3` semver: MAJOR=breaking, MINOR=feature, PATCH=fix. Changelog from commit history.
+```
+feat(billing): implement subscription proration
+
+Calculate prorated charges when users upgrade mid-cycle.
+Uses Stripe's proration API to credit unused days before
+charging the new plan amount.
+
+Closes #87
+```
+
+## Pull Request Process
+
+- PR title must follow conventional commit format
+- PR description: what changed, why, how to test, screenshots if UI
+- Minimum 1 reviewer approval before merge; 2 for security-sensitive changes
+- No self-merge — always get a review
+- All CI checks must pass: lint, test, build
+- Squash merge for feature branches to keep `main` history clean
+- Rebase merge for chores/fixes if commit history is meaningful
+
+## PR Description Template
+
+```markdown
+## What
+Brief description of the change.
+
+## Why
+Context for why this change is needed.
+
+## How to Test
+1. Step one
+2. Step two
+
+## Checklist
+- [ ] Tests added/updated
+- [ ] Docs updated if needed
+- [ ] No secrets or credentials in code
+```
+
+## Tags and Releases
+
+- Tag releases on `main`: `v1.2.3` following semver
+- MAJOR: breaking API change
+- MINOR: new backward-compatible feature
+- PATCH: backward-compatible bug fix
+- Generate changelog from conventional commit history
 
 ## Critical Rules
 
-- Never force-push main; never commit secrets/.env
-- `git pull --rebase origin main` before PR
-- One logical change per commit; rebase stale branches (>5 days)
+- Never force-push to `main` or shared branches
+- Never commit secrets, credentials, or `.env` files
+- Run `git pull --rebase origin main` before opening a PR
+- One logical change per commit — split unrelated changes
+- If a branch is stale (>5 days), rebase on `main` before review

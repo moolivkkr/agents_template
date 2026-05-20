@@ -12,6 +12,7 @@ tags:
   - archetype
   - backend
 ---
+
 # CRUD Repository Archetype
 
 Complete pgx-based PostgreSQL repository template. Every generated repository MUST follow this pattern.

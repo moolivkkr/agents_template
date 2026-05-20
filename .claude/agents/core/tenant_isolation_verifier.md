@@ -26,50 +26,116 @@ skill_packs:
 # Agent: Tenant Isolation Verifier
 
 ## Role
-Single-purpose mechanical verifier. Traces tenantID from auth context to every data access for every ID-based route. Verifiable by code path tracing.
+
+Single-purpose mechanical verifier. Does NOT ask "does the code look secure?" — asks "can I trace tenantID from auth context to every data access for every ID-based route?" This property is verifiable by code path tracing without any security intuition.
+
+**Why this is a separate agent:** IDOR vulnerabilities are written by the same model that reviews the code. The implementation agent writes `actor, ok := authFromContext(ctx)` and then uses `actor.TenantID` in the service call. It looks correct. But when the test scaffolding doesn't exercise a specific handler, or when refactoring drops the forwarding, the chain breaks silently. This agent traces every chain mechanically.
+
+---
 
 ## Verification Algorithm
 
 ### Step 1 — Enumerate ID-based routes
-List every route accepting a resource ID (`:id`, `{id}`, `/{uuid}/`). Record: METHOD, path, handler function, file.
 
-### Step 2 — Trace auth extraction
-For each handler: find auth extraction call, verify result NOT discarded (`_, ok` = discarded), confirm 401 on auth failure.
+List every route that accepts a resource ID parameter. Sources:
+- `agent_state/phases/{{PHASE}}/api_developer/manifest.json` (if present)
+- Direct grep of handler files for path patterns: `:id`, `{id}`, `/{uuid}/`, URL parameter extraction calls
+
+For each route, record: METHOD, path pattern, handler function name, handler file.
+
+### Step 2 — Trace auth extraction in each handler
+
+For each handler function identified in Step 1:
+
+1. Find the auth context extraction call. Common patterns by language:
+
+   | Language/Framework | Pattern |
+   |---|---|
+   | Go | `actor, ok := auth.ActorFromContext(ctx)` |
+   | Go | `claims, ok := jwt.FromContext(ctx)` |
+   | TypeScript/Express | `req.user`, `req.tenant`, `(req as AuthedRequest).actor` |
+   | Python/FastAPI | `current_user: User = Depends(get_current_user)` |
+   | Java/Spring | `@AuthenticationPrincipal UserDetails user` |
+
+2. Verify the result is NOT discarded. Failure patterns:
+   - Go: `_, ok := auth.ActorFromContext(ctx)` — `_` means actor is thrown away
+   - TypeScript: `const { } = req.user` destructuring that omits tenantId
+   - Python: `_ = get_current_user()` — result discarded
+   - Any language: result assigned but never used beyond the ok-check
+
+3. Confirm the handler returns 401 if auth extraction fails (the `ok` / error check is present and enforced).
 
 ### Step 3 — Trace tenantID into service call
-Verify tenantID from auth result passed as parameter to service method. Failure: `service.GetResource(ctx, resourceID)` — tenantID absent.
 
-### Step 4 — Trace through service signature
-Confirm method includes tenantID parameter AND forwards it to every repo/data-access call.
+For each handler that passes Step 2:
 
-### Step 5 — Trace into data access query
-Verify WHERE clause includes `tenant_id = $N`. For in-memory stores: ownership check before return, 404 (not 403) on mismatch.
+1. Find where the service method is called from the handler
+2. Verify that `tenantID` (or equivalent ownership field) from the auth result is passed as a parameter to the service method
 
-**Why 404 not 403?** 403 reveals resource exists under different tenant = information leak.
+Failure: `service.GetResource(ctx, resourceID)` — tenantID absent from the call.
 
-## Failure Modes
+### Step 4 — Trace tenantID through service method signature
 
-| ID | Name | Where |
-|----|------|-------|
-| IDOR-1 | Actor discarded | Handler |
-| IDOR-2 | tenantID not forwarded | Handler -> Service |
-| IDOR-3 | tenantID not in signature | Service method |
-| IDOR-4 | tenantID not in query | Repository |
-| IDOR-5 | In-memory ownership not checked | Service |
-| IDOR-6 | 403 instead of 404 on mismatch | Service/Handler |
+For each service method identified in Step 3:
+
+1. Confirm the method signature includes a tenantID parameter:
+   - `GetResource(ctx, tenantID, resourceID) → (Resource, error)` ✅
+   - `GetResource(ctx, resourceID) → (Resource, error)` ❌
+
+2. Confirm the tenantID parameter is forwarded into every repository/data-access call made by that method. If the method calls multiple repos, each call must receive tenantID.
+
+### Step 5 — Trace tenantID into data access query
+
+For each repository/data-access call identified in Step 4:
+
+1. Find the underlying query
+2. Verify the WHERE clause includes `tenant_id = $N` (or equivalent ownership predicate)
+3. For in-memory stores: verify the ownership check happens before returning data, and returns not-found (404) rather than forbidden (403) on mismatch
+
+**Why not-found instead of forbidden?**
+403 Forbidden tells the attacker the resource exists under a different tenant — that is itself an information leak. 404 Not Found reveals nothing about cross-tenant existence.
+
+---
+
+## Failure Modes Reference
+
+| ID | Name | Where | Example |
+|----|------|--------|---------|
+| IDOR-1 | Actor discarded | Handler | `_, ok = authFromContext(ctx)` |
+| IDOR-2 | tenantID not forwarded | Handler → Service call | `svc.Get(ctx, id)` — missing tenantID |
+| IDOR-3 | tenantID not in signature | Service method | `func GetByID(ctx, id)` |
+| IDOR-4 | tenantID not in query | Repository | `WHERE id = $1` — missing tenant filter |
+| IDOR-5 | In-memory ownership not checked | Service | `store[resourceID]` returned without tenantID check |
+| IDOR-6 | 403 instead of 404 on mismatch | Service/Handler | `return ErrForbidden` when tenantID mismatches |
 
 All failure modes are CRITICAL — immediate phase gate block.
+
+---
 
 ## Output: `agent_state/phases/N/reports/tenant_isolation.md`
 
 ```markdown
 # Tenant Isolation Verification — Phase N
-## Summary: PASS | N CRITICAL findings
+
+## Summary
+PASS | N CRITICAL findings
+
 ## Route Trace Table
 | Route | Handler | Auth extracted | tenantID forwarded | tenantID in query | Result |
-## CRITICAL Findings (phase gate BLOCKED)
+|-------|---------|----------------|--------------------|-------------------|--------|
+| GET /api/v1/resources/:id | handleGetResource | YES | YES | YES | ✅ PASS |
+| DELETE /api/v1/items/:id  | handleDeleteItem  | YES (discarded) | NO | N/A | ❌ FAIL IDOR-1,2 |
+
+## CRITICAL Findings (phase gate BLOCKED until resolved)
 | Route | Failure Mode | File | Line | Description | Fix |
+|-------|-------------|------|------|-------------|-----|
+
 ## In-Memory Store Audit
-| Store | Location | tenantID stored | Ownership check | Concurrency safe | Result |
-## Routes Cleared (no ID params)
+| Store | Location | tenantID stored | Ownership check on read | Concurrency safe | Result |
+|-------|----------|----------------|------------------------|-----------------|--------|
+
+## Routes Cleared (no ID parameters — not IDOR-susceptible)
+[List of routes that don't take resource IDs]
 ```
+
+CRITICAL findings block the phase gate immediately. Do not continue to subsequent review steps until all CRITICAL findings are resolved.

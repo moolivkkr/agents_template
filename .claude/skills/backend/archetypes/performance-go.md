@@ -36,6 +36,7 @@ import (
 )
 
 // OpenDB opens a connection pool with production-tuned settings.
+//
 // Rule of thumb for MaxOpenConns:
 //   - Start with (2 * CPU cores) + effective_io_concurrency
 //   - For a 4-core container with SSD: (2 * 4) + 4 = 12
@@ -187,6 +188,7 @@ import (
 
 // NewHTTPClient creates an HTTP client with connection pooling tuned
 // for making outbound API calls from a backend service.
+//
 // NEVER use http.DefaultClient in production — it has no timeouts.
 func NewHTTPClient() *http.Client {
     transport := &http.Transport{
@@ -386,7 +388,9 @@ func (o *Order) AddItem(item OrderItem) {
 ```go
 // The Go compiler decides whether to allocate on stack or heap.
 // Stack allocation is free (no GC pressure). Heap allocation costs GC time.
+//
 // Run: go build -gcflags='-m' ./... to see escape analysis decisions.
+//
 // Common escape causes:
 //   1. Returning a pointer to a local variable
 //   2. Storing in an interface{}/any
@@ -432,8 +436,10 @@ import (
 //   Host: 64 cores, Container limit: 2 CPUs
 //   Default GOMAXPROCS: 64 (too many threads, cache thrashing, scheduling overhead)
 //   With automaxprocs: 2 (correct)
+//
 // Simply importing go.uber.org/automaxprocs fixes this automatically.
 // The import init() reads /sys/fs/cgroup and adjusts.
+//
 // Manual override if needed:
 //   runtime.GOMAXPROCS(2)
 //   or: GOMAXPROCS=2 environment variable
@@ -450,6 +456,7 @@ import (
 )
 
 // Pool manages a fixed number of goroutines processing tasks from a channel.
+//
 // Sizing guidelines:
 //   CPU-bound work:  workers = GOMAXPROCS (number of available CPUs)
 //   IO-bound work:   workers = 10 * GOMAXPROCS (goroutines spend most time waiting)
@@ -713,6 +720,7 @@ curl http://localhost:6060/debug/pprof/goroutine?debug=2
 #   - Goroutine count increasing over time
 #   - Many goroutines stuck in the same stack (blocked on channel/mutex)
 #   - Goroutines waiting on a channel that nobody will ever send to
+#
 # Monitor goroutine count as a metric (see observability-go.md section 2.4).
 # Alert if count exceeds a threshold (e.g., > 10000).
 ```
@@ -731,6 +739,7 @@ go tool trace trace.out
 #   - Network/syscall blocking
 #   - GC pauses (STW events)
 #   - Per-goroutine timeline
+#
 # Use when pprof CPU profile doesn't explain latency:
 #   - The trace shows WHERE goroutines are waiting (scheduler, GC, syscalls)
 #   - pprof shows WHERE CPU time is spent
@@ -859,12 +868,14 @@ func validateEmailGood(email string) bool {
 }
 
 // Note: regexp.MustCompile panics if the pattern is invalid.
+// This is correct for package-level vars (fail fast at startup).
 ```
 
 ### 5.3 sync.Map vs Sharded Map vs Regular Map
 
 ```go
 // Decision matrix:
+//
 // | Scenario                       | Best choice     |
 // |-------------------------------|-----------------|
 // | Read-heavy, stable keys       | sync.Map        |
@@ -872,6 +883,7 @@ func validateEmailGood(email string) bool {
 // | Single goroutine access       | Regular map     |
 // | Low contention (< 4 cores)    | RWMutex + map   |
 // | High contention (16+ cores)   | ShardedMap      |
+//
 // Benchmark YOUR workload. Contention patterns vary.
 ```
 

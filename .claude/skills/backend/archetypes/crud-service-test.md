@@ -26,6 +26,8 @@ internal/widget/
   mock_audit.go
 ```
 
+Rule: Test file lives next to production code in the same package.
+
 ## Test Factory Pattern
 
 ```go
@@ -217,6 +219,7 @@ func (m *mockAuditWriter) Write(ctx context.Context, entry domain.AuditEntry) er
 // --- Metrics Stub ---
 // For unit tests, use noop counters/histograms from OTel SDK's noop package.
 // import "go.opentelemetry.io/otel/metric/noop"
+//
 // func noopMetrics() Metrics {
 //     mp := noop.NewMeterProvider()
 //     meter := mp.Meter("test")

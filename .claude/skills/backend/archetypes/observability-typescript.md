@@ -62,6 +62,7 @@ The OTel SDK MUST be initialized before any other imports. Create `src/instrumen
 
 ```typescript
 // src/instrumentation.ts
+// IMPORTANT: This file MUST be imported before ANY application code.
 // In your entrypoint: import './instrumentation';
 
 import { NodeSDK } from '@opentelemetry/sdk-node';
@@ -1277,8 +1278,10 @@ This is the complete instrumentation file. Copy this as-is into `src/instrumenta
 
 ```typescript
 // src/instrumentation.ts
+// ============================================================
 // MUST be the first import in src/main.ts:
 //   import './instrumentation';
+// ============================================================
 
 import { NodeSDK } from '@opentelemetry/sdk-node';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';

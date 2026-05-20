@@ -29,6 +29,7 @@ from uuid import UUID, uuid4
 
 T = TypeVar("T")
 
+
 @dataclass
 class Entity:
     """Base for all domain objects."""
@@ -42,6 +43,7 @@ class Entity:
     updated_by: UUID = field(default_factory=uuid4)
     version: int = 1
 
+
 @dataclass
 class ListFilters:
     """Common filter parameters for cursor-based list operations."""
@@ -52,6 +54,7 @@ class ListFilters:
     sort_dir: str = "desc"
     fields: dict[str, str] = field(default_factory=dict)
 
+
 @dataclass
 class ListResult(Generic[T]):
     """Wraps cursor-paginated results."""
@@ -60,6 +63,7 @@ class ListResult(Generic[T]):
     cursor: str | None = None
     has_more: bool = False
     total: int = 0
+
 
 @dataclass
 class OffsetListFilters:
@@ -71,12 +75,14 @@ class OffsetListFilters:
     sort_dir: str = "desc"
     fields: dict[str, str] = field(default_factory=dict)
 
+
 @dataclass
 class OffsetListResult(Generic[T]):
     """Wraps offset-paginated results."""
 
     items: list[T]
     total: int = 0
+
 
 @dataclass
 class AuditEntry:
@@ -100,10 +106,12 @@ from enum import StrEnum
 
 from app.domain.base import Entity
 
+
 class WidgetStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
     ARCHIVED = "archived"
+
 
 @dataclass
 class Widget(Entity):
@@ -125,6 +133,7 @@ from uuid import UUID
 from app.domain.base import ListFilters, ListResult, OffsetListFilters, OffsetListResult
 from app.domain.widget import Widget
 
+
 @runtime_checkable
 class WidgetRepository(Protocol):
     """Data access contract for widgets. Owned by the consumer (service)."""
@@ -136,6 +145,7 @@ class WidgetRepository(Protocol):
     async def list(self, tenant_id: UUID, filters: ListFilters) -> ListResult[Widget]: ...
     async def list_offset(self, tenant_id: UUID, filters: OffsetListFilters) -> OffsetListResult[Widget]: ...
 
+
 @runtime_checkable
 class Cache(Protocol):
     """Abstracts the caching layer."""
@@ -144,11 +154,13 @@ class Cache(Protocol):
     async def set(self, key: str, value: bytes, ttl_seconds: int) -> None: ...
     async def delete(self, key: str) -> None: ...
 
+
 @runtime_checkable
 class AuditWriter(Protocol):
     """Writes audit entries to the audit log."""
 
     async def write(self, entry: Any) -> None: ...
+
 
 @runtime_checkable
 class TxManager(Protocol):
@@ -178,6 +190,7 @@ logger = logging.getLogger(__name__)
 
 # Cache TTL in seconds
 _CACHE_TTL = 300  # 5 minutes
+
 
 class WidgetService:
     """

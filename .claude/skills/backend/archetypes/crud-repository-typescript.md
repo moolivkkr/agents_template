@@ -361,11 +361,16 @@ export class PrismaWidgetRepository implements IWidgetRepository {
 
 import { Prisma } from "@prisma/client";
 
+/**
  * Prisma middleware that automatically filters soft-deleted records
  * on find operations and converts delete to soft delete.
+ *
  * Apply in main.ts:
  *   prisma.$use(softDeleteMiddleware);
+ *
  * NOTE: Prisma Client Extensions (v4.16+) are preferred over $use middleware.
+ * This middleware is shown for compatibility with older Prisma versions.
+ */
 export const softDeleteMiddleware: Prisma.Middleware = async (params, next) => {
   // Models that support soft delete
   const softDeleteModels = new Set(["Widget", "Component"]);
@@ -408,9 +413,12 @@ export const softDeleteMiddleware: Prisma.Middleware = async (params, next) => {
 
 import { Prisma, PrismaClient } from "@prisma/client";
 
+/**
  * Prisma Client Extension for soft delete — preferred over $use middleware (v4.16+).
+ *
  * Usage:
  *   const prisma = new PrismaClient().$extends(softDeleteExtension);
+ */
 export const softDeleteExtension = Prisma.defineExtension({
   name: "soft-delete",
   query: {
@@ -763,8 +771,10 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
 
   // --- Multi-Tenant Filtering Helper ---
 
+  /**
    * Applies tenant scoping to any query.
    * Every query builder in this repository calls this — no query escapes tenant isolation.
+   */
   private tenantScope(tenantId: string): SQL {
     return eq(widgets.tenantId, tenantId);
   }
@@ -854,14 +864,19 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
 ```typescript
 // src/db/pagination.ts
 
+/**
  * Pagination helpers shared across all Drizzle repositories.
+ */
 
 import { sql, type SQL, gt, lt, asc, desc } from "drizzle-orm";
 
+/**
  * Creates a tuple comparison for cursor pagination.
  * Generates: (sort_column, id) > (cursor_value, cursor_id)
+ *
  * This is more efficient than separate WHERE clauses and handles
  * tied sort values correctly.
+ */
 export function cursorCondition(
   sortColumn: any,
   idColumn: any,
@@ -873,8 +888,10 @@ export function cursorCondition(
   return sql`(${sortColumn}, ${idColumn}) ${op} (${cursorSortValue}, ${cursorId})`;
 }
 
+/**
  * Builds ORDER BY clause for cursor pagination.
  * Always includes id as tiebreaker to ensure stable ordering.
+ */
 export function cursorOrderBy(
   sortColumn: any,
   idColumn: any,
@@ -892,8 +909,10 @@ export function cursorOrderBy(
 ```typescript
 // src/lib/cursor.ts
 
+/**
  * Cursor = base64url(JSON{sortValue, id}) — opaque, stable across inserts.
  * Used by both Prisma and Drizzle repositories.
+ */
 
 interface CursorPayload {
   sv: unknown; // sort value (timestamp, string, etc.)

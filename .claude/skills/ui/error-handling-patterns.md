@@ -49,6 +49,7 @@ export default function Error({
 Create `error.tsx` at EVERY route segment that fetches data.
 
 ---
+
 ## TanStack Query Error Handling
 
 ```tsx

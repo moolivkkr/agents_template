@@ -29,18 +29,34 @@ Fully autonomous phase implementation. Detects where you are, implements all spe
 
 **One decision point:** at the end — advance to the next phase or not.
 
-**Concurrent access:** Single developer per phase assumed. Two developers on same phase → file conflicts in `agent_state/phases/N/`.
+**⚠ Concurrent access:** This command assumes a single developer per phase. If two developers run `/develop --phase=2` simultaneously, file conflicts will occur in `agent_state/phases/2/` and git commits may conflict. To coordinate: use separate phases, or ensure only one developer runs `/develop` at a time for a given phase number.
 
 ---
 
 ## Agent Execution Logging Protocol
 
-Every agent appends to `agent_state/phases/${PHASE}/execution.jsonl` (append-only, read at Step 7):
+Every agent spawned during /develop MUST append execution entries to:
+`agent_state/phases/${PHASE}/execution.jsonl`
 
+This file is append-only. Agents write entries during the pipeline; the file is only read at the end (Step 7) for the execution summary.
+
+**On agent start:**
 ```json
 {"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"started"}
+```
+
+**On agent completion:**
+```json
 {"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"completed","duration_s":<N>,"findings":{"blocking":<N>,"warning":<N>},"output":"<primary_output_path>"}
+```
+
+**On agent failure:**
+```json
 {"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"failed","error":"<one_line_reason>","attempt":<N>}
+```
+
+**Pipeline completion:**
+```json
 {"ts":"<ISO>","event":"pipeline_complete","phase":N,"status":"gate_passed|gate_failed|gate_forced","total_duration_s":<N>,"agents_run":<N>,"agents_failed":<N>}
 ```
 
@@ -48,79 +64,118 @@ Every agent appends to `agent_state/phases/${PHASE}/execution.jsonl` (append-onl
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`.
+> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
-**Agent result discipline:** Every agent ends with:
+`/develop` is a long-running pipeline. Follow these rules to stay within the conversation context window:
+
+**Agent result discipline — return summaries, not content:**
+Every agent (subagent or inline) must end with this exact pattern:
 ```
 ✅ <agent-name> complete → wrote <output-file-path>
-   Summary: <3 lines max>
+   Summary: <3 lines max of what was done>
    Issues: none | <count + severity>
 ```
-Never echo file contents back to parent conversation.
+The full output is in the file. The parent conversation receives only the summary above.
+**Never echo file contents back to the parent conversation.**
 
-**Read discipline:** Read → act → don't re-read same file in same step. `phase_context.md` read once at Step 0, referenced from memory thereafter.
+**Read discipline — load-then-act, don't accumulate:**
+- Read a file → act on it → do not re-read the same file in the same step
+- Never load the same document twice in one step
+- `phase_context.md` is read once at Step 0 and referenced from memory for the rest of the step
 
-**Step isolation:** Each step writes output files then finishes. Mid-step context overflow → resume by reading output files from `agent_state/phases/${PHASE}/`.
+**Step isolation:**
+Each step (Audit, Implement, Test, Review, Gate) is a complete unit. After a step writes its output files, the conversation for that step is finished. If the conversation window fills mid-step, the step can be resumed by reading the output files already written — all state is in `agent_state/phases/${PHASE}/`.
 
 **Per-step context budget targets:**
-| Step | Target | What to load |
-|------|--------|---|
+| Step | Target input tokens | What to load |
+|------|--------------------|----|
 | Step 0 Orient | ~10K | phase_context.md (6-8K) + gate files |
 | Step 1 Audit | ~20K | phase_context.md + per-spec file (one at a time) + prev manifest |
 | Step 2 Implement (per agent) | ~25K | phase_context.md + own component spec + prev manifest |
-| Step 3 Test | ~20K | phase_context.md + git diff this phase + spec edge cases |
-| Step 3d Reconcile C | ~25K | all phase specs + agent implementation summaries (from manifests) |
-| Step 3e Reconcile D | ~20K | spec test-coverage sections + test file list |
-| Step 3f Optimize (per agent) | ~20K | phase_context.md + git diff this phase + skill pack patterns |
-| Step 3g Re-test | ~10K | test commands only |
-| Step 4 Review | ~20K | code diff this phase only + skill pack patterns |
-| Step 5 Acceptance | ~15K | phase_context.md requirements + acceptance criteria + seed data |
-| Step 6 Gate | ~8K | report file first 20 lines each (summary rows only) |
+| Step 3 Test | ~20K | phase_context.md + new code only (git diff this phase) + spec edge cases section |
+| Step 3d Reconcile C | ~25K | all phase specs + agent implementation summaries (from manifests, not full code) |
+| Step 3e Reconcile D | ~20K | spec test-coverage sections + test file list from unit/integration reports |
+| Step 3f Optimize (per agent) | ~20K | phase_context.md + git diff for this phase only + skill pack §patterns |
+| Step 3g Re-test | ~10K | test commands only — no new code reading needed |
+| Step 4 Review | ~20K | code diff this phase only (not full src/) + skill pack §patterns section |
+| Step 5 Acceptance | ~15K | phase_context.md §requirements + acceptance criteria + seed data |
+| Step 6 Gate | ~8K | report file first 20 lines each (summary rows) — not full report content |
 
-`phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. Loading it in every step is intentional.
+Note: `phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. Loading it in every step is intentional and correct.
 
 ---
 
 ## Pipeline Anti-Rationalization Guard
 
-Never skip a step, shortcut a gate, or accept partial results.
+**One rule:** Never skip a step, shortcut a gate, or accept partial results — even if it "seems fine." If you're tempted to skip, that's exactly when the step matters most. The table below lists specific temptations and their correct responses.
+
+Before skipping ANY step, shortcutting ANY gate, or accepting partial results, review this table.
 
 | Your Internal Reasoning | Correct Response |
 |---|---|
-| "Tests pass, so implementation is correct" | Tests verify what author thought to check. Specs define what MUST exist. Run reconciliation. |
-| "Simple phase, skip audit" | Simple phases hide assumptions. Run the audit. |
-| "Only one minor blocker, I'll pass it" | A blocker is a blocker. Fix it or `--force_gate` with user approval. |
-| "I reviewed this when I wrote it" | Authors don't find their own bugs. Reviewers are separate agents for a reason. |
-| "Optimization not needed — barely any code" | Runs every phase. 5 lines of dead code compound over 10 phases. |
-| "Previous phase tests still pass, skip regression" | Run anyway. Silent import breakage is #1 cross-phase regression. |
-| "Skip acceptance — unit/integration cover everything" | Unit/integration test code paths. Acceptance tests verify USER EXPERIENCE. |
-| "Combine review stages to save time" | Spec compliance and code quality are DIFFERENT concerns. Keep separate. |
+| "Tests pass, so the implementation is correct" | Tests verify what the test author thought to check. Specs define what MUST exist. Run reconciliation. |
+| "This is a simple phase, I can skip the audit step" | Simple phases are where assumptions hide. Run the audit. |
+| "The gate has only one minor blocker, I'll pass it" | A blocker is a blocker. Fix it or use `--force_gate` with explicit user approval. |
+| "I already reviewed this code when I wrote it" | You are the author. Authors don't find their own bugs. The reviewers are separate agents for a reason. |
+| "Optimization isn't needed this phase — there's barely any code" | Optimization runs every phase. Even 5 lines of dead code compound over 10 phases. |
+| "The previous phase tests still pass, no need for regression check" | Run them anyway. Silent import breakage is the #1 cross-phase regression. |
+| "I'll skip the acceptance tests — unit and integration tests cover everything" | Unit/integration test code paths. Acceptance tests verify USER EXPERIENCE. They catch different bugs. |
+| "I can combine the review stages to save time" | Review stages are separated for a reason. Spec compliance and code quality are DIFFERENT concerns. |
 
 ---
 
 ## Phase Re-Development Protocol
 
-When re-developing (e.g., `gate.passed` removed or `/reset-phase` run):
+When re-developing a phase (e.g., `gate.passed` was removed, or `/reset-phase` was run):
+
+### 1. Before re-running
+
+- Git tag current state: `git tag "phase-${PHASE}-attempt-${ATTEMPT}" -m "Phase ${PHASE} attempt ${ATTEMPT}: $(date)"`
+  - `ATTEMPT` is determined by counting existing `phase-${PHASE}-attempt-*` tags + 1
+- Archive previous reports: `mv agent_state/phases/${PHASE}/reports agent_state/phases/${PHASE}/reports.attempt-${ATTEMPT}`
+- Clear ready signals: `rm -f agent_state/phases/${PHASE}/.*_ready`
 
 ```bash
-# Archive previous attempt
+# Detect attempt number
 ATTEMPT=$(git tag -l "phase-${PHASE}-attempt-*" | wc -l | tr -d ' ')
 ATTEMPT=$((ATTEMPT + 1))
+
+# Tag current state
 git tag "phase-${PHASE}-attempt-${ATTEMPT}" -m "Phase ${PHASE} attempt ${ATTEMPT}: $(date)"
+
+# Archive previous reports (if they exist)
 if [ -d "agent_state/phases/${PHASE}/reports" ]; then
   mv "agent_state/phases/${PHASE}/reports" "agent_state/phases/${PHASE}/reports.attempt-${ATTEMPT}"
 fi
+
+# Clear ready signals
 rm -f agent_state/phases/${PHASE}/.*_ready
 ```
 
-During re-run: all agents run fresh (no caching). Previous code NOT auto-reverted. Clean slate → user should `git reset` to tag first.
+### 2. During re-run
 
-After completion manifest includes: `"attempt": N, "previous_attempts": [...]`. Gate report includes diff from previous attempt showing blocker resolution progression.
+- All agents run fresh (no caching from previous attempt)
+- Previous attempt's code is NOT automatically reverted (agents build on existing code)
+- If clean slate needed: user should `git reset` to the phase tag first (use `/reset-phase --hard`)
 
-### Detection (Step 0)
+### 3. After completion
+
+- Manifest includes: `"attempt": N, "previous_attempts": ["phase-N-attempt-1", "phase-N-attempt-2"]`
+- Gate report includes diff from previous attempt:
+  ```
+  ## Changes from Previous Attempt
+  - Attempt 1: 3 blockers (auth flow, CORS, migration order)
+  - Attempt 2: 1 blocker (migration order — fixed by reordering)
+  - Attempt 3: PASSED ✅
+  ```
+
+### Detection
+
+At the start of Step 0, detect if this is a re-run:
 ```bash
 if [ -d "agent_state/phases/${PHASE}/reports" ] || [ -d "agent_state/phases/${PHASE}/reports.attempt-1" ]; then
   echo "⚠ Phase ${PHASE} re-development detected — archiving previous attempt"
+  # Execute pre-run archival steps above
 fi
 ```
 
@@ -136,6 +191,7 @@ echo "▶ Running Phase $PHASE"
 ```
 
 ### Initialize Execution Log
+
 ```bash
 mkdir -p agent_state/phases/${PHASE}
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_start\",\"phase\":${PHASE},\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
@@ -143,7 +199,10 @@ echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_start\",\"
 
 ### Failure Pattern Detection
 
+Check if previous attempts at this phase failed at specific steps:
+
 ```bash
+# Check for previous gate.failed files
 PREV_FAILURES=$(ls agent_state/phases/${PHASE}/gate.failed* 2>/dev/null)
 if [ -n "$PREV_FAILURES" ]; then
   echo "⚠ Phase ${PHASE} has previous failure(s):"
@@ -151,12 +210,19 @@ if [ -n "$PREV_FAILURES" ]; then
     BLOCKERS=$(python3 -c "import json; d=json.load(open('$f')); print(', '.join(b.get('gate_item','?') for b in d.get('blockers',[])))" 2>/dev/null)
     echo "  - $(basename $f): blocked by $BLOCKERS"
   done
+  echo "  → Extra scrutiny will be applied to previously-failing steps"
 fi
 ```
 
-Previously-failed steps get extra scrutiny: test steps run TWICE (normal + verbose), review steps lower threshold (MEDIUM → BLOCKING for failing areas), gate explicitly verifies previously-blocking items first.
+When a step that previously failed is reached:
+- Log: `⚠ Step ${STEP} failed in previous attempt — applying extra verification`
+- For test steps: run tests TWICE (once normally, once with verbose output)
+- For review steps: lower the threshold for BLOCKING (MEDIUM → BLOCKING for previously-failing areas)
+- For gate: explicitly verify previously-blocking items are resolved before checking new items
 
 ### Phase Lock (Advisory)
+
+Before starting implementation, check for and create a lock:
 
 ```bash
 LOCK_FILE="agent_state/phases/${PHASE}/.lock"
@@ -164,40 +230,65 @@ if [ -f "$LOCK_FILE" ]; then
   LOCK_OWNER=$(cat "$LOCK_FILE" | head -1)
   LOCK_TIME=$(cat "$LOCK_FILE" | tail -1)
   echo "⚠ Phase ${PHASE} is locked by ${LOCK_OWNER} since ${LOCK_TIME}"
-  echo "  If stale, remove with: rm ${LOCK_FILE}"
-  # --auto mode: STOP. Interactive: ask user.
+  echo "  If this is stale, remove with: rm ${LOCK_FILE}"
+  echo "  Proceeding may cause file conflicts in agent_state/phases/${PHASE}/"
+  # In --auto mode: STOP. In interactive mode: ask user to confirm.
 fi
+
+# Create lock
 echo "$(whoami)@$(hostname)" > "$LOCK_FILE"
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LOCK_FILE"
 ```
-Release at end of Step 6: `rm -f "agent_state/phases/${PHASE}/.lock"`
+
+Release lock at the end of Step 6 (gate write):
+```bash
+rm -f "agent_state/phases/${PHASE}/.lock"
+```
+
+This is advisory — it warns but doesn't prevent. Two developers CAN override, but they're warned.
 
 ### Gate check
-- PHASE > 1 and `agent_state/phases/$((PHASE-1))/gate.passed` missing → **STOP** — run previous phase first
-- `docs/design/phases/${PHASE}/INDEX.md` missing → auto-run `/plan --phase=${PHASE}` first
+If PHASE > 1 and `agent_state/phases/$((PHASE-1))/gate.passed` is missing:
+**STOP** — `Phase $((PHASE-1)) gate not found. Run /develop --phase=$((PHASE-1)) first.`
+
+If `docs/design/phases/${PHASE}/INDEX.md` is missing:
+**Auto-run `/plan --phase=${PHASE}` first**, then continue.
 
 ### Load previous phase context
-Read `agent_state/phases/$((PHASE-1))/manifest.json` (if PHASE > 1): surface `carried_forward[]` issues, note existing code paths/API routes/DB schema.
+Read `agent_state/phases/$((PHASE-1))/manifest.json` (if PHASE > 1):
+- Surface `carried_forward[]` issues at the top of the Step 1 audit report
+- Note existing code paths, API routes, DB schema from previous phases
 
 ### Cross-Phase Contract Validation (Phase > 1)
 
+Before starting Phase N implementation, validate that data contracts are consistent with the previous phase's actual outputs:
+
 1. Read `docs/design/phases/${PHASE}/specs/data-contracts.md`
-2. Compare against Phase N-1 manifest's `api_routes` and `artifacts.code` for changed endpoints/fields
-3. Stale contracts (endpoints modified/renamed/removed) → **BLOCKING** — re-run `/plan`
-4. Extended endpoints → verify existing fields match Phase N-1 actual code (not just spec). Mismatch → `⚠ STALE CONTRACT`
-5. **Schema evolution:** Phase N-1 response shape must be subset of Phase N (additive only):
-   - Field removed → **BLOCKING**; Field renamed → **BLOCKING**; Type changed → **BLOCKING**
-   - Optional field added → OK; Required request field added → WARNING
+2. Compare against Phase N-1 manifest's `api_routes` and `artifacts.code` to identify endpoints/fields that changed
+3. If `data-contracts.md` references endpoints or fields that were modified, renamed, or removed in Phase N-1:
+   - **BLOCKING** — data contracts may be stale. Re-run `/plan --phase=${PHASE}` or manually update `data-contracts.md`.
+4. If Phase N specs extend an endpoint from Phase N-1 (e.g., adding fields to an existing response):
+   - Verify the existing fields in `data-contracts.md` match what Phase N-1 actually implemented (check the code, not just the spec)
+   - If mismatch: surface as `⚠ STALE CONTRACT: data-contracts.md says X, but Phase N-1 code returns Y`
+5. **Schema evolution validation** — for endpoints that exist in BOTH Phase N-1 and Phase N contracts:
+   - Phase N-1 response shape must be a **subset** of Phase N response shape (additive changes only)
+   - If Phase N removes or renames a field from Phase N-1: **BLOCKING** — this breaks Phase N-1 consumers
+   - If Phase N changes a field type (e.g., `string` → `number`): **BLOCKING** — type mismatch
+   - If Phase N adds new required fields to a request: **WARNING** — Phase N-1 callers won't send them
+   - Compare actual TypeScript interfaces from both `data-contracts.md` files, not just endpoint names
+   - Surface any breaking changes: `⛔ BREAKING CHANGE: GET /users/:id field 'role' changed from string to enum — Phase N-1 code returns string`
 
-### Breaking Change Detection (HARD BLOCK)
+### Breaking Change Detection (HARD BLOCK — not warning)
 
-- **Field REMOVED** → `⛔ HARD BLOCK: Field '${field}' in Phase ${N-1} response but missing in Phase ${N}`
-- **Field RENAMED** → `⛔ HARD BLOCK: '${oldName}' → '${newName}', consumers reference old name`
-- **Field TYPE CHANGED** → `⛔ HARD BLOCK: '${field}' ${oldType} → ${newType}`
-- **Optional field ADDED** → OK
-- **Required request field ADDED** → WARNING
+When comparing Phase N data-contracts.md against Phase N-1 actual implementation:
 
-Hard blocks CANNOT be force-gated. Fix contract or provide migration path (deprecated field alias).
+- **Field REMOVED from response** → ⛔ HARD BLOCK: `Field '${field}' was in Phase ${N-1} response but missing in Phase ${N} contract. This breaks Phase ${N-1} consumers.`
+- **Field RENAMED** → ⛔ HARD BLOCK: `Field '${oldName}' renamed to '${newName}'. Phase ${N-1} consumers reference the old name.`
+- **Field TYPE CHANGED** → ⛔ HARD BLOCK: `Field '${field}' changed from ${oldType} to ${newType}. Type mismatch.`
+- **Field ADDED (optional)** → ✅ OK (additive, backward-compatible)
+- **Field ADDED (required to request)** → ⚠ WARNING: Phase ${N-1} callers won't send this field
+
+Hard blocks CANNOT be force-gated. Fix the contract or provide a migration path (deprecated field alias).
 
 ```bash
 # Quick staleness check
@@ -205,6 +296,8 @@ if [ $PHASE -gt 1 ]; then
   PREV_MANIFEST="agent_state/phases/$((PHASE-1))/manifest.json"
   CONTRACTS="docs/design/phases/${PHASE}/specs/data-contracts.md"
   if [ -f "$PREV_MANIFEST" ] && [ -f "$CONTRACTS" ]; then
+    echo "Validating data contracts against Phase $((PHASE-1)) manifest..."
+    # Extract api_routes from previous manifest and verify they still exist in contracts
     python3 -c "
 import json, sys
 manifest = json.load(open('$PREV_MANIFEST'))
@@ -223,24 +316,35 @@ fi
 
 ### Schema Evolution Validation (PHASE > 1)
 
-Load ALL previous phases' `data-contracts.md` (not just N-1). For each shared interface:
-- Field additions → ALLOWED (INFO)
-- Field removals → ⛔ BREAKING: Option A (restore), B (version endpoint), C (confirm + document as `breaking_changes[]`)
-- Type changes → ⛔ BREAKING: same routing
-- Array↔Object → ⛔ CRITICAL: must version endpoint
+Before implementation begins, validate schema compatibility across phases:
 
-Output: `agent_state/phases/${PHASE}/reports/schema_evolution.md`
-Manifest: `"breaking_changes": [{"field":"...","action":"removed|type_changed","resolution":"versioned|confirmed|restored"}]`
+1. Load ALL previous phases' `data-contracts.md` files (not just N-1 — schema evolution can span multiple phases)
+2. Load current phase's `data-contracts.md`
+3. For each interface/type that exists in BOTH current and previous phases:
+   a. **Field additions:** ALLOWED (backward compatible) — log as INFO
+   b. **Field removals:** ⛔ BREAKING CHANGE — route to user for decision:
+      - Option A: Add field back (preserve compatibility)
+      - Option B: Version the endpoint (create /v2/ route)
+      - Option C: Confirm removal (document in manifest as `breaking_changes[]`)
+   c. **Type changes:** ⛔ BREAKING CHANGE — same routing as removals
+   d. **Array↔Object changes:** ⛔ CRITICAL BREAKING CHANGE — must version endpoint
+4. Output: `agent_state/phases/${PHASE}/reports/schema_evolution.md`
+5. Add to manifest: `"breaking_changes": [{"field": "...", "action": "removed|type_changed", "resolution": "versioned|confirmed|restored"}]`
 
 ```bash
+# Schema evolution validation
 if [ $PHASE -gt 1 ]; then
+  echo "Validating schema evolution across all previous phases..."
   CURRENT_CONTRACTS="docs/design/phases/${PHASE}/specs/data-contracts.md"
   if [ -f "$CURRENT_CONTRACTS" ]; then
     for PREV_PHASE in $(seq 1 $((PHASE - 1))); do
       PREV_CONTRACTS="docs/design/phases/${PREV_PHASE}/specs/data-contracts.md"
       if [ -f "$PREV_CONTRACTS" ]; then
+        echo "  Comparing Phase ${PHASE} contracts against Phase ${PREV_PHASE}..."
+        # Compare interfaces — field removals and type changes are breaking
         python3 -c "
 import re, sys
+
 def parse_interfaces(text):
     interfaces = {}
     current = None
@@ -258,23 +362,27 @@ def parse_interfaces(text):
             if fm:
                 interfaces[current][fm.group(1)] = fm.group(2).strip()
     return interfaces
+
 prev = parse_interfaces(open('$PREV_CONTRACTS').read())
 curr = parse_interfaces(open('$CURRENT_CONTRACTS').read())
 breaking = []
+
 for iface in prev:
-    if iface not in curr: continue
+    if iface not in curr:
+        continue
     for field, ftype in prev[iface].items():
         if field not in curr[iface]:
             breaking.append(f'⛔ BREAKING: {iface}.{field} REMOVED (was {ftype})')
         elif curr[iface][field] != ftype:
             breaking.append(f'⛔ BREAKING: {iface}.{field} TYPE CHANGED: {ftype} → {curr[iface][field]}')
+
 if breaking:
-    print('Schema evolution issues (Phase ${PREV_PHASE} → Phase ${PHASE}):')
+    print('Schema evolution issues found (Phase ${PREV_PHASE} → Phase ${PHASE}):')
     for b in breaking: print(f'  {b}')
     sys.exit(1)
 else:
     print('✅ Schema evolution clean: Phase ${PREV_PHASE} → Phase ${PHASE}')
-" || echo "⚠ Schema evolution validation failed"
+" || echo "⚠ Schema evolution validation failed — review before proceeding"
       fi
     done
   fi
@@ -283,13 +391,21 @@ fi
 
 ### Breaking Change Propagation
 
-When confirmed (not restored): identify all consuming phases via manifests' `artifacts.api_routes` → check if their tests pass with new contract → if fail, version endpoint or cross-phase fix. Log in `schema_evolution.md`.
+When a breaking change is confirmed (not restored):
+1. Identify all previous phases that consume the affected endpoint (check their manifests' `artifacts.api_routes`)
+2. For each consuming phase:
+   a. Check if consuming phase's tests still pass with the new contract
+   b. If tests fail → the breaking change MUST be resolved before proceeding:
+      - Version the endpoint (original route stays, new route added)
+      - OR update consuming phase's code (cross-phase fix)
+3. Log propagation results in `schema_evolution.md`
 
 ```bash
+# Breaking change propagation — check all consuming phases
 if [ $PHASE -gt 1 ] && [ -f "agent_state/phases/${PHASE}/reports/schema_evolution.md" ]; then
   BREAKING_COUNT=$(grep -c "⛔ BREAKING" "agent_state/phases/${PHASE}/reports/schema_evolution.md" 2>/dev/null || echo 0)
   if [ "$BREAKING_COUNT" -gt 0 ]; then
-    echo "⚠ ${BREAKING_COUNT} breaking change(s) — checking consuming phases..."
+    echo "⚠ ${BREAKING_COUNT} breaking change(s) detected — checking consuming phases..."
     for PREV_PHASE in $(seq 1 $((PHASE - 1))); do
       PREV_MANIFEST="agent_state/phases/${PREV_PHASE}/manifest.json"
       if [ -f "$PREV_MANIFEST" ]; then
@@ -299,16 +415,20 @@ manifest = json.load(open('$PREV_MANIFEST'))
 routes = manifest.get('artifacts', {}).get('api_routes', [])
 if routes:
     print(f'  Phase ${PREV_PHASE} consumes {len(routes)} API routes — verify compatibility')
-    for r in routes: print(f'    - {r}')
+    for r in routes:
+        print(f'    - {r}')
 "
       fi
     done
-    echo "  → Resolve breaking changes (version endpoint or update consumers) before proceeding."
+    echo "  → Breaking changes MUST be resolved (version endpoint or update consumers) before proceeding."
+    echo "  → Results logged to agent_state/phases/${PHASE}/reports/schema_evolution.md"
   fi
 fi
 ```
 
 ### Phase Context Staleness Detection
+
+Before loading `phase_context.md`, verify it's not stale relative to the BRD:
 
 ```bash
 CONTEXT_FILE="docs/design/phases/${PHASE}/phase_context.md"
@@ -317,14 +437,21 @@ if [ -f "$CONTEXT_FILE" ] && [ -f "$BRD_FILE" ]; then
   CONTEXT_MTIME=$(stat -f %m "$CONTEXT_FILE" 2>/dev/null || stat -c %Y "$CONTEXT_FILE")
   BRD_MTIME=$(stat -f %m "$BRD_FILE" 2>/dev/null || stat -c %Y "$BRD_FILE")
   if [ "$BRD_MTIME" -gt "$CONTEXT_MTIME" ]; then
-    echo "⚠ BRD modified AFTER phase_context.md — consider re-running /plan --phase=${PHASE}"
+    echo "⚠ WARNING: BRD was modified AFTER phase_context.md was generated."
+    echo "  BRD modified:     $(date -r $BRD_MTIME 2>/dev/null || date -d @$BRD_MTIME)"
+    echo "  Context generated: $(date -r $CONTEXT_MTIME 2>/dev/null || date -d @$CONTEXT_MTIME)"
+    echo "  Consider re-running /plan --phase=${PHASE} to refresh phase_context.md"
+    echo "  Or proceed with caution — new BRD requirements may be missing from this phase."
   fi
 fi
 ```
 
-BRD diff includes new FR-* IDs not in `phase_context.md` → **BLOCKING** (re-run `/plan`). Editorial BRD changes (no new FR-*) → WARNING only.
+If staleness detected and the BRD diff includes new FR-* IDs not in `phase_context.md`: **BLOCKING** — re-run `/plan --phase=${PHASE}`.
+If staleness detected but BRD changes are editorial (no new FR-*): **WARNING** — proceed with caution.
 
 ### Spec Staleness Warning
+
+Before starting implementation, check if phase specs are older than 30 days:
 
 ```bash
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
@@ -335,29 +462,38 @@ if [ -d "$SPEC_DIR" ]; then
     SPEC_MTIME=$(stat -f %m "$SPEC" 2>/dev/null || stat -c %Y "$SPEC")
     DAYS_OLD=$(( (NOW - SPEC_MTIME) / 86400 ))
     if [ "$DAYS_OLD" -gt 60 ]; then
-      echo "⛔ Spec $(basename $SPEC) is ${DAYS_OLD} days old — strongly recommend /plan --refresh"
+      echo "⛔ Phase ${PHASE} spec $(basename $SPEC) is ${DAYS_OLD} days old — strongly recommend /plan --refresh before /develop"
     elif [ "$DAYS_OLD" -gt 30 ]; then
-      echo "⚠ Spec $(basename $SPEC) is ${DAYS_OLD} days old — consider re-running /plan"
+      echo "⚠ Phase ${PHASE} spec $(basename $SPEC) is ${DAYS_OLD} days old — consider re-running /plan to refresh"
     fi
   done
 fi
 ```
 
-Not BLOCKING — user decides. Surface all stale specs together, then continue.
+Neither warning is BLOCKING — user decides whether to proceed. Surface all stale specs together, then continue.
 
 ### Start infrastructure
 ```bash
-docker compose up -d  # from IMPLEMENTATION_GUIDELINES Section 5
+# Bring up local dev stack from IMPLEMENTATION_GUIDELINES Section 5
+# Commands vary per project — read docs/IMPLEMENTATION_GUIDELINES.md for exact commands
+docker compose up -d  # (or equivalent from project setup)
+
 # Wait for DB readiness (up to 60s)
+# Health check command from IMPLEMENTATION_GUIDELINES
 ```
 
 ### Token/Cost Estimation
 
-Rough order-of-magnitude for budgeting. Count components: `NUM_COMPONENTS = spec file count` (exclude data-contracts.md, phase_context.md, INDEX.md). `HAS_UI = true if wireframe specs exist`. `PREV_PHASES = PHASE - 1`.
+Before starting the pipeline, estimate total token usage for this phase. These estimates are **rough order-of-magnitude** — they exist for budgeting and expectation-setting, not precision. Actual usage varies with codebase size, spec complexity, and retry cycles.
 
-**Per-agent estimates (input + output tokens):**
-| Agent | Model | Tokens | When |
-|-------|-------|--------|------|
+**Estimation algorithm:**
+1. Count components in phase specs: `NUM_COMPONENTS = count of spec files in docs/design/phases/${PHASE}/specs/` (exclude `data-contracts.md`, `phase_context.md`, and `INDEX.md` from count)
+2. Determine if UI phase: `HAS_UI = true if wireframe specs exist`
+3. Count previous phases for regression: `PREV_PHASES = PHASE - 1`
+4. Base estimates per agent (input + output tokens):
+
+| Agent | Model | Estimated Tokens | When |
+|-------|-------|-----------------|------|
 | backend_audit_agent | sonnet | ~15K | Always |
 | ui_audit_agent | sonnet | ~15K | If HAS_UI |
 | database_agent | opus | ~25K x NUM_DB_TABLES | Always |
@@ -380,195 +516,431 @@ Rough order-of-magnitude for budgeting. Count components: `NUM_COMPONENTS = spec
 | ui_code_optimizer | sonnet | ~20K | If HAS_UI |
 | documentation_agent | sonnet | ~15K | Always |
 
-Example: 3-component backend-only → ~655K tokens. 5-component full-stack → ~1.2M tokens.
+5. Calculate total:
+   ```
+   TOTAL_TOKENS = sum of all applicable agent estimates
 
-If TOTAL_TOKENS > 1,500,000: `"Consider splitting into smaller phases or running /plan --split."`
+   Example for 3-component backend-only phase:
+     Audit: 15K
+     DB + Migration: 25K + 20K = 45K
+     Implementation: (40K + 35K) x 3 = 225K
+     Testing: (30K + 25K) x 3 + 30K = 195K
+     Review: 15K + 25K + 30K + 20K + 10K = 100K
+     Reconciliation: 25K + 15K = 40K
+     Optimization: 20K
+     Documentation: 15K
+     TOTAL: ~655K tokens
 
-```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"estimate\",\"phase\":${PHASE},\"estimated_tokens\":${TOTAL_TOKENS},\"components\":${NUM_COMPONENTS},\"has_ui\":${HAS_UI}}" >> agent_state/phases/${PHASE}/execution.jsonl
-```
+   Example for 5-component full-stack phase:
+     All above + UI agents
+     TOTAL: ~1.2M tokens
+   ```
+
+6. Display estimate:
+   ```
+   Phase ${PHASE} Token Estimate
+   ──────────────────────────────
+   Components: ${NUM_COMPONENTS} (${HAS_UI ? "full-stack" : "backend-only"})
+   Agents to run: ${AGENT_COUNT}
+   Estimated tokens: ~${TOTAL_TOKENS} (${TOTAL_TOKENS > 1000000 ? "large phase" : "normal"})
+
+   Breakdown:
+     Implementation:  ~${IMPL_TOKENS} (${IMPL_PCT}%)
+     Testing:         ~${TEST_TOKENS} (${TEST_PCT}%)
+     Review:          ~${REVIEW_TOKENS} (${REVIEW_PCT}%)
+     Other:           ~${OTHER_TOKENS} (${OTHER_PCT}%)
+
+   Note: These are rough estimates for budgeting. Actual usage depends on
+   codebase size, spec complexity, retry cycles, and escalation count.
+   ```
+
+7. **Large phase warning:**
+   If TOTAL_TOKENS > 1,500,000: surface warning:
+   "This phase is estimated at ~${TOTAL_TOKENS} tokens. Consider splitting into smaller phases or running /plan --split to break it down."
+
+8. Add to execution.jsonl:
+   ```bash
+   echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"estimate\",\"phase\":${PHASE},\"estimated_tokens\":${TOTAL_TOKENS},\"components\":${NUM_COMPONENTS},\"has_ui\":${HAS_UI}}" >> agent_state/phases/${PHASE}/execution.jsonl
+   ```
+
+---
 
 ### Decision Log Protocol
 
-All agents append to `agent_state/phases/${PHASE}/decision-log.md`:
+All agents MUST log significant decisions to `agent_state/phases/${PHASE}/decision-log.md` (append-only):
+
 ```markdown
 ## Decision: <short title>
 - **Agent:** <agent name>
-- **Context:** <what prompted this>
-- **Options considered:** <alternatives>
-- **Decision:** <chosen>
+- **Context:** <what prompted this decision>
+- **Options considered:** <what alternatives existed>
+- **Decision:** <what was chosen>
 - **Rationale:** <why>
-- **Impact:** <downstream effects>
+- **Impact:** <what this affects downstream>
 ```
-Log when: choosing between alternatives, deviating from spec, making assumptions, choosing unprescribed libraries/patterns.
 
-### Spec Amendment Protocol
+Log when:
+- Choosing between alternative implementations
+- Deviating from spec (even slightly)
+- Making an assumption not in the spec
+- Choosing a library, pattern, or approach not prescribed
 
-When intentionally deviating from spec:
-1. Log in decision-log.md with original spec behavior, actual behavior, rationale, downstream impact
-2. Append to spec: `## Implementation Notes (auto-generated)` with deviation summary
-3. `spec_impl_reconciler` treats documented deviations as ACKNOWLEDGED (not MISSING)
+**Why:** Decisions made by agents in session 3 are invisible in session 7. The decision log creates persistent memory with accountability.
+
+### Spec Amendment Protocol (Intentional Deviations)
+
+When an implementation agent intentionally deviates from a spec:
+
+1. **Log the deviation** in decision-log.md:
+   ```
+   ## Spec Deviation: <component> — <what changed>
+   - **Spec says:** <original spec behavior>
+   - **Implementation does:** <actual behavior>
+   - **Rationale:** <why the deviation was necessary>
+   - **Impact:** <what downstream artifacts need updating>
+   ```
+
+2. **Auto-update the spec** (append, don't overwrite):
+   ```markdown
+   ## Implementation Notes (auto-generated)
+   > ⚠ Deviation from original spec — see decision-log.md
+   > - <what changed and why>
+   > - Original behavior preserved in section above
+   ```
+
+3. **Flag for reconciliation:** spec_impl_reconciler treats documented deviations as ACKNOWLEDGED (not MISSING).
+
+This prevents specs from going stale after implementation while preserving the original design intent.
 
 ### Mid-Execution Escalation Protocol
 
-**LOW impact** (reversible, single-option): continue with default → `{"type":"escalation","impact":"LOW","recommendation":"A","continueWithDefault":true}`
+When an agent encounters uncertainty, conflicting options, or missing data:
 
-**MEDIUM/HIGH impact** (architecture, security, data model): escalate to Debate Team via `agent_state/debates/<step>-<topic>.json`:
+**LOW impact** (reversible, single-option): continue with `continueWithDefault: true`
+```json
+{ "type": "escalation", "impact": "LOW", "recommendation": "A", "continueWithDefault": true }
+```
+
+**MEDIUM/HIGH impact** (architecture, security, data model): escalate to Debate Team
 ```json
 {
   "type": "debate_request",
-  "from_agent": "<agent>", "from_step": "<step>",
-  "decision": "<what>",
-  "options": [{"id":"A","label":"...","initial_reasoning":"..."}, {"id":"B","label":"...","initial_reasoning":"..."}],
-  "context": "<BRD refs, constraints>",
-  "impact": "HIGH|MEDIUM", "domain": "architecture|security|data_model|feature",
+  "from_agent": "<agent name>",
+  "from_step": "<pipeline step>",
+  "decision": "<what needs deciding>",
+  "options": [
+    { "id": "A", "label": "...", "initial_reasoning": "..." },
+    { "id": "B", "label": "...", "initial_reasoning": "..." }
+  ],
+  "context": "<BRD refs, constraints, what's known>",
+  "impact": "HIGH | MEDIUM",
+  "domain": "architecture | security | data_model | feature",
   "blocking": true
 }
 ```
 
-Debate flow: Researchers (parallel) → Advocates (parallel, HIGH only) → Arbitrator (scored verdict) → `agent_state/debates/<topic>-verdict.json`.
+Write to `agent_state/debates/<step>-<topic>.json`.
+
+The `debate_moderator` picks it up and runs:
+1. **Researchers** (parallel) — gather evidence for each option
+2. **Advocates** (parallel, HIGH only) — argue for each option adversarially
+3. **Arbitrator** — evaluates all arguments, produces scored verdict
+
+Verdict written to `agent_state/debates/<topic>-verdict.json`. The requesting agent reads it and continues.
+
+**This replaces guessing with researched, debated, scored decisions.**
 
 ### Escalation Circuit Breaker
 
-- **Max per step:** 3 — excess → `agent_state/debates/unresolved.json` with defaults
-- **`--auto` mode:** continue with defaults, flag as `"⚠ AUTO-RESOLVED — may need review"` in decision log + manifest `known_issues[]`
-- **Security exception:** NEVER auto-resolve. Use hardened default (more restrictive). Includes: auth, tokens, IDOR, encryption, PII, CORS/CSRF, rate limiting. No clear hardened default → EXIT auto mode.
-- **Max per phase:** 10 — exceeded → EXIT auto mode entirely
-- **Max depth:** 2 — second-level auto-resolves with default (except security → hardened). Third-level NEVER allowed.
+Prevent runaway escalation loops that consume context and time:
+
+- **Max escalations per step:** 3 — if a single step (e.g., Step 2 Implementation) triggers more than 3 debate requests, STOP escalating. Write remaining decisions to `agent_state/debates/unresolved.json` with recommended defaults.
+- **In `--auto` mode:** continue with defaults for all unresolved decisions, but flag ALL as `"⚠ AUTO-RESOLVED — may need review"` in the decision log and manifest `known_issues[]`.
+- **⛔ SECURITY ESCALATION EXCEPTION:** Escalations with `"domain": "security"` are NEVER auto-resolved. In `--auto` mode, security decisions MUST use the **hardened default** (the option that is MORE restrictive / MORE secure). Log as `"⚠ SECURITY — hardened default applied, review recommended"`. Security escalations include: auth patterns, token storage, IDOR mitigation, encryption, PII handling, CORS/CSRF config, rate limiting. If no clearly hardened default exists → EXIT auto mode for this decision and surface to user.
+- **Max total escalations per phase:** 10 — if exceeded, EXIT auto mode entirely. Surface all unresolved decisions to the user with: `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
+- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator can't decide and re-escalates), the second-level debate auto-resolves with the recommended default (except security — always hardened). A third-level escalation is NEVER allowed.
 
 ```json
 // agent_state/debates/unresolved.json
 {
-  "phase": N, "unresolved_count": 4,
-  "decisions": [{"topic":"cache_strategy","from_agent":"backend_developer","auto_resolved_with":"A","confidence":"LOW","reason":"escalation_limit_exceeded","needs_review":true}]
+  "phase": N,
+  "unresolved_count": 4,
+  "decisions": [
+    {
+      "topic": "cache_strategy",
+      "from_agent": "backend_developer",
+      "auto_resolved_with": "A",
+      "confidence": "LOW",
+      "reason": "escalation_limit_exceeded",
+      "needs_review": true
+    }
+  ]
 }
 ```
 
 ### Universal Agent Return Protocol
 
-Every agent returns ONLY:
+Every agent spawned during this command MUST end by returning this exact format — nothing more — to the parent conversation:
+
 ```
 ✅ <agent-name> — <status: complete | blocked | partial>
    Wrote: <output file path>
-   Done:  <one line>
+   Done:  <what was implemented in one line>
    Issues: none | <N blocking / N warning>
 ```
-If blocked: `Blocker: <one-line> → see <file> for details`
-Parent reads output file for details — never asks agent to reproduce content.
 
-### Analysis Paralysis Guard
+If the agent encountered blockers, append:
+```
+   Blocker: <one-line description> → see <file path> for details
+```
 
-If agent makes **5+ consecutive read-only calls** without any write → STOP exploring, state the blocker in 1 line, then write code or return with `status: blocked`. Exception: audit agents are read-only by design.
+**The parent reads the output file to get details. It does NOT ask the agent to reproduce or summarize the file contents.**
+
+### Analysis Paralysis Guard (applies to ALL agents spawned by this command)
+
+If an agent makes **5+ consecutive read-only tool calls** (Read, Grep, Glob, Bash with read-only commands) without any write action (Edit, Write, Bash with write commands), the agent MUST:
+
+1. **Stop exploring** — do not make another read call
+2. **State the blocker** — write a 1-line summary of what's preventing action:
+   - "Blocker: can't find the file X expected by spec Y"
+   - "Blocker: interface mismatch between service and handler"
+3. **Take action** — either:
+   - Write code to resolve the blocker
+   - Write the blocker to the output file and return to the parent with `status: blocked`
+
+**Why:** Agents get stuck in read-loops, consuming context tokens without making progress. 5 consecutive reads without a write is a strong signal of analysis paralysis.
+
+**Exception:** `backend_audit_agent` and `ui_audit_agent` are read-only by design — this guard does NOT apply to audit agents.
 
 ---
 
 ### Placeholder Convention
-- `${PHASE}` / `$((PHASE-1))` — bash variables (numeric)
-- `{{PHASE}}` / `{{PHASE-1}}` — in agent `.md` files, substitute at runtime
+Throughout all agent files and commands:
+- `${PHASE}` — current phase number (bash variable, numeric)
+- `$((PHASE-1))` — previous phase number (bash arithmetic)
+- `{{PHASE}}` — when used inside agent `.md` files, means "substitute the current phase number here at runtime"
+- `{{PHASE-1}}` — when used inside agent `.md` files, means "substitute the previous phase number (current minus 1) here at runtime"
+
+Agents reading `{{PHASE-1}}` in their instructions should resolve this to `PHASE - 1` before looking up any path.
+
+---
 
 ### Agent Context Protocol — Minimal, targeted reads
 
-**Primary context (load these, nothing more):**
+**Primary context — agents load these, nothing more by default:**
+
 | File | Size | Contains |
 |------|------|----------|
-| `docs/design/phases/${PHASE}/phase_context.md` | ~6-8K | Full tech stack, conventions, security NFRs, acceptance criteria, existing state, gate checklist |
-| `docs/design/phases/${PHASE}/specs/<own-component>.md` | ~5-10K | Interface contracts, data model, edge cases, test requirements |
-| `docs/design/phases/${PHASE}/specs/data-contracts.md` | ~3-5K | Typed TypeScript interfaces, ARRAY vs OBJECT explicit |
-| `agent_state/phases/$((PHASE-1))/manifest.json` | ~3-5K | Existing routes, schema, services |
+| `docs/design/phases/${PHASE}/phase_context.md` | ~6-8K | Complete tech stack, all conventions, security NFRs, full acceptance criteria, what already exists, gate checklist |
+| `docs/design/phases/${PHASE}/specs/<own-component>.md` | ~5-10K | Interface contracts, data model, edge cases, test requirements for THIS component only |
+| `docs/design/phases/${PHASE}/specs/data-contracts.md` | ~3-5K | Typed TypeScript interfaces for ALL API endpoints — ARRAY vs OBJECT explicit. Source of truth for response shapes. |
+| `agent_state/phases/$((PHASE-1))/manifest.json` | ~3-5K | Existing routes, schema, services — what NOT to re-implement |
 
-`phase_context.md` is a structured 6-8K extract replacing full BRD + IMPL_GUIDELINES.
+`phase_context.md` is intentionally complete — it contains the full tech stack, all coding conventions, all security requirements, and all acceptance criteria needed for correct implementation. **It is not a 50-line stub — it is a structured 6-8K extract that replaces the need to load the full BRD and IMPLEMENTATION_GUIDELINES.**
 
-**Escalation only:** Specific FR-* from BRD, infra commands from IMPL_GUIDELINES §Local Dev, adjacent component spec.
-**Never load:** Entire BRD (except: brd_spec_reconciler, requirements_brd_reconciler, acceptance_test_agent), entire IMPL_GUIDELINES (except: agent_factory, architecture_orchestrator), all spec files at once.
+**Escalation (only when phase_context.md leaves something unresolved):**
+- More detail on a specific requirement → `docs/BRD.md` — read only the specific FR-* row
+- Infra setup commands → `docs/IMPLEMENTATION_GUIDELINES.md §Local Development Setup` only
+- Adjacent component's interface → `docs/design/phases/${PHASE}/specs/<other-component>.md`
+
+**Never load:**
+- The entire `docs/BRD.md` (except: brd_spec_reconciler, requirements_brd_reconciler, acceptance_test_agent)
+- The entire `docs/IMPLEMENTATION_GUIDELINES.md` (except: agent_factory, architecture_orchestrator)
+- All spec files at once — load your component's spec only
 
 ---
 
 ## Step 0.5 — Implementation Readiness Gate (HARD GATE)
 
+**Before ANY implementation starts, verify these prerequisites.** This prevents wasted implementation cycles when specs are incomplete or misaligned.
+
 ```bash
+# Check 1: Specs exist for this phase
 SPECS_DIR="docs/design/phases/${PHASE}/specs"
 SPEC_COUNT=$(ls ${SPECS_DIR}/*.md 2>/dev/null | wc -l)
-[ "$SPEC_COUNT" -eq 0 ] && echo "⛔ BLOCKED: No specs at ${SPECS_DIR}/. Run /plan --phase=${PHASE}." && exit 1
+if [ "$SPEC_COUNT" -eq 0 ]; then
+  echo "⛔ BLOCKED: No specs found at ${SPECS_DIR}/. Run /plan --phase=${PHASE} first."
+  exit 1
+fi
 
+# Check 2: phase_context.md exists and is non-trivial
 CONTEXT_FILE="docs/design/phases/${PHASE}/phase_context.md"
-[ ! -f "$CONTEXT_FILE" ] || [ $(wc -l < "$CONTEXT_FILE") -lt 20 ] && echo "⛔ BLOCKED: phase_context.md missing/short. Run /plan." && exit 1
+if [ ! -f "$CONTEXT_FILE" ] || [ $(wc -l < "$CONTEXT_FILE") -lt 20 ]; then
+  echo "⛔ BLOCKED: phase_context.md missing or too short. Run /plan --phase=${PHASE} first."
+  exit 1
+fi
 
+# Check 3: VERIFICATION_REPORT.md exists (specs were verified against BRD)
 VERIFY_FILE="docs/design/phases/${PHASE}/VERIFICATION_REPORT.md"
-[ ! -f "$VERIFY_FILE" ] && echo "⛔ BLOCKED: No verification report. Run /plan." && exit 1
+if [ ! -f "$VERIFY_FILE" ]; then
+  echo "⛔ BLOCKED: No verification report. Run /plan --phase=${PHASE} to verify specs against BRD."
+  exit 1
+fi
 
+# Check 4: BRD↔Spec reconciliation passed (no unresolved MISSING coverage)
 RECON_FILE="agent_state/reconciliation/phase-${PHASE}/brd_vs_specs.md"
-[ -f "$RECON_FILE" ] && grep -q "MISSING" "$RECON_FILE" && echo "⚠ BRD↔Spec reconciliation has MISSING coverage."
+if [ -f "$RECON_FILE" ] && grep -q "MISSING" "$RECON_FILE"; then
+  echo "⚠ WARNING: BRD↔Spec reconciliation has MISSING coverage. Review before implementing."
+fi
 
+# Check 5: data-contracts.md exists (typed API response shapes)
 CONTRACTS_FILE="docs/design/phases/${PHASE}/specs/data-contracts.md"
-[ ! -f "$CONTRACTS_FILE" ] && echo "⚠ data-contracts.md missing. API↔UI binding errors likely."
+if [ ! -f "$CONTRACTS_FILE" ]; then
+  echo "⚠ WARNING: data-contracts.md missing. API↔UI binding errors likely. Run /plan --phase=${PHASE} Step 2b."
+fi
 ```
 
-Any check fails → STOP, recommend `/plan --phase=${PHASE}`. Incomplete specs produce incomplete implementations.
+**If any check fails:** STOP. Do not proceed to Step 1. Surface the specific failure and recommend `/plan --phase=${PHASE}`.
+
+**Anti-rationalization:** "The specs are good enough to start" → No. Incomplete specs produce incomplete implementations that fail at acceptance tests. Fix the specs first.
 
 ---
 
 ## Step 1 — Audit
 
-**Agents (parallel):** `backend_audit_agent` (always) + `ui_audit_agent` (if `frontend.enabled = true`)
+**Agents (parallel):**
+- `backend_audit_agent` — always runs
+- `ui_audit_agent` — runs only if `frontend.enabled = true` in `docs/IMPLEMENTATION_GUIDELINES.md`
 
-Outputs: `agent_state/phases/${PHASE}/audit_report.md` / `audit_report_ui.md`
+Both agents read all Step 0 context. `backend_audit_agent` writes `agent_state/phases/${PHASE}/audit_report.md`. `ui_audit_agent` writes `agent_state/phases/${PHASE}/audit_report_ui.md`.
 
 ```markdown
 # Phase N Audit Report
+
 ## Carried Forward Issues (from Phase N-1)
+[Issues from previous manifest's carried_forward[] — MUST appear here]
+
 ## Gap Analysis
 | Component | Expected (from spec) | Found (in codebase) | Gap |
+|-----------|---------------------|---------------------|-----|
+
 ## Missing Implementations
+- [ ] <component/function> — required by spec <file.md>
+
 ## Broken/Incomplete Items
+- [ ] <item> — reason
+
 ## Recommended Implementation Order
+1. ...
 ```
 
-If `--audit_only`: stop here.
+If `--audit_only` flag: stop here and print the report.
 
 ---
 
 ## Step 2 — Implementation (Wave-based Parallel Execution)
 
-Agents from `.claude/agents/generated/` per component type. Waves run in parallel; waves are sequential.
+**Agents:** Generated agents from `.claude/agents/generated/` per component type
 
-### Wave Structure
+Run implementation in the waves defined in `PHASE_PLAN.md`. Each wave runs in parallel; waves are sequential.
 
-**Wave 1** (parallel): `database_agent` → schema + docs/design/database.md; `migration_agent` → migration files (up + down)
+**Typical wave structure:**
+```
+Wave 1 (parallel):
+  ├─ database_agent     → schema design + docs/design/database.md
+  └─ migration_agent    → migration files (up + down)
 
-**Wave 1.5** (sequential gate): Migration Validation — dry-run against test DB:
-1. Files parse without syntax errors
-2. UP applies cleanly to empty DB
-3. DOWN reverses UP cleanly
-4. UP re-applies after DOWN (idempotency)
-Fail → block Wave 2, route to migration_agent (max 1 retry)
+Wave 1.5 (sequential gate — validates migrations before applying):
+  └─ Migration Validation → dry-run migrations against test DB
+      Checks:
+      1. Migration files parse without syntax errors
+      2. UP migration applies cleanly to empty test DB
+      3. DOWN migration reverses the UP cleanly
+      4. UP re-applies after DOWN (idempotency)
+      If validation fails → block Wave 2, surface error to migration_agent for fix (max 1 retry)
 
 ### Migration Failure Auto-Recovery
-UP fails → immediately run DOWN to restore schema → log error → route back for fix (max 1 retry).
-DOWN rollback also fails → **STOP** immediately (unknown schema state) → write `migration_failure.json` → do NOT proceed to Wave 2.
 
-**Migration Safety Gate (BLOCKING):** Zero CRITICAL findings in migration_safety.md, all DOWN migrations exist and non-empty, irreversible migrations acknowledged.
+If UP migration fails:
+1. Immediately run the DOWN migration for the failed file to restore schema consistency
+2. Log the specific error: `⛔ Migration ${FILE} UP failed: ${ERROR}`
+3. Log the rollback: `↩ Auto-rolled back ${FILE} DOWN to restore schema`
+4. Route back to migration_agent with the specific error for fix (max 1 retry)
+5. After fix: re-run UP → validate → proceed if success
 
-**Wave 2a** (sequential): `backend_developer` → domain models, services, repositories. Writes manifest with service method return types.
+If DOWN rollback also fails:
+- STOP immediately — schema is now in an unknown state
+- Surface: `⛔ CRITICAL: Migration UP failed AND DOWN rollback failed. Manual intervention required.`
+- Write to agent_state/phases/${PHASE}/migration_failure.json with full error details
+- Do NOT proceed to Wave 2
 
-**Wave 2a.5** — Compile/Typecheck Gate (BLOCKING):
-| Language | Command | Pass |
-|----------|---------|------|
-| Go | `go build ./...` | Exit 0 |
-| TypeScript | `tsc --noEmit` | Exit 0 |
-| Python | `python -m py_compile <files>` + `mypy` (if configured) | Exit 0 |
-| Java | `mvn compile -q` or `gradle compileJava` | Exit 0 |
-| Rust | `cargo check` | Exit 0 |
+This prevents the common failure where Phase N migration adds a table, fails partway through,
+and Phase N re-development tries to add the same table again.
 
-Fail → route to `backend_developer` with first 50 lines of errors (max 2 attempts) → still failing → STOP. Do NOT proceed to Wave 2b on broken code.
+**Migration Safety Gate (BLOCKING):**
+- Zero CRITICAL findings in migration_safety.md
+- All DOWN migrations exist and are non-empty
+- Irreversible migrations explicitly acknowledged in migration metadata
+- If any CRITICAL finding: STOP — do not apply migration until resolved
 
+Wave 2a (sequential — api_developer depends on backend service interfaces):
+  └─ backend_developer  → domain models, services, repositories
+       ↓ writes manifest with service method return types (list/single/none)
+
+Wave 2a.5 (COMPILE/TYPECHECK GATE — BLOCKING):
+  └─ Build verification: compile/typecheck the codebase
+       See "Wave 2a.5 — Compile/Typecheck Gate" section below
+       If FAILS → route back to backend_developer for fix (max 2 attempts)
+       Do NOT proceed to Wave 2b on broken code
+
+### Wave 2a.5 — Compile/Typecheck Gate (BLOCKING)
+
+**Purpose:** Catch compilation errors before downstream agents build on broken code. This is cheap (seconds to run) but prevents expensive downstream failures where api_developer builds on code that doesn't compile.
+
+**Language-specific commands:**
+| Language | Command | Pass Condition |
+|----------|---------|---------------|
+| Go | `go build ./...` | Exit code 0 |
+| TypeScript | `tsc --noEmit` | Exit code 0 |
+| Python | `python -m py_compile <changed_files>` + `mypy <changed_files>` (if mypy configured) | Exit code 0 |
+| Java | `mvn compile -q` or `gradle compileJava` | Exit code 0 |
+| Rust | `cargo check` | Exit code 0 |
+
+**Detection:** Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the primary backend language, then run the corresponding command.
+
+```bash
+# Detect language from IMPLEMENTATION_GUIDELINES and run compile check
+# The exact command depends on the project's tech stack
+# Examples:
+#   Go:         go build ./...
+#   TypeScript: npx tsc --noEmit
+#   Python:     python -m py_compile $(git diff --name-only --diff-filter=AM HEAD -- '*.py')
+#   Java:       mvn compile -q  OR  gradle compileJava
+#   Rust:       cargo check
+```
+
+**On failure:**
+1. Capture compiler error output (first 50 lines)
+2. Route back to `backend_developer` with the error output as context
+3. Max 2 fix attempts — backend_developer reads compiler errors, fixes, then re-runs compile check
+4. If still failing after 2 attempts: **STOP** — surface compiler errors to user
+5. Do **NOT** proceed to Wave 2b (api_developer) on broken code — api_developer will build on a broken foundation
+
+**On success:**
+```
+✅ Wave 2a.5 — Compile/Typecheck Gate PASSED
+   Language: <detected language>
+   Command: <command run>
+   → Proceeding to Wave 2b (api_developer)
+```
+
+**Log to execution.jsonl:**
 ```bash
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"2a.5\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
 
-### Agent Handoff Protocol (Wave 2a → 2b)
+### Agent Handoff Protocol (Wave 2a → Wave 2b)
 
-Atomic write + verified ready signal:
+After backend_developer completes — **atomic write + verified ready signal:**
+1. Write manifest to `.tmp` first: `agent_state/phases/${PHASE}/backend_developer/manifest.json.tmp`
+2. Validate JSON: `python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/backend_developer/manifest.json.tmp`
+3. If valid: atomic move: `mv manifest.json.tmp manifest.json`
+4. If invalid: STOP — do not touch ready signal. Log error and retry manifest write (max 1 retry).
+5. Verify report exists: `test -f agent_state/phases/${PHASE}/reports/backend_developer.md`
+6. **Only after steps 1-5 succeed:** Touch ready signal: `touch agent_state/phases/${PHASE}/.backend_developer_VERIFIED`
+
 ```bash
+# Atomic agent handoff — prevents downstream agents from reading partial manifests
 MANIFEST_DIR="agent_state/phases/${PHASE}/backend_developer"
 python3 -c "import json,sys; json.load(sys.stdin)" < "${MANIFEST_DIR}/manifest.json.tmp" && \
   mv "${MANIFEST_DIR}/manifest.json.tmp" "${MANIFEST_DIR}/manifest.json" && \
@@ -576,297 +948,810 @@ python3 -c "import json,sys; json.load(sys.stdin)" < "${MANIFEST_DIR}/manifest.j
   { echo "⛔ backend_developer manifest invalid — blocking handoff"; exit 1; }
 ```
 
-Before api_developer starts: check `.backend_developer_VERIFIED` exists, validate manifest JSON is readable, then read service method return types. This pattern applies to ALL wave transitions.
+Before api_developer starts:
+1. Check: `test -f agent_state/phases/${PHASE}/.backend_developer_VERIFIED` (**VERIFIED, not just ready**)
+2. If missing: WAIT or FAIL — do not proceed with stale/missing data
+3. Validate manifest is readable: `python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/backend_developer/manifest.json`
+4. Read `backend_developer/manifest.json` for service method return types
 
-**Wave 2b** (depends on 2a + compile gate): `api_developer` → handlers, routes, middleware, DTOs, api-contracts.md. Reads data-contracts.md as MANDATORY source of truth. api-contracts.md derives from data-contracts.md — shape mismatch → BLOCKER.
+This pattern applies to ALL wave transitions where one agent depends on another's output. The **atomic write + verified ready signal** prevents race conditions where a downstream agent reads a partial or corrupt manifest.
 
-**Wave 2b.5** — API Layer Compile Check (BLOCKING): Same compile command as 2a.5. Fail → route to `api_developer` (max 2 attempts) → STOP. Do NOT proceed to Wave 2.5/2.75/3.
+Wave 2b (depends on 2a passing build + backend_developer ready signal):
+  └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
+       ↓ reads data-contracts.md from /plan as MANDATORY source of truth for response shapes
+       ↓ api-contracts.md is DERIVED from data-contracts.md (validates, doesn't reinvent)
+       ↓ if api-contracts.md shapes differ from data-contracts.md → BLOCKER
+       ↓ reads backend_developer manifest to pick respondList/respondOne/respondError
 
+Wave 2b.5 (API LAYER COMPILE CHECK — BLOCKING):
+  └─ Build verification: compile/typecheck after api_developer's changes
+       Same compile/typecheck command as Wave 2a.5
+       Verifies api_developer's changes compile cleanly WITH backend_developer's code
+       If FAILS → route back to api_developer for fix (max 2 attempts), then STOP
+
+### Wave 2b.5 — API Layer Compile Check (BLOCKING)
+
+**Purpose:** Verify that api_developer's changes compile cleanly alongside backend_developer's code. API handlers frequently reference service interfaces, DTOs, and error types — type mismatches between layers are the most common inter-agent failure mode.
+
+**Command:** Same language-specific compile/typecheck command as Wave 2a.5 (see table above).
+
+**On failure:**
+1. Capture compiler error output (first 50 lines)
+2. Route back to `api_developer` with the error output as context
+3. Max 2 fix attempts — api_developer reads compiler errors, fixes, then re-runs compile check
+4. If still failing after 2 attempts: **STOP** — surface compiler errors to user
+5. Do **NOT** proceed to Wave 2.5/2.75/3 on broken code
+
+**On success:**
+```
+✅ Wave 2b.5 — API Layer Compile Check PASSED
+   Language: <detected language>
+   Command: <command run>
+   → Proceeding to Wave 2.5/2.75 (contract validation / smoke test)
+```
+
+**Log to execution.jsonl:**
 ```bash
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"2b.5\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
 
-**Wave 2.5** (sequential gate, UI only): Contract Validation — verify api-contracts.md exists, all endpoints documented, shapes unambiguous.
+Wave 2.5 (sequential gate, UI phases only):
+  └─ Contract Validation → verify api-contracts.md exists, all endpoints documented, shapes are unambiguous
 
-**Wave 2.75** (SMOKE TEST): `docker compose up -d && curl -sf http://localhost:PORT/health`. Fail → route to api_developer (max 1 retry). Catches catastrophic failures before expensive UI + test agents.
+Wave 2.75 (SMOKE TEST — before expensive UI implementation):
+  └─ Quick smoke test: does the app start? Does GET /health respond?
+       docker compose up -d && curl -sf http://localhost:PORT/health
+       If FAILS → route back to api_developer for fix (max 1 retry)
+       This catches catastrophic failures before spending tokens on UI + test agents
 
-**Wave 3** (parallel, UI only, blocked until 2.75 passes): `ui_developer` → screens from UI specs + api-contracts.md + data-contracts.md
+Wave 3 (parallel, UI phases only — BLOCKED until Wave 2.75 passes):
+  └─ ui_developer       → screen implementation from UI specs + api-contracts.md + data-contracts.md
 
-**Wave 3.5** — Frontend Build Check (BLOCKING, UI only):
-| Framework | Command |
-|-----------|---------|
-| React/CRA | `npm run build` |
-| Next.js | `npx next build` |
-| Vue/Nuxt | `npm run build` |
-| Vite | `npx vite build` |
-| Angular | `npx ng build` |
+Wave 3.5 (FRONTEND BUILD CHECK — BLOCKING, UI phases only):
+  └─ Build verification: full frontend build after ui_developer's changes
+       See "Wave 3.5 — Frontend Build Check" section below
+       If FAILS → route back to ui_developer for fix (max 2 attempts), then STOP
 
-Additional: `tsc --noEmit --strict` (if strict mode), `npx eslint src/ --max-warnings 0`. Fail → route to `ui_developer` (max 2 attempts) → STOP.
+### Wave 3.5 — Frontend Build Check (BLOCKING, if UI phase)
 
+**Purpose:** Catch frontend build failures before expensive test agents run. UI code frequently has TypeScript errors, missing imports, or JSX/TSX issues that are invisible until a full build runs.
+
+**Skip if:** `frontend.enabled = false` or this phase has no UI components (no Wave 3).
+
+**Commands:**
+| Framework | Command | Pass Condition |
+|-----------|---------|---------------|
+| React (CRA) | `npm run build` | Exit code 0 |
+| Next.js | `npx next build` | Exit code 0 |
+| Vue/Nuxt | `npm run build` | Exit code 0 |
+| Vite | `npx vite build` | Exit code 0 |
+| Angular | `npx ng build` | Exit code 0 |
+
+**Additional checks (run after build passes):**
+- TypeScript strict mode: `tsc --noEmit --strict` (if `tsconfig.json` has `strict: true`)
+- ESLint: `npx eslint src/ --max-warnings 0` (zero warnings policy — catches unused imports, type issues)
+
+**Detection:** Read `package.json` to determine the framework and build command. Fall back to `npm run build` if unclear.
+
+```bash
+# Detect frontend framework and run build check
+# Read package.json for scripts.build or framework-specific dependencies
+# Examples:
+#   React/CRA:  npm run build
+#   Next.js:    npx next build
+#   Vue:        npm run build
+#   Vite:       npx vite build
+#
+# Additional TypeScript check (if tsconfig.json exists):
+#   npx tsc --noEmit
+#
+# ESLint check (if .eslintrc exists or eslint in package.json):
+#   npx eslint src/ --max-warnings 0
+```
+
+**On failure:**
+1. Capture build error output (first 50 lines)
+2. Route back to `ui_developer` with the error output as context
+3. Max 2 fix attempts — ui_developer reads build errors, fixes, then re-runs build check
+4. If still failing after 2 attempts: **STOP** — surface build errors to user
+5. Do **NOT** proceed to Wave 4 (test agents) on broken frontend code
+
+**On success:**
+```
+✅ Wave 3.5 — Frontend Build Check PASSED
+   Framework: <detected framework>
+   Build command: <command run>
+   TypeScript check: PASSED | SKIPPED (no tsconfig)
+   ESLint check: PASSED | SKIPPED (no eslint config)
+   → Proceeding to Wave 4 (test agents)
+```
+
+**Log to execution.jsonl:**
 ```bash
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"frontend_build_check\",\"step\":\"3.5\",\"status\":\"passed|failed\",\"framework\":\"<framework>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
 
-**Wave 4** (parallel): `unit_test_agent` + `integration_test_agent` — read specs AND implementation code.
+Wave 4 (parallel — test agents read BOTH specs AND implementation code):
+  ├─ unit_test_agent     → unit tests for all new code (reads actual functions, not just specs)
+  └─ integration_test_agent → integration tests for service↔infra + contract shape tests
+```
 
-Each agent: reads Step 0 context + spec files + skill pack → implements in-scope work → writes agent manifest to `agent_state/phases/${PHASE}/<agent>/manifest.json`.
+Each agent:
+1. Reads ALL Step 0 context + its specific spec files
+2. Reads its activated skill pack (`.claude/skills/languages/{{LANG}}.md` etc.)
+3. Implements only what is in scope for this phase (prev manifest shows what exists)
+4. Writes an agent-level manifest to `agent_state/phases/${PHASE}/<agent>/manifest.json`
 
 ---
 
 ## Step 2.5 — API Contract Validation (UI phases only)
 
-Runs after Wave 2 completes, blocks Wave 3.
+**When:** `frontend.enabled = true` in IMPLEMENTATION_GUIDELINES AND this phase includes UI screens
+**Runs after:** Wave 2 (backend_developer + api_developer complete)
+**Blocks:** Wave 3 (ui_developer will NOT start until this passes)
 
-**Checks:**
-1. `api-contracts.md` exists and non-empty
-2. All routes in api_developer manifest have matching entry
-3. Shape unambiguity: explicit `[]` or `{}`, empty state documented, all fields typed
-4. Data contract compliance: field names match data-contracts.md exactly, array/object match. Mismatch → route to api_developer (max 1 retry)
-5. Wireframe cross-reference: endpoints exist, fields exist in response shape, list/single matches component expectation
+Validate that `api_developer` produced a complete, unambiguous contract artifact:
 
-Pass → proceed to Wave 3. Fail → surface specific mismatches, route to api_developer.
+```bash
+CONTRACT_FILE="docs/design/phases/${PHASE}/specs/api-contracts.md"
+```
+
+**Checks (inline — no separate agent needed):**
+
+1. **File exists:** `api-contracts.md` must exist and be non-empty
+2. **All routes covered:** every route in `agent_state/phases/${PHASE}/api_developer/manifest.json` must have a matching entry in `api-contracts.md`
+3. **Shape unambiguity:** for each endpoint entry:
+   - Response shows explicit `"data": [...]` (array) or `"data": {...}` (object) — not just `"data": ...`
+   - Empty state documented (list: `[]`, single: `null`)
+   - All fields have types (no untyped `"field": "object"`)
+4. **Data contract compliance:** every endpoint in `api-contracts.md` matches the TypeScript interface in `data-contracts.md` from /plan:
+   - Field names match exactly
+   - Array vs object matches exactly
+   - If mismatch: `⚠ api-contracts.md GET /api/v1/users returns data as object, but data-contracts.md defines it as User[] (array)`
+   - Route back to `api_developer` for fix (max 1 retry)
+5. **Wireframe cross-reference:** for each wireframe API binding (`| Component | Endpoint | Fields Used |`):
+   - The endpoint exists in `api-contracts.md`
+   - The fields referenced exist in the contract's response shape
+   - List vs single matches what the UI component expects (e.g., a table expects an array, a detail view expects an object)
+
+**If validation fails:**
+- Surface specific mismatches: `⚠ Wireframe <screen>.wireframe.md binds <Component> to GET /api/v1/items expecting array, but api-contracts.md shows data as object`
+- Route back to `api_developer` for contract fix (max 1 retry)
+- After fix: re-validate → then proceed to Wave 3
+
+**If validation passes:**
+```
+✅ API Contract Validation — PASS
+   Endpoints documented: N/N
+   Shape checks: all unambiguous
+   Wireframe cross-refs: all matched
+   → Proceeding to Wave 3 (ui_developer)
+```
 
 ---
 
 ## Step 3 — Tests
 
 ### Step 3a — Unit Tests
-**Agent:** `unit_test_agent`. On failure: diagnose → fix implementation (not tests) → rerun. **Max 3 attempts** → surface with reproduction steps.
+**Agent:** Generated `unit_test_agent`
+
+Runs unit tests. On failure:
+- Diagnoses root cause
+- Fixes implementation (not the tests)
+- Reruns
+- **Max 3 attempts** → then surfaces unresolved failures with reproduction steps
 
 ### Test Attempt Tracking
-Track ALL retries: log `"⚠ Test [name] required [N] attempts"`, add to manifest `"flaky_tests"`, carry forward to next phase audit.
+
+When a test agent retries (attempt > 1), track ALL retry information for visibility:
+
+1. Log: `"⚠ Test [test_name] required [N] attempts to pass"`
+2. Add to manifest under test_results: `"flaky_tests": ["test_name (passed on attempt N)"]`
+3. Add to gate report: `"⚠ FLAKY: [count] tests required multiple attempts"`
+4. Carry forward: flaky tests appear in next phase's audit as known instability
+
 ```json
-"test_results": {"unit": {"status":"passed","total":24,"passed":24,"failed":0,"flaky_tests":["TestCreateUser (attempt 2)","TestListResources (attempt 3)"],"report":"agent_state/phases/N/reports/unit_tests.md"}}
+// In manifest.json test_results section:
+"test_results": {
+  "unit": {
+    "status": "passed",
+    "total": 24,
+    "passed": 24,
+    "failed": 0,
+    "flaky_tests": [
+      "TestCreateUser (passed on attempt 2)",
+      "TestListResources (passed on attempt 3)"
+    ],
+    "report": "agent_state/phases/N/reports/unit_tests.md"
+  }
+}
 ```
 
-### Flaky Test Quarantine
-Test in `flaky_tests[]` across 2+ consecutive phases → quarantine:
-- Go: `t.Skip("QUARANTINED: flaky across phases N-1, N")`
-- Python: `@pytest.mark.skip(reason="QUARANTINED: flaky")`
-- TypeScript: `test.skip('QUARANTINED: flaky')`
-- Java: `@Disabled("QUARANTINED: flaky")` / Rust: `#[ignore]`
+**Why track flaky tests?** A test that needs 3 attempts to pass is a signal of non-deterministic behavior (race condition, timing dependency, test isolation failure). If the same test is flaky across 2+ phases, it becomes a reliability risk that compounds.
 
-Track in manifest `"quarantined_tests"`. If count > 5 → escalate. Auto-unquarantine after 3 consecutive passing phases.
+### Flaky Test Quarantine
+
+When a test appears in `flaky_tests[]` across 2+ consecutive phases:
+
+1. **Detect:** Check previous phase manifest's `flaky_tests[]`. If current phase has the same test name: it's chronically flaky.
+2. **Quarantine:** Mark with `@flaky` tag/annotation (language-specific):
+   - Go: `t.Skip("QUARANTINED: flaky across phases N-1, N")`
+   - Python: `@pytest.mark.skip(reason="QUARANTINED: flaky")`
+   - TypeScript: `test.skip('QUARANTINED: flaky')`
+   - Java: `@Disabled("QUARANTINED: flaky")`
+   - Rust: `#[ignore]`
+3. **Log:** Add to manifest: `"quarantined_tests": ["TestName (flaky since phase N-1)"]`
+4. **Track:** Quarantined tests appear in gate report as: `⚠ QUARANTINED: N tests skipped (flaky across 2+ phases)`
+5. **Escalate:** If quarantined count > 5: surface to user as `⚠ Too many quarantined tests — investigate root cause`
+6. **Unquarantine:** If a quarantined test passes 3 consecutive phases: auto-remove quarantine
+
+This prevents flaky tests from blocking every phase while maintaining visibility.
 
 ### Step 3a.5 — Cross-Phase Regression (Smart, if PHASE > 1)
 
-**Artifact Overlap Detection Algorithm:**
-1. Extract current phase `artifacts.api_routes`, `artifacts.schemas`, `artifacts.code`
-2. For each previous phase P: compute schema/route/code overlap
-3. Overlap detected → phase is "affected" → re-run P's unit + integration tests (NOT e2e)
-4. No overlap → SKIP (log reason)
-5. Failure → BLOCKER → route to implementation agent (max 2 attempts) → escalate if unfixable
-6. Output in manifest:
-```json
-"cross_phase_regression": {
-  "phases_checked": [1,2], "phases_skipped": [3],
-  "overlap_details": {"phase_1":{"schemas":["users"],"routes":["/api/v1/users"]}},
-  "results": {"phase_1":{"unit":"passed","integration":"passed"}}
-}
-```
-Report: `agent_state/phases/${PHASE}/reports/regression_check.md`
+**Purpose:** Detect regressions in previous phases caused by current phase changes.
+**Skip if:** PHASE = 1 (nothing to regress against)
+
+**Algorithm — Artifact Overlap Detection:**
+
+1. Read current phase manifest draft: extract `artifacts.api_routes`, `artifacts.schemas` (tables/collections), `artifacts.code` (modified files)
+
+2. For each previous phase P (from 1 to PHASE-1):
+   a. Read `agent_state/phases/P/manifest.json`
+   b. Extract P's `artifacts.api_routes`, `artifacts.schemas`, `artifacts.code`
+   c. Compute overlap:
+      - **Schema overlap:** current phase touches a table/collection that phase P created or modified
+      - **Route overlap:** current phase modifies an API route that phase P defined
+      - **Code overlap:** current phase modifies a file that phase P created
+   d. If ANY overlap detected → phase P is "affected"
+
+3. For each affected phase:
+   a. Re-run that phase's **unit tests** (from test paths in phase P's manifest)
+   b. Re-run that phase's **integration tests** (critical: catches DB schema/query regressions)
+   c. Do NOT re-run e2e tests (too expensive for regression; save for /accept)
+
+4. For non-affected phases: SKIP (log: "Phase P: no artifact overlap, skipping regression")
+
+5. **Failure handling:**
+   - If any previous phase test fails → BLOCKER
+   - Surface: "Phase P regression: <test_name> FAILED — current phase changes broke Phase P"
+   - Route to implementation agent for fix (max 2 attempts)
+   - If unfixable: escalate to user with both phase contexts
+
+6. **Output:** Append to manifest:
+   ```json
+   "cross_phase_regression": {
+     "phases_checked": [1, 2],
+     "phases_skipped": [3],
+     "overlap_details": {
+       "phase_1": {"schemas": ["users"], "routes": ["/api/v1/users"]},
+       "phase_2": {"schemas": ["billing"], "routes": []}
+     },
+     "results": {
+       "phase_1": {"unit": "passed", "integration": "passed"},
+       "phase_2": {"unit": "passed", "integration": "passed"}
+     }
+   }
+   ```
+
+   Log detailed report: `agent_state/phases/${PHASE}/reports/regression_check.md`
+
+This prevents silent breakage where Phase 3 code compiles and passes its own tests but breaks Phase 1 behavior. The artifact overlap detection avoids wasting time re-running tests for phases with zero overlap.
 
 ### Step 3b — Integration Tests
-**Agent:** `integration_test_agent`. Requires infra running. Tests service↔DB, service↔cache. Fix → retry → max 3 attempts.
+**Agent:** Generated `integration_test_agent`
+
+Requires infra running (started in Step 0). Tests service↔DB and service↔cache interactions.
+
+Same iteration rules: fix → retry → max 3 attempts.
 
 ### Step 3c — E2E Tests (conditional)
-**Trigger:** `PHASE_PLAN.md` has non-empty `e2e_workflows_unlocked`. **Agent:** `e2e_orchestrator` + `ui_test_agent` (if UI). Fix → retry → max 2 attempts.
+**Trigger:** `PHASE_PLAN.md` has non-empty `e2e_workflows_unlocked` list
 
-All three tiers must pass before reconciliation.
+**Agent:** `e2e_orchestrator` + generated `ui_test_agent` (if UI phase)
+
+Runs complete user workflow tests. Same iteration rules: fix → retry → max 2 attempts.
+
+**All three tiers must pass before the reconciliation steps.**
 
 ### Step 3c.5 — Post-Implementation Re-Audit (CLOSED LOOP)
 
-After all tests pass: re-read Step 1 audit report, verify each gap under "Missing Implementations" and "Broken/Incomplete Items" is resolved. Check carried-forward issues. Output: `reports/re_audit.md`. Unresolved audit gaps → warnings in gate. Carried-forward items 2+ phases old → **BLOCKING**.
+**Runs after:** All tests pass (Steps 3a-3c)
+**Purpose:** Verify that gaps identified in the Step 1 audit were actually addressed by implementation
+
+**Execution:**
+1. Read the Step 1 audit report (`agent_state/phases/${PHASE}/audit_report.md`)
+2. For each gap listed under "Missing Implementations" and "Broken/Incomplete Items":
+   - Check if the gap is now resolved (code exists, tests pass)
+   - If still missing: flag as `⚠ AUDIT GAP UNRESOLVED: <item>`
+3. For each "Carried Forward Issue" from previous phase:
+   - Check if addressed in this phase's implementation
+   - If not addressed: flag as `⚠ CARRIED FORWARD STILL OPEN: <item>`
+
+**Output:** `agent_state/phases/${PHASE}/reports/re_audit.md`
+
+**Impact on gate:**
+- Unresolved audit gaps are surfaced in the gate report as warnings (not blocking — tests are the real gate)
+- Unresolved carried-forward items that are 2+ phases old become **BLOCKING** per the carried-forward policy
+
+**Why this matters:** Without re-audit, the Step 1 audit report becomes "write-only" — gaps are detected but nobody verifies they were closed. This step closes that loop.
 
 ---
 
-## Step 3d + 3e — Reconciliation (SEQUENTIAL)
+## Step 3d + 3e — Reconciliation (SEQUENTIAL — 3d before 3e)
 
-3d runs first → 3e reads 3d output. A behavior can't be "untested" if it's not implemented yet.
+Run reconciliation agents **sequentially** — `spec_test_reconciler` depends on `spec_impl_reconciler` output to distinguish "untested" from "unimplemented".
+
+```
+Step 3d (first):
+  └─ spec_impl_reconciler  → specs ↔ implementation (4-level verification)
+       ↓ writes: agent_state/reconciliation/phase-N/specs_vs_impl.md
+       ↓ output includes list of MISSING implementations
+
+Step 3e (after 3d completes):
+  └─ spec_test_reconciler  → specs ↔ test coverage
+       ↓ reads: specs_vs_impl.md to EXCLUDE unimplemented behaviors from "untested" count
+       ↓ a behavior can't be untested if it's not implemented yet — that's a MISSING impl, not a test gap
+```
+
+**Why sequential:** If `spec_test_reconciler` runs in parallel with `spec_impl_reconciler`, it will flag "no test for behavior X" when behavior X isn't even implemented yet. This creates confusion about whether the gap is a test gap or an implementation gap. Running 3d first gives 3e the context to make accurate assessments.
 
 ### 3d: Specs ↔ Implementation (`spec_impl_reconciler`)
-4-level verification (Existence → Substantiveness → Wiring → Data Flow), forward + reverse.
+
+Validates both directions with 4-level verification (Existence → Substantiveness → Wiring → Data Flow):
+- **Forward:** spec-defined behaviors missing from the implementation
+- **Reverse:** unspecced implementation (behaviors added without spec justification)
+
 Output: `agent_state/reconciliation/phase-N/specs_vs_impl.md`
-Missing implementations = **BLOCKER**. Unspecced implementations = LOGGED with classification: `technical_necessity`, `scope_creep`, `test_helper`. `scope_creep` → recommend: add to BRD or remove. Unresolved → `carried_forward[]`.
+
+Missing implementations = **BLOCKER** (fix before acceptance tests).
+Unspecced implementations = **LOGGED** with count in gate report. Not auto-blocking, but:
+- If unspecced count > 0: gate report surfaces them with: `⚠ N unspecced implementations found — review before next phase`
+- Each unspecced item is classified: `technical_necessity` (e.g., error handler), `scope_creep` (feature not in spec), or `test_helper`
+- `scope_creep` items surfaced to user with recommendation: add to BRD or remove
+- Manifest `carried_forward[]` includes unresolved unspecced items for next phase audit
 
 ### 3e: Specs ↔ Tests (`spec_test_reconciler`)
-Forward + reverse validation. Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md`
-HIGH-priority untested = blocker. MEDIUM/LOW = logged.
+
+Validates both directions:
+- **Forward:** spec-defined edge cases and behaviors with no test coverage
+- **Reverse:** tests that test behaviors not in any spec
+
+Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md`
+
+HIGH-priority untested behaviors = blocker.
+MEDIUM/LOW = logged as known gaps.
 
 ---
 
 ## Step 3f — Code Optimization (MANDATORY)
 
-Runs every phase, after tests pass + reconciliation complete, before review. Produces report even if zero changes.
+**Runs after:** All tests pass (Step 3a-3c) AND reconciliation complete (Step 3d-3e)
+**Runs before:** Code review (Step 4) — reviewers see clean, optimized code
+**Mandatory:** Yes — runs every phase. Produces a report even if zero changes made.
 
-### Scope Lock (CRITICAL)
-ONLY files created/modified in THIS phase. Never modify previous-phase code.
+### Why mandatory
+
+Dead code and redundant patterns accumulate across phases. Each agent generates code independently — backend_developer, api_developer, and ui_developer don't coordinate on shared utilities or know what the other has deprecated. Without cleanup at every phase, technical debt compounds and review cycles get longer.
+
+### Scope Lock (CRITICAL SAFETY RULE)
+
+Optimization ONLY touches files that were created or modified in THIS phase. Never modify code from previous phases — it has already passed its own gate.
+
 ```bash
+# Scope = only files changed since last phase gate
 SCOPE_FILES=$(git diff --name-only agent_state/phases/$((PHASE-1))/gate.passed..HEAD 2>/dev/null || git diff --name-only HEAD~50..HEAD)
 ```
 
 ### Pre-optimization snapshot
+
+Before any optimization starts, capture the current state:
+
 ```bash
+# Tag the pre-optimization state for safe rollback
 git tag "phase-${PHASE}-pre-optimize" HEAD
 ```
 
-### Execution (parallel)
-- `code_optimizer` → backend/API (src/domain/, src/services/, src/repositories/, src/api/, src/errors/)
-- `ui_code_optimizer` → UI (src/ui/, src/components/, src/hooks/, src/pages/, src/styles/) — if frontend.enabled
+If ALL optimizations need to be reverted:
+```bash
+git reset --hard "phase-${PHASE}-pre-optimize"
+```
 
-Both: Pass 1 (dead code removal) → Pass 2 (code optimization). Each change committed individually.
+### Execution — parallel backend + UI tracks
 
-Outputs: `reports/code_optimization.md`, `reports/ui_code_optimization.md`
+```
+Step 3f (parallel):
+  ├─ code_optimizer         → backend/API dead code removal + optimization
+  │                           Scope: src/domain/, src/services/, src/repositories/, src/api/, src/errors/
+  │
+  └─ ui_code_optimizer      → UI dead code removal + optimization (if frontend.enabled = true)
+                              Scope: src/ui/, src/components/, src/hooks/, src/pages/, src/styles/
+```
+
+**Agent:** `code_optimizer` — always runs
+**Agent:** `ui_code_optimizer` — runs only if `frontend.enabled = true`
+
+Both agents follow the same safety protocol:
+1. **Pass 1 — Dead code removal** (safe — removing unused code can't change behavior)
+2. **Pass 2 — Code optimization** (risky — changes code paths)
+3. Each change committed individually for granular revert
+4. Each change must include the files affected and what was changed
+
+**Outputs:**
+- `agent_state/phases/${PHASE}/reports/code_optimization.md` — backend/API optimization report
+- `agent_state/phases/${PHASE}/reports/ui_code_optimization.md` — UI optimization report (if frontend)
 
 ---
 
-## Step 3g — Post-Optimization Test Re-run (CONDITIONAL)
+## Step 3g — Post-Optimization Test Re-run (CONDITIONAL SAFETY GATE)
 
-Skip if zero changes. Otherwise re-run ALL test tiers (unit, integration, e2e).
+**Runs after:** Step 3f optimization completes
+**Purpose:** Verify that NO optimization introduced a regression
+**Skip if:** Both optimizers report zero changes (no dead code removed, no optimizations applied). Log: "Step 3g skipped — zero optimization changes."
+
+If ANY optimization was applied:
+
+### Execution
+
+Re-run ALL test tiers that passed in Step 3a-3c:
+
+```
+Re-run 3g.1: Unit tests           → must still pass
+Re-run 3g.2: Integration tests    → must still pass
+Re-run 3g.3: E2E tests            → must still pass (if they ran in 3c)
+```
 
 ### On failure
-1. Identify causing optimization via git log since `phase-${PHASE}-pre-optimize`
-2. Diagnose + fix (max 2 attempts)
-3. If fix fails → `git revert <commit> --no-edit`
-4. Max 3 revert cycles → `git reset --hard phase-${PHASE}-pre-optimize` + log
-5. Optimization failure is NOT a pipeline blocker but IS logged in gate
 
-Gate checks post-optimization status: CLEAN (all kept), PARTIAL (some reverted), REVERTED (all rolled back) → all acceptable. Tests still failing → **BLOCKER**.
+If ANY test fails after optimization:
+
+1. **Identify which optimization caused the failure** — check git log since `phase-${PHASE}-pre-optimize` tag
+2. **Diagnose and fix first** (don't blindly revert):
+   - Read test failure output → identify root cause (missing import, broken caller, type mismatch)
+   - Apply targeted fix → commit as `fix: resolve <issue> after <optimization>`
+   - Re-run failing test → if passes, continue
+3. **If fix doesn't work** — try broader fix (check all callers of changed code, fix all affected)
+4. **If still failing after 2 fix attempts** — revert the specific optimization commit + fix attempts:
+   ```bash
+   git revert <commit-hash> --no-edit
+   ```
+5. **Max 3 revert cycles** — if tests still fail after 3 optimization reverts:
+   - Reset to pre-optimization state: `git reset --hard phase-${PHASE}-pre-optimize`
+   - Log in report: "⚠ All optimizations reverted — optimization introduced non-recoverable regression"
+   - Pipeline continues (optimization failure is NOT a pipeline blocker, but IS logged in gate)
+6. **Update the optimization report** with fixed and reverted items
+
+### Output
+
+Updates `agent_state/phases/${PHASE}/reports/code_optimization.md` with:
+```markdown
+## Post-Optimization Test Re-run
+- Unit tests: PASS (X/X)
+- Integration tests: PASS (X/X)
+- E2E tests: PASS (X/X) | not run
+- Reverted optimizations: N (or: none)
+- Status: CLEAN | PARTIAL (N optimizations reverted) | REVERTED (all rolled back)
+```
+
+### Gate impact
+
+The Phase Gate (Step 6) checks the post-optimization test status:
+- `CLEAN` → no issues, all optimizations kept
+- `PARTIAL` → some optimizations reverted, remaining tests pass → acceptable
+- `REVERTED` → all rolled back, code is at pre-optimization state → acceptable (logged as known issue)
+- Tests still failing → **BLOCKER** (should not happen if revert protocol followed)
 
 ---
 
 ## Step 4 — Code Review + Acceptance Tests (PARALLEL TRACKS)
 
-Both tracks read same code, neither modifies it. Both must pass for gate.
+Review and acceptance testing run as **two parallel tracks** — both read the same code, neither modifies it.
+
+```
+Step 4 (PARALLEL TRACKS):
+  Track A: Code Review (three stages)
+  Track B: Acceptance Tests (persona-based)
+```
+
+Both tracks must pass for the gate. Running them in parallel saves a full step.
 
 ### Track A: Code Review (Three-Stage Pipeline)
 
-### Stage 4a — Spec Compliance Review (FIRST)
-Independently verify implementation matches specs. Explicit distrust of manifests — read actual code.
+Review runs as three sequential stages. Each stage catches a different class of defect. Stages are NOT combined.
 
-**Checks per spec:** interface contracts match, behaviors implemented (not stubbed), edge cases handled, error matrix covered, API↔wireframe bindings match.
+### Stage 4a — Spec Compliance Review (FIRST — catches "clean code, wrong spec")
 
-**Mismatch → closed loop:** route to implementation agent (max 2 rounds) → re-check changed files only → persist after 2 rounds → `spec_deviation` → gate blocker.
+**Purpose:** Independently verify the implementation matches the specs. This is NOT a code quality check — it's a "did you build the right thing" check.
 
-Output: `reports/spec_compliance_review.md`
+**Approach:** Read each spec in `docs/design/phases/${PHASE}/specs/`, then verify the implementation delivers what the spec defines. Use explicit distrust:
 
-### Stage 4b — All remaining reviews (PARALLEL after 4a)
+> "The implementer's manifest reports success. Their report may be incomplete, inaccurate, or optimistic. Verify everything independently by reading the actual code — do NOT trust the manifest alone."
+
+**Checks (per spec):**
+- Every interface contract in the spec has a matching implementation (method signatures, route paths, request/response shapes)
+- Every behavior described in the spec's flow section is implemented (not just stubbed)
+- Every edge case in the spec has handling code (or a documented deviation)
+- Every error type in the spec's error matrix has a corresponding error response
+- API contracts match the wireframe API bindings (if UI phase)
+
+**On mismatch (CLOSED LOOP):**
+- Route back to implementation agent for fix (max 2 rounds)
+- After fix: **re-run spec compliance check on the changed files** (not full review — targeted re-check)
+- If mismatch persists after 2 rounds: log as `spec_deviation` with details → becomes gate blocker
+- Log all deviations (fixed and unresolved) in report
+
+**Output:** `agent_state/phases/${PHASE}/reports/spec_compliance_review.md`
+
+```markdown
+# Spec Compliance Review — Phase N
+
+## Summary
+COMPLIANT | N deviations | N missing implementations
+
+## Per-Spec Results
+| Spec File | Contracts Verified | Behaviors Verified | Edge Cases | Result |
+|-----------|-------------------|--------------------|------------|--------|
+
+## Deviations
+| Spec | Expected | Actual | Severity | Action |
+|------|----------|--------|----------|--------|
+
+## Missing Implementations
+| Spec | What's Missing | Blocking |
+|------|---------------|----------|
 ```
-├─ code_reviewer_I     → style + idioms (language skill pack)
-├─ code_reviewer_II    → architecture compliance (IMPLEMENTATION_GUIDELINES)
-├─ security_reviewer   → OWASP + adversarial + dynamic checks (SQL injection, auth bypass, CORS, rate limiting)
-└─ dependency_scanner  → CVE + outdated packages
+
+### Stage 4b — All remaining reviews (PARALLEL)
+
+After spec compliance passes, run ALL remaining reviews in parallel to maximize speed:
+
+```
+Stage 4b (ALL PARALLEL):
+  ├─ code_reviewer_I     → style + idioms (reads language skill pack)
+  ├─ code_reviewer_II    → architecture compliance (reads IMPLEMENTATION_GUIDELINES)
+  ├─ security_reviewer   → OWASP + adversarial property checks
+  └─ dependency_scanner  → CVE + outdated packages
 ```
 
-Max 2 rounds per reviewer. Unresolved → `known_issues` in manifest.
+On issues found from any reviewer:
+- Implementation agent addresses each comment
+- Reviewer re-checks
+- **Max 2 rounds** → unresolved issues go to `known_issues` in manifest
 
-**Blocking rules:** code_reviewer_I: BLOCKING issues; code_reviewer_II: VIOLATION findings; security_reviewer: HIGH severity (static + dynamic); dependency_scanner: CRITICAL/HIGH with available fixes (auto-apply non-breaking).
+**Blocking rules:**
+- `code_reviewer_I`: BLOCKING issues must fix
+- `code_reviewer_II`: VIOLATION findings must fix
+- `security_reviewer`: HIGH severity findings must fix
+  **Dynamic security checks** (within security_reviewer):
+  - Requires application running (from Step 2.75 smoke test)
+  - Runs SQL injection, auth bypass, CORS, rate limiting probes
+  - Findings appended to security_review.md under "Dynamic Security Findings"
+  - BLOCKING/CRITICAL findings from dynamic checks have same gate impact as static findings
+- `dependency_scanner`: CRITICAL/HIGH with available fixes must apply. Auto-applies non-breaking fixes (`npm audit fix` etc.). Breaking fixes flagged for user decision.
 
-Reports: `spec_compliance_review.md`, `code_review_I.md`, `code_review_II.md`, `security_review.md`, `dependency_scan.md`, `sast_scan.md`
+Reports written to `agent_state/phases/${PHASE}/reports/`:
+- `spec_compliance_review.md` (Stage 4a)
+- `code_review_I.md` (Stage 4b)
+- `code_review_II.md` (Stage 4b)
+- `security_review.md` (Stage 4b)
+- `dependency_scan.md` (Stage 4b)
+- `sast_scan.md` (Stage 4c)
 
-### Stage 4c — SAST (parallel with review)
+### Stage 4c — Static Application Security Testing (parallel with review)
+
+Run SAST scan on all code changed in this phase:
+
 ```bash
-# Language-specific: govulncheck, bandit, semgrep, spotbugs, cargo audit
+# Language-specific SAST (from IMPLEMENTATION_GUIDELINES)
+# Go: govulncheck ./...
+# Python: bandit -r src/ -f json
+# TypeScript/JavaScript: semgrep --config auto src/
+# Java: spotbugs or semgrep
+# Rust: cargo audit
+
+SAST_CMD=$(detect_sast_command)  # from IMPLEMENTATION_GUIDELINES
 $SAST_CMD > agent_state/phases/${PHASE}/reports/sast_scan.md
 ```
-CRITICAL/HIGH → BLOCKING; MEDIUM → WARNING; LOW → INFO. No SAST tool configured → skip with warning.
 
-### Track B: Acceptance Tests (PARALLEL with Track A)
+Severity mapping:
+- CRITICAL/HIGH → BLOCKING (must fix before gate)
+- MEDIUM → WARNING (logged in known_issues)
+- LOW → INFO (logged but not blocking)
 
-**Agent:** `acceptance_test_agent` — validates against BRD FR-* at use case/persona level.
+If no SAST tool is configured in IMPLEMENTATION_GUIDELINES: skip with warning log.
 
-**Data seeding:** `requirements/test-data/phase-${PHASE}.yaml` if present, else agent generates from BRD personas.
+---
 
-**Execution:** Each in-scope FR-* executed as declared persona. Every BRD persona exercised by at least 1 use case. Results: PASS / PARTIAL / FAIL per use case.
+### Track B: Acceptance Tests (runs in PARALLEL with Track A)
 
-**Contract shape assertions:** Every API call verifies response matches data-contracts.md (field names, types, array vs object, empty state). Mismatches logged as `CONTRACT_VIOLATION`.
+**Agent:** `acceptance_test_agent`
 
-**Iteration:** Failure → implementation fix → re-test → max 2 rounds → unresolved → **gate blocked**.
+Validates implementation at use case and persona level against BRD FR-* requirements scoped to this phase. Runs in parallel with code review — both read the same code, neither modifies it.
 
-Outputs: `reports/acceptance_report.md`, `test-data/generated-seed.yaml`, `test-data/seed-cleanup.md`
+### Data Seeding
+1. Check `requirements/test-data/phase-${PHASE}.yaml` — use if present (user-provided data takes priority)
+2. If absent: `acceptance_test_agent` generates realistic seed data from BRD personas + in-scope use cases
+3. Seed data applied via API or direct DB (per IMPLEMENTATION_GUIDELINES)
+
+### Execution
+- Each in-scope FR-* with user-facing acceptance criteria is executed as its declared persona
+- Every BRD persona must be exercised by ≥1 use case this phase (if in scope)
+- Results: PASS / PARTIAL (N of M criteria met) / FAIL per use case
+
+### Contract Shape Assertions (runs alongside persona tests)
+For EVERY API endpoint called during acceptance testing, verify:
+- Response matches `data-contracts.md` TypeScript interface (field names, types)
+- List endpoints return `data: []` (array), not object
+- Single endpoints return `data: {}` (object), not array
+- Empty list returns `{ data: [], meta: { total: 0 } }`, not `null` or `{}`
+- Log mismatches as `CONTRACT_VIOLATION` — these are the exact bugs that crash the UI
+
+### Iteration
+- Acceptance failure → implementation agent fixes → re-test → max 2 rounds
+- After max rounds: log as unresolved → **phase gate blocked**
+
+### Outputs
+- `agent_state/phases/${PHASE}/reports/acceptance_report.md` — full results
+- `agent_state/phases/${PHASE}/test-data/generated-seed.yaml` — seed data used
+- `agent_state/phases/${PHASE}/test-data/seed-cleanup.md` — how to reset
 
 ---
 
 ## Step 6 — Phase Gate
 
-Read each gate item's source file, evaluate pass/fail. If NOT met → record blocker, do NOT write `gate.passed`.
+Read the output file for each gate item below. Evaluate the specific pass/fail criterion. If the condition is NOT met, record it as a blocker — **do not write gate.passed**.
 
 ```
 Gate Item                    Source File                                          Pass Condition
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-Spec compliance              reports/spec_compliance_review.md                    COMPLIANT — no missing implementations
-Unit tests                   reports/unit_tests.md                                No FAILED tests
-Integration tests            reports/integration_tests.md                         No FAILED tests
+Spec compliance              agent_state/phases/${PHASE}/reports/spec_compliance_review.md   COMPLIANT — no missing implementations
+Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests
+Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests
 E2E tests (if unlocked)      agent_state/e2e/results.md                          No FAILED workflows
-Reconciliation C (spec↔impl) reconciliation/phase-N/specs_vs_impl.md             No MISSING impls, unspecced acknowledged
-Reconciliation D (spec↔tests)reconciliation/phase-N/specs_vs_tests.md            No HIGH-priority untested
-Code optimization            reports/code_optimization.md                         Post-opt tests PASS (CLEAN/PARTIAL ok)
-UI code optimization         reports/ui_code_optimization.md                      Post-opt tests PASS (if frontend; else skip)
-Code review I                reports/code_review_I.md                             No BLOCKING issues
-Code review II               reports/code_review_II.md                            No architecture violations
-Security review              reports/security_review.md                           No HIGH severity
-SAST scan                    reports/sast_scan.md                                 No CRITICAL/HIGH
-Acceptance tests             reports/acceptance_report.md                         All in-scope use cases PASS
-Cross-phase regression       manifest.json → cross_phase_regression               All affected phases PASSED (skip if PHASE==1)
-Migration safety             reports/migration_safety.md                          Zero CRITICAL, DOWN coverage ≥ 90%
+Reconciliation C (spec↔impl) agent_state/reconciliation/phase-${PHASE}/specs_vs_impl.md   No MISSING implementations AND unspecced items acknowledged (count logged)
+Reconciliation D (spec↔tests)agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md  No HIGH-priority untested behaviors
+Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     Post-optimization tests: PASS (CLEAN or PARTIAL accepted)
+UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimization.md  Post-optimization tests: PASS (if frontend.enabled; skip otherwise)
+Code review I                agent_state/phases/${PHASE}/reports/code_review_I.md   No BLOCKING issues
+Code review II               agent_state/phases/${PHASE}/reports/code_review_II.md  No architecture violations
+Security review              agent_state/phases/${PHASE}/reports/security_review.md  No HIGH severity findings
+SAST scan                    agent_state/phases/${PHASE}/reports/sast_scan.md        No CRITICAL or HIGH findings
+Acceptance tests             agent_state/phases/${PHASE}/reports/acceptance_report.md   All in-scope use cases: PASS
+Cross-phase regression       manifest.json → cross_phase_regression                    All affected phases PASSED (skip if PHASE == 1)
+Migration safety              agent_state/phases/${PHASE}/reports/migration_safety.md   Zero CRITICAL findings, DOWN coverage ≥ 90%
 ```
 
-E2E gate active only when `PHASE_PLAN.md` has non-empty `e2e_workflows_unlocked`.
+**E2E gate is active only when `PHASE_PLAN.md` has a non-empty `e2e_workflows_unlocked` list.**
 
 ### Bug Severity Classification
 
+All items in `known_issues[]` and `carried_forward[]` MUST have a severity level:
+
 | Severity | Definition | Gate Impact | Carry-Forward Limit |
-|----------|-----------|-------------|---------------------|
-| `critical` | Data loss, security breach, feature broken | BLOCKS | 0 phases |
-| `high` | Major feature broken, UX degradation | BLOCKS | 1 phase max |
-| `medium` | Minor feature broken, workaround exists | No block | 3 phases max |
-| `low` | Cosmetic | No block | No limit |
+|----------|-----------|-------------|-------------------|
+| `critical` | Data loss, security breach, complete feature broken | BLOCKS gate — must fix | 0 phases (fix immediately) |
+| `high` | Major feature broken, significant UX degradation | BLOCKS gate — must fix | 1 phase max |
+| `medium` | Minor feature broken, workaround exists | Does not block gate | 3 phases max |
+| `low` | Cosmetic, minor inconvenience | Does not block gate | No limit (tracked) |
 
-Default if unset: `medium`. Carry-forward enforcement: `critical` in carried_forward → IMMEDIATE BLOCK; `high` >1 phase → auto-escalates to `critical`; `medium` >3 phases → auto-escalates to `high`.
+When severity is not explicitly set, default to `medium`.
 
-### Gate failure
-```bash
-cat > agent_state/phases/${PHASE}/gate.failed <<EOF
-{"phase":${PHASE},"failed_at":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","blockers":[/* failing items */],"attempt":${ATTEMPT:-1}}
-EOF
-```
+Carry-forward enforcement:
+- `critical` items that appear in `carried_forward[]` → ⛔ IMMEDIATE BLOCK, cannot proceed
+- `high` items carried for >1 phase → becomes `critical` (auto-escalation)
+- `medium` items carried for >3 phases → becomes `high` (auto-escalation)
 
-**Gate state machine:** `gate.passed` → completed; `gate.failed` only → unresolved blockers; neither → not attempted; both → `gate.passed` wins.
+If any gate item fails:
+1. Write `gate.failed` with structured failure data (enables next-phase detection of "ran but failed" vs "never ran"):
+   ```bash
+   cat > agent_state/phases/${PHASE}/gate.failed <<EOF
+   {
+     "phase": ${PHASE},
+     "failed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+     "blockers": [
+       // list of failing gate items with details
+     ],
+     "attempt": ${ATTEMPT:-1}
+   }
+   EOF
+   ```
+2. Surface to user with specific blocker text, file location, and the exact failing entry.
+3. Do not proceed to Step 7.
 
-When resolved: write `gate.passed`, rename `gate.failed` → `gate.failed.resolved`.
+**Gate state machine (ternary):**
+- `gate.passed` exists → phase completed successfully
+- `gate.failed` exists (no `gate.passed`) → phase ran but has unresolved blockers
+- Neither exists → phase has not been attempted yet
+- Both exist → `gate.passed` wins (gate.failed is from a previous attempt)
 
-### Gate Failure Recovery
-1. Identify blocker from specific report file
-2. Fix root cause — re-run failing agent only
-3. Re-evaluate gate — re-read all reports
-4. Gate passes → write `gate.passed` + manifest
+When the Gate Failure Recovery Procedure resolves all blockers:
+1. Write `gate.passed`
+2. Rename `gate.failed` → `gate.failed.resolved` (preserve history, don't delete)
 
-Do NOT delete `agent_state/phases/${PHASE}/`, re-run entire pipeline, or modify tests to force pass.
+### Gate Failure Recovery Procedure
 
-### --force_gate Override
-1. Write `gate.passed` with `⚠ FORCED GATE` header listing overridden items
-2. Write `gate.forced`:
-```json
-{"phase":N,"forced_at":"<ISO>","blockers":[{"gate_item":"...","details":"...","severity":"gate_override"}],"user_rationale":"<reason>"}
-```
-3. Add to manifest `known_issues[]` with `"severity": "gate_override"`
+When the gate fails, DO NOT delete any phase files. Follow this sequence:
+1. **Identify the blocker** — read the specific report file and find the failing entry
+2. **Fix the root cause** — re-run the failing agent (e.g., fix test → re-run unit_test_agent)
+3. **Re-run only the failed check** — no need to re-run the entire pipeline
+4. **Re-evaluate the gate** — re-read all report files and check conditions again
+5. If gate now passes → write `gate.passed` and manifest
 
-### Forced Gate Carry-Forward Enforcement
-Next phase Step 0: check `gate.forced` → surface ALL blockers prominently. Phase N+1 audit lists each as CRITICAL carried-forward. Phase N+1 gate adds extra check: all forced blockers resolved or re-deferred. **2 consecutive forced gates → PERMANENTLY BLOCKING** (cannot force again; fix or remove from scope).
+**DO NOT:**
+- Delete `agent_state/phases/${PHASE}/` — it contains all the work done so far
+- Re-run the entire `/develop` pipeline — only re-run the failing step
+- Modify tests to force them to pass — fix the implementation instead
+
+### --force-gate Override
+
+If `--force_gate` flag is set AND the gate has failures:
+1. Write `gate.passed` with a warning header:
+   ```
+   ⚠ FORCED GATE — ${N} blockers overridden by user at ${TIMESTAMP}
+   Overridden items: [list of failed gate items]
+   ```
+2. Write `gate.forced` with structured failure data:
+   ```json
+   {
+     "phase": N,
+     "forced_at": "<ISO 8601>",
+     "blockers": [
+       { "gate_item": "unit_tests", "details": "TestAuthFlow FAILED — flaky", "severity": "gate_override" },
+       { "gate_item": "security_review", "details": "HIGH: IDOR in GET /users/:id", "severity": "gate_override" }
+     ],
+     "user_rationale": "<user's reason for forcing>"
+   }
+   ```
+3. Add overridden failures to manifest `known_issues[]` with `"severity": "gate_override"`
+4. Print warning: `⚠ Gate forced with N unresolved blockers — review before release`
+
+### Forced Gate Carry-Forward Enforcement (HARD RULE)
+
+When the NEXT phase starts (Phase N+1 Step 0):
+1. Check: `test -f agent_state/phases/$((PHASE-1))/gate.forced`
+2. If exists: read `gate.forced` and surface ALL blockers prominently:
+   ```
+   ⛔ FORCED GATE DETECTED — Phase $((PHASE-1)) passed with N unresolved blockers:
+     - [blocker 1 details]
+     - [blocker 2 details]
+   These MUST be resolved in Phase ${PHASE} or explicitly re-deferred with --force_gate.
+   ```
+3. Phase N+1 audit (Step 1) MUST list each forced blocker as a **CRITICAL carried-forward item**
+4. Phase N+1 gate (Step 6) adds an extra gate check:
+   ```
+   Forced gate resolution    agent_state/phases/$((PHASE-1))/gate.forced    All blockers resolved OR explicitly re-deferred
+   ```
+5. If a blocker survives **2 consecutive forced gates**: it becomes **PERMANENTLY BLOCKING** — cannot be force-gated again. Must fix or remove from scope via BRD change request.
+
+**Anti-pattern:** Forcing gates across 3+ phases creates a project where nothing actually works. The 2-force limit prevents this.
 
 ### Manifest Write Protocol (Atomic)
+
+All manifest writes MUST use atomic write protocol to prevent corrupt JSON from crashing downstream phases:
+
+1. Write to `agent_state/phases/${PHASE}/manifest.json.tmp`
+2. Validate: `cat manifest.json.tmp | python3 -c "import json,sys; json.load(sys.stdin)" && echo "valid" || echo "CORRUPT"`
+3. If valid: `mv manifest.json.tmp manifest.json`
+4. If invalid: STOP — do not proceed. Log error and retry write.
+
 ```bash
+# Atomic manifest write
 python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/manifest.json.tmp && \
   mv agent_state/phases/${PHASE}/manifest.json.tmp agent_state/phases/${PHASE}/manifest.json || \
   { echo "⛔ CORRUPT manifest — aborting"; exit 1; }
 ```
 
-Also validate required fields:
+This protocol also applies to any agent-level manifest writes in `agent_state/phases/${PHASE}/<agent>/manifest.json` — always write to `.tmp`, validate, then `mv`.
+
+### Schema Validation
+
+After JSON syntax validation, also validate against the manifest schema (`agent_state/manifest_schema.json`):
+
 ```bash
 python3 -c "
 import json, sys
 manifest = json.load(sys.stdin)
-required = ['phase','goal','started_at','brd_requirements_met','test_results','artifacts','known_issues','carried_forward']
+required = ['phase', 'goal', 'started_at', 'brd_requirements_met', 'test_results', 'artifacts', 'known_issues', 'carried_forward']
 missing = [f for f in required if f not in manifest]
 if missing:
     print(f'⛔ MANIFEST MISSING FIELDS: {missing}')
@@ -876,44 +1761,102 @@ print('✅ Manifest schema valid')
 ```
 
 ### Phase Completion Tagging
+
+After gate passes and manifest is written:
+1. `git tag "phase-${PHASE}-complete" -m "Phase ${PHASE} gate passed: $(date)"`
+2. This tag serves as the rollback point for future phase resets
+
 ```bash
 git tag "phase-${PHASE}-complete" -m "Phase ${PHASE} gate passed: $(date)"
 ```
 
-### Write gate files + manifest
+### Write gate files
+
 ```bash
 mkdir -p agent_state/phases/${PHASE}
 touch agent_state/phases/${PHASE}/gate.passed
 ```
 
-Manifest schema (`agent_state/phases/${PHASE}/manifest.json`):
+Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next phase:
+
 ```json
 {
-  "phase": N, "goal": "<from PHASE_PLAN.md>",
-  "completed_at": "<ISO 8601>",
+  "phase": N,
+  "goal": "<from PHASE_PLAN.md>",
+  "completed_at": "<ISO 8601 timestamp>",
   "brd_requirements_met": ["FR-001", "FR-002", "NFR-PERF-01"],
-  "acceptance_tests": {"use_cases_total":5,"use_cases_passed":5,"personas_exercised":["Admin User","End User"],"seed_data":"agent_state/phases/N/test-data/generated-seed.yaml"},
-  "artifacts": {"specs":["..."],"code":["..."],"migrations":["..."],"tests":["..."],"api_routes":["..."]},
+  "acceptance_tests": {
+    "use_cases_total": 5,
+    "use_cases_passed": 5,
+    "personas_exercised": ["Admin User", "End User"],
+    "seed_data": "agent_state/phases/N/test-data/generated-seed.yaml"
+  },
+  "artifacts": {
+    "specs":      ["docs/design/phases/N/specs/auth-flow.md"],
+    "code":       ["src/services/auth.go", "src/handlers/auth.go"],
+    "migrations": ["migrations/001_add_users.sql"],
+    "tests":      ["src/services/auth_test.go", "tests/integration/auth_test.go"],
+    "api_routes": ["POST /api/v1/auth/login", "POST /api/v1/auth/logout"]
+  },
   "test_results": {
-    "unit": {"status":"passed","total":24,"passed":24,"failed":0,"report":"agent_state/phases/N/reports/unit_tests.md"},
-    "integration": {"status":"passed","total":8,"passed":8,"failed":0,"report":"..."},
-    "e2e": {"status":"passed|not_run","total":3,"passed":3,"failed":0,"report":"..."}
+    "unit": {
+      "status": "passed",
+      "total": 24,
+      "passed": 24,
+      "failed": 0,
+      "report": "agent_state/phases/N/reports/unit_tests.md"
+    },
+    "integration": {
+      "status": "passed",
+      "total": 8,
+      "passed": 8,
+      "failed": 0,
+      "report": "agent_state/phases/N/reports/integration_tests.md"
+    },
+    "e2e": {
+      "status": "passed | not_run",
+      "total": 3,
+      "passed": 3,
+      "failed": 0,
+      "report": "agent_state/e2e/results.md"
+    }
   },
   "optimization": {
-    "backend": {"status":"CLEAN|PARTIAL|REVERTED","dead_code_removed":0,"optimizations_applied":0,"lines_reduced":0,"report":"..."},
-    "ui": {"status":"CLEAN|PARTIAL|REVERTED|not_run","dead_code_removed":0,"optimizations_applied":0,"report":"..."},
-    "post_optimization_tests": "PASS|PASS_WITH_REVERTS|not_run"
+    "backend": {
+      "status": "CLEAN | PARTIAL | REVERTED",
+      "dead_code_removed": 0,
+      "optimizations_applied": 0,
+      "lines_reduced": 0,
+      "report": "agent_state/phases/N/reports/code_optimization.md"
+    },
+    "ui": {
+      "status": "CLEAN | PARTIAL | REVERTED | not_run",
+      "dead_code_removed": 0,
+      "optimizations_applied": 0,
+      "report": "agent_state/phases/N/reports/ui_code_optimization.md"
+    },
+    "post_optimization_tests": "PASS | PASS_WITH_REVERTS | not_run"
   },
-  "known_issues": [], "carried_forward": [],
-  "carried_forward_policy": "Items in carried_forward[] MUST be addressed within 1 phase. If an item survives 2 consecutive phases: it becomes BLOCKING — fix or remove from scope via BRD change request. Forced gate overrides count toward this limit."
+  "known_issues":    [],
+  "carried_forward": [],
+  "carried_forward_policy": "Items in carried_forward[] MUST be addressed within 1 phase. If an item survives 2 consecutive phases: it becomes a BLOCKING gate item in the 2nd phase — fix or explicitly remove from scope via BRD change request. Forced gate overrides count toward this limit — an item force-gated in Phase N and still unresolved in Phase N+1 is BLOCKING in Phase N+1."
 }
 ```
 
 ---
 
-## Step 6b — Documentation (parallel with gate writes)
+## Step 6b — Documentation (runs in parallel with gate file writes)
 
-**Agent:** `documentation_agent` — API docs (OpenAPI/Swagger), README updates, code review annotations. Output: `reports/documentation_update.md`. Does NOT block gate.
+**Agent:** `documentation_agent`
+
+Generates or updates developer-facing documentation for all artifacts produced this phase:
+- API endpoint docs (OpenAPI/Swagger update or equivalent)
+- Updated `README.md` sections for new components
+- Any doc annotations from code review comments
+
+Output: `agent_state/phases/${PHASE}/reports/documentation_update.md` — summary of what was added/updated.
+
+Does NOT block gate passage. Runs in parallel with gate file writes.
 
 ---
 
@@ -921,19 +1864,57 @@ Manifest schema (`agent_state/phases/${PHASE}/manifest.json`):
 
 ```
 ✅ Phase N complete
-  Implemented: Backend: N services, N repos, N routes | UI: N screens | DB: N migrations
-  Tests: Unit X/X | Integration X/X | E2E X/X (or not run)
-  Reconciliation: Spec↔Impl PASS | Spec↔Tests PASS
-  Optimization: Dead code N items (-X lines) | Optimizations N | Flagged N
-  Acceptance: X/X passed (FR-001, FR-002) | Personas: [Admin, End User]
-  Reviews: Style PASS | Architecture PASS | Security PASS
+
+  Implemented:
+    Backend: N services, N repositories, N API routes
+    UI:      N screens (or: not a UI phase)
+    DB:      N migrations applied
+
+  Tests:
+    Unit:        X/X passed
+    Integration: X/X passed
+    E2E:         X/X passed (or: not run this phase)
+
+  Reconciliation:
+    Spec ↔ Impl:   PASS (or: N missing, N unspecced flagged)
+    Spec ↔ Tests:  PASS (or: N untested HIGH behaviors)
+
+  Optimization:
+    Dead code removed: N items (-X lines)
+    Optimizations applied: N (code reduction: X, performance: Y, structural: Z)
+    Flagged for review: N items
+
+  Acceptance:
+    Use cases:   X/X passed  (FR-001, FR-002, FR-003)
+    Personas:    [Admin User, End User]
+    Seed data:   agent_state/phases/N/test-data/generated-seed.yaml
+
+  Reviews:
+    Code style:    PASS (or: N known issues logged)
+    Architecture:  PASS
+    Security:      PASS
+
   Gate: agent_state/phases/N/gate.passed ✅
   Manifest: agent_state/phases/N/manifest.json ✅
+
   ▶ Next: /plan --phase=N+1
+  ▶ After all phases: /accept (global acceptance across full product)
 ```
 
 ### Execution Summary
-Read `execution.jsonl`, render agent timings + status, identify slowest agent, total run/failed/retried counts.
+
+Read `agent_state/phases/${PHASE}/execution.jsonl` and render:
+
+```
+Phase ${PHASE} Execution (total: Xm Ys)
+  <agent_name>        Xm Ys  ✅|⚠|❌  <findings summary>
+  ...
+
+Slowest agent: <name> (Xm Ys)
+Total agents: N run, N failed, N retried
+```
+
+Write the pipeline_complete entry to the execution log:
 ```bash
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_complete\",\"phase\":${PHASE},\"status\":\"<gate_passed|gate_failed|gate_forced>\",\"total_duration_s\":<N>,\"agents_run\":<N>,\"agents_failed\":<N>}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
@@ -942,28 +1923,54 @@ echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_complete\"
 
 ## Step 7b — Phase Post-Mortem (ALWAYS runs, even on forced gates)
 
-Informational only, never blocks gate. Output: `reports/postmortem.md`
+**Purpose:** Analyze patterns from this phase's development to improve future phases.
+
+**Gate impact:** NONE — post-mortem is informational only, never blocks.
+
+**Analysis:**
 
 ### 1. Failure Pattern Analysis
-Read all reports: count BLOCKING/CRITICAL/HIGH findings, group by category (security, architecture, style, testing, contract), identify systemic patterns across components.
+
+Read all reports in `agent_state/phases/${PHASE}/reports/`:
+- Count total BLOCKING/CRITICAL/HIGH findings across all reviewers
+- Group findings by category: security, architecture, style, testing, contract
+- Identify repeat patterns: "Did the same type of issue appear in multiple components?"
+- Example: "3 of 5 handlers missing tenantID in WHERE clause -> systemic pattern, not one-off"
 
 ### 2. Retry Analysis
+
+Read `agent_state/phases/${PHASE}/execution.jsonl`:
+- Count agents that required retries
+- Identify which steps had the most failures
+- Calculate: `retry_rate = agents_retried / agents_run`
+- If retry_rate > 30%: flag `"⚠ High retry rate — consider improving specs or skill packs"`
+
 ```bash
+# Calculate retry rate from execution log
 AGENTS_RUN=$(grep '"status":"completed"' agent_state/phases/${PHASE}/execution.jsonl | wc -l)
 AGENTS_RETRIED=$(grep '"status":"failed"' agent_state/phases/${PHASE}/execution.jsonl | jq -r '.agent' 2>/dev/null | sort -u | wc -l)
 if [ "$AGENTS_RUN" -gt 0 ]; then
   RETRY_RATE=$(( AGENTS_RETRIED * 100 / AGENTS_RUN ))
-  echo "Retry rate: ${RETRY_RATE}%"
-  [ "$RETRY_RATE" -gt 30 ] && echo "⚠ High retry rate — improve specs or skill packs"
+  echo "Retry rate: ${RETRY_RATE}% (${AGENTS_RETRIED} of ${AGENTS_RUN} agents retried)"
+  if [ "$RETRY_RATE" -gt 30 ]; then
+    echo "⚠ High retry rate — consider improving specs or skill packs"
+  fi
 fi
 ```
 
 ### 3. Time Distribution
-From `execution.jsonl`: % in implementation vs testing vs review. Ideal: ~40/30/20/10. Review > 40% → specs underspecified. Testing > 50% → implementation quality issue.
+
+From `execution.jsonl`, calculate:
+- % time in implementation vs testing vs review
+- Ideal: ~40% implementation, ~30% testing, ~20% review, ~10% other
+- Flag deviations: if review > 40%, suggest "specs may be underspecified"
+- Flag: if testing > 50%, suggest "implementation quality may need improvement"
 
 ```bash
+# Parse execution.jsonl for time distribution
 python3 -c "
 import json, sys
+
 steps = {'implement': 0, 'test': 0, 'review': 0, 'other': 0}
 step_map = {
     'audit': 'other', 'orient': 'other', 'gate': 'other', 'documentation': 'other',
@@ -973,6 +1980,7 @@ step_map = {
     'reconcil': 'test', 'optimiz': 'test',
     'review': 'review', 'security': 'review', 'tenant': 'review', 'quality': 'review'
 }
+
 for line in open('agent_state/phases/${PHASE}/execution.jsonl'):
     try:
         entry = json.loads(line.strip())
@@ -980,46 +1988,123 @@ for line in open('agent_state/phases/${PHASE}/execution.jsonl'):
             agent = entry.get('agent', entry.get('step', 'other')).lower()
             category = 'other'
             for key, cat in step_map.items():
-                if key in agent: category = cat; break
+                if key in agent:
+                    category = cat
+                    break
             steps[category] += entry['duration_s']
     except: pass
+
 total = sum(steps.values()) or 1
 for cat, secs in steps.items():
-    print(f'  {cat}: {int(secs*100/total)}% ({secs:.0f}s)')
-if steps['review']*100/total > 40: print('⚠ Review > 40% — specs may be underspecified')
-if steps['test']*100/total > 50: print('⚠ Test > 50% — implementation quality issue')
-" 2>/dev/null || echo "  (time distribution unavailable)"
+    pct = int(secs * 100 / total)
+    print(f'  {cat}: {pct}% ({secs:.0f}s)')
+
+if steps['review'] * 100 / total > 40:
+    print('⚠ Review time > 40% — specs may be underspecified')
+if steps['test'] * 100 / total > 50:
+    print('⚠ Test time > 50% — implementation quality may need improvement')
+" 2>/dev/null || echo "  (time distribution unavailable — execution.jsonl missing or malformed)"
 ```
 
 ### 4. Carried-Forward Trend
+
+Compare current phase's `known_issues[]` + `carried_forward[]` against previous phase:
+- Are issues accumulating or being resolved?
+- Severity trend: are issues getting more or less severe?
+- If carried_forward count is increasing phase-over-phase: flag `"⚠ Technical debt accumulating"`
+
 ```bash
+# Carried-forward trend analysis
 python3 -c "
 import json, os
+
 trend = []
 phase = ${PHASE}
 for p in range(1, phase + 1):
-    path = f'agent_state/phases/{p}/manifest.json'
-    if os.path.exists(path):
-        m = json.load(open(path))
-        cf, ki = len(m.get('carried_forward',[])), len(m.get('known_issues',[]))
-        trend.append({'phase':p,'total':cf+ki})
-        print(f'  Phase {p}: {cf+ki} issues ({cf} carried, {ki} known)')
+    manifest_path = f'agent_state/phases/{p}/manifest.json'
+    if os.path.exists(manifest_path):
+        m = json.load(open(manifest_path))
+        cf = len(m.get('carried_forward', []))
+        ki = len(m.get('known_issues', []))
+        trend.append({'phase': p, 'carried_forward': cf, 'known_issues': ki, 'total': cf + ki})
+        print(f'  Phase {p}: {cf + ki} issues ({cf} carried forward, {ki} known issues)')
+
 if len(trend) >= 2:
-    print('  Trend:', 'DEGRADING ⚠' if trend[-1]['total']>trend[-2]['total'] else 'IMPROVING' if trend[-1]['total']<trend[-2]['total'] else 'STABLE')
-" 2>/dev/null || echo "  (trend unavailable)"
+    prev = trend[-2]['total']
+    curr = trend[-1]['total']
+    if curr > prev:
+        print('  Trend: DEGRADING ⚠ Technical debt accumulating')
+    elif curr < prev:
+        print('  Trend: IMPROVING')
+    else:
+        print('  Trend: STABLE')
+elif len(trend) == 1:
+    print(f'  Trend: BASELINE (first phase tracked)')
+" 2>/dev/null || echo "  (trend analysis unavailable)"
 ```
 
 ### 5. Gate Health
+
+- Did the gate pass on first attempt?
+- How many gate items required fixes?
+- Was the gate forced? If so, what was forced and why?
+
 ```bash
+# Gate health analysis
 GATE_FORCED=$(ls agent_state/phases/${PHASE}/gate.forced 2>/dev/null)
 GATE_FAILED=$(ls agent_state/phases/${PHASE}/gate.failed* 2>/dev/null | wc -l | tr -d ' ')
-[ -n "$GATE_FORCED" ] && echo "  Gate: FORCED" || { [ "$GATE_FAILED" -gt 0 ] && echo "  Gate: PASSED on attempt $((GATE_FAILED+1))" || echo "  Gate: PASSED on first attempt"; }
+if [ -n "$GATE_FORCED" ]; then
+  echo "  Gate: FORCED — review agent_state/phases/${PHASE}/gate.forced for details"
+elif [ "$GATE_FAILED" -gt 0 ]; then
+  echo "  Gate: PASSED on attempt $((GATE_FAILED + 1)) (${GATE_FAILED} previous failure(s))"
+else
+  echo "  Gate: PASSED on first attempt"
+fi
+```
+
+### Output
+
+Write the post-mortem report to `agent_state/phases/${PHASE}/reports/postmortem.md`:
+
+```markdown
+## Phase ${PHASE} Post-Mortem
+
+### Summary
+- Gate: PASSED (attempt ${N}) | FORCED (${N} blockers overridden)
+- Total findings: ${N} blocking, ${N} warning, ${N} info
+- Retry rate: ${N}% (${N} of ${N} agents retried)
+- Time distribution: impl ${N}% | test ${N}% | review ${N}% | other ${N}%
+
+### Systemic Patterns
+${patterns found, or "None detected"}
+
+### Recommendations for Next Phase
+- ${actionable recommendations based on patterns}
+
+### Carried-Forward Trend
+Phase 1: 0 issues -> Phase 2: 2 issues -> Phase 3 (current): 1 issue
+Trend: STABLE | IMPROVING | DEGRADING
+
+### Gate Items That Required Fixes
+| Gate Item | Fix Rounds | Root Cause |
+|-----------|-----------|------------|
+| ${item} | ${N} | ${cause} |
 ```
 
 ### Manifest Addition
+
+Add post-mortem data to the phase manifest:
+
 ```json
-"postmortem": {"retry_rate_pct":N,"systemic_patterns":N,"carried_forward_trend":"stable|improving|degrading","recommendations":["..."]}
+"postmortem": {
+  "retry_rate_pct": N,
+  "systemic_patterns": N,
+  "carried_forward_trend": "stable|improving|degrading",
+  "recommendations": ["..."]
+}
 ```
+
+### Execution Log Entry
 
 ```bash
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"postmortem_complete\",\"phase\":${PHASE},\"retry_rate_pct\":${RETRY_RATE:-0},\"systemic_patterns\":${PATTERN_COUNT:-0},\"carried_forward_trend\":\"${CF_TREND:-baseline}\"}" >> agent_state/phases/${PHASE}/execution.jsonl

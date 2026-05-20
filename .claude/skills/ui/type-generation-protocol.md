@@ -86,6 +86,7 @@ After generation, verify:
 - Field names, types, and optionality match exactly
 
 ---
+
 ## Usage Rules
 
 ### UI Components MUST import from types/api.ts

@@ -40,8 +40,10 @@ import java.time.Instant;
 import java.util.UUID;
 import java.util.function.Consumer;
 
+/**
  * Shared factory for test entities and DTOs.
  * Uses Consumer-based overrides for fluent customization.
+ */
 public final class TestFixtures {
 
     public static final UUID TENANT_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");

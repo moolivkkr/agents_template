@@ -12,6 +12,7 @@ tags:
   - archetype
   - backend
 ---
+
 # CRUD Handler Archetype
 
 Complete HTTP handler set for chi router. Every generated handler MUST follow this pattern.

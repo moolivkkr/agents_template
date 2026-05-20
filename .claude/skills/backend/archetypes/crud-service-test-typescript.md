@@ -28,6 +28,8 @@ src/services/
   widget.service.test.ts      <- THIS file
 ```
 
+Rule: Test file lives next to production code with `.test.ts` suffix.
+
 ---
 
 ## Test Factory Pattern
@@ -202,7 +204,9 @@ describe("WidgetService", () => {
     svc = new WidgetService(repo as any, cache as any, audit as any, logger);
   });
 
+  // =========================================================================
   // Create Tests
+  // =========================================================================
 
   describe("create", () => {
     it("creates widget with correct fields and version 1", async () => {
@@ -290,7 +294,9 @@ describe("WidgetService", () => {
     });
   });
 
+  // =========================================================================
   // Get Tests — Cache-Aside Pattern
+  // =========================================================================
 
   describe("get", () => {
     it("returns cached widget on cache hit — does NOT query DB", async () => {
@@ -350,7 +356,9 @@ describe("WidgetService", () => {
     });
   });
 
+  // =========================================================================
   // Update Tests — Optimistic Locking
+  // =========================================================================
 
   describe("update", () => {
     it("updates widget and increments version", async () => {
@@ -459,7 +467,9 @@ describe("WidgetService", () => {
     });
   });
 
+  // =========================================================================
   // Delete Tests
+  // =========================================================================
 
   describe("delete", () => {
     it("soft deletes widget and invalidates cache", async () => {
@@ -504,7 +514,9 @@ describe("WidgetService", () => {
     });
   });
 
+  // =========================================================================
   // List Tests
+  // =========================================================================
 
   describe("list", () => {
     it("returns paginated results from repository", async () => {
@@ -704,7 +716,9 @@ beforeEach(() => {
 // prismaMock.widget.create.mockResolvedValueOnce(makeWidgetRecord());
 // prismaMock.$transaction.mockImplementation(async (fn) => fn(prismaMock));
 
+/**
  * Mock Prisma transaction — executes callback with the mock client.
+ */
 function mockTransaction() {
   prismaMock.$transaction.mockImplementation(async (fn: any) => {
     if (typeof fn === "function") {
@@ -746,8 +760,10 @@ it("creates widget within transaction", async () => {
 import { vi } from "vitest";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 
+/**
  * Creates a mock Drizzle database client.
  * Chain methods return `this` for fluent API.
+ */
 export function createMockDrizzle() {
   const mockQuery = {
     select: vi.fn().mockReturnThis(),

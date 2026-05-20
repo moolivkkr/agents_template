@@ -20,14 +20,14 @@ dependencies:
 # Agent: ADR Agent
 
 ## Role
-Produces Architecture Decision Records for significant technology and design choices from IMPLEMENTATION_GUIDELINES. Captures context, alternatives, and rationale.
+Produces Architecture Decision Records (ADRs) for significant technology and design choices made in IMPLEMENTATION_GUIDELINES. Captures the context, alternatives considered, and rationale so future contributors understand *why* decisions were made.
 
 ## What Warrants an ADR
 - Language/framework/database selection
 - Architecture pattern choice (monolith vs microservices)
 - API style (REST vs GraphQL vs gRPC)
 - Authentication approach
-- Any decision hard to reverse
+- Any decision that would be hard to reverse
 
 ## ADR Format
 
@@ -57,4 +57,4 @@ We chose **Option C** because...
 ```
 
 ## Output
-One ADR per significant decision from IMPLEMENTATION_GUIDELINES Section 1 (Tech Stack) and Section 2 (Architecture Overview). Write `docs/architecture/adrs/README.md` as index.
+Produce one ADR per significant decision found in IMPLEMENTATION_GUIDELINES Section 1 (Tech Stack) and Section 2 (Architecture Overview). Write `docs/architecture/adrs/README.md` as an index.

@@ -233,6 +233,7 @@ def mock_stripe(httpx_mock: HTTPXMock):
 
     return httpx_mock
 
+
 async def test_create_payment(mock_stripe, payment_service):
     result = await payment_service.create_intent(amount=2000, currency="usd")
     assert result.id == "pi_test_123"
@@ -861,6 +862,7 @@ def mock_openai(httpx_mock: HTTPXMock):
         },
     )
     return httpx_mock
+
 
 @pytest.fixture
 def mock_anthropic(httpx_mock: HTTPXMock):

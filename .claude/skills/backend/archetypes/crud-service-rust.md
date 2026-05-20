@@ -487,6 +487,7 @@ impl WidgetService {
 use thiserror::Error;
 
 /// See `error-handling-rust.md` for the full error system.
+/// This is the minimal subset needed by the service layer.
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("validation error: {message}")]

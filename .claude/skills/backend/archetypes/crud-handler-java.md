@@ -405,8 +405,10 @@ import org.jsoup.safety.Safelist;
 public final class Sanitizer {
     private Sanitizer() {}
 
+    /**
      * Strip all HTML tags and trim whitespace.
      * Call this in the service layer before persisting user-supplied strings.
+     */
     public static String clean(String input) {
         if (input == null) return null;
         return Jsoup.clean(input.trim(), Safelist.none());

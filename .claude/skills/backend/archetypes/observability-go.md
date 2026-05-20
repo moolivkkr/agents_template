@@ -348,6 +348,7 @@ func NewRedisClient(addr string) *redis.Client {
 
 ```go
 // ALWAYS record errors on the span that encountered them.
+// This surfaces errors in trace UIs (Jaeger, Grafana Tempo, Honeycomb).
 
 func (s *Service) Process(ctx context.Context, id string) error {
     ctx, span := tracer.Start(ctx, "Service.Process")
@@ -380,6 +381,7 @@ func (s *Service) Process(ctx context.Context, id string) error {
 
 ```go
 // Context flows through every layer, carrying trace context + app values.
+//
 //   Request arrives
 //     -> otelhttp extracts W3C traceparent header, creates root span
 //     -> RequestIDMiddleware injects request_id into context
@@ -388,6 +390,7 @@ func (s *Service) Process(ctx context.Context, id string) error {
 //     -> Handler reads context, calls service
 //       -> Service reads context, starts child span, calls repo
 //         -> Repo reads context, starts child span, executes query
+//
 // For outgoing HTTP calls:
 //     -> otelhttp.NewTransport injects traceparent + baggage into outgoing headers
 //     -> Downstream service extracts them, continues the trace
@@ -852,6 +855,7 @@ import (
 
 // NewLogger creates the application logger.
 // Production: JSON output, INFO level.
+// Development: Text output, DEBUG level.
 func NewLogger(serviceName, version, env string) *slog.Logger {
     var handler slog.Handler
 
@@ -1188,6 +1192,7 @@ When using Grafana (Loki + Tempo) or similar backends, structured logs with `tra
 //   "tenant_id": "tenant_xyz",
 //   "order_id": "ord_456"
 // }
+//
 // Grafana Loki query: {service="order-service"} | json | trace_id != ""
 // Click trace_id → opens Tempo trace view showing the full request waterfall.
 ```

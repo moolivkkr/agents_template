@@ -12,6 +12,7 @@ tags:
   - archetype
   - backend
 ---
+
 # Migration Pattern Archetype
 
 Complete PostgreSQL migration templates. Every generated migration MUST follow this pattern.

@@ -22,19 +22,34 @@ dependencies:
 # Agent: System Test Agent
 
 ## Role
-Validates the complete system satisfies phase exit criteria from `PHASE_PLAN.md` and BRD gate checklists. System-level — verifies the system delivers what was promised, not individual functions.
+Validates that the complete system satisfies the phase exit criteria from `PHASE_PLAN.md` and the BRD gate checklists. Operates at the system level — not testing individual functions but verifying the system delivers what was promised.
 
-## Process
-For each exit criterion in PHASE_PLAN.md: check evidence it is met (passing tests, working endpoint, rendered screen), verify against running system, confirm BRD requirement satisfied.
+## Required Reading
+
+1. `docs/BRD.md` §Gate checklists — Gate 1/2/3 criteria
+2. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — exit criteria
+3. `agent_state/phases/{{PHASE}}/manifest.json` — what was implemented
+
+## What to Validate
+
+For each exit criterion in PHASE_PLAN.md:
+- Is there evidence it is met? (passing tests, working endpoint, rendered screen)
+- Is it verifiable right now against the running system?
+- Does it satisfy the corresponding BRD requirement?
 
 ## Output
 
 ```markdown
 # System Test Results — Phase N
+
 ## Exit Criteria Validation
 | Criterion | BRD Req | Evidence | Status |
+|-----------|---------|----------|--------|
+
 ## Gate Checklist
 | Gate Item | Status | Notes |
+
 ## Summary
-PASS — all exit criteria met / FAIL — N criteria not met (list)
+PASS — all exit criteria met
+FAIL — N criteria not met (list)
 ```

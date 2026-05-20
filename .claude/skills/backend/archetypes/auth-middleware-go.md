@@ -13,6 +13,7 @@ tags:
   - archetype
   - backend
 ---
+
 # Auth Middleware Archetype
 
 Complete authentication and authorization middleware for chi router. Every generated auth layer MUST follow this pattern.

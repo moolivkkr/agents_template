@@ -22,9 +22,11 @@ Complete error handling system for Spring Boot services. Every generated service
 ```java
 package com.example.app.exception;
 
+/**
  * Sealed base class for all domain exceptions.
  * Using sealed classes ensures exhaustive handling — the compiler warns about unhandled subtypes.
  * Every domain exception MUST extend this class.
+ */
 public abstract sealed class DomainException extends RuntimeException
     permits ResourceNotFoundException, ConflictException, BusinessRuleException,
             BadRequestException, ForbiddenException, RateLimitException, UpstreamServiceException {
@@ -144,8 +146,10 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+/**
  * Centralized exception handler. ALL exception-to-HTTP mapping lives here.
  * Controllers MUST NOT catch exceptions — let this advice handle them.
+ */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -343,6 +347,7 @@ public class GlobalExceptionHandler {
 
 // 1. Create domain exceptions at the boundary where you KNOW the error type.
 //    Repository layer wraps JPA exceptions; service layer wraps business rule violations.
+//
 //    // In repository layer — this is where we know "no rows" means "not found":
 //    return repository.findByIdAndTenantId(id, tenantId)
 //        .orElseThrow(() -> new ResourceNotFoundException("widget", id.toString()));
@@ -350,9 +355,11 @@ public class GlobalExceptionHandler {
 
 // 2. Never double-wrap domain exceptions.
 //    If the error is already a DomainException, let it propagate — @ControllerAdvice handles it.
+//
 //    // BAD:
 //    try { widgetService.create(request); }
 //    catch (ConflictException e) { throw new BadRequestException("conflict", e); } // WRONG
+//
 //    // GOOD:
 //    widgetService.create(request); // let ConflictException propagate to @ControllerAdvice
 

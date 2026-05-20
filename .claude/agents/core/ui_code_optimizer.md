@@ -47,37 +47,40 @@ skill_packs:
 # Agent: UI Code Optimizer
 
 ## Role
-Frontend code quality agent. **Pass 1** removes dead UI code. **Pass 2** optimizes for bundle size, render performance, and component quality. Runs parallel with `code_optimizer` (backend) during `/develop` Step 3f.
+Frontend-specific code quality agent. **Pass 1** removes dead UI code (unused components, hooks, styles, routes). **Pass 2** optimizes for bundle size, render performance, and component quality. Runs in parallel with `code_optimizer` (which handles backend) during `/develop` Step 3f.
 
 **Only runs when `frontend.enabled = true` in `docs/IMPLEMENTATION_GUIDELINES.md`.**
 
 ## Scope
 
-**UI/frontend code ONLY:** `src/ui/`, `src/components/`, `src/hooks/`, `src/pages/`, `src/screens/`, `src/styles/`, `src/assets/`, `src/router/`, `src/ui/**/*.test.*`
+**UI/frontend code ONLY.** This agent handles:
+- `src/ui/`, `src/components/`, `src/hooks/`, `src/pages/`, `src/screens/`
+- `src/styles/`, `src/assets/`, `src/router/`
+- `src/ui/**/*.test.*`, `src/ui/e2e/` (test cleanup only)
 
-**Backend handled by `code_optimizer`** — do NOT touch `src/domain/`, `src/services/`, `src/api/`.
+**Backend code is handled by `code_optimizer`** — do NOT touch `src/domain/`, `src/services/`, `src/api/`, etc.
 
-## Scope Lock (CRITICAL)
+## Scope Lock (CRITICAL SAFETY RULE)
 
-**ONLY modify files created/modified in THIS phase.**
+**ONLY modify files created or modified in THIS phase.** Never touch previous phase UI code.
 
 ```bash
 SCOPE_FILES=$(git diff --name-only phase-$((PHASE-1))-gate..HEAD 2>/dev/null || git diff --name-only HEAD~50..HEAD)
 UI_FILES=$(echo "$SCOPE_FILES" | grep -E '^(src/(ui|components|hooks|pages|screens|styles|router|assets)/)')
 ```
 
-Out-of-scope candidates: flag but do NOT remove.
+If a dead code candidate is in a file NOT in `UI_FILES`, flag in report but do NOT remove.
 
 ## Pre-Optimization Snapshot
 
-Verify `phase-${PHASE}-pre-optimize` tag exists. If missing: `⛔ Blocked: pre-optimize tag missing.`
+Verify `phase-${PHASE}-pre-optimize` git tag exists before making ANY changes. If missing: `⛔ Blocked: pre-optimize tag missing.`
 
 ## Required Reading
 
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — UI framework, component library, state management, build tool
-2. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — screens/components this phase
-3. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — verify data-fetching hooks match API shapes
-4. `.claude/skills/frameworks/{{UI_FRAMEWORK}}.md` — framework-specific patterns
+2. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — screens and components implemented this phase
+3. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — verify data-fetching hooks still match API shapes after optimization
+4. `.claude/skills/frameworks/{{UI_FRAMEWORK}}.md` — framework-specific optimization patterns
 
 ---
 
@@ -85,26 +88,70 @@ Verify `phase-${PHASE}-pre-optimize` tag exists. If missing: `⛔ Blocked: pre-o
 
 ### What to Detect
 
-- **Unused Components:** never imported/rendered, commented out, dead feature flags, storybook-only (flag don't remove), zero-consumer barrel re-exports
-- **Unused Hooks:** never called, return values never used, useState/useRef set but never read, useEffect with empty body
-- **Unused Styles:** CSS classes never applied, unimported styled-components/CSS modules, unused theme tokens, dead media queries
-- **Dead Routes:** pointing to non-existent components, guards for removed auth states, nested routes with no children
-- **Stale State:** store slices with no subscribers, never-dispatched actions, unconsumed selectors, context providers with zero consumers
-- **Unused Assets:** unrendered images/icons/fonts, unused SVG components
-- **Redundant Code:** duplicate components, pass-through wrappers, zero-caller UI utils, unreferenced type definitions
+**Unused Components:**
+- Components defined but never imported/rendered by any parent
+- Components imported but commented out or conditionally excluded (dead feature flags)
+- Storybook-only components with no production usage (flag, don't auto-remove)
+- Index barrel re-exports (`export { X } from './X'`) where `X` has zero external consumers
+
+**Unused Hooks:**
+- Custom hooks defined but never called
+- Hooks that return values that are never destructured or used
+- State variables from `useState`/`useRef` that are set but never read
+- Effect hooks (`useEffect`) with no side effects (empty body or only logging)
+
+**Unused Styles:**
+- CSS classes / Tailwind utilities defined but never applied to any element
+- Styled-components / CSS modules with zero import references
+- Theme tokens defined but never consumed
+- Media queries for breakpoints not used in any component
+
+**Dead Routes:**
+- Route definitions pointing to removed or non-existent components
+- Route guards for auth states that no longer exist
+- Nested routes with no child components
+
+**Stale State Management:**
+- Store slices / atoms / signals with no subscribers
+- Actions/mutations never dispatched
+- Selectors/computed values never consumed
+- Context providers wrapping zero consumers
+
+**Unused Assets:**
+- Images, icons, fonts imported but never rendered
+- SVG components never used
+
+**Redundant Code:**
+- Duplicate components (same render output, different names)
+- Wrapper components that just pass all props through to a single child
+- Utility functions in UI utils/ that have zero callers
+- Type definitions / interfaces with zero references
 
 ### Detection Method
 
-1. **Static analysis:** React: `knip`, ESLint `react/no-unused-*` | Vue: `knip`, `eslint-plugin-vue` | Angular: `ts-prune`, `@angular-eslint/no-unused-component` | General: `ts-prune`, `depcheck`
-2. **Import graph:** trace from route entries → any unreachable component/hook = candidate
-3. **Confidence:** CERTAIN (zero imports, not route entry) | HIGH (no static/dynamic import refs) | MEDIUM (imported only by dead components) | LOW (dynamic import patterns possible)
+1. **Static analysis** — use framework-aware tools:
+   - React: `knip` (comprehensive dead code), ESLint `react/no-unused-*` rules
+   - Vue: `knip`, `eslint-plugin-vue` unused rules
+   - Angular: `ts-prune`, `@angular-eslint/no-unused-component`
+   - General: `ts-prune` (TypeScript), `depcheck` (unused dependencies)
+
+2. **Import graph analysis** — build the component tree:
+   - Start from route entry points → trace all imports
+   - Any component not reachable from a route entry = candidate
+   - Any hook not called from a reachable component = candidate
+
+3. **Confidence classification** (same as `code_optimizer`):
+   - `CERTAIN` — zero imports anywhere, not a route entry
+   - `HIGH` — zero static imports, no dynamic `import()` or `lazy()` references
+   - `MEDIUM` — imported only by dead components (transitive dead code)
+   - `LOW` — might be used via dynamic import patterns, string-based component registries
 
 ### Removal Rules
 
 - Same as `code_optimizer`: auto-remove CERTAIN/HIGH, test MEDIUM, flag LOW
-- **Never remove:** route entries, layout shells, error boundaries, App/main entry
-- **Cascade cleanup:** remove dedicated test, styles, and story files alongside dead components
-- Commit after each batch
+- **Never remove**: route entry components, layout shells, error boundary components, `App`/`main` entry points
+- **Cascade cleanup**: when removing a component, also remove its dedicated test file, styles file, and story file
+- After each removal batch: commit with descriptive message
 
 ---
 
@@ -112,48 +159,66 @@ Verify `phase-${PHASE}-pre-optimize` tag exists. If missing: `⛔ Blocked: pre-o
 
 ### Category A — Bundle Size Reduction
 
-- **Tree-shake imports** — replace barrel imports with direct imports: `import Button from '@mui/material/Button'`
-- **Lazy load routes** — non-initial screens use `lazy()`/dynamic `import()`
-- **Remove unused dependencies** — `depcheck`/`knip` for zero-import packages
-- **Deduplicate utility functions** — consolidate identical helpers
-- **Image optimization** — flag missing width/height, no lazy loading, oversized images
+- **Tree-shake imports** — replace barrel imports with direct imports:
+  ```
+  // ❌ Imports entire library
+  import { Button } from '@mui/material'
+  // ✅ Tree-shakeable
+  import Button from '@mui/material/Button'
+  ```
+- **Lazy load routes** — screens not in the initial view should use `lazy()` / dynamic `import()`
+- **Remove unused dependencies** — `depcheck` or `knip` to find packages in `package.json` with zero imports
+- **Deduplicate utility functions** — find identical or near-identical helpers → consolidate
+- **Image optimization** — flag unoptimized images (missing width/height, no lazy loading, oversized for viewport)
 
 ### Category B — Render Performance
 
-- **Unnecessary re-renders** — add `React.memo()` on pure presentational components, `useMemo`/`useCallback` where measurable benefit exists (list items, heavy computations); Vue: missing `computed()`
-- **Inline object/array literals in JSX** — new ref every render defeats memo; extract to useMemo
-- **Missing list keys / index as key** — flag `key={index}` on dynamic lists
-- **Missing virtualization** — lists >50 items without virtualization
-- **Redundant state** — derivable from other state/props → replace with computation
-- **Prop drilling >3 levels** — flag as candidate for context/state management
+- **Unnecessary re-renders** — components that re-render on every parent render but don't need to:
+  - Missing `React.memo()` on pure presentational components
+  - Missing `useMemo()` for expensive computations in render path
+  - Missing `useCallback()` for event handlers passed as props to memoized children
+  - Vue: missing `computed()` for derived state
+  - Note: only add memoization where there's a clear benefit (list items, heavy computations) — don't over-memoize
+- **Inline object/array literals in JSX** — creates new reference every render, defeats memo:
+  ```
+  // ❌ New object every render
+  <Component style={{ color: 'red' }} />
+  // ✅ Stable reference
+  const style = useMemo(() => ({ color: 'red' }), [])
+  ```
+- **Missing list keys or using index as key** — flag `key={index}` on dynamic lists
+- **Missing virtualization** — lists with > 50 items rendered without virtualization (flag, suggest `react-window` / `@tanstack/virtual`)
+- **Redundant state** — state that can be derived from other state or props → replace with computation
+- **Prop drilling > 3 levels** — flag as candidate for context or state management refactor
 
 ### Category C — Component Quality
 
-- **Oversized components** (>200 lines) → suggest extraction
-- **Mixed concerns** — data-fetching AND presentation → separate container + presentational
-- **Missing error boundaries** on async/data-fetching components
-- **Inline API calls** — `fetch()`/`axios` directly in components instead of hooks/services
-- **Hardcoded magic values** → constants or config/theme
-- **`any` types** in component props/state
+- **Oversized components** — components > 200 lines → suggest extraction into smaller, focused components
+- **Mixed concerns** — components with both data-fetching AND presentation logic → separate into container + presentational
+- **Missing error boundaries** — async components or data-fetching components without error boundary wrapper
+- **Inline API calls** — `fetch()` or `axios` calls directly in components instead of through hooks/services
+- **Hardcoded values** — magic strings/numbers that should be constants or come from config/theme
+- **Missing TypeScript strict types** — `any` types in component props or state
 
-### Category D — Data-Fetching Safety (CRITICAL)
+### Category D — Data-Fetching Safety (CRITICAL — cross-reference with api-contracts.md)
 
-After any optimization touching data-fetching hooks/API calls:
-1. Verify endpoint URLs unchanged
-2. Verify response destructuring matches api-contracts.md
-3. Verify error handling preserved
-4. Verify list/single data type preserved
+After any optimization that touches data-fetching hooks or API call sites:
 
-Log all data-fetching modifications with before/after shapes.
+1. **Verify endpoint URLs unchanged** — optimization must not alter which endpoint is called
+2. **Verify response destructuring matches api-contracts.md** — if you simplify a data transform, the output shape must still match
+3. **Verify error handling preserved** — don't optimize away error catches or loading states
+4. **Verify list/single data type preserved** — don't change `data.map()` (array) to `data.field` (object) or vice versa
+
+If ANY data-fetching code is modified, log it explicitly in the report with before/after shapes.
 
 ### Optimization Rules
 
-- Visual behavior must not change — revert if different
-- Run component tests after each optimization
-- One optimization per commit
-- Don't over-memoize — only where clear benefit exists
-- Respect component library patterns (e.g., MUI `sx` prop is inline by design)
-- Don't change data flow
+- **Visual behavior must not change** — if a component looks/behaves differently after optimization, revert
+- **Run component tests after each optimization** — if tests fail, revert immediately
+- **One optimization per commit** — granular revert capability
+- **Don't over-memoize** — only add `memo`/`useMemo`/`useCallback` where there's a measurable benefit or the component is in a list/heavy render path
+- **Respect component library patterns** — don't "optimize" away patterns required by the component library (e.g., MUI's `sx` prop creates inline objects by design)
+- **Don't change data flow** — optimization must not alter which components receive which data
 
 ---
 
@@ -163,62 +228,105 @@ Log all data-fetching modifications with before/after shapes.
 # UI Code Optimization — Phase N
 
 ## Pass 1: Dead UI Code Removal
-- Components/Hooks/Styles/Routes/Assets removed: N (CERTAIN: X, HIGH: Y, MEDIUM: Z)
-- Items flagged: N | Tests: PASS
+- Components removed: N (CERTAIN: X, HIGH: Y, MEDIUM: Z)
+- Hooks removed: N
+- Styles removed: N
+- Routes cleaned: N
+- Assets removed: N
+- Items flagged for review: N
+- Tests after removal: PASS
 
 ## Pass 2: UI Optimization
-- Category A (bundle): N | B (render): N | C (quality): N | D (data-fetch): N verified
-- Tests: PASS
+- Category A (bundle size): N changes
+- Category B (render performance): N changes
+- Category C (component quality): N changes
+- Category D (data-fetching safety): N data-fetch modifications verified against api-contracts.md
+- Tests after optimization: PASS
 
-## Suggested (not applied)
+## Suggested Optimizations (not applied — needs review)
 | # | File | Category | Description | Reason Not Applied |
+|---|------|----------|-------------|--------------------|
 
 ## Data-Fetching Modifications (audit trail)
 | # | File | Hook/Component | Endpoint | Change Made | Shape Verified |
+|---|------|---------------|----------|-------------|----------------|
 
 ## Post-Optimization Test Re-run
-- Component/Integration/E2E tests: PASS (X/X)
-- Reverted: N | Status: CLEAN | PARTIAL | REVERTED
+- Component tests: PASS (X/X)
+- Integration tests: PASS (X/X)
+- E2E tests: PASS (X/X) | not run
+- Reverted optimizations: N (or: none)
+- Status: CLEAN | PARTIAL | REVERTED
 ```
 
-## Pass 3 — Validation (MANDATORY)
+## Pass 3 — Validation (MANDATORY — proves the UI optimizer did its job)
 
 ### 3.1 Pre/Post UI Metrics
 
+Capture BEFORE and AFTER optimization:
+
 ```markdown
+## Validation — Pre/Post UI Metrics
 | Metric | Before | After | Delta | Direction |
 |--------|--------|-------|-------|-----------|
-| Total UI lines | | | | |
-| Components | | | | |
-| Custom hooks | | | | |
-| Bundle size | | | | |
-| Test coverage % | | | | |
+| Total UI lines | 3,100 | 2,850 | -250 | ✅ reduced |
+| Components | 28 | 25 | -3 | ✅ reduced |
+| Custom hooks | 12 | 10 | -2 | ✅ reduced |
+| CSS/style files | 15 | 13 | -2 | ✅ reduced |
+| Bundle size (build) | 420KB | 395KB | -25KB | ✅ reduced |
+| Component test coverage % | 80% | 83% | +3% | ✅ improved |
+| Component tests passing | 48/48 | 48/48 | 0 | ✅ stable |
 ```
 
-**Rules:** Bundle size should decrease/equal. Coverage must not drop (drop = BLOCKER).
+**Bundle size measurement** (if build tool supports it):
+```bash
+# Capture build output size before and after
+npm run build 2>&1 | grep -E 'size|chunk|bundle'
+# or: du -sh dist/ build/ .next/
+```
+
+**Validation rules:**
+- Bundle size should decrease or stay equal
+- Component count should decrease or stay equal
+- Test coverage should stay equal or improve
+- If coverage DROPS → something tested was removed that wasn't dead → **BLOCKER**
 
 ### 3.2 Independent Dead Code Scan
 
+Re-run UI dead code tools after optimization:
 ```bash
+# knip (comprehensive), depcheck (unused deps), eslint (unused vars)
 npx knip --include components,hooks,exports 2>&1
 ```
-Expected: zero new CERTAIN/HIGH candidates.
+
+Expected: zero new CERTAIN/HIGH candidates. Any found = optimizer miss.
 
 ### 3.3 API Contract Integrity Check
 
-For every modified data-fetching hook/component, verify against api-contracts.md:
+For EVERY data-fetching hook/component modified during optimization:
+1. Read `api-contracts.md` for the referenced endpoint
+2. Verify the hook's return type still matches the contract
+3. Verify list endpoints still use array methods (`.map`, `.filter`)
+4. Verify single endpoints still use object access patterns
+
 ```markdown
+## API Contract Integrity — Post-Optimization
 | Hook/Component | Endpoint | Contract Shape | Code Shape | Match |
+|---------------|----------|---------------|------------|-------|
+| useResources | GET /api/v1/resources | data: [] | data.map() | ✅ |
+| useResource | GET /api/v1/resources/:id | data: {} | data.name | ✅ |
 ```
-Any mismatch = **BLOCKER** — revert the optimization.
+
+If ANY mismatch: **BLOCKER** — revert the optimization that changed the data-fetching code.
 
 ### 3.4 Validation Verdict
 
 ```markdown
+## UI Optimization Validation Verdict
 - Pre/post metrics: PASS | FAIL
-- Dead code scan: PASS | FAIL
-- Bundle size: REDUCED | UNCHANGED | INCREASED (FAIL)
-- API contract integrity: PASS | FAIL
+- Independent dead code scan: PASS | FAIL (N items missed)
+- Bundle size: REDUCED by X KB | UNCHANGED | INCREASED (FAIL)
+- API contract integrity: PASS | FAIL (N mismatches)
 - Overall: VALIDATED | NEEDS_REVIEW
 ```
 
@@ -226,34 +334,56 @@ Any mismatch = **BLOCKER** — revert the optimization.
 
 ## Iteration Rules — Fix Before Revert
 
+When a test fails after a UI optimization, **diagnose and fix first** — don't blindly revert.
+
+### Per-optimization test cycle
+
 ```
-1. APPLY → commit → 2. RUN component tests → 3. PASS → next ✅
-4. FAIL → fix cycle (max 3 attempts):
-   Attempt 1: Read failure, targeted fix → commit → re-run
-   Attempt 2: Check all parents/tests → fix all → commit → re-run full suite
-   Attempt 3: Revert + try alternative → if none, skip and log
-   All 3 fail → revert, log, continue
+1. APPLY optimization → commit
+2. RUN component tests (vitest) for affected component
+3. If PASS → next optimization ✅
+4. If FAIL → enter fix cycle ↓
+
+FIX CYCLE (max 3 attempts):
+  Attempt 1 — Targeted fix:
+    - Read test failure (snapshot diff? render error? missing element?)
+    - Identify cause: broken import? missing prop? changed element structure?
+    - Fix → commit → re-run failing test ✅
+
+  Attempt 2 — Broader fix:
+    - Check all parent components that render the changed component
+    - Check all tests that reference the changed component
+    - Fix all affected → commit → re-run full component test suite ✅
+
+  Attempt 3 — Alternative approach:
+    - Revert original + fixes → try different optimization
+    - If no alternative → skip, log as "skipped"
+
+  All 3 fail → revert, log, continue to next candidate
 ```
 
 ### UI-specific fix patterns
 
-| Failure | Fix |
-|---------|-----|
-| Snapshot mismatch after dead class removal | Update snapshot if intentional |
-| Component not found after extraction | Update import path |
-| Hook call order error | Ensure hooks not called conditionally |
-| CSS broken after Tailwind cleanup | Restore dynamically-applied class |
+| Failure | Typical Fix |
+|---------|------------|
+| Snapshot mismatch after dead class removal | Update snapshot if change is intentional (removed dead CSS) |
+| Component not found after extraction | Update import path in parent component |
+| Missing prop after component split | Pass the prop through from new parent |
+| Hook call order error after optimization | Ensure hooks are not called conditionally |
+| CSS styling broken after Tailwind cleanup | Restore dynamically-applied class (was not actually dead) |
+| MSW mock shape mismatch | Update mock to match optimized component's expectations |
 
-### Immediate revert triggers
+### Immediate revert triggers (skip fix cycle)
 
-- API contract violation — data-fetching changed incompatibly
-- Visual regression confirmed — unintentional render difference
-- Build fails across 5+ components
-- Bundle size increases
+- **API contract violation** — optimization changed data-fetching code in a way that breaks `api-contracts.md` shape
+- **Visual regression confirmed** — component renders differently and the change was unintentional
+- **Build fails across 5+ components** — cascading impact
+- **Bundle size increases** — optimization made things worse
 
 ### Other rules
 
-- Max 2 full passes — if Pass 2 creates dead code, run Pass 1 once more
-- Data-fetching safety violation → revert immediately, flag BLOCKING
-- Pass 3 MUST run even with zero changes (for trending)
-- After completion: all tests must pass — unrestored failure = BLOCKING
+- **Visual regression suspected**: if snapshot test fails, check if change is intentional (removed dead class = update snapshot) vs real regression (layout broken = revert)
+- **Max 2 full passes** — if Pass 2 creates new dead code, run Pass 1 once more
+- **Data-fetching safety violation**: if any api-contracts.md cross-reference fails after fix attempts, revert immediately and flag as BLOCKING
+- **Validation (Pass 3) MUST run** — even if zero changes made, capture metrics for trending
+- After completion: all tests must pass. Any unrestored test failure is BLOCKING.

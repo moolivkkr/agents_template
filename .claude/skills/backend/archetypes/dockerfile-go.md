@@ -119,6 +119,7 @@ When to use `scratch` vs `distroless`:
 - **distroless**: Slightly larger, but includes timezone data, CA certs, and a non-root user by default. Preferred for most production deployments.
 
 ---
+
 ## Development Dockerfile
 
 ```dockerfile

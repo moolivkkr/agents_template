@@ -66,10 +66,13 @@ export interface JwtConfig {
 import { randomUUID } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 
+/**
  * Generates or extracts a unique request ID for tracing.
  * Checks X-Request-ID header first (client correlation), generates UUID if absent.
  * Sets the ID on the response header for client-side correlation.
+ *
  * Mount EARLY in the middleware stack — before auth and logging.
+ */
 export function requestId(req: Request, res: Response, next: NextFunction): void {
   const id = (req.headers["x-request-id"] as string) || randomUUID();
 
@@ -96,10 +99,13 @@ import type { JwtConfig, JwtCustomPayload, AuthUser } from "../types/auth";
 import { UnauthorizedError } from "../errors/domain-errors";
 import { logger } from "../lib/logger";
 
+/**
  * Express middleware that validates the Bearer token and injects AuthUser into req.
  * Mount AFTER requestId and body parser, BEFORE route handlers.
+ *
  * Usage:
  *   app.use(authMiddleware(jwtConfig));
+ */
 export function authMiddleware(config: JwtConfig) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const requestId = (req as any).requestId ?? "";
@@ -151,8 +157,10 @@ export function authMiddleware(config: JwtConfig) {
   };
 }
 
+/**
  * Extracts Bearer token from Authorization header.
  * Returns null if header is missing or malformed.
+ */
 function extractBearerToken(req: Request): string | null {
   const auth = req.headers.authorization;
   if (!auth) return null;
@@ -176,9 +184,12 @@ import { jwtVerify, importSPKI, type JWTPayload } from "jose";
 import type { JwtConfig, AuthUser } from "../types/auth";
 import { UnauthorizedError } from "../errors/domain-errors";
 
+/**
  * Express auth middleware using `jose` — works in Edge runtimes
  * (Cloudflare Workers, Vercel Edge, Deno) where `jsonwebtoken` is not available.
+ *
  * jose is also recommended for RS256/ES256 public key validation.
+ */
 export function authMiddlewareJose(config: JwtConfig) {
   // Pre-import the key once at startup (not per-request)
   const keyPromise = config.algorithms[0]?.startsWith("RS")
@@ -319,11 +330,14 @@ import { SetMetadata } from "@nestjs/common";
 
 export const IS_PUBLIC_KEY = "isPublic";
 
+/**
  * Marks a route as public — skips JWT authentication.
+ *
  * Usage:
  *   @Public()
  *   @Get("health")
  *   healthCheck() { return { status: "ok" }; }
+ */
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 ```
 
@@ -338,10 +352,13 @@ import type { Request, Response, NextFunction } from "express";
 import { ForbiddenError } from "../errors/domain-errors";
 import type { AuthUser } from "../types/auth";
 
+/**
  * Express middleware that checks the user has at least one of the specified roles.
+ *
  * Usage:
  *   router.post("/admin/settings", requireRole("admin"), settingsHandler);
  *   router.put("/widgets/:id", requireRole("admin", "editor"), updateHandler);
+ */
 export function requireRole(...requiredRoles: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const user = (req as any).user as AuthUser | undefined;
@@ -361,10 +378,13 @@ export function requireRole(...requiredRoles: string[]) {
   };
 }
 
+/**
  * Express middleware that checks the user has ALL specified permissions.
+ *
  * Usage:
  *   router.put("/users/:id", requirePermission("users:write"), updateUserHandler);
  *   router.delete("/widgets/:id", requirePermission("widgets:delete", "widgets:write"), deleteHandler);
+ */
 export function requirePermission(...requiredPermissions: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const user = (req as any).user as AuthUser | undefined;
@@ -398,12 +418,15 @@ import type { AuthUser } from "../types/auth";
 
 export const ROLES_KEY = "roles";
 
+/**
  * NestJS guard that checks the user has at least one of the specified roles.
+ *
  * Usage:
  *   @UseGuards(JwtAuthGuard, RolesGuard)
  *   @Roles("admin", "editor")
  *   @Put(":id")
  *   update() { ... }
+ */
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
@@ -439,8 +462,11 @@ export class RolesGuard implements CanActivate {
 
 import { SetMetadata } from "@nestjs/common";
 
+/**
  * Sets required roles metadata on a route handler.
+ *
  * Usage: @Roles("admin", "editor")
+ */
 export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
 ```
 
@@ -455,11 +481,14 @@ import rateLimit from "express-rate-limit";
 import type { Request } from "express";
 import type { AuthUser } from "../types/auth";
 
+/**
  * Per-tenant rate limiter using express-rate-limit.
  * Keys by tenant ID (from auth context) to prevent noisy neighbor abuse.
  * Falls back to IP-based limiting for unauthenticated requests.
+ *
  * Usage:
  *   app.use(tenantRateLimit({ windowMs: 60_000, max: 100 }));
+ */
 export function tenantRateLimit(opts: { windowMs: number; max: number }) {
   return rateLimit({
     windowMs: opts.windowMs,
@@ -488,9 +517,12 @@ export function tenantRateLimit(opts: { windowMs: number; max: number }) {
   });
 }
 
+/**
  * Stricter rate limit for sensitive endpoints (login, password reset, etc.).
+ *
  * Usage:
  *   router.post("/auth/login", sensitiveRateLimit(), loginHandler);
+ */
 export function sensitiveRateLimit() {
   return rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -527,10 +559,13 @@ export interface CorsConfig {
   maxAge: number; // preflight cache duration in seconds
 }
 
+/**
  * CORS middleware factory.
  * Mount FIRST in the middleware stack — before auth, before body parser.
+ *
  * Usage:
  *   app.use(corsMiddleware({ allowedOrigins: ["https://app.example.com"], ... }));
+ */
 export function corsMiddleware(config: CorsConfig) {
   const originSet = new Set(config.allowedOrigins);
 
@@ -576,8 +611,10 @@ export function corsMiddleware(config: CorsConfig) {
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
 
+/**
  * Logs request start/finish with timing and attaches enriched logger to request.
  * Mount AFTER requestId and auth.
+ */
 export function logEnrichment(req: Request, res: Response, next: NextFunction): void {
   const start = Date.now();
   const requestId = (req as any).requestId ?? "";
@@ -635,8 +672,10 @@ interface MiddlewareConfig {
   rateLimit: { windowMs: number; max: number };
 }
 
+/**
  * Assembles the full middleware stack in correct order.
  * Order matters: outermost middleware runs first.
+ *
  *   1. CORS         — must be outermost to handle preflight before auth
  *   2. Request ID   — generate/extract before anything else
  *   3. Body parser  — with size limit to prevent abuse
@@ -645,6 +684,7 @@ interface MiddlewareConfig {
  *   6. Log enrich   — after auth so we have user/tenant context
  *   ... routes ...
  *   7. Error handler — MUST be last
+ */
 export function setupMiddleware(app: Application, config: MiddlewareConfig): void {
   // 1. CORS
   app.use(corsMiddleware(config.cors));
@@ -665,10 +705,13 @@ export function setupMiddleware(app: Application, config: MiddlewareConfig): voi
   app.use(logEnrichment);
 }
 
+/**
  * Mount error handler AFTER all routes.
+ *
  *   setupMiddleware(app, config);
  *   app.use("/api/v1/widgets", widgetRouter);
  *   setupErrorHandler(app);
+ */
 export function setupErrorHandler(app: Application): void {
   app.use(errorHandler);
 }
@@ -740,16 +783,21 @@ export interface ApiKeyIdentity {
 }
 
 export interface ApiKeyConfig {
+  /**
    * Resolves an API key to identity.
    * In production, this queries a hashed key store (bcrypt/argon2).
    * NEVER store API keys in plaintext.
+   */
   lookupFn: (key: string) => Promise<ApiKeyIdentity | null>;
 }
 
+/**
  * API key authentication middleware.
  * Reads key from X-API-Key header.
+ *
  * Usage:
  *   router.use(apiKeyAuth({ lookupFn: keyStore.lookup }));
+ */
 export function apiKeyAuth(config: ApiKeyConfig) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     const apiKey = req.headers["x-api-key"] as string | undefined;
@@ -778,8 +826,10 @@ export function apiKeyAuth(config: ApiKeyConfig) {
   };
 }
 
+/**
  * Timing-safe comparison for API key validation.
  * Prevents timing attacks when comparing keys in the lookup function.
+ */
 export function safeCompare(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   return timingSafeEqual(Buffer.from(a), Buffer.from(b));

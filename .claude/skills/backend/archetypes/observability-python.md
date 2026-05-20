@@ -66,6 +66,7 @@ from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 from app.config import settings
 
+
 def configure_tracing() -> TracerProvider:
     """
     Initialise the global TracerProvider.
@@ -110,6 +111,7 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 
+
 def instrument_auto(app, engine=None):
     """
     Enable auto-instrumentation for FastAPI, SQLAlchemy, Redis, and httpx.
@@ -145,6 +147,7 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
 tracer = trace.get_tracer("order-service")
+
 
 class OrderService:
     def __init__(self, repo: OrderRepository, payment_client: PaymentClient):
@@ -197,6 +200,7 @@ from opentelemetry import trace
 from opentelemetry.trace import StatusCode
 
 tracer = trace.get_tracer("order-service")
+
 
 class OrderRepository:
     def __init__(self, session_factory):
@@ -264,6 +268,7 @@ Every manual span MUST include these attributes where applicable:
 from opentelemetry.propagate import inject
 import httpx
 
+
 async def call_downstream(url: str, payload: dict, ctx: RequestContext) -> httpx.Response:
     """
     If using auto-instrumented httpx, trace context is injected automatically.
@@ -309,6 +314,7 @@ from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
 
 from app.config import settings
+
 
 def configure_metrics() -> MeterProvider:
     """
@@ -413,6 +419,7 @@ from app.observability.app_metrics import (
     active_connections,
 )
 
+
 class MetricsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         if request.url.path in ("/health", "/ready", "/metrics"):
@@ -457,6 +464,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
 
 from app.observability.app_metrics import order_total, order_count
 
+
 class OrderService:
     async def create_order(self, ctx: RequestContext, req: CreateOrderRequest) -> Order:
         order = await self._process_order(ctx, req)
@@ -481,6 +489,7 @@ class OrderService:
 import time
 from sqlalchemy import event
 from app.observability.app_metrics import db_query_duration
+
 
 def instrument_db_metrics(engine):
     """Attach SQLAlchemy event listeners to record query duration."""
@@ -548,6 +557,7 @@ import structlog
 
 from app.config import settings
 
+
 def configure_logging() -> None:
     """
     Configure structlog with a JSON processor chain.
@@ -601,11 +611,13 @@ def configure_logging() -> None:
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
+
 def _add_service_info(logger, method_name, event_dict):
     """Inject service name and version into every log line."""
     event_dict["service"] = settings.SERVICE_NAME
     event_dict["version"] = settings.SERVICE_VERSION
     return event_dict
+
 
 # ── Sensitive Data Filter ─────────────────────────────────────────────
 
@@ -614,6 +626,7 @@ _SENSITIVE_KEYS = frozenset({
     "authorization", "cookie", "session_id", "ssn", "credit_card",
     "card_number", "cvv", "private_key",
 })
+
 
 def _filter_sensitive_keys(logger, method_name, event_dict):
     """Replace values of sensitive keys with '[REDACTED]'."""
@@ -630,6 +643,7 @@ def _filter_sensitive_keys(logger, method_name, event_dict):
 
 from opentelemetry import trace
 
+
 def add_otel_context(logger, method_name, event_dict):
     """
     Inject trace_id and span_id from the current OTel span into every log line.
@@ -642,6 +656,7 @@ def add_otel_context(logger, method_name, event_dict):
         event_dict["trace_id"] = format(ctx.trace_id, "032x")
         event_dict["span_id"] = format(ctx.span_id, "016x")
     return event_dict
+
 
 # Updated processor chain:
 shared_processors = [
@@ -668,6 +683,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 logger = structlog.get_logger()
+
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """
@@ -715,6 +731,7 @@ import structlog
 
 logger = structlog.get_logger()
 
+
 class OrderService:
     async def create_order(self, ctx: RequestContext, req: CreateOrderRequest) -> Order:
         # tenant_id, request_id, trace_id are already bound via middleware
@@ -732,6 +749,7 @@ class OrderService:
             total=str(order.total),
         )
         return order
+
 
 # Output (JSON, production):
 # {
@@ -821,6 +839,7 @@ from opentelemetry import trace
 
 from app.config import settings
 
+
 class JSONFormatter(logging.Formatter):
     """JSON log formatter with OTel trace correlation."""
 
@@ -851,6 +870,7 @@ class JSONFormatter(logging.Formatter):
 
         return json.dumps(log_entry, default=str)
 
+
 def configure_stdlib_logging() -> None:
     handler = logging.StreamHandler()
     handler.setFormatter(JSONFormatter())
@@ -874,6 +894,7 @@ from app.observability.logging import configure_logging
 from app.observability.tracing import configure_tracing
 from app.observability.metrics import configure_metrics
 from app.observability.instruments import instrument_auto
+
 
 def instrument_app(app, engine=None):
     """
@@ -910,6 +931,7 @@ from app.db import create_engine
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.metrics_middleware import MetricsMiddleware
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────
@@ -925,6 +947,7 @@ async def lifespan(app: FastAPI):
     if meter_provider:
         meter_provider.force_flush()
         meter_provider.shutdown()
+
 
 app = FastAPI(
     title="Order Service",
@@ -943,6 +966,7 @@ app.add_middleware(MetricsMiddleware)
 
 from pydantic_settings import BaseSettings
 
+
 class Settings(BaseSettings):
     # Service identity
     SERVICE_NAME: str = "order-service"
@@ -958,6 +982,7 @@ class Settings(BaseSettings):
 
     model_config = {"env_prefix": "", "case_sensitive": True}
 
+
 settings = Settings()
 ```
 
@@ -967,6 +992,7 @@ settings = Settings()
 # app/context.py
 
 from dataclasses import dataclass
+
 
 @dataclass(frozen=True, slots=True)
 class RequestContext:
@@ -988,6 +1014,7 @@ class RequestContext:
 from fastapi import Depends, Header, Request
 
 from app.context import RequestContext
+
 
 async def get_request_context(
     request: Request,

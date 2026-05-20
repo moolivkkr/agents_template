@@ -440,24 +440,33 @@ pub async fn recovery_middleware(req: Request, next: Next) -> Response {
 
 ```rust
 // --- WRAPPING RULES ---
+//
 // 1. Use the ? operator with From implementations — errors convert automatically.
+//
 //    let widget = sqlx::query_as!(Widget, ...)
 //        .fetch_optional(&pool).await?  // sqlx::Error → AppError via From
 //        .ok_or_else(|| AppError::NotFound { .. })?;
+//
 // 2. Create domain errors at the BOUNDARY where you know the error type.
+//
 //    // In the repository — this is where we know "no rows" means "not found":
 //    .ok_or_else(|| AppError::NotFound {
 //        resource: "widget".into(),
 //        identifier: id.to_string(),
 //    })?;
+//
 //    // NOT in the handler — the handler shouldn't know about sqlx internals.
+//
 // 3. Use .map_err() when you need to add context beyond what From provides.
+//
 //    self.repo.create(&widget).await.map_err(|e| {
 //        tracing::error!(error = %e, "widget create failed");
 //        e
 //    })?;
+//
 // 4. Log errors at the TOP of the call stack (handler/middleware), not at every layer.
 //    The IntoResponse impl logs 5xx errors automatically.
+//
 // 5. Never use anyhow::Error in service/handler code — always use AppError.
 //    anyhow is acceptable only in CLI tools or one-off scripts.
 ```

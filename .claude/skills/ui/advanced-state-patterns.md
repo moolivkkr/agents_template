@@ -146,6 +146,7 @@ export function useToggleItemStatus(id: string) {
 ```
 
 ---
+
 ## 2. WebSocket Integration — Real-Time Data Sync
 
 ### Pattern: WebSocket with TanStack Query Cache Sync
