@@ -151,6 +151,63 @@ Scenario 2: Error case
 
 ---
 
+## Change Impact Analysis (MANDATORY before BRD amendment)
+
+Before modifying the BRD, analyze the blast radius of the change:
+
+### Step 1 — Requirement Mapping
+1. Identify which FR-*/NFR-*/OBJ-* requirements are affected by the change
+2. For each affected requirement:
+   a. Check: which phases reference this requirement? (read all phase manifests + specs)
+   b. Check: is the phase already completed (gate.passed)?
+   c. Check: is the phase currently in-progress?
+
+### Step 2 — Impact Classification
+
+| Scenario | Impact | Action Required |
+|----------|--------|----------------|
+| Affected requirement in FUTURE phase (not yet planned) | LOW | Update BRD, re-plan when phase starts |
+| Affected requirement in PLANNED phase (specs exist, not implemented) | MEDIUM | Update BRD + update specs |
+| Affected requirement in COMPLETED phase | HIGH | Update BRD + re-plan + potentially re-develop |
+| Affected requirement spans MULTIPLE phases | CRITICAL | Full impact trace required |
+
+### Step 3 — Impact Report
+
+Output: `agent_state/change-requests/CR-<N>-impact.md`
+
+Format:
+```
+## Change Request Impact Analysis
+
+**Change:** <one-line description>
+**Requested by:** <user>
+**Date:** <ISO>
+
+### Affected Requirements
+| Requirement | Phase | Phase Status | Impact |
+|-------------|-------|-------------|--------|
+| FR-003 | Phase 2 | completed | HIGH — requires re-development |
+| FR-003 | Phase 4 | planned | MEDIUM — specs need update |
+| NFR-PERF-01 | Phase 3 | in-progress | MEDIUM — current work affected |
+
+### Estimated Re-work
+- Phases requiring re-plan: [4]
+- Phases requiring re-develop: [2]
+- Phases unaffected: [1, 3, 5]
+
+### Recommendation
+<PROCEED | DEFER | MODIFY_SCOPE>
+<reasoning>
+```
+
+### Step 4 — User Decision Gate
+Present impact report to user. Do NOT modify BRD until user confirms:
+- PROCEED — apply BRD change, update affected specs
+- DEFER — log change request for future milestone
+- MODIFY_SCOPE — narrow the change to reduce blast radius
+
+---
+
 ## QUALITY GATES
 
 - [ ] Every `FR-*` in BRD has at least one linked user story

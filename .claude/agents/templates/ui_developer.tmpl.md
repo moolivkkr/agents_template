@@ -133,6 +133,15 @@ Before skipping ANY quality step, review this table. If your reasoning matches t
 
 **STOP CONDITION:** If `api-contracts.md` does not exist or is empty, do NOT proceed. Report: `⛔ Blocked: api-contracts.md missing — api_developer must run first.`
 
+**Pre-flight shape validation (BLOCKING):**
+For each API endpoint referenced in wireframe specs:
+1. Verify endpoint EXISTS in api-contracts.md (existing check)
+2. Verify response type matches wireframe expectation:
+   - Wireframe binds to a list → api-contracts.md shows `data: []` (array)
+   - Wireframe binds to a single resource → api-contracts.md shows `data: {}` (object)
+3. Verify all wireframe field references exist in the contract's response fields
+4. If ANY mismatch: STOP and surface discrepancy. Do NOT guess — route back to api_developer for contract update.
+
 ---
 
 ## The 4 States Rule (MANDATORY — BLOCKING if missing)

@@ -143,9 +143,31 @@ Hard limits to prevent resource exhaustion and infinite escalation loops:
 
 Multiple escalations can be debated simultaneously (up to the max concurrent limit of 3) — each gets its own researcher/debater/arbitrator set. The moderator manages the queue. Debates beyond the concurrent limit are queued FIFO with a 5-minute timeout.
 
+**Queue timeout semantics (clarification):**
+- The 5-minute timeout applies to TIME WAITING IN QUEUE, not total debate duration
+- If a debate waits >5 minutes for a slot: auto-resolve with the option that has highest BRD alignment based on the escalation request's `initial_reasoning`
+- Log auto-resolved queued debates: {"topic":"...","resolution":"queue_timeout","auto_selected":"<option>","reason":"5m_queue_wait_exceeded"}
+- Once a debate gets a slot, it has the full 10-minute execution budget regardless of queue wait time
+
 ## Human Checkpoint Integration
 
 Before the human checkpoint, the moderator compiles ALL debate verdicts into a summary:
 - HIGH impact decisions with full score breakdown
 - MEDIUM impact decisions with verdict + confidence
 - Verdicts the user should review (LOW confidence or close scores)
+
+**User override logging format:**
+When user overrides a debate verdict, log to `agent_state/debates/<topic>-override.json`:
+```json
+{
+  "topic": "<decision topic>",
+  "original_verdict": "<option_id>",
+  "original_confidence": "HIGH|MEDIUM|LOW",
+  "user_override": "<option_id>",
+  "user_rationale": "<captured from user input>",
+  "overridden_at": "<ISO 8601>",
+  "phase": N,
+  "impact": "HIGH|MEDIUM"
+}
+```
+All overrides also appended to `agent_state/debates/overrides.jsonl` for cross-phase audit.

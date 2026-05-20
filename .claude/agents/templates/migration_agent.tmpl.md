@@ -129,6 +129,84 @@ migrations:
 - If `backend_developer` reports a schema mismatch: create a new corrective migration, never edit applied ones
 - Log every migration decision in `agent_state/phases/{{PHASE}}/migration_agent/changelog.md`
 
+## Migration Safety Validation (MANDATORY)
+
+Before any migration is applied, validate safety:
+
+### Pre-Migration Checks
+
+1. **Destructive operation detection:**
+   Scan each UP migration for destructive operations:
+   - `DROP TABLE` → ⛔ CRITICAL — requires explicit `--allow-drop` flag
+   - `DROP COLUMN` → ⛔ HIGH — data loss risk. Require confirmation: "Column <name> on <table> will be permanently deleted. Confirm?"
+   - `ALTER COLUMN ... TYPE` → ⚠ WARNING — type conversion may truncate data. Verify: is the new type wider or narrower?
+   - `TRUNCATE TABLE` → ⛔ CRITICAL — all data deleted
+   - `DELETE FROM` (without WHERE) → ⛔ CRITICAL — all rows deleted
+   - `ALTER TABLE ... DROP CONSTRAINT` → ⚠ WARNING — may allow invalid data going forward
+
+2. **Data preservation check:**
+   For each `DROP COLUMN` or `ALTER COLUMN TYPE`:
+   a. Generate a pre-migration data snapshot query: `SELECT COUNT(*), MIN(<col>), MAX(<col>), COUNT(DISTINCT <col>) FROM <table>`
+   b. Include in migration comments for audit trail
+   c. If column has >0 non-null values: require explicit acknowledgment in migration metadata
+
+3. **Reversibility validation:**
+   For each UP migration, verify the corresponding DOWN migration:
+   a. DOWN migration EXISTS (not empty, not just a comment)
+   b. DOWN migration reverses the UP operation (column added in UP → column dropped in DOWN, etc.)
+   c. DOWN migration preserves data where possible:
+      - If UP adds a column with DEFAULT: DOWN should NOT drop it without backing up data
+      - If UP renames a column: DOWN should rename it back (not drop + create)
+   d. Flag irreversible migrations: "⚠ This migration cannot be fully reversed — data in <column> will be lost on rollback"
+
+4. **Dry-run validation:**
+   Before applying migration to real database:
+   a. Run migration against a test/shadow database (if available)
+   b. Verify: migration completes without errors
+   c. Verify: schema after migration matches expected state
+   d. Verify: existing test data survives migration (row counts preserved for non-destructive migrations)
+
+### Migration Safety Report
+
+Output: `agent_state/phases/{{PHASE}}/reports/migration_safety.md`
+
+Format:
+```markdown
+## Migration Safety Report — Phase {{PHASE}}
+
+| Migration | Operation | Risk | Status |
+|-----------|-----------|------|--------|
+| 001_create_users.up.sql | CREATE TABLE | SAFE | ✅ |
+| 002_add_billing.up.sql | ADD COLUMN | SAFE | ✅ |
+| 003_drop_legacy.up.sql | DROP COLUMN (email_old) | HIGH | ⚠ Requires confirmation |
+
+### Destructive Operations
+- 003_drop_legacy.up.sql: Drops `email_old` from `users` (47,382 non-null values)
+  - Reversibility: IRREVERSIBLE (data cannot be recovered in DOWN migration)
+  - Recommendation: Add data backup step before migration
+
+### DOWN Migration Coverage
+- 001: ✅ Reversible
+- 002: ✅ Reversible
+- 003: ⚠ Partial — data loss on rollback
+```
+
+### Gate Integration
+
+Add to manifest:
+```json
+"migration_safety": {
+  "total_migrations": N,
+  "safe": N,
+  "warnings": N,
+  "critical": N,
+  "irreversible": N,
+  "down_coverage": "100% | N%"
+}
+```
+
+---
+
 ## Output Manifest
 
 On completion, write `agent_state/phases/{{PHASE}}/migration_agent/manifest.json`:
@@ -139,6 +217,14 @@ On completion, write `agent_state/phases/{{PHASE}}/migration_agent/manifest.json
   "migrations_created": ["<list of migration IDs>"],
   "migrations_applied": ["<list of migration IDs successfully run>"],
   "registry": "migrations/registry.yaml",
-  "rollback_tested": false
+  "rollback_tested": false,
+  "migration_safety": {
+    "total_migrations": 0,
+    "safe": 0,
+    "warnings": 0,
+    "critical": 0,
+    "irreversible": 0,
+    "down_coverage": "100%"
+  }
 }
 ```

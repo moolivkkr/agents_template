@@ -53,7 +53,7 @@ skill_packs:
 # Agent: UI Test Agent — {{PROJECT_NAME}}
 
 ## Role
-Tests all UI screens and components for **{{PROJECT_NAME}}** across three tiers: component unit tests, API-mocked integration tests, and e2e browser tests via **{{E2E_TOOL}}**, using **{{TEST_FRAMEWORK}}**.
+Tests all UI screens and components for **{{PROJECT_NAME}}** across five tiers: component unit tests, API-mocked integration tests, e2e browser tests, responsive regression, and visual regression via **{{E2E_TOOL}}**, using **{{TEST_FRAMEWORK}}**.
 
 ## Tech Context
 
@@ -67,7 +67,7 @@ Tests all UI screens and components for **{{PROJECT_NAME}}** across three tiers:
 
 ---
 
-## Three-Tier Test Strategy
+## Five-Tier Test Strategy
 
 ### Tier 1 — Component Unit Tests
 - Test each component in isolation
@@ -191,6 +191,113 @@ test('page has acceptable CLS', async ({ page }) => {
 
 CLS > 0.1 = WARNING, CLS > 0.25 = BLOCKING (skeleton doesn't match content layout).
 
+### Accessibility Automated Testing (within Tier 1 + Tier 3)
+
+**Tier 1 addition — Component-level a11y:**
+For each component test file, add accessibility assertions:
+1. Run axe-core (or equivalent) on the rendered component
+2. Assert zero violations at WCAG 2.2 AA level
+3. Specifically check:
+   - All images have alt text
+   - All form inputs have associated labels
+   - All interactive elements are keyboard accessible
+   - Color contrast ratios meet 4.5:1 (normal text) / 3:1 (large text)
+   - No duplicate IDs
+   - Heading hierarchy is sequential (no h1 → h3 skip)
+
+**Implementation pattern:**
+```typescript
+import { axe, toHaveNoViolations } from 'jest-axe'; // or @axe-core/playwright
+
+expect.extend(toHaveNoViolations);
+
+it('should have no accessibility violations', async () => {
+  const { container } = render(<Component />);
+  const results = await axe(container);
+  expect(results).toHaveNoViolations();
+});
+```
+
+**Tier 3 addition — Page-level a11y:**
+For each E2E test, add a11y scan after page load:
+```typescript
+import { injectAxe, checkA11y } from '@axe-core/playwright';
+
+test('page meets WCAG 2.2 AA', async ({ page }) => {
+  await page.goto('/dashboard');
+  await injectAxe(page);
+  await checkA11y(page, null, {
+    detailedReport: true,
+    rules: { 'color-contrast': { enabled: true } }
+  });
+});
+```
+
+**Gate impact:**
+- WCAG A violations: BLOCKING (critical a11y failure)
+- WCAG AA violations: WARNING (should fix, not blocking for MVP)
+- WCAG AAA violations: INFO (aspirational)
+
+**Output:** Add to manifest:
+```json
+"accessibility": {
+  "components_scanned": N,
+  "pages_scanned": N,
+  "violations_a": 0,
+  "violations_aa": N,
+  "violations_aaa": N
+}
+```
+
+### Tier 5 — Visual Regression Tests (RECOMMENDED)
+
+**Purpose:** Detect unintended visual changes between implementations.
+
+**When to run:** After Tier 1-4 pass. Skip on first phase with UI (no baseline exists).
+
+**Implementation:**
+1. For each page archetype implemented in this phase:
+   a. Navigate to the page with populated test data
+   b. Capture screenshot at 3 viewports: mobile (375px), tablet (768px), desktop (1280px)
+   c. Save to `tests/visual-regression/baseline/<page>-<viewport>.png`
+
+2. **Baseline mode (first run / no existing baseline):**
+   - Capture screenshots as new baselines
+   - Log: "Visual baseline created for <page> at <viewport>"
+   - No comparison — all PASS
+
+3. **Comparison mode (baseline exists):**
+   - Capture current screenshots
+   - Compare against baseline using pixel diff (threshold: 0.1% pixel difference tolerance)
+   - If diff > threshold:
+     - Save diff image to `tests/visual-regression/diff/<page>-<viewport>-diff.png`
+     - Mark as WARNING (not BLOCKING — visual changes may be intentional)
+     - Surface: "⚠ Visual change detected: <page> at <viewport> — X.X% pixel diff"
+   - If diff ≤ threshold: PASS
+
+4. **Baseline update:**
+   - If visual changes are intentional (confirmed by implementation context):
+     - Update baseline: copy current → baseline
+     - Log: "Visual baseline updated for <page>"
+   - Do NOT auto-update baselines — require explicit confirmation
+
+5. **4-state visual testing:**
+   - Capture screenshots for ALL 4 states (loading, empty, error, populated)
+   - Each state is a separate baseline image
+   - Ensures skeleton screens, empty states, and error states don't regress
+
+**Output:** Add to manifest:
+```json
+"visual_regression": {
+  "baselines_created": N,
+  "comparisons_run": N,
+  "diffs_detected": N,
+  "pages_tested": ["dashboard", "user-list", "user-detail"]
+}
+```
+
+**Gate impact:** WARNING only (visual changes may be intentional). Never BLOCKING.
+
 ## Required Reading Sequence
 
 1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — **READ FIRST** — exact response shapes. ALL Tier 2 mocks must match these shapes.
@@ -225,6 +332,19 @@ On completion, write `agent_state/phases/{{PHASE}}/ui_test_agent/manifest.json`:
   "integration_tests": { "total": 0, "passed": 0, "failed": 0 },
   "e2e_tests": { "total": 0, "passed": 0, "failed": 0 },
   "coverage_pct": 0,
+  "accessibility": {
+    "components_scanned": 0,
+    "pages_scanned": 0,
+    "violations_a": 0,
+    "violations_aa": 0,
+    "violations_aaa": 0
+  },
+  "visual_regression": {
+    "baselines_created": 0,
+    "comparisons_run": 0,
+    "diffs_detected": 0,
+    "pages_tested": []
+  },
   "unresolved_failures": []
 }
 ```

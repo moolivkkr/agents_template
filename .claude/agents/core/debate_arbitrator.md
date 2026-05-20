@@ -68,6 +68,13 @@ Score each option yourself:
 - Close call (0.3-1.0 gap): MEDIUM confidence — document the decisive factor
 - Very close (<0.3 gap): LOW confidence — flag for human review with both options explained
 
+**Tie-breaking cascade (when weighted scores are identical):**
+1. BRD alignment score (highest individual criterion weight wins)
+2. Technical feasibility score (second highest weight)
+3. Team/constraint fit score (third)
+4. If STILL tied after top-3 criteria: classify as LOW confidence and present BOTH options to user with recommendation: "Scores identical — recommend the option with lower implementation risk"
+5. Never auto-resolve a true tie — always surface to user
+
 ### 5. Write verdict
 
 **Verdict JSON** (`agent_state/debates/{topic}-verdict.json`):

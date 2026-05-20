@@ -212,6 +212,85 @@ HIGH: data exfiltration keywords (`UNION`, `INTO`) absent from blocklist.
 
 ---
 
+## Dynamic Security Validation (Post-Implementation)
+
+After static review completes, perform runtime security checks against the running application:
+
+### Check 9 — SQL Injection Probing
+For each endpoint that accepts user input (query params, request body, path params):
+1. Test with common SQL injection payloads:
+   - `' OR '1'='1` in string fields
+   - `1; DROP TABLE users--` in numeric fields
+   - `' UNION SELECT null,null,null--` in search/filter fields
+2. Verify: application returns 400/422 (validation error), NOT 500 (unhandled)
+3. Verify: no SQL error messages leak in response body
+4. **BLOCKING** if any payload returns 500 or reveals SQL error
+
+### Check 10 — XSS Probing (API responses)
+For each endpoint that echoes user input in responses:
+1. Test with: `<script>alert(1)</script>`, `"><img src=x onerror=alert(1)>`, `javascript:alert(1)`
+2. Verify: input is sanitized or escaped in response
+3. Verify: Content-Type header is correct (application/json, not text/html)
+4. **HIGH** if unsanitized script tags appear in JSON response values
+
+### Check 11 — Authentication Bypass
+1. Call protected endpoints WITHOUT auth token → expect 401
+2. Call protected endpoints with EXPIRED token → expect 401
+3. Call protected endpoints with MALFORMED token → expect 401 (not 500)
+4. Call protected endpoints with token signed by WRONG key → expect 401
+5. **CRITICAL** if any protected endpoint returns 200 without valid auth
+
+### Check 12 — Rate Limiting Verification
+For auth-sensitive endpoints (login, register, password reset, token refresh):
+1. Send 20 rapid requests from same IP
+2. Verify: rate limit triggers (429 response) within 10-20 requests
+3. **WARNING** if no rate limiting detected (not BLOCKING — may be configured at infra level)
+
+### Check 13 — CORS Validation
+1. Send request with `Origin: https://evil.com`
+2. Verify: `Access-Control-Allow-Origin` is NOT `*` and does NOT echo back the malicious origin
+3. **HIGH** if wildcard CORS or origin reflection detected
+
+### Check 14 — Security Headers
+Verify response headers include:
+- `X-Content-Type-Options: nosniff` → WARNING if missing
+- `X-Frame-Options: DENY` or `SAMEORIGIN` → WARNING if missing
+- `Strict-Transport-Security` → INFO if missing (may be at LB level)
+- `Content-Security-Policy` → INFO if missing
+- **No blocking** — these are defense-in-depth, handled at infra level
+
+### Dynamic Security Report
+
+Append findings to `agent_state/phases/${PHASE}/reports/security_review.md` under a new "## Dynamic Security Findings" section.
+
+Format:
+```
+## Dynamic Security Findings
+
+| Check | Target | Result | Severity |
+|-------|--------|--------|----------|
+| SQL Injection | POST /api/v1/users | PASS — 422 on injection payload | — |
+| SQL Injection | GET /api/v1/search?q= | FAIL — 500 on UNION payload | BLOCKING |
+| Auth Bypass | GET /api/v1/admin | PASS — 401 without token | — |
+| CORS | All endpoints | PASS — specific origin only | — |
+| Rate Limiting | POST /api/v1/auth/login | WARN — no 429 after 20 requests | WARNING |
+```
+
+### Prerequisites
+- Application MUST be running locally (Docker or direct)
+- Dynamic checks ONLY run if `/develop` Step 2.75 (smoke test) passed
+- If application is not running: SKIP dynamic checks with note "Dynamic security checks skipped — application not running"
+
+### Gate Impact
+- SQL Injection FAIL → BLOCKING
+- Auth Bypass FAIL → CRITICAL (immediately blocks gate)
+- XSS in API responses → HIGH
+- CORS violation → HIGH
+- Rate limiting → WARNING
+- Security headers → INFO/WARNING
+
+---
+
 > **Severity mapping:** This agent's native severities map to the unified model in `.claude/skills/core/code-quality.md` §Unified Severity Model.
 
 ## Severity Levels (Standardized)

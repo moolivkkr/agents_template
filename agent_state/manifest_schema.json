@@ -30,7 +30,18 @@
     },
     "known_issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
     "carried_forward": { "type": "array", "items": { "$ref": "#/$defs/carried_item" } },
-    "hotfixes": { "type": "array", "items": { "$ref": "#/$defs/hotfix" } }
+    "hotfixes": { "type": "array", "items": { "$ref": "#/$defs/hotfix" } },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "total_duration_s": { "type": "integer" },
+        "agents_run": { "type": "integer" },
+        "agents_failed": { "type": "integer" },
+        "agents_retried": { "type": "integer" },
+        "slowest_agent": { "type": "string" },
+        "slowest_duration_s": { "type": "integer" }
+      }
+    }
   },
   "$defs": {
     "test_tier": {

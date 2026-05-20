@@ -33,6 +33,35 @@ Fully autonomous phase implementation. Detects where you are, implements all spe
 
 ---
 
+## Agent Execution Logging Protocol
+
+Every agent spawned during /develop MUST append execution entries to:
+`agent_state/phases/${PHASE}/execution.jsonl`
+
+This file is append-only. Agents write entries during the pipeline; the file is only read at the end (Step 7) for the execution summary.
+
+**On agent start:**
+```json
+{"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"started"}
+```
+
+**On agent completion:**
+```json
+{"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"completed","duration_s":<N>,"findings":{"blocking":<N>,"warning":<N>},"output":"<primary_output_path>"}
+```
+
+**On agent failure:**
+```json
+{"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"failed","error":"<one_line_reason>","attempt":<N>}
+```
+
+**Pipeline completion:**
+```json
+{"ts":"<ISO>","event":"pipeline_complete","phase":N,"status":"gate_passed|gate_failed|gate_forced","total_duration_s":<N>,"agents_run":<N>,"agents_failed":<N>}
+```
+
+---
+
 ## Session Context Budget
 
 > Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
@@ -161,6 +190,13 @@ PHASE=${ARG_PHASE:-$(( ${LAST_PASSED:-0} + 1 ))}
 echo "▶ Running Phase $PHASE"
 ```
 
+### Initialize Execution Log
+
+```bash
+mkdir -p agent_state/phases/${PHASE}
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_start\",\"phase\":${PHASE},\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+```
+
 ### Failure Pattern Detection
 
 Check if previous attempts at this phase failed at specific steps:
@@ -278,6 +314,118 @@ print('✅ Data contracts consistent with Phase $((PHASE-1)) manifest')
 fi
 ```
 
+### Schema Evolution Validation (PHASE > 1)
+
+Before implementation begins, validate schema compatibility across phases:
+
+1. Load ALL previous phases' `data-contracts.md` files (not just N-1 — schema evolution can span multiple phases)
+2. Load current phase's `data-contracts.md`
+3. For each interface/type that exists in BOTH current and previous phases:
+   a. **Field additions:** ALLOWED (backward compatible) — log as INFO
+   b. **Field removals:** ⛔ BREAKING CHANGE — route to user for decision:
+      - Option A: Add field back (preserve compatibility)
+      - Option B: Version the endpoint (create /v2/ route)
+      - Option C: Confirm removal (document in manifest as `breaking_changes[]`)
+   c. **Type changes:** ⛔ BREAKING CHANGE — same routing as removals
+   d. **Array↔Object changes:** ⛔ CRITICAL BREAKING CHANGE — must version endpoint
+4. Output: `agent_state/phases/${PHASE}/reports/schema_evolution.md`
+5. Add to manifest: `"breaking_changes": [{"field": "...", "action": "removed|type_changed", "resolution": "versioned|confirmed|restored"}]`
+
+```bash
+# Schema evolution validation
+if [ $PHASE -gt 1 ]; then
+  echo "Validating schema evolution across all previous phases..."
+  CURRENT_CONTRACTS="docs/design/phases/${PHASE}/specs/data-contracts.md"
+  if [ -f "$CURRENT_CONTRACTS" ]; then
+    for PREV_PHASE in $(seq 1 $((PHASE - 1))); do
+      PREV_CONTRACTS="docs/design/phases/${PREV_PHASE}/specs/data-contracts.md"
+      if [ -f "$PREV_CONTRACTS" ]; then
+        echo "  Comparing Phase ${PHASE} contracts against Phase ${PREV_PHASE}..."
+        # Compare interfaces — field removals and type changes are breaking
+        python3 -c "
+import re, sys
+
+def parse_interfaces(text):
+    interfaces = {}
+    current = None
+    for line in text.split('\n'):
+        m = re.match(r'(?:export\s+)?interface\s+(\w+)', line)
+        if m:
+            current = m.group(1)
+            interfaces[current] = {}
+            continue
+        if current and re.match(r'\s*}', line):
+            current = None
+            continue
+        if current:
+            fm = re.match(r'\s+(\w+)\??\s*:\s*(.+);', line)
+            if fm:
+                interfaces[current][fm.group(1)] = fm.group(2).strip()
+    return interfaces
+
+prev = parse_interfaces(open('$PREV_CONTRACTS').read())
+curr = parse_interfaces(open('$CURRENT_CONTRACTS').read())
+breaking = []
+
+for iface in prev:
+    if iface not in curr:
+        continue
+    for field, ftype in prev[iface].items():
+        if field not in curr[iface]:
+            breaking.append(f'⛔ BREAKING: {iface}.{field} REMOVED (was {ftype})')
+        elif curr[iface][field] != ftype:
+            breaking.append(f'⛔ BREAKING: {iface}.{field} TYPE CHANGED: {ftype} → {curr[iface][field]}')
+
+if breaking:
+    print('Schema evolution issues found (Phase ${PREV_PHASE} → Phase ${PHASE}):')
+    for b in breaking: print(f'  {b}')
+    sys.exit(1)
+else:
+    print('✅ Schema evolution clean: Phase ${PREV_PHASE} → Phase ${PHASE}')
+" || echo "⚠ Schema evolution validation failed — review before proceeding"
+      fi
+    done
+  fi
+fi
+```
+
+### Breaking Change Propagation
+
+When a breaking change is confirmed (not restored):
+1. Identify all previous phases that consume the affected endpoint (check their manifests' `artifacts.api_routes`)
+2. For each consuming phase:
+   a. Check if consuming phase's tests still pass with the new contract
+   b. If tests fail → the breaking change MUST be resolved before proceeding:
+      - Version the endpoint (original route stays, new route added)
+      - OR update consuming phase's code (cross-phase fix)
+3. Log propagation results in `schema_evolution.md`
+
+```bash
+# Breaking change propagation — check all consuming phases
+if [ $PHASE -gt 1 ] && [ -f "agent_state/phases/${PHASE}/reports/schema_evolution.md" ]; then
+  BREAKING_COUNT=$(grep -c "⛔ BREAKING" "agent_state/phases/${PHASE}/reports/schema_evolution.md" 2>/dev/null || echo 0)
+  if [ "$BREAKING_COUNT" -gt 0 ]; then
+    echo "⚠ ${BREAKING_COUNT} breaking change(s) detected — checking consuming phases..."
+    for PREV_PHASE in $(seq 1 $((PHASE - 1))); do
+      PREV_MANIFEST="agent_state/phases/${PREV_PHASE}/manifest.json"
+      if [ -f "$PREV_MANIFEST" ]; then
+        python3 -c "
+import json
+manifest = json.load(open('$PREV_MANIFEST'))
+routes = manifest.get('artifacts', {}).get('api_routes', [])
+if routes:
+    print(f'  Phase ${PREV_PHASE} consumes {len(routes)} API routes — verify compatibility')
+    for r in routes:
+        print(f'    - {r}')
+"
+      fi
+    done
+    echo "  → Breaking changes MUST be resolved (version endpoint or update consumers) before proceeding."
+    echo "  → Results logged to agent_state/phases/${PHASE}/reports/schema_evolution.md"
+  fi
+fi
+```
+
 ### Phase Context Staleness Detection
 
 Before loading `phase_context.md`, verify it's not stale relative to the BRD:
@@ -301,6 +449,29 @@ fi
 If staleness detected and the BRD diff includes new FR-* IDs not in `phase_context.md`: **BLOCKING** — re-run `/plan --phase=${PHASE}`.
 If staleness detected but BRD changes are editorial (no new FR-*): **WARNING** — proceed with caution.
 
+### Spec Staleness Warning
+
+Before starting implementation, check if phase specs are older than 30 days:
+
+```bash
+SPEC_DIR="docs/design/phases/${PHASE}/specs"
+if [ -d "$SPEC_DIR" ]; then
+  NOW=$(date +%s)
+  for SPEC in "$SPEC_DIR"/*.md; do
+    [ -f "$SPEC" ] || continue
+    SPEC_MTIME=$(stat -f %m "$SPEC" 2>/dev/null || stat -c %Y "$SPEC")
+    DAYS_OLD=$(( (NOW - SPEC_MTIME) / 86400 ))
+    if [ "$DAYS_OLD" -gt 60 ]; then
+      echo "⛔ Phase ${PHASE} spec $(basename $SPEC) is ${DAYS_OLD} days old — strongly recommend /plan --refresh before /develop"
+    elif [ "$DAYS_OLD" -gt 30 ]; then
+      echo "⚠ Phase ${PHASE} spec $(basename $SPEC) is ${DAYS_OLD} days old — consider re-running /plan to refresh"
+    fi
+  done
+fi
+```
+
+Neither warning is BLOCKING — user decides whether to proceed. Surface all stale specs together, then continue.
+
 ### Start infrastructure
 ```bash
 # Bring up local dev stack from IMPLEMENTATION_GUIDELINES Section 5
@@ -310,6 +481,89 @@ docker compose up -d  # (or equivalent from project setup)
 # Wait for DB readiness (up to 60s)
 # Health check command from IMPLEMENTATION_GUIDELINES
 ```
+
+### Token/Cost Estimation
+
+Before starting the pipeline, estimate total token usage for this phase. These estimates are **rough order-of-magnitude** — they exist for budgeting and expectation-setting, not precision. Actual usage varies with codebase size, spec complexity, and retry cycles.
+
+**Estimation algorithm:**
+1. Count components in phase specs: `NUM_COMPONENTS = count of spec files in docs/design/phases/${PHASE}/specs/` (exclude `data-contracts.md`, `phase_context.md`, and `INDEX.md` from count)
+2. Determine if UI phase: `HAS_UI = true if wireframe specs exist`
+3. Count previous phases for regression: `PREV_PHASES = PHASE - 1`
+4. Base estimates per agent (input + output tokens):
+
+| Agent | Model | Estimated Tokens | When |
+|-------|-------|-----------------|------|
+| backend_audit_agent | sonnet | ~15K | Always |
+| ui_audit_agent | sonnet | ~15K | If HAS_UI |
+| database_agent | opus | ~25K x NUM_DB_TABLES | Always |
+| migration_agent | opus | ~20K | Always |
+| backend_developer | opus | ~40K x NUM_COMPONENTS | Always |
+| api_developer | opus | ~35K x NUM_COMPONENTS | Always |
+| ui_developer | opus | ~45K x NUM_COMPONENTS | If HAS_UI |
+| unit_test_agent | opus | ~30K x NUM_COMPONENTS | Always |
+| integration_test_agent | opus | ~25K x NUM_COMPONENTS | Always |
+| e2e_orchestrator | sonnet | ~20K | If e2e unlocked |
+| acceptance_test_agent | opus | ~30K | Always |
+| code_reviewer_I | sonnet | ~15K | Always |
+| code_reviewer_II | opus | ~25K | Always |
+| security_reviewer | opus | ~30K | Always |
+| tenant_isolation_verifier | opus | ~20K | Always |
+| code_quality_verifier | sonnet | ~10K | Always |
+| spec_impl_reconciler | opus | ~25K | Always |
+| spec_test_reconciler | sonnet | ~15K | Always |
+| code_optimizer | sonnet | ~20K | Always |
+| ui_code_optimizer | sonnet | ~20K | If HAS_UI |
+| documentation_agent | sonnet | ~15K | Always |
+
+5. Calculate total:
+   ```
+   TOTAL_TOKENS = sum of all applicable agent estimates
+
+   Example for 3-component backend-only phase:
+     Audit: 15K
+     DB + Migration: 25K + 20K = 45K
+     Implementation: (40K + 35K) x 3 = 225K
+     Testing: (30K + 25K) x 3 + 30K = 195K
+     Review: 15K + 25K + 30K + 20K + 10K = 100K
+     Reconciliation: 25K + 15K = 40K
+     Optimization: 20K
+     Documentation: 15K
+     TOTAL: ~655K tokens
+
+   Example for 5-component full-stack phase:
+     All above + UI agents
+     TOTAL: ~1.2M tokens
+   ```
+
+6. Display estimate:
+   ```
+   Phase ${PHASE} Token Estimate
+   ──────────────────────────────
+   Components: ${NUM_COMPONENTS} (${HAS_UI ? "full-stack" : "backend-only"})
+   Agents to run: ${AGENT_COUNT}
+   Estimated tokens: ~${TOTAL_TOKENS} (${TOTAL_TOKENS > 1000000 ? "large phase" : "normal"})
+
+   Breakdown:
+     Implementation:  ~${IMPL_TOKENS} (${IMPL_PCT}%)
+     Testing:         ~${TEST_TOKENS} (${TEST_PCT}%)
+     Review:          ~${REVIEW_TOKENS} (${REVIEW_PCT}%)
+     Other:           ~${OTHER_TOKENS} (${OTHER_PCT}%)
+
+   Note: These are rough estimates for budgeting. Actual usage depends on
+   codebase size, spec complexity, retry cycles, and escalation count.
+   ```
+
+7. **Large phase warning:**
+   If TOTAL_TOKENS > 1,500,000: surface warning:
+   "This phase is estimated at ~${TOTAL_TOKENS} tokens. Consider splitting into smaller phases or running /plan --split to break it down."
+
+8. Add to execution.jsonl:
+   ```bash
+   echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"estimate\",\"phase\":${PHASE},\"estimated_tokens\":${TOTAL_TOKENS},\"components\":${NUM_COMPONENTS},\"has_ui\":${HAS_UI}}" >> agent_state/phases/${PHASE}/execution.jsonl
+   ```
+
+---
 
 ### Decision Log Protocol
 
@@ -613,6 +867,12 @@ If DOWN rollback also fails:
 This prevents the common failure where Phase N migration adds a table, fails partway through,
 and Phase N re-development tries to add the same table again.
 
+**Migration Safety Gate (BLOCKING):**
+- Zero CRITICAL findings in migration_safety.md
+- All DOWN migrations exist and are non-empty
+- Irreversible migrations explicitly acknowledged in migration metadata
+- If any CRITICAL finding: STOP — do not apply migration until resolved
+
 Wave 2a (sequential — api_developer depends on backend service interfaces):
   └─ backend_developer  → domain models, services, repositories
        ↓ writes manifest with service method return types (list/single/none)
@@ -784,24 +1044,56 @@ When a test appears in `flaky_tests[]` across 2+ consecutive phases:
 
 This prevents flaky tests from blocking every phase while maintaining visibility.
 
-### Step 3a.5 — Cross-Phase Regression (PHASE > 1 only)
+### Step 3a.5 — Cross-Phase Regression (Smart, if PHASE > 1)
 
-**When:** PHASE > 1 — verify this phase's code didn't break previous phases
+**Purpose:** Detect regressions in previous phases caused by current phase changes.
 **Skip if:** PHASE = 1 (nothing to regress against)
 
-Run ALL unit tests from previous phases (not just this phase's tests):
-```bash
-# Run full test suite, not just new tests
-<test_command> ./...  # or equivalent full-suite command from IMPLEMENTATION_GUIDELINES
-```
+**Algorithm — Artifact Overlap Detection:**
 
-If previous-phase tests fail:
-- Identify which test broke and which new code caused it
-- Fix the regression in this phase's code (do NOT modify previous phase tests)
-- Re-run → max 2 attempts → surface to user if unresolvable
-- Log in report: `agent_state/phases/${PHASE}/reports/regression_check.md`
+1. Read current phase manifest draft: extract `artifacts.api_routes`, `artifacts.schemas` (tables/collections), `artifacts.code` (modified files)
 
-This prevents silent breakage where Phase 3 code compiles and passes its own tests but breaks Phase 1 behavior.
+2. For each previous phase P (from 1 to PHASE-1):
+   a. Read `agent_state/phases/P/manifest.json`
+   b. Extract P's `artifacts.api_routes`, `artifacts.schemas`, `artifacts.code`
+   c. Compute overlap:
+      - **Schema overlap:** current phase touches a table/collection that phase P created or modified
+      - **Route overlap:** current phase modifies an API route that phase P defined
+      - **Code overlap:** current phase modifies a file that phase P created
+   d. If ANY overlap detected → phase P is "affected"
+
+3. For each affected phase:
+   a. Re-run that phase's **unit tests** (from test paths in phase P's manifest)
+   b. Re-run that phase's **integration tests** (critical: catches DB schema/query regressions)
+   c. Do NOT re-run e2e tests (too expensive for regression; save for /accept)
+
+4. For non-affected phases: SKIP (log: "Phase P: no artifact overlap, skipping regression")
+
+5. **Failure handling:**
+   - If any previous phase test fails → BLOCKER
+   - Surface: "Phase P regression: <test_name> FAILED — current phase changes broke Phase P"
+   - Route to implementation agent for fix (max 2 attempts)
+   - If unfixable: escalate to user with both phase contexts
+
+6. **Output:** Append to manifest:
+   ```json
+   "cross_phase_regression": {
+     "phases_checked": [1, 2],
+     "phases_skipped": [3],
+     "overlap_details": {
+       "phase_1": {"schemas": ["users"], "routes": ["/api/v1/users"]},
+       "phase_2": {"schemas": ["billing"], "routes": []}
+     },
+     "results": {
+       "phase_1": {"unit": "passed", "integration": "passed"},
+       "phase_2": {"unit": "passed", "integration": "passed"}
+     }
+   }
+   ```
+
+   Log detailed report: `agent_state/phases/${PHASE}/reports/regression_check.md`
+
+This prevents silent breakage where Phase 3 code compiles and passes its own tests but breaks Phase 1 behavior. The artifact overlap detection avoids wasting time re-running tests for phases with zero overlap.
 
 ### Step 3b — Integration Tests
 **Agent:** Generated `integration_test_agent`
@@ -1087,6 +1379,11 @@ On issues found from any reviewer:
 - `code_reviewer_I`: BLOCKING issues must fix
 - `code_reviewer_II`: VIOLATION findings must fix
 - `security_reviewer`: HIGH severity findings must fix
+  **Dynamic security checks** (within security_reviewer):
+  - Requires application running (from Step 2.75 smoke test)
+  - Runs SQL injection, auth bypass, CORS, rate limiting probes
+  - Findings appended to security_review.md under "Dynamic Security Findings"
+  - BLOCKING/CRITICAL findings from dynamic checks have same gate impact as static findings
 - `dependency_scanner`: CRITICAL/HIGH with available fixes must apply. Auto-applies non-breaking fixes (`npm audit fix` etc.). Breaking fixes flagged for user decision.
 
 Reports written to `agent_state/phases/${PHASE}/reports/`:
@@ -1177,6 +1474,8 @@ Code review II               agent_state/phases/${PHASE}/reports/code_review_II.
 Security review              agent_state/phases/${PHASE}/reports/security_review.md  No HIGH severity findings
 SAST scan                    agent_state/phases/${PHASE}/reports/sast_scan.md        No CRITICAL or HIGH findings
 Acceptance tests             agent_state/phases/${PHASE}/reports/acceptance_report.md   All in-scope use cases: PASS
+Cross-phase regression       manifest.json → cross_phase_regression                    All affected phases PASSED (skip if PHASE == 1)
+Migration safety              agent_state/phases/${PHASE}/reports/migration_safety.md   Zero CRITICAL findings, DOWN coverage ≥ 90%
 ```
 
 **E2E gate is active only when `PHASE_PLAN.md` has a non-empty `e2e_workflows_unlocked` list.**
@@ -1457,4 +1756,22 @@ Does NOT block gate passage. Runs in parallel with gate file writes.
 
   ▶ Next: /plan --phase=N+1
   ▶ After all phases: /accept (global acceptance across full product)
+```
+
+### Execution Summary
+
+Read `agent_state/phases/${PHASE}/execution.jsonl` and render:
+
+```
+Phase ${PHASE} Execution (total: Xm Ys)
+  <agent_name>        Xm Ys  ✅|⚠|❌  <findings summary>
+  ...
+
+Slowest agent: <name> (Xm Ys)
+Total agents: N run, N failed, N retried
+```
+
+Write the pipeline_complete entry to the execution log:
+```bash
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_complete\",\"phase\":${PHASE},\"status\":\"<gate_passed|gate_failed|gate_forced>\",\"total_duration_s\":<N>,\"agents_run\":<N>,\"agents_failed\":<N>}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```

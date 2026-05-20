@@ -149,3 +149,32 @@ Common failures:
 | Nested interactive elements | Separate click targets |
 | Missing alt text on images | `alt="Description"` or `alt=""` for decorative |
 | Heading level skips (h1 → h3) | Sequential: h1 → h2 → h3 |
+
+## Automated Accessibility Testing Tools
+
+### Required Setup
+Add to project dependencies:
+- **Component tests:** `jest-axe` (Jest/Vitest) or `@axe-core/react`
+- **E2E tests:** `@axe-core/playwright`
+- **Linting:** `eslint-plugin-jsx-a11y` (React) or equivalent
+
+### ESLint A11y Rules (MUST be enabled)
+```json
+{
+  "extends": ["plugin:jsx-a11y/recommended"],
+  "rules": {
+    "jsx-a11y/alt-text": "error",
+    "jsx-a11y/anchor-is-valid": "error",
+    "jsx-a11y/click-events-have-key-events": "error",
+    "jsx-a11y/no-static-element-interactions": "error",
+    "jsx-a11y/label-has-associated-control": "error",
+    "jsx-a11y/heading-has-content": "error"
+  }
+}
+```
+
+### CI Integration
+Run axe-core scans in CI pipeline:
+- Component-level: runs with unit tests (Tier 1)
+- Page-level: runs with E2E tests (Tier 3)
+- ESLint: runs as pre-commit hook

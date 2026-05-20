@@ -153,6 +153,48 @@ POST   /api/v1/users/search       # complex search (body payload)
 - Publish docs at `/api/docs` (Swagger UI or Redoc)
 - Include example request/response in every operation
 
+## API Versioning Strategy
+
+### When to Version
+- **DO version:** Breaking changes to response shapes, removed fields, changed field types, removed endpoints
+- **DON'T version:** Additive changes (new fields, new endpoints, new optional query params)
+
+### Versioning Approach: URL Path Versioning
+Default strategy: `/api/v1/`, `/api/v2/`
+
+**Rules:**
+1. All endpoints start at `/api/v1/`
+2. When a breaking change is needed:
+   a. Keep the old endpoint at `/api/v1/<resource>` (unchanged)
+   b. Create new endpoint at `/api/v2/<resource>` with the breaking change
+   c. Mark old endpoint as deprecated in api-contracts.md: `@deprecated — use /api/v2/<resource>`
+   d. Old endpoint continues to work for minimum 2 phases after deprecation
+3. Deprecation timeline:
+   - Phase N: deprecation announced, v2 created
+   - Phase N+1: deprecation warning header added to v1 responses (`Deprecation: true`, `Sunset: <date>`)
+   - Phase N+2: v1 can be removed (with acceptance test confirming no consumers)
+
+### Version Coexistence
+- Both v1 and v2 share the same service layer
+- Version differences handled at the handler/controller level (response serialization)
+- Database schema supports both versions simultaneously
+- Never duplicate business logic for versioning — only transform at the API boundary
+
+### api-contracts.md Versioning
+When versioned endpoints exist:
+```yaml
+# api-contracts.md
+GET /api/v1/users/:id
+  Response: { data: { id, name, email } }
+  Status: deprecated (sunset: Phase 5)
+
+GET /api/v2/users/:id
+  Response: { data: { id, full_name, email, created_at } }
+  Status: active
+```
+
+---
+
 ## Critical Rules
 
 - Always include `request_id` in every response and every log line
