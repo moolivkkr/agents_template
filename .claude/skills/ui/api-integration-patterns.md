@@ -1,5 +1,32 @@
 # API Integration Patterns — HTTP Client + TanStack Query
 
+## CRITICAL RULE: No Raw Data Fetching in Components
+
+Components MUST use the project's data fetching layer (TanStack Query hooks). These patterns are BANNED in component files:
+
+**BANNED:**
+- `fetch()` or `axios.get()` directly in components
+- `useEffect(() => { fetch(...) }, [])` pattern
+- `useState` + `useEffect` for data loading
+- `useSWR` unless it's the project's chosen library
+
+**REQUIRED:**
+- `useQuery()` from TanStack Query with query key factory
+- `useMutation()` for state-changing operations
+- `useInfiniteQuery()` for paginated lists
+- Custom hooks in `lib/api/` that wrap the above
+
+**WHY:** Raw fetch bypasses query caching, deduplication, retry logic, and invalidation. It causes:
+- Duplicate requests (no deduplication)
+- Stale data (no automatic refetch)
+- No loading/error states (must implement manually)
+- Broken optimistic updates (no cache to update)
+
+### Enforcement
+`code_reviewer_I` MUST flag any `fetch()`, `axios`, or `useEffect` data fetching in component files as BLOCKING.
+
+---
+
 ## HTTP Client Setup
 
 ```tsx

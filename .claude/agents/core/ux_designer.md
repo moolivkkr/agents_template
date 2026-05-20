@@ -106,6 +106,27 @@ ASCII grid showing mobile layout (stacked, hamburger nav, full-width)
 ### Populated State
 - [describe the main content layout with real data]
 
+## Error Boundary Specification (REQUIRED for every screen with data fetching)
+
+For each data-fetching component on the screen, specify:
+
+| Component | Data Source | Error Scope | Recovery |
+|-----------|-----------|-------------|----------|
+| UserList | GET /api/v1/users | Section (list only) | Retry button (refetch) |
+| UserStats | GET /api/v1/stats | Section (stats widget) | Retry button (refetch) |
+| PageLayout | N/A (static) | Page (catches unhandled) | Full page error with "Go Home" |
+
+**Error Scope options:**
+- `Section` — only the affected widget shows error, rest of page renders normally
+- `Page` — entire page shows error state (for critical single-data-source screens)
+- `Toast` — non-blocking notification (for background mutations)
+
+**Recovery options:**
+- `Retry button` — calls refetch() on the specific query
+- `Redirect` — navigates to fallback page (e.g., 401 → login)
+- `Toast + auto-retry` — shows notification, retries automatically after 3s
+- `Full page error` — last resort, shows error boundary with "Go Home" link
+
 ## Interaction Flows
 - User action → result (e.g., "Click Save → POST /api/v1/... → toast success → redirect to list")
 - Error flows (e.g., "Submit fails → toast error + form stays open with input preserved")
