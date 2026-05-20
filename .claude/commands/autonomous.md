@@ -80,7 +80,7 @@ Run `/init` with auto-research protocol:
 
 **Checkpoint:** Write `agent_state/autonomous/checkpoint.json`:
 ```json
-{ "step": "init_complete", "timestamp": "...", "decisions_count": 24, "low_confidence": 3 }
+{ "step": "init_complete", "timestamp": "...", "decisions_count": 24, "low_confidence": 3, "auto_resolved_count": 0, "auto_resolved_security_count": 0, "auto_resolved_log": "agent_state/autonomous/auto-resolved.jsonl" }
 ```
 
 ---
@@ -173,6 +173,23 @@ Prevent runaway escalation loops in autonomous mode:
 - Unresolved decisions written to `agent_state/debates/unresolved.json`
 - All auto-resolved decisions appear in the final report (Step 7) under "Decisions Made → Escalations resolved with default"
 
+### Auto-Resolution Logging (MANDATORY)
+
+Every auto-resolved escalation MUST be logged to:
+`agent_state/autonomous/auto-resolved.jsonl`
+
+**Format — one entry per auto-resolution:**
+```jsonl
+{"ts":"<ISO>","phase":N,"step":"<step_id>","escalation_number":N,"topic":"<decision topic>","question":"<full escalation question>","options":["A: <option>","B: <option>"],"auto_selected":"<option_id>","auto_rationale":"<why this default was chosen>","confidence":"HIGH|MEDIUM|LOW","category":"<architecture|security|data|ux|performance|other>","would_block":false}
+```
+
+**Logging rules:**
+1. Log BEFORE applying the auto-resolution (not after)
+2. Include the FULL question text (not truncated)
+3. Include ALL options that were available
+4. Tag the category to enable post-run filtering
+5. If the auto-resolution involves security-adjacent topics (auth, access, tokens, permissions, tenant, encryption, secrets, CORS, CSRF, rate-limit), set `"category": "security"` and add `"security_flag": true`
+
 ### Git branching:
 ```bash
 # Before each phase
@@ -191,9 +208,14 @@ git merge phase-${PHASE}-implementation --no-ff -m "Phase ${PHASE} complete"
   "step": "tests_complete",
   "timestamp": "...",
   "tests": { "unit": "pass", "integration": "pass" },
-  "next_step": "reconciliation"
+  "next_step": "reconciliation",
+  "auto_resolved_count": 0,
+  "auto_resolved_security_count": 0,
+  "auto_resolved_log": "agent_state/autonomous/auto-resolved.jsonl"
 }
 ```
+
+The `auto_resolved_count` and `auto_resolved_security_count` fields reflect cumulative totals for the current phase at checkpoint time. These enable resume mode to know how many auto-resolutions occurred before interruption.
 
 **On catastrophic failure** (build won't compile, infra won't start after retries):
 ```bash
@@ -214,6 +236,37 @@ For each phase N (2, 3, ... max_phases):
   3. /develop --auto --phase=N
   4. Checkpoint
 ```
+
+### Post-Phase Auto-Resolution Review
+
+After each phase completes in autonomous mode, before proceeding to next phase:
+
+1. Read `agent_state/autonomous/auto-resolved.jsonl`
+2. Filter entries for the just-completed phase
+3. Count by category
+4. Generate summary:
+
+```
+Auto-Resolution Summary — Phase ${PHASE}
+────────────────────────────────────────
+Total auto-resolved: ${N}
+  architecture: ${N}
+  data: ${N}
+  performance: ${N}
+  security: ${N} ${N > 0 ? "⚠ REVIEW RECOMMENDED" : ""}
+  ux: ${N}
+  other: ${N}
+
+Security-flagged decisions:
+  ${list each security-flagged decision with topic + auto_selected}
+
+Full log: agent_state/autonomous/auto-resolved.jsonl
+```
+
+5. If ANY security-flagged auto-resolutions exist:
+   - Surface prominently: "⚠ ${N} security-adjacent decisions were auto-resolved — review recommended before next phase"
+   - Include in the phase manifest under `"auto_resolved_security": [...]`
+   - These will appear in the final autonomous report (Step 7)
 
 **Phase dependency:** If Phase N gate was force-passed with known issues, Phase N+1 audit will surface them as carried-forward critical items.
 
@@ -254,6 +307,22 @@ Results written to `agent_state/autonomous/acceptance-report.md`.
 - Auto-researched: N (HIGH: N, MEDIUM: N, LOW: N)
 - User-approved at checkpoint: N
 - Escalations resolved with default: N
+
+## Auto-Resolution Audit
+
+Total auto-resolved across all phases: ${N}
+
+| Phase | Total | Architecture | Security | Data | UX | Performance |
+|-------|-------|-------------|----------|------|----|-------------|
+| 1 | ${N} | ${N} | ${N} | ${N} | ${N} | ${N} |
+| 2 | ${N} | ${N} | ${N} | ${N} | ${N} | ${N} |
+
+⚠ Security-Adjacent Auto-Resolutions (review these):
+| Phase | Topic | Auto-Selected | Confidence |
+|-------|-------|--------------|------------|
+| ${phase} | ${topic} | ${option} | ${confidence} |
+
+Full audit trail: agent_state/autonomous/auto-resolved.jsonl
 
 ## Known Issues
 [carried-forward items, forced gate items, deferred features]
@@ -315,3 +384,4 @@ echo "✅ Dependencies installed"
 5. **Force-gate with full logging** — never silently skips failures
 6. **Environment pre-flight** — catches infra issues in seconds, not minutes
 7. **Decision audit trail** — every auto-decision documented with evidence + confidence
+8. **Structured auto-resolution log** — every auto-resolved escalation captured in `agent_state/autonomous/auto-resolved.jsonl` with full question, options, rationale, category, and security flags for post-run audit
