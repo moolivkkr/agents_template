@@ -42,6 +42,48 @@ Research and catalog EVERY vendor in the space:
 |---------|-------|-------------|---------|-------------------|
 ```
 
+### 1a.5 — Startup Deep Dive (CRITICAL — these are your direct competitors)
+
+Startups matter MORE than incumbents for moat analysis. Research EVERY startup in the space:
+
+```markdown
+## Startup Intelligence
+
+### For each startup (minimum 10-15):
+| Field | Detail |
+|-------|--------|
+| Name | |
+| Founded | |
+| Funding | Total raised, last round, investors |
+| Team | Founders' background (ex-CrowdStrike? ex-NSA? ex-Google?) |
+| Technical approach | What's novel about their architecture? |
+| Go-to-market | PLG? Enterprise sales? MSP channel? |
+| Traction | Customer count, ARR if known, logo customers |
+| Positioning | "We are X for Y because Z" |
+| Open source? | Core OSS? Freemium? Fully commercial? |
+| Technical moat claim | What they say is hard to replicate |
+| Actual moat assessment | Is their moat real? How defensible? |
+
+### Startup Comparison Matrix
+| Startup | Approach | Moat Claim | Funding | Traction | Threat Level |
+|---------|----------|-----------|---------|----------|-------------|
+
+### What startups are doing that incumbents aren't
+[Patterns across startup approaches — where is innovation happening?]
+
+### Startup failure patterns
+[Which startups failed and why? What to avoid?]
+```
+
+**Research sources for startups:**
+- Crunchbase / PitchBook — funding, investors, team
+- Product Hunt — launch positioning, early traction signals
+- GitHub — OSS repos reveal actual tech stack and approach
+- LinkedIn — founder backgrounds, team growth rate
+- Job postings — what they're building next
+- Y Combinator / TechStars batches — recent cohort companies in this space
+- Security conference talks (Black Hat, DEF CON, RSA) — startup demos reveal technical approach
+
 ### 1b — Market Dynamics
 ```markdown
 ## Market Overview
@@ -426,7 +468,36 @@ From the capability matrix, identify:
 |----------|-----------|------|----------------|
 ```
 
-### 5b — Competitive Moat Strategy
+### 5b — Startup-vs-Startup Moat Comparison (YOUR competitive landscape)
+
+Incumbents are less relevant for moat analysis — they have distribution and brand. Your REAL competition is other startups. Compare:
+
+```markdown
+## Our Position vs Startup Competitors
+
+| Dimension | Startup A | Startup B | Startup C | US (proposed) |
+|-----------|-----------|-----------|-----------|---------------|
+| Detection approach | ML-first | Rule-based + ML | eBPF kernel | [our approach] |
+| Data architecture | Cloud-only | Hybrid | Edge-first | [our approach] |
+| Open source strategy | Closed | Core OSS | Fully OSS | [our approach] |
+| GTM | Enterprise sales | PLG + community | MSP channel | [our approach] |
+| Funding stage | Series B | Series A | Seed | [our stage] |
+| Technical team strength | 5 PhDs (ML) | 3 ex-FAANG | 2 ex-NSA | [our strength] |
+| Unique capability | AutoML tuning | 1-day deploy | Zero kernel driver | [our unique] |
+
+## Where we can win (realistic assessment)
+| Advantage | Why it's real | Effort to build | Defensibility |
+|-----------|--------------|-----------------|---------------|
+
+## Where we're behind (honest gaps)
+| Gap | Who's ahead | How far behind | Catch-up plan |
+|-----|-----------|---------------|---------------|
+
+## Recommended positioning
+"We are [X] for [Y] because [Z] — unlike [Startup A] which [limitation] and [Startup B] which [limitation]"
+```
+
+### 5c — Competitive Moat Strategy
 ```markdown
 ## Potential Moats
 
