@@ -41,6 +41,7 @@ dependencies:
 skill_packs:
   - ".claude/skills/databases/{{DB_TECH}}.md"
   - ".claude/skills/frameworks/{{ORM}}.md"
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
 ---
 
 # Agent: Database Agent — {{PROJECT_NAME}}

@@ -48,6 +48,7 @@ skill_packs:
   - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
   - ".claude/skills/testing/{{E2E_TOOL}}.md"
   - ".claude/skills/testing/{{API_MOCK_TOOL}}.md"
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
 ---
 
 # Agent: UI Test Agent — {{PROJECT_NAME}}

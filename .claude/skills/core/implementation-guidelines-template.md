@@ -1037,6 +1037,27 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - Rate limiting: {{PER_TENANT_RATE_LIMIT}}
 - Resource quotas: {{TENANT_QUOTAS}}
 - Connection pool: {{TENANT_POOL_STRATEGY}}
+
+### 15.6 Tenancy Model
+
+- **Architecture:** {{TENANCY_MODEL}} (pooled | dedicated | hybrid)
+- **Pooled tier:** {{POOLED_TIERS}} (e.g., Free, Starter, Pro)
+- **Dedicated tier:** {{DEDICATED_TIERS}} (e.g., Enterprise, Premium)
+- **Database isolation:** {{DB_ISOLATION}} (shared DB + RLS | schema-per-tenant | DB-per-tenant | hybrid routing)
+- **Compute isolation:** {{COMPUTE_ISOLATION}} (shared pods | dedicated namespace | dedicated cluster)
+- **Tenant ID extraction:** {{TENANT_EXTRACTION}} (JWT claims | API key | mTLS SAN | subdomain)
+- **Encryption:** {{ENCRYPTION_MODEL}} (shared KEK | per-tenant KEK via Vault Transit | per-tenant AWS KMS)
+- **Rate limiting:** Per-tenant with tier-based limits
+- **Skill pack:** `.claude/skills/infrastructure/saas-tenancy-models.md`
+
+### 15.7 Local AWS Simulation
+
+- **Tool:** {{LOCAL_AWS_TOOL}} (LocalStack | moto | localstack-pro)
+- **Services:** {{LOCAL_AWS_SERVICES}} (e.g., S3, KMS, SQS, Route53, IAM, SecretsManager)
+- **Regions:** {{LOCAL_AWS_REGIONS}} (e.g., us-east-1, us-west-1, eu-west-1)
+- **Init scripts:** `localstack/init/ready.d/` (auto-run on container start)
+- **Multi-region simulation:** {{MULTI_REGION}} (geo-router nginx | single region)
+- **Skill pack:** `.claude/skills/infrastructure/localstack-aws-local.md`
 ```
 
 ---

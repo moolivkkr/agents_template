@@ -121,6 +121,17 @@ Answer by number. "skip" defers to an open decision.
 
 Never invent a technology choice. If the user defers, document it as an open decision with a deadline.
 
+### SaaS Architecture Questions (if building SaaS)
+- What tenancy model? (pooled for all | dedicated for all | hybrid with tier-based routing)
+- Which tiers map to pooled vs dedicated?
+- How is tenant ID extracted? (JWT | API key | mTLS | subdomain)
+- Per-tenant encryption needed? (shared key | per-tenant Vault Transit | per-tenant AWS KMS)
+
+### Local AWS Simulation Questions (if using AWS services)
+- Which AWS services does the project use? (S3, KMS, SQS, Route53, IAM, SecretsManager, DynamoDB, Lambda, SNS, SES)
+- Need multi-region simulation locally? (yes | no)
+- Which regions to simulate? (us-east-1, us-west-1, eu-west-1, etc.)
+
 ### Phase 4: Write docs/IMPLEMENTATION_GUIDELINES.md
 
 ```markdown

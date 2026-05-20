@@ -19,6 +19,8 @@ output:
 dependencies:
   upstream: [backend_developer, api_developer]
   downstream: [security_reviewer]
+skill_packs:
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
 ---
 
 # Agent: Tenant Isolation Verifier

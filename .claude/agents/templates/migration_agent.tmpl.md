@@ -47,6 +47,7 @@ dependencies:
     - integration_test_agent
 skill_packs:
   - ".claude/skills/databases/{{DB_TECH}}.md"
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
 ---
 
 # Agent: Migration Agent — {{PROJECT_NAME}}

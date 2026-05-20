@@ -18,6 +18,9 @@ output:
     - path: docker-compose.local.yml
 dependencies:
   upstream: [backend_developer, ui_developer]
+skill_packs:
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
+  - ".claude/skills/infrastructure/localstack-aws-local.md"
 ---
 
 # Agent: Deployment Agent

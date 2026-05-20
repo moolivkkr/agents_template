@@ -62,6 +62,7 @@ skill_packs:
   - ".claude/skills/ui/accessibility-patterns.md"
   - ".claude/skills/ui/responsive-patterns.md"
   - ".claude/skills/ui/loading-states.md"
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
   - ".claude/skills/ui/component-composition.md"
   - ".claude/skills/ui/api-integration-patterns.md"
   - ".claude/skills/ui/type-generation-protocol.md"

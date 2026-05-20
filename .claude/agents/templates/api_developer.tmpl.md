@@ -59,6 +59,7 @@ skill_packs:
   - ".claude/skills/frameworks/{{FRAMEWORK}}.md"
   - ".claude/skills/core/api-design.md"
   - ".claude/skills/core/security-owasp.md"
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
 ---
 
 # Agent: API Developer — {{PROJECT_NAME}}

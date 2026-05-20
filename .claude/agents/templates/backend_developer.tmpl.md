@@ -52,6 +52,7 @@ skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
   - ".claude/skills/frameworks/{{FRAMEWORK}}.md"
   - ".claude/skills/databases/{{DB_TECH}}.md"
+  - ".claude/skills/infrastructure/saas-tenancy-models.md"
 ---
 
 # Agent: Backend Developer — {{PROJECT_NAME}}
