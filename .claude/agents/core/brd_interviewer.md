@@ -34,9 +34,30 @@ skill_packs:
   - ".claude/skills/requirements/acceptance-criteria.md"
   - ".claude/skills/requirements/nfr-patterns.md"
   - ".claude/skills/requirements/persona-definition.md"
+  - ".claude/skills/core/auto-research.md"
 ---
 
 # Agent: BRD Interviewer
+
+## Auto Mode (`--auto` flag from /init or /autonomous)
+
+When running in auto mode, do NOT present questions to the user. Instead, for each gap:
+
+1. Follow the 5-level research ladder from `auto-research.md`:
+   - Level 1: Check documents in `requirements/`
+   - Level 2: Infer from related requirements and context
+   - Level 3: Web search for best practices given the project domain + tech stack
+   - Level 4: Apply sensible industry default
+   - Level 5: Document as open question with best guess + flag for review
+
+2. Log every auto-answered question to `agent_state/autonomous/decisions.md` with:
+   - Research level used, answer, confidence, evidence, risk if wrong
+
+3. Continue pipeline — never block waiting for human input
+
+**In normal mode (no --auto):** Present questions to user as usual.
+
+---
 
 ## Role
 Interactive agent that presents focused questions to fill gaps identified by `brd_analyzer`. Groups related questions by theme, prioritizes critical blockers first, and records every user answer as a typed decision for `brd_writer`.

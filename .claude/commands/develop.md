@@ -17,6 +17,10 @@ arguments:
     required: false
     default: false
     description: "Force gate to pass even with failures (e.g. known test flakes). Writes gate.passed with ⚠ FORCED flag. Use with caution."
+  - name: auto
+    required: false
+    default: false
+    description: "Autonomous mode — all escalations use recommended defaults. Gate failures auto-fix (max 3 cycles) then force-gate with logging. No user prompts."
 ---
 
 # /develop — Autonomous Phase Implementation

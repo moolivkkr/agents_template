@@ -10,6 +10,10 @@ arguments:
     required: false
     default: false
     description: "Re-run BRD creation only — skip IMPLEMENTATION_GUIDELINES and agent generation"
+  - name: auto
+    required: false
+    default: false
+    description: "Auto-research mode — agents research answers instead of asking user. Logs all decisions with confidence levels to agent_state/autonomous/decisions.md"
 ---
 
 # /init — Project Initialization

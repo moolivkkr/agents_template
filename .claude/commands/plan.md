@@ -13,6 +13,10 @@ arguments:
     required: false
     default: false
     description: "Only verify existing specs against BRD — no new generation"
+  - name: auto
+    required: false
+    default: false
+    description: "Auto-assign FR-* to phases by dependency analysis. No user prompts for scope decisions."
 ---
 
 # /plan — Phase Specification Generation

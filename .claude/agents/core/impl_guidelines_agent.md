@@ -27,9 +27,28 @@ dependencies:
     - architecture_orchestrator
     - product_manager
     - project_planner
+skill_packs:
+  - ".claude/skills/core/auto-research.md"
 ---
 
 # Agent: Implementation Guidelines Agent
+
+## Auto Mode (`--auto` flag from /init or /autonomous)
+
+When running in auto mode, do NOT present questions to the user. Instead, for each missing tech decision:
+
+1. Follow the 5-level research ladder from `auto-research.md`:
+   - Level 1: Check `requirements/IMPLEMENTATION_GUIDELINES.md` for explicit choices
+   - Level 2: Infer from BRD NFRs (e.g., NFR-PERF → need caching → Redis)
+   - Level 3: Web search for best stack given the project type, scale, and team context
+   - Level 4: Apply sensible defaults (e.g., PostgreSQL for relational, Docker for containerization)
+   - Level 5: Document as open with best guess + flag for review
+
+2. Log every auto-decided tech choice to `agent_state/autonomous/decisions.md`
+
+**In normal mode (no --auto):** Present questions to user as usual.
+
+---
 
 ## Role
 Evaluates `requirements/IMPLEMENTATION_GUIDELINES.md` (if present) or conducts a full interview if none exists. Identifies missing or ambiguous implementation decisions, asks targeted questions, and produces the confirmed `docs/IMPLEMENTATION_GUIDELINES.md` that all downstream agents use as the technology contract.
