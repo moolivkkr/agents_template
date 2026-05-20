@@ -1,6 +1,6 @@
 ---
 command: plan
-description: Generate specifications (TRDs, wireframes) for a phase. Reads BRD + IMPLEMENTATION_GUIDELINES + previous phase manifest. Produces docs/design/phases/N/specs/.
+description: Generate specifications (TRDs, UI specs, data contracts) for a phase. Reads BRD + IMPLEMENTATION_GUIDELINES + previous phase manifest. Produces docs/design/phases/N/specs/.
 arguments:
   - name: phase
     required: false
@@ -8,7 +8,7 @@ arguments:
   - name: ui_only
     required: false
     default: false
-    description: "Regenerate wireframes only — skip backend specs (use after API contract changes)"
+    description: "Regenerate UI specs only — skip backend specs (use after API contract changes)"
   - name: verify_only
     required: false
     default: false
@@ -17,7 +17,7 @@ arguments:
 
 # /plan — Phase Specification Generation
 
-Generates detailed technical specifications (TRDs) and wireframes for a phase. The output of `/plan` is the contract that `/develop` implements.
+Generates detailed technical specifications (TRDs), typed data contracts, and component-level UI specs for a phase. The output of `/plan` is the contract that `/develop` implements.
 
 **Prerequisites:** `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md` must exist (run `/init` first).
 
@@ -31,9 +31,11 @@ Generates detailed technical specifications (TRDs) and wireframes for a phase. T
 | Step | Target input tokens |
 |------|---------------------|
 | Step 1 Scope | ~15K (BRD §FR + IMPL §components) |
+| Step 1b Context validation | ~5K (phase_context.md + PHASE_PLAN.md) |
 | Step 2 Spec per agent | ~10K (phase_context + assigned FR-* rows only) |
-| Step 3 Wireframes | ~15K (phase_context + backend spec API contracts) |
-| Step 4 Verify | ~20K (all specs + BRD FR-* list) |
+| Step 2b Data contracts | ~8K (extract from backend specs only) |
+| Step 3 UI specs | ~15K (phase_context + data-contracts.md + archetype reference) |
+| Step 4 Verify | ~20K (all specs + data-contracts.md + BRD FR-* list) |
 
 **Agent return protocol:** Every agent returns 3 lines to the parent:
 ```
@@ -41,6 +43,23 @@ Generates detailed technical specifications (TRDs) and wireframes for a phase. T
    Covered: FR-NNN, FR-NNN
    Issues: none | <N>
 ```
+
+---
+
+## Pipeline Anti-Rationalization Guard
+
+Before skipping ANY step or accepting incomplete spec output, review this table.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "The spec is detailed enough without typed interfaces" | Every endpoint MUST have TypeScript interfaces in data-contracts.md. No exceptions. |
+| "ASCII layout is sufficient for the developer" | Produce component-level specs with exact shadcn names. ASCII art is banned. |
+| "Edge cases can be figured out during implementation" | Spec must have ≥10 edge cases with expected behavior. Implementation shouldn't guess. |
+| "Mobile wireframe isn't needed for this screen" | Every screen needs desktop + mobile layout. BLOCK if missing. |
+| "The API bindings are obvious" | Every binding must reference exact field path from data-contracts.md with type. |
+| "This page is simple, no archetype needed" | Always start from a page archetype. Simple pages = archetype with fewer customizations. |
+| "I'll skip the data contracts, the developer knows the API" | Data contracts are the #1 source of UI bugs. Produce them or the phase will fail at integration. |
+| "The developer can figure out array vs object" | Explicit `// ARRAY` and `// OBJECT` annotations. This single issue causes most UI↔API crashes. |
 
 ---
 
@@ -69,19 +88,20 @@ Check what already exists from a previous interrupted run:
 ```bash
 HAS_PHASE_PLAN=$([ -f "docs/design/phases/${PHASE}/PHASE_PLAN.md" ] && echo true || echo false)
 HAS_PHASE_CONTEXT=$([ -f "docs/design/phases/${PHASE}/phase_context.md" ] && echo true || echo false)
+HAS_DATA_CONTRACTS=$([ -f "docs/design/phases/${PHASE}/specs/data-contracts.md" ] && echo true || echo false)
 HAS_SPECS=$(ls docs/design/phases/${PHASE}/specs/*.md 2>/dev/null | head -1 && echo true || echo false)
 HAS_VERIFICATION=$([ -f "docs/design/phases/${PHASE}/VERIFICATION_REPORT.md" ] && echo true || echo false)
 ```
 
 **Resume rules:**
-- If `PHASE_PLAN.md` exists → skip Step 1 (scope already defined)
-- If `phase_context.md` exists → skip Step 1 (context already extracted)
-- If backend specs exist in `specs/` → skip Step 2 for those components (check each spec file individually)
-- If wireframes exist in `specs/` → skip Step 3 for those screens
-- If `VERIFICATION_REPORT.md` exists → skip to Step 5 (already verified)
-- **Always re-run Step 3c (phase_context validation)** on resume — cheap and catches stale context
+- If `PHASE_PLAN.md` + `phase_context.md` exist → skip Step 1 + 1b
+- If backend specs exist in `specs/` → skip Step 2 for those components
+- If `data-contracts.md` exists → skip Step 2b
+- If UI specs exist in `specs/` → skip Step 3 for those screens
+- If `VERIFICATION_REPORT.md` exists → skip to Step 5
+- **Always re-run Step 1b (phase_context validation)** on resume — cheap and catches stale context
 
-### Agent Context Protocol — ALL agents in this command read ALL of these before producing output
+### Agent Context Protocol — ALL agents read these before producing output
 
 **REQUIRED READS (all agents):**
 - `docs/BRD.md` — objectives (OBJ-*), functional requirements (FR-*), NFRs, gate checklists
@@ -103,7 +123,7 @@ Reads BRD requirements and previous manifests. Determines scope for this phase:
 
 Writes two files:
 
-**`docs/design/phases/${PHASE}/PHASE_PLAN.md`** — full planning detail for humans and reconcilers:
+**`docs/design/phases/${PHASE}/PHASE_PLAN.md`** — full planning detail:
 ```markdown
 # Phase N — <Goal Title>
 
@@ -126,128 +146,15 @@ Wave 3 (sequential): [tasks]
 [user workflows first completable after this phase — triggers e2e tests]
 ```
 
-**`docs/design/phases/${PHASE}/phase_context.md`** — structured context extract (~6-8K tokens) loaded by ALL implementation agents instead of the full BRD + IMPLEMENTATION_GUIDELINES. Must be thorough enough that no agent needs to escalate to the full documents:
-```markdown
-# Phase N Context — <Goal Title>
-(Auto-generated by /plan. Do not edit manually.)
-
-## In-Scope Requirements
-| ID | Title | Acceptance Criteria (one line) |
-|----|-------|-------------------------------|
-| FR-001 | User can register | Email + password, verification email sent |
-| NFR-SEC-01 | Passwords hashed | bcrypt min cost 12 |
-
-## Components This Phase
-- UserService (new), AuthHandler (new), users migration (new)
-
-## Key Tech Constraints
-- Lang: Go 1.22 / Gin / PostgreSQL / goose migrations
-- Auth: JWT (HS256), tokens in Authorization header
-- API version: /api/v1/
-- Test framework: testify + mockery
-
-## What Already Exists (from Phase N-1)
-- [summary from previous manifest — key routes, schema, services]
-- Nothing yet (Phase 1)
-
-## Gate Checklist
-- [ ] FR-001 integration test passing
-- [ ] NFR-SEC-01 verified by security reviewer
-```
+**`docs/design/phases/${PHASE}/phase_context.md`** — structured context extract (~6-8K tokens) loaded by ALL implementation agents.
 
 ---
 
-## Step 2 — Backend Specifications (PARALLEL)
-
-**Agents:** `spec_writer` (one per component in scope)
-**Skip if:** `--ui_only` flag
-
-Each agent reads: ALL Step 0 context + `docs/design/phases/${PHASE}/PHASE_PLAN.md`
-
-Produces one spec file per component/flow in `docs/design/phases/${PHASE}/specs/`:
-
-```markdown
-# Spec: <Component/Flow Name>
-
-## BRD Traceability
-- FR-* satisfied: [IDs]
-- NFR-* satisfied: [IDs]
-- Gate criteria covered: [which gate items]
-
-## Interface Contracts
-- Function/method signatures with types
-- Request/response shapes
-- Error types
-
-## Data Model
-- Entities created/modified
-- DB schema changes (migration needed: yes/no)
-
-## Flow Description
-Step-by-step logic for the happy path and key error paths
-
-## Edge Cases (≥10)
-[Enumerated edge cases with expected behavior]
-
-## Test Coverage Required
-- Unit: [which functions, which cases]
-- Integration: [which service↔infra interactions]
-- E2E trigger: [if this spec completes a user workflow]
-
-## Performance Targets
-- p95 latency: Xms
-- Throughput: X req/s
-```
-
----
-
-## Step 3 — UI Wireframes (PARALLEL with Step 2, UI phases only)
-
-**Agent:** `ux_designer`
-**Run when:** `docs/IMPLEMENTATION_GUIDELINES.md` shows `frontend.enabled = true` AND phase scope includes UI screens
-
-Reads: ALL Step 0 context + backend specs from Step 2 (waits for Step 2 if `--ui_only` not set)
-
-Produces wireframe files in `docs/design/phases/${PHASE}/specs/`:
-
-Each wireframe contains:
-- Purpose and user story
-- ASCII layout grid
-- Component list (mapped to UI component library)
-- API bindings (every displayed field → endpoint + field name)
-- Interaction flows (user action → result)
-- Accessibility requirements
-- Empty / loading / error states
-
-**Design quality gate:** `design_quality_reviewer` validates each wireframe against:
-1. No "TBD" API bindings
-2. All components map to the project's component library
-3. Loading / error / empty states present
-4. Accessibility annotations present
-
-BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked.
-
----
-
-## Step 3b — Reconciliation Point B: BRD ↔ Specs
-
-**Agent:** `brd_spec_reconciler` (runs in parallel with Step 3 completion, before Step 4)
-
-Validates both directions:
-- **Forward:** BRD FR-* requirements assigned to this phase with no spec coverage
-- **Reverse:** Spec behaviors with no BRD source (gold-plating, scope creep, undocumented decisions)
-
-Output: `agent_state/reconciliation/phase-N/brd_vs_specs.md`
-
-If MISSING coverage: blocks `/develop` — gaps must be closed.
-If INVENTED behaviors: surface to user — may be valid technical decisions or may be scope creep.
-
----
-
-## Step 3c — Phase Context Validation (inline — no separate agent)
+## Step 1b — Phase Context Validation (inline — no separate agent)
 
 **Runs after:** `project_planner` writes `phase_context.md` (Step 1)
-**Purpose:** Verify `phase_context.md` is complete before spec writers consume it
+**Runs before:** `spec_writer` agents consume it (Step 2)
+**Purpose:** Catch incomplete phase context BEFORE spec writers use it
 
 **Checks:**
 1. Every FR-* listed in `PHASE_PLAN.md` §Scope appears in `phase_context.md` §In-Scope Requirements
@@ -261,6 +168,130 @@ If INVENTED behaviors: surface to user — may be valid technical decisions or m
 
 ---
 
+## Step 2 — Backend Specifications (PARALLEL)
+
+**Agents:** `spec_writer` (one per component in scope)
+**Skip if:** `--ui_only` flag
+
+Each agent reads: ALL Step 0 context + `docs/design/phases/${PHASE}/PHASE_PLAN.md`
+
+Produces one spec file per component/flow in `docs/design/phases/${PHASE}/specs/`.
+
+Every spec MUST include a **Data Contracts** section with exact TypeScript interfaces (see spec_writer agent for format). This is the source material for Step 2b.
+
+---
+
+## Step 2b — Typed Data Contracts (after backend specs, before UI specs)
+
+**Runs after:** Step 2 (all spec_writer agents complete)
+**Runs before:** Step 3 (ux_designer needs these for API bindings)
+**Output:** `docs/design/phases/${PHASE}/specs/data-contracts.md`
+
+Extract ALL endpoint response shapes from the backend TRDs into a single typed data contracts file. This is the **SINGLE SOURCE OF TRUTH** for data shapes consumed by:
+- `ux_designer` (API bindings in UI specs reference these types)
+- `api_developer` during `/develop` (must implement these exact shapes)
+- `ui_developer` during `/develop` (TypeScript interfaces must match)
+- `spec_verifier` (validates cross-references)
+
+### Format
+
+```typescript
+// ============================================================
+// GET /api/v1/users
+// Source: specs/user-management.md §Data Contracts
+// ============================================================
+
+interface User {
+  id: string;
+  name: string;           // min: 2, max: 50
+  email: string;          // valid email format
+  role: "admin" | "member" | "viewer";
+  avatar_url?: string;    // optional
+  created_at: string;     // ISO 8601
+}
+
+interface ListMeta {
+  total: number;
+  page: number;
+  per_page: number;
+}
+
+// List endpoint — RETURNS ARRAY
+type GetUsersResponse = {
+  data: User[];           // ← ARRAY (UI uses .map(), .length, .filter())
+  error: string | null;
+  meta: ListMeta | null;  // null if unpaginated
+}
+
+// Detail endpoint — RETURNS OBJECT
+type GetUserResponse = {
+  data: User;             // ← SINGLE OBJECT (UI uses .name, .email)
+  error: string | null;
+}
+
+// Create request
+type CreateUserRequest = {
+  name: string;           // min: 2, max: 50
+  email: string;          // valid email
+  role: "admin" | "member" | "viewer";
+}
+
+// Create response
+type CreateUserResponse = {
+  data: User;             // ← OBJECT (newly created)
+  error: string | null;
+}
+
+// Empty states:
+// GET /users (no results): { data: [], error: null, meta: { total: 0, page: 1, per_page: 20 } }
+// GET /users/:id (not found): 404 status
+// POST /users (validation fail): { data: null, error: "Validation failed", details: { email: "already taken" } }
+```
+
+### Rules
+- One file per phase, ALL endpoints consolidated
+- ARRAY vs OBJECT must be explicitly annotated with comments
+- Empty state documented for every endpoint
+- Request types include validation constraints (min, max, format)
+- Field types are exact TypeScript (not `any` or `object`)
+- Source spec file referenced for each endpoint group
+
+---
+
+## Step 3 — UI Specifications (after data contracts, UI phases only)
+
+**Agent:** `ux_designer`
+**Run when:** `docs/IMPLEMENTATION_GUIDELINES.md` shows `frontend.enabled = true` AND phase scope includes UI screens
+**Depends on:** Step 2b (data-contracts.md must exist before UI specs)
+
+Reads: ALL Step 0 context + `data-contracts.md` + page archetypes from `.claude/skills/ui/archetypes/`
+
+Produces component-level UI spec files in `docs/design/phases/${PHASE}/specs/`:
+
+Each UI spec contains:
+- Page archetype reference (list-page, detail-page, form-page, dashboard-page, settings-page)
+- Exact shadcn component tree (NOT ASCII art)
+- Data bindings referencing exact TypeScript interfaces from `data-contracts.md`
+- Desktop (1280px) + Mobile (375px) layout with component changes
+- All 4 states (loading skeleton, empty with Lucide icon + CTA, error + retry, populated)
+- Interaction flows with API calls and UI responses
+- Accessibility annotations (heading hierarchy, landmarks, focus order, ARIA labels)
+
+**Design quality gate:** `design_quality_reviewer` validates each UI spec against 9 dimensions:
+1. API Coverage — all fields bound, no "TBD"
+2. Component Mapping — all widgets are named shadcn primitives
+3. 4-State Coverage — loading skeleton + empty + error + data defined
+4. Interactions — every action has defined outcome
+5. Accessibility — headings, landmarks, ARIA, focus order
+6. Responsive — mobile + desktop layouts present
+7. Touch Targets — ≥44px annotated for mobile
+8. Consistency — matches previous phase screens
+9. Data Contract Binding — every field references real type in data-contracts.md, array/object matches component type
+
+BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked.
+
+---
+
 ## Step 4 — Spec Verification
 
 **Agent:** `spec_verifier`
@@ -269,8 +300,22 @@ Reads ALL specs produced in Steps 2-3 and verifies:
 - Every FR-* assigned to this phase in BRD traceability matrix is covered by ≥1 spec
 - All cited FR-*/NFR-*/OBJ-* IDs exist verbatim in `docs/BRD.md` (no invented IDs)
 - All exit criteria in `PHASE_PLAN.md` are covered by ≥1 spec
-- UI wireframe API bindings reference endpoints defined in backend specs (no dangling refs)
 - Performance targets reference specific NFR-* IDs
+
+**Data Contract Validation:**
+- `data-contracts.md` exists and is non-empty
+- Every endpoint in backend specs has a matching entry in `data-contracts.md`
+- Every TypeScript interface has explicit field types (no `any`)
+- List endpoints annotated `// ARRAY`, single endpoints `// OBJECT`
+- Empty states documented for every endpoint
+- If UI specs exist: every API binding references a real field in `data-contracts.md`
+- If UI specs exist: list components bind to ARRAY endpoints, detail components bind to OBJECT endpoints (**BLOCKING** mismatch)
+
+**Spec Quality:**
+- Every spec has interface contracts, edge cases (≥10 meaningful), test coverage requirements
+- Edge cases are specific (not generic "invalid input")
+- Acceptance criteria are testable (yes/no automated test)
+- Specs with DB changes declare migrations
 
 Auto-retry failed specs (max 2 retries). Surface unresolvable issues to user.
 
@@ -278,17 +323,31 @@ Writes `docs/design/phases/${PHASE}/VERIFICATION_REPORT.md`.
 
 ---
 
+## Step 4a — Reconciliation Point B: BRD ↔ Specs
+
+**Agent:** `brd_spec_reconciler`
+**Runs after:** Step 4 (spec_verifier complete)
+**Parallelization:** Can start on backend specs as soon as Step 2 finishes. Adds UI spec checks when Step 3 completes.
+
+Validates both directions:
+- **Forward:** BRD FR-* requirements assigned to this phase with no spec coverage
+- **Reverse:** Spec behaviors with no BRD source (gold-plating, scope creep, undocumented decisions)
+
+Output: `agent_state/reconciliation/phase-N/brd_vs_specs.md`
+
+If MISSING coverage: blocks `/develop` — gaps must be closed.
+If INVENTED behaviors: surface to user — may be valid technical decisions or may be scope creep.
+
+---
+
 ## Step 4b — Architecture Decision Records (parallel with Step 4)
 
 **Agent:** `adr_agent`
-**When:** Any spec introduces a significant architectural decision (new pattern, library, integration approach, or deviation from IMPLEMENTATION_GUIDELINES)
+**When:** Any spec introduces a significant architectural decision
 
-Reads all specs from Steps 2-3. For each significant architectural decision detected:
+Reads all specs from Steps 2-3. For each significant architectural decision:
 - Writes an ADR in `docs/adr/` using the format: `ADR-NNN-<decision-slug>.md`
 - Captures: decision, context, options considered, rationale, consequences
-
-Output directory: `docs/adr/`
-Summary: listed in the phase INDEX.md under "Architecture Decisions"
 
 Does NOT block `/develop`. Runs in parallel with spec verification.
 
@@ -298,8 +357,6 @@ Does NOT block `/develop`. Runs in parallel with spec verification.
 
 **When:** Phase being planned is NOT the last phase in the BRD scope
 **Purpose:** Sketch future phases to capture intent without over-planning
-
-Instead of planning all phases upfront (which produces stale specs), create lightweight sketches for the next 2 phases. These are NOT full plans — they capture intent and constraints.
 
 For each future phase (N+1, N+2):
 ```markdown
@@ -322,8 +379,6 @@ For each future phase (N+1, N+2):
 
 Write sketches to `docs/design/phases/${FUTURE_PHASE}/SKETCH.md`.
 
-**Key insight (from GSD-2 research):** "95% per-step reliability over 20 steps = 36% success." Planning future phases in detail when the codebase hasn't been built yet wastes effort. Sketch now, refine later with actual codebase state.
-
 ---
 
 ## Step 5 — Output Index
@@ -334,17 +389,19 @@ Write `docs/design/phases/${PHASE}/INDEX.md`:
 
 ## Phase Plan
 - PHASE_PLAN.md
+- phase_context.md
 
 ## Backend Specs
 - specs/<component>.md — <one-line description>
-- ...
 
-## Wireframes (if UI phase)
-- specs/<screen>.wireframe.md — <screen name>
-- ...
+## Data Contracts
+- specs/data-contracts.md — typed TypeScript interfaces for ALL endpoints
+
+## UI Specs (if UI phase)
+- specs/<screen>.ui-spec.md — component-level UI specification
 
 ## Verification
-- VERIFICATION_REPORT.md — spec coverage against BRD
+- VERIFICATION_REPORT.md — spec + data contract coverage against BRD
 ```
 
 Print summary:
@@ -353,7 +410,8 @@ Print summary:
 
   Scope: N FR-* requirements, N components
   Backend specs: N files
-  Wireframes: N files (or: not a UI phase)
+  Data contracts: N endpoints typed in data-contracts.md
+  UI specs: N files (or: not a UI phase)
   Verification: PASSED
 
   ▶ Next: /develop --phase=N

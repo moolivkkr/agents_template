@@ -90,11 +90,13 @@
     "auto_commit_after_phase": false,
     "require_confirmation_for_prod_deploy": true,
     "allow": [
-      "Bash(bash install.sh)",
-      "Read(//^skill_packs:/,/**)"
-    ],
-    "additionalDirectories": [
-      "/Users/kishoremoli/development/startup-agents/.claude/skills/testing"
+      "Read",
+      "Write",
+      "Edit",
+      "Bash",
+      "Glob",
+      "Grep",
+      "Agent"
     ]
   }
 }

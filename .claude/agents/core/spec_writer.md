@@ -24,6 +24,8 @@ skill_packs:
   - ".claude/skills/requirements/acceptance-criteria.md"
   - ".claude/skills/requirements/edge-case-taxonomy.md"
   - ".claude/skills/requirements/nfr-patterns.md"
+  - ".claude/skills/requirements/requirement-clarity.md"
+  - ".claude/skills/core/api-design.md"
 ---
 
 # Agent: Spec Writer
@@ -172,6 +174,45 @@ Errors:
 - Throughput: X req/s — from NFR-* ID: [exact NFR ID from BRD]
 - If no specific NFR: document assumption and flag for BRD update
 ```
+
+## Typed Data Contracts (MANDATORY)
+
+Every spec that defines API endpoints MUST include a `## Data Contracts` section with exact TypeScript interfaces. These are extracted into `data-contracts.md` during Step 2b of /plan.
+
+```typescript
+// GET /api/v1/users — List users
+interface User {
+  id: string;
+  name: string;           // min: 2, max: 50
+  email: string;
+  role: "admin" | "member" | "viewer";
+  avatar_url?: string;    // optional
+  created_at: string;     // ISO 8601
+}
+
+// List endpoint — RETURNS ARRAY
+type GetUsersResponse = {
+  data: User[];           // ARRAY — UI uses .map(), .length
+  error: string | null;
+  meta: { total: number; page: number; per_page: number } | null;
+}
+
+// Empty: { data: [], error: null, meta: { total: 0, page: 1, per_page: 20 } }
+```
+
+**Rules:**
+- Every field has an explicit TypeScript type (never `any` or `object`)
+- ARRAY vs OBJECT explicitly annotated with `// ARRAY` or `// OBJECT` comment
+- Empty state documented for every endpoint
+- Request types include validation constraints as comments
+- Enum fields use union types: `"admin" | "member" | "viewer"`
+- Optional fields use `?`: `avatar_url?: string`
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "The developer can figure out the response shape" | Define EXACT TypeScript interfaces. Vague shapes cause UI crashes at runtime. |
+
+---
 
 ## Quality Rules
 

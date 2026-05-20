@@ -14,7 +14,8 @@ input:
 output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/brd_vs_specs.md
 dependencies:
-  upstream: [spec_verifier]
+  upstream: [spec_writer, ux_designer]
+  runs_after: [spec_verifier]
   downstream: [spec_impl_reconciler]
 ---
 

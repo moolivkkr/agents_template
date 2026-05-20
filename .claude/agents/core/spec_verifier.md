@@ -19,6 +19,9 @@ output:
 dependencies:
   upstream: [project_planner, ux_designer]
   downstream: [backend_audit_agent]
+skill_packs:
+  - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/edge-case-taxonomy.md"
 ---
 
 # Agent: Spec Verifier
@@ -43,9 +46,21 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 - Data types used in specs are consistent across related specs (same field name = same type)
 - Response field names in backend specs match field names referenced in wireframe API bindings
 
+### Data Contract Validation
+- `data-contracts.md` exists in `docs/design/phases/${PHASE}/specs/` and is non-empty
+- Every endpoint defined in backend specs has a matching entry in `data-contracts.md`
+- Every TypeScript interface has explicit field types (no `any`, no `object`)
+- List endpoints explicitly annotated with `// ARRAY`, single with `// OBJECT`
+- Empty states documented for every endpoint
+- If UI specs exist: every API binding references a real field path in `data-contracts.md`
+- If UI specs exist: list components bind to ARRAY endpoints, detail components bind to OBJECT endpoints (**BLOCKING** mismatch)
+
 ### Completeness
-- Every spec has: interface contracts, edge cases (≥10), test coverage requirements
+- Every spec has: interface contracts, edge cases (≥10 meaningful), test coverage requirements
+- Edge cases are specific (not generic "invalid input")
+- Acceptance criteria are testable (verifiable by single yes/no automated test)
 - Specs with DB changes declare migrations needed
+- Every spec with API endpoints has a "Data Contracts" section with TypeScript interfaces
 
 ## Auto-Retry
 For each verification failure: flag the specific spec, describe the gap, allow the originating agent to fix it. Max 2 retries per spec before escalating to user.
