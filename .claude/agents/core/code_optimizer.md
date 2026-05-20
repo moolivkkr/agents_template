@@ -93,6 +93,8 @@ Before ANY code changes, the parent pipeline tags the commit:
 git tag "phase-${PHASE}-pre-optimize" HEAD
 ```
 
+> **Note:** This tag is created by the parent `/develop` command at Step 3f, not by the optimizer itself. The optimizer must only verify the tag exists — never create it.
+
 This agent MUST verify this tag exists before making changes. If missing: `⛔ Blocked: pre-optimize tag missing — cannot safely optimize without rollback point.`
 
 ## Required Reading

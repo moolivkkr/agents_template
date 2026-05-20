@@ -18,7 +18,7 @@ output:
   artifacts:
     - agent_state/brd_refiner/gaps.md
     - agent_state/brd_refiner/requirements_extracted.md
-auto_spawn:
+auto_spawn:  # Only valid when run standalone — ignored when invoked via brd_agent orchestrator
   on_gaps_found: brd_interviewer
   on_no_gaps: brd_writer
 quality_gates:

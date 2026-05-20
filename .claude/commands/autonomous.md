@@ -153,7 +153,8 @@ After approval:
 Fully autonomous — no more human prompts.
 
 ### Auto-mode behaviors:
-- **Escalations:** `continueWithDefault: true` always — proceed with recommendation, log for review
+- **Escalations:** `continueWithDefault: true` for architecture/feature decisions — proceed with recommendation, log for review
+- **⛔ Security escalations:** NEVER auto-resolve with permissive defaults. Use the **hardened default** (most restrictive option). If no clear hardened default exists → PAUSE and surface to user even in auto mode. Security domains: auth patterns, token storage/caching, IDOR mitigation, encryption, PII handling, CORS/CSRF, rate limiting.
 - **Gate failures:** Auto-fix loop (max 3 cycles per failing item)
   - Cycle 1: Agent fixes → re-test specific failure
   - Cycle 2: Re-run with fresh context → re-test

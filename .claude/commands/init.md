@@ -128,6 +128,32 @@ The agent:
 
 ---
 
+## Step 1.5 — Post-Clarification Cross-Validation (CLOSED LOOP)
+
+**Runs after:** Both `brd_agent` and `impl_guidelines_agent` have completed their user interviews and produced draft outputs.
+**Purpose:** Catch contradictions between user answers given to different agents, and internal inconsistencies within the BRD.
+
+**Checks:**
+1. **BRD internal consistency:**
+   - No FR-* references NFR-* IDs that don't exist (and vice versa)
+   - No persona references features not in scope
+   - No contradictory constraints (e.g., "offline-first" + "real-time sync required" without reconciliation)
+2. **BRD ↔ IMPLEMENTATION_GUIDELINES consistency:**
+   - Tech stack in IMPL_GUIDELINES can support all NFR-* (e.g., if NFR says "sub-50ms latency", IMPL_GUIDELINES doesn't specify a language/framework known to be slow for that workload)
+   - Component inventory covers all FR-* (no feature without a component to implement it)
+   - Auth mechanism in IMPL_GUIDELINES matches auth requirements in BRD
+3. **User answer consistency:**
+   - If user told `brd_agent` "users are internal only" but told `impl_guidelines_agent` "public-facing API with rate limiting" → contradiction
+
+**On contradiction found:**
+- Surface the specific contradiction to user with both conflicting statements
+- Ask user to resolve: "You mentioned X in the BRD interview but Y in the tech stack interview. Which is correct?"
+- Max 1 round of clarification → update the affected document
+
+**On pass:** Proceed to Step 2b.
+
+---
+
 ## Step 2b — Reconciliation Point A: Requirements ↔ BRD
 
 **Agent:** `requirements_brd_reconciler` (runs immediately after Step 1+2 complete)

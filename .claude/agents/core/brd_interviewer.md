@@ -16,7 +16,7 @@ output:
   primary: agent_state/brd_refiner/decisions.yaml
   artifacts:
     - agent_state/brd_refiner/answers.md
-auto_spawn:
+auto_spawn:  # Only valid when run standalone — ignored when invoked via brd_agent orchestrator
   on_complete: brd_writer
   condition: all_critical_questions_answered
   pass_context:

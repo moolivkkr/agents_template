@@ -339,7 +339,13 @@ Validates both directions:
 
 Output: `agent_state/reconciliation/phase-N/brd_vs_specs.md`
 
-If MISSING coverage: blocks `/develop` — gaps must be closed.
+If MISSING coverage: **auto-fix loop** before blocking:
+1. Identify which FR-* is missing spec coverage
+2. Route to `spec_writer` with the specific FR-* as input → agent writes the missing spec
+3. Re-run `brd_spec_reconciler` to verify the gap is closed
+4. Max 2 auto-fix cycles → if still MISSING after 2 cycles: block `/develop` and surface to user
+5. This prevents the common case where a spec_writer simply forgot one FR-* from its assignment
+
 If INVENTED behaviors: surface to user — may be valid technical decisions or may be scope creep.
 
 ---

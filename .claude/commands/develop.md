@@ -178,6 +178,13 @@ Before starting Phase N implementation, validate that data contracts are consist
 4. If Phase N specs extend an endpoint from Phase N-1 (e.g., adding fields to an existing response):
    - Verify the existing fields in `data-contracts.md` match what Phase N-1 actually implemented (check the code, not just the spec)
    - If mismatch: surface as `⚠ STALE CONTRACT: data-contracts.md says X, but Phase N-1 code returns Y`
+5. **Schema evolution validation** — for endpoints that exist in BOTH Phase N-1 and Phase N contracts:
+   - Phase N-1 response shape must be a **subset** of Phase N response shape (additive changes only)
+   - If Phase N removes or renames a field from Phase N-1: **BLOCKING** — this breaks Phase N-1 consumers
+   - If Phase N changes a field type (e.g., `string` → `number`): **BLOCKING** — type mismatch
+   - If Phase N adds new required fields to a request: **WARNING** — Phase N-1 callers won't send them
+   - Compare actual TypeScript interfaces from both `data-contracts.md` files, not just endpoint names
+   - Surface any breaking changes: `⛔ BREAKING CHANGE: GET /users/:id field 'role' changed from string to enum — Phase N-1 code returns string`
 
 ```bash
 # Quick staleness check
@@ -202,6 +209,29 @@ print('✅ Data contracts consistent with Phase $((PHASE-1)) manifest')
   fi
 fi
 ```
+
+### Phase Context Staleness Detection
+
+Before loading `phase_context.md`, verify it's not stale relative to the BRD:
+
+```bash
+CONTEXT_FILE="docs/design/phases/${PHASE}/phase_context.md"
+BRD_FILE="docs/BRD.md"
+if [ -f "$CONTEXT_FILE" ] && [ -f "$BRD_FILE" ]; then
+  CONTEXT_MTIME=$(stat -f %m "$CONTEXT_FILE" 2>/dev/null || stat -c %Y "$CONTEXT_FILE")
+  BRD_MTIME=$(stat -f %m "$BRD_FILE" 2>/dev/null || stat -c %Y "$BRD_FILE")
+  if [ "$BRD_MTIME" -gt "$CONTEXT_MTIME" ]; then
+    echo "⚠ WARNING: BRD was modified AFTER phase_context.md was generated."
+    echo "  BRD modified:     $(date -r $BRD_MTIME 2>/dev/null || date -d @$BRD_MTIME)"
+    echo "  Context generated: $(date -r $CONTEXT_MTIME 2>/dev/null || date -d @$CONTEXT_MTIME)"
+    echo "  Consider re-running /plan --phase=${PHASE} to refresh phase_context.md"
+    echo "  Or proceed with caution — new BRD requirements may be missing from this phase."
+  fi
+fi
+```
+
+If staleness detected and the BRD diff includes new FR-* IDs not in `phase_context.md`: **BLOCKING** — re-run `/plan --phase=${PHASE}`.
+If staleness detected but BRD changes are editorial (no new FR-*): **WARNING** — proceed with caution.
 
 ### Start infrastructure
 ```bash
@@ -257,6 +287,7 @@ When an agent encounters uncertainty, conflicting options, or missing data:
   ],
   "context": "<BRD refs, constraints, what's known>",
   "impact": "HIGH | MEDIUM",
+  "domain": "architecture | security | data_model | feature",
   "blocking": true
 }
 ```
@@ -278,8 +309,9 @@ Prevent runaway escalation loops that consume context and time:
 
 - **Max escalations per step:** 3 — if a single step (e.g., Step 2 Implementation) triggers more than 3 debate requests, STOP escalating. Write remaining decisions to `agent_state/debates/unresolved.json` with recommended defaults.
 - **In `--auto` mode:** continue with defaults for all unresolved decisions, but flag ALL as `"⚠ AUTO-RESOLVED — may need review"` in the decision log and manifest `known_issues[]`.
+- **⛔ SECURITY ESCALATION EXCEPTION:** Escalations with `"domain": "security"` are NEVER auto-resolved. In `--auto` mode, security decisions MUST use the **hardened default** (the option that is MORE restrictive / MORE secure). Log as `"⚠ SECURITY — hardened default applied, review recommended"`. Security escalations include: auth patterns, token storage, IDOR mitigation, encryption, PII handling, CORS/CSRF config, rate limiting. If no clearly hardened default exists → EXIT auto mode for this decision and surface to user.
 - **Max total escalations per phase:** 10 — if exceeded, EXIT auto mode entirely. Surface all unresolved decisions to the user with: `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
-- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator can't decide and re-escalates), the second-level debate auto-resolves with the recommended default. A third-level escalation is NEVER allowed.
+- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator can't decide and re-escalates), the second-level debate auto-resolves with the recommended default (except security — always hardened). A third-level escalation is NEVER allowed.
 
 ```json
 // agent_state/debates/unresolved.json
@@ -481,17 +513,30 @@ Wave 2a.5 (BUILD CHECK — catches type errors before api_developer starts):
 
 ### Agent Handoff Protocol (Wave 2a → Wave 2b)
 
-After backend_developer completes:
-1. Verify report exists: `test -f agent_state/phases/${PHASE}/reports/backend_developer.md`
-2. Verify agent manifest is valid JSON (if JSON): `python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/backend_developer/manifest.json`
-3. Touch ready signal: `touch agent_state/phases/${PHASE}/.backend_developer_ready`
+After backend_developer completes — **atomic write + verified ready signal:**
+1. Write manifest to `.tmp` first: `agent_state/phases/${PHASE}/backend_developer/manifest.json.tmp`
+2. Validate JSON: `python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/backend_developer/manifest.json.tmp`
+3. If valid: atomic move: `mv manifest.json.tmp manifest.json`
+4. If invalid: STOP — do not touch ready signal. Log error and retry manifest write (max 1 retry).
+5. Verify report exists: `test -f agent_state/phases/${PHASE}/reports/backend_developer.md`
+6. **Only after steps 1-5 succeed:** Touch ready signal: `touch agent_state/phases/${PHASE}/.backend_developer_VERIFIED`
+
+```bash
+# Atomic agent handoff — prevents downstream agents from reading partial manifests
+MANIFEST_DIR="agent_state/phases/${PHASE}/backend_developer"
+python3 -c "import json,sys; json.load(sys.stdin)" < "${MANIFEST_DIR}/manifest.json.tmp" && \
+  mv "${MANIFEST_DIR}/manifest.json.tmp" "${MANIFEST_DIR}/manifest.json" && \
+  touch "agent_state/phases/${PHASE}/.backend_developer_VERIFIED" || \
+  { echo "⛔ backend_developer manifest invalid — blocking handoff"; exit 1; }
+```
 
 Before api_developer starts:
-1. Check: `test -f agent_state/phases/${PHASE}/.backend_developer_ready`
+1. Check: `test -f agent_state/phases/${PHASE}/.backend_developer_VERIFIED` (**VERIFIED, not just ready**)
 2. If missing: WAIT or FAIL — do not proceed with stale/missing data
-3. Read `backend_developer/manifest.json` for service method return types
+3. Validate manifest is readable: `python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/backend_developer/manifest.json`
+4. Read `backend_developer/manifest.json` for service method return types
 
-This pattern applies to ALL wave transitions where one agent depends on another's output. The ready signal prevents race conditions where a downstream agent starts before the upstream agent's files are fully written.
+This pattern applies to ALL wave transitions where one agent depends on another's output. The **atomic write + verified ready signal** prevents race conditions where a downstream agent reads a partial or corrupt manifest.
 
 Wave 2b (depends on 2a passing build + backend_developer ready signal):
   └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
@@ -645,17 +690,47 @@ Runs complete user workflow tests. Same iteration rules: fix → retry → max 2
 
 **All three tiers must pass before the reconciliation steps.**
 
+### Step 3c.5 — Post-Implementation Re-Audit (CLOSED LOOP)
+
+**Runs after:** All tests pass (Steps 3a-3c)
+**Purpose:** Verify that gaps identified in the Step 1 audit were actually addressed by implementation
+
+**Execution:**
+1. Read the Step 1 audit report (`agent_state/phases/${PHASE}/audit_report.md`)
+2. For each gap listed under "Missing Implementations" and "Broken/Incomplete Items":
+   - Check if the gap is now resolved (code exists, tests pass)
+   - If still missing: flag as `⚠ AUDIT GAP UNRESOLVED: <item>`
+3. For each "Carried Forward Issue" from previous phase:
+   - Check if addressed in this phase's implementation
+   - If not addressed: flag as `⚠ CARRIED FORWARD STILL OPEN: <item>`
+
+**Output:** `agent_state/phases/${PHASE}/reports/re_audit.md`
+
+**Impact on gate:**
+- Unresolved audit gaps are surfaced in the gate report as warnings (not blocking — tests are the real gate)
+- Unresolved carried-forward items that are 2+ phases old become **BLOCKING** per the carried-forward policy
+
+**Why this matters:** Without re-audit, the Step 1 audit report becomes "write-only" — gaps are detected but nobody verifies they were closed. This step closes that loop.
+
 ---
 
-## Step 3d + 3e — Reconciliation (PARALLEL)
+## Step 3d + 3e — Reconciliation (SEQUENTIAL — 3d before 3e)
 
-Run BOTH reconciliation agents simultaneously — they read different inputs and don't depend on each other.
+Run reconciliation agents **sequentially** — `spec_test_reconciler` depends on `spec_impl_reconciler` output to distinguish "untested" from "unimplemented".
 
 ```
-Step 3d+3e (PARALLEL):
-  ├─ spec_impl_reconciler  → specs ↔ implementation (4-level verification)
+Step 3d (first):
+  └─ spec_impl_reconciler  → specs ↔ implementation (4-level verification)
+       ↓ writes: agent_state/reconciliation/phase-N/specs_vs_impl.md
+       ↓ output includes list of MISSING implementations
+
+Step 3e (after 3d completes):
   └─ spec_test_reconciler  → specs ↔ test coverage
+       ↓ reads: specs_vs_impl.md to EXCLUDE unimplemented behaviors from "untested" count
+       ↓ a behavior can't be untested if it's not implemented yet — that's a MISSING impl, not a test gap
 ```
+
+**Why sequential:** If `spec_test_reconciler` runs in parallel with `spec_impl_reconciler`, it will flag "no test for behavior X" when behavior X isn't even implemented yet. This creates confusion about whether the gap is a test gap or an implementation gap. Running 3d first gives 3e the context to make accurate assessments.
 
 ### 3d: Specs ↔ Implementation (`spec_impl_reconciler`)
 
@@ -835,9 +910,11 @@ Review runs as three sequential stages. Each stage catches a different class of 
 - Every error type in the spec's error matrix has a corresponding error response
 - API contracts match the wireframe API bindings (if UI phase)
 
-**On mismatch:**
-- Route back to implementation agent for fix (max 1 round)
-- Log as `spec_deviation` with details
+**On mismatch (CLOSED LOOP):**
+- Route back to implementation agent for fix (max 2 rounds)
+- After fix: **re-run spec compliance check on the changed files** (not full review — targeted re-check)
+- If mismatch persists after 2 rounds: log as `spec_deviation` with details → becomes gate blocker
+- Log all deviations (fixed and unresolved) in report
 
 **Output:** `agent_state/phases/${PHASE}/reports/spec_compliance_review.md`
 
@@ -950,7 +1027,32 @@ Acceptance tests             agent_state/phases/${PHASE}/reports/acceptance_repo
 
 **E2E gate is active only when `PHASE_PLAN.md` has a non-empty `e2e_workflows_unlocked` list.**
 
-If any gate item fails: surface to user with specific blocker text, file location, and the exact failing entry. Do not proceed to Step 7.
+If any gate item fails:
+1. Write `gate.failed` with structured failure data (enables next-phase detection of "ran but failed" vs "never ran"):
+   ```bash
+   cat > agent_state/phases/${PHASE}/gate.failed <<EOF
+   {
+     "phase": ${PHASE},
+     "failed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+     "blockers": [
+       // list of failing gate items with details
+     ],
+     "attempt": ${ATTEMPT:-1}
+   }
+   EOF
+   ```
+2. Surface to user with specific blocker text, file location, and the exact failing entry.
+3. Do not proceed to Step 7.
+
+**Gate state machine (ternary):**
+- `gate.passed` exists → phase completed successfully
+- `gate.failed` exists (no `gate.passed`) → phase ran but has unresolved blockers
+- Neither exists → phase has not been attempted yet
+- Both exist → `gate.passed` wins (gate.failed is from a previous attempt)
+
+When the Gate Failure Recovery Procedure resolves all blockers:
+1. Write `gate.passed`
+2. Rename `gate.failed` → `gate.failed.resolved` (preserve history, don't delete)
 
 ### Gate Failure Recovery Procedure
 
@@ -974,9 +1076,40 @@ If `--force_gate` flag is set AND the gate has failures:
    ⚠ FORCED GATE — ${N} blockers overridden by user at ${TIMESTAMP}
    Overridden items: [list of failed gate items]
    ```
-2. Add overridden failures to manifest `known_issues[]` with `"severity": "gate_override"`
-3. Print warning: `⚠ Gate forced with N unresolved blockers — review before release`
-4. Next phase will show these in its audit report as critical carried-forward items
+2. Write `gate.forced` with structured failure data:
+   ```json
+   {
+     "phase": N,
+     "forced_at": "<ISO 8601>",
+     "blockers": [
+       { "gate_item": "unit_tests", "details": "TestAuthFlow FAILED — flaky", "severity": "gate_override" },
+       { "gate_item": "security_review", "details": "HIGH: IDOR in GET /users/:id", "severity": "gate_override" }
+     ],
+     "user_rationale": "<user's reason for forcing>"
+   }
+   ```
+3. Add overridden failures to manifest `known_issues[]` with `"severity": "gate_override"`
+4. Print warning: `⚠ Gate forced with N unresolved blockers — review before release`
+
+### Forced Gate Carry-Forward Enforcement (HARD RULE)
+
+When the NEXT phase starts (Phase N+1 Step 0):
+1. Check: `test -f agent_state/phases/$((PHASE-1))/gate.forced`
+2. If exists: read `gate.forced` and surface ALL blockers prominently:
+   ```
+   ⛔ FORCED GATE DETECTED — Phase $((PHASE-1)) passed with N unresolved blockers:
+     - [blocker 1 details]
+     - [blocker 2 details]
+   These MUST be resolved in Phase ${PHASE} or explicitly re-deferred with --force_gate.
+   ```
+3. Phase N+1 audit (Step 1) MUST list each forced blocker as a **CRITICAL carried-forward item**
+4. Phase N+1 gate (Step 6) adds an extra gate check:
+   ```
+   Forced gate resolution    agent_state/phases/$((PHASE-1))/gate.forced    All blockers resolved OR explicitly re-deferred
+   ```
+5. If a blocker survives **2 consecutive forced gates**: it becomes **PERMANENTLY BLOCKING** — cannot be force-gated again. Must fix or remove from scope via BRD change request.
+
+**Anti-pattern:** Forcing gates across 3+ phases creates a project where nothing actually works. The 2-force limit prevents this.
 
 ### Manifest Write Protocol (Atomic)
 
@@ -1075,7 +1208,7 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
   },
   "known_issues":    [],
   "carried_forward": [],
-  "carried_forward_policy": "Items in carried_forward[] MUST be addressed within 2 phases. If an item survives 3 phases: it becomes a BLOCKING gate item in the 3rd phase — fix or explicitly remove from scope via /review --change-request."
+  "carried_forward_policy": "Items in carried_forward[] MUST be addressed within 1 phase. If an item survives 2 consecutive phases: it becomes a BLOCKING gate item in the 2nd phase — fix or explicitly remove from scope via BRD change request. Forced gate overrides count toward this limit — an item force-gated in Phase N and still unresolved in Phase N+1 is BLOCKING in Phase N+1."
 }
 ```
 

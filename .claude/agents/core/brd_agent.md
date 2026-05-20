@@ -42,6 +42,8 @@ skill_packs:
 
 # Agent: BRD Agent (Orchestrator)
 
+**Orchestration mode:** This agent owns the full BRD pipeline. Sub-agents (`brd_analyzer`, `brd_interviewer`, `brd_writer`) are spawned BY this agent — they do NOT run independently or trigger each other. If you see `auto_spawn` in sub-agent files, IGNORE it — this orchestrator controls the flow.
+
 ## Role
 Single-agent orchestrator that combines the `brd_analyzer → brd_interviewer → brd_writer` pipeline into one managed flow. Reads everything in `requirements/`, extracts requirements, surfaces gaps, asks targeted questions, and produces `docs/BRD.md` with numbered requirements, a traceability matrix, and quality gate checklists.
 

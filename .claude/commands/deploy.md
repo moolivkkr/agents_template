@@ -58,7 +58,14 @@ docker build --no-cache -t <project>:<version> .
 # python -m build
 ```
 
-Verifies build succeeds. On failure: surface error with context.
+Verifies build succeeds.
+
+### Build Failure Recovery (CLOSED LOOP)
+On failure:
+1. Surface error with context (compiler output, missing dependencies)
+2. Attempt auto-fix: if error is a missing dependency, run `go mod tidy` / `npm install` / `pip install -r requirements.txt`
+3. Re-run build (max 1 retry after auto-fix)
+4. If still failing: STOP with clear error and suggest manual fix
 
 ---
 
@@ -74,7 +81,18 @@ Runs pending migrations against the target database:
 ```
 
 **Dry run:** shows pending migrations without applying.
-**On failure:** STOP — do not proceed with deployment. Surface error with rollback instructions.
+
+### Migration Failure Recovery (CLOSED LOOP)
+On failure:
+1. STOP — do NOT proceed with deployment
+2. Surface error with specific migration file and error message
+3. If error is a connection/transient issue (timeout, connection refused):
+   - Wait 5 seconds, retry migration (max 2 retries)
+   - If still failing: surface connection issue and suggest checking DB status
+4. If error is a schema conflict (duplicate column, constraint violation):
+   - Surface the conflict with rollback command: `<migration_tool> down 1`
+   - Do NOT auto-rollback — require user confirmation
+5. Write migration status to `agent_state/reports/migration_status.md`
 
 ---
 
@@ -101,7 +119,22 @@ After deployment, verify services are healthy:
 curl -f http://localhost:<PORT>/health || curl -f http://localhost:<PORT>/api/v1/health
 ```
 
-Waits up to 60s for healthy status. On failure: print logs and surface rollback steps.
+### Health Check Recovery (CLOSED LOOP)
+
+1. Wait up to 60s for healthy status (poll every 5s)
+2. If unhealthy after 60s:
+   - Print container logs: `docker logs --tail 50 <container>`
+   - Diagnose: check for common issues (port conflict, missing env var, crash loop)
+   - If crash loop detected: `docker restart <container>`, wait 30s more (1 retry)
+   - If port conflict: surface specific port and conflicting process
+3. If still unhealthy after retry:
+   - Surface rollback steps:
+     ```
+     ⛔ Health check failed after retry
+     Rollback: docker compose down && git checkout phase-${PHASE}-complete -- docker-compose.yml && docker compose up -d
+     Logs: docker logs <container>
+     ```
+4. Write deployment status to `agent_state/reports/deploy_status.md`
 
 ---
 

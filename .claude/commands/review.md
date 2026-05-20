@@ -185,3 +185,58 @@ Code Review Results
 - HIGH security findings → phase gate BLOCKED; must fix before merge
 - BLOCKING style issues → phase gate BLOCKED; must fix before merge
 - VIOLATION architecture findings → phase gate BLOCKED; must fix before merge
+
+---
+
+## Step 5 — Fix and Re-Verify Loop (CLOSED LOOP)
+
+**When:** ANY BLOCKING, VIOLATION, CRITICAL, or HIGH findings exist from Steps 1-3
+
+This step converts `/review` from a read-only reporter into a **closed feedback loop**.
+
+### Iteration Protocol
+
+```
+For each BLOCKING/CRITICAL/HIGH finding:
+  1. Route finding to the appropriate implementation agent:
+     - Style/idiom → backend_developer or ui_developer (depending on file)
+     - Architecture → backend_developer or api_developer
+     - Tenant isolation → api_developer + backend_developer
+     - Security → security-relevant agent (whoever owns the file)
+  2. Agent fixes the specific issue (targeted fix, not refactor)
+  3. Re-run ONLY the reviewer that found the issue (not all reviewers)
+  4. If fixed → mark as RESOLVED in report
+  5. If still failing → retry (max 2 rounds total per finding)
+  6. After 2 rounds: log as unresolved in report
+```
+
+### Max Iteration Limits
+- **Per finding:** 2 fix-and-verify rounds
+- **Per review session:** 10 total fix cycles (across all findings)
+- **If limit exceeded:** Stop fixing, report remaining blockers with `⚠ UNRESOLVED after max retries`
+
+### Updated Report (after iteration)
+
+```
+Code Review Results (after fix iteration)
+
+  Style & Idioms:       PASS — 2 BLOCKING fixed (round 1: 1, round 2: 1)
+  Architecture:         PASS — 1 VIOLATION fixed
+  Tenant Isolation:     PASS — 0 CRITICAL
+  Security:             1 HIGH unresolved after 2 rounds
+
+  Fixed in this session:
+    ✅ [file:line] <issue> — fixed in round N
+    ✅ [file:line] <issue> — fixed in round N
+
+  Remaining blockers:
+    ❌ [file:line] <issue> — unresolved after 2 attempts
+
+  Reports:
+    agent_state/review/code_review_I.md (updated)
+    agent_state/review/code_review_II.md (updated)
+    agent_state/review/tenant_isolation.md (updated)
+    agent_state/review/security_review.md (updated)
+```
+
+**Anti-rationalization:** "The fix looks right, no need to re-run the reviewer" → Wrong. The reviewer must independently verify. Authors don't catch their own mistakes.

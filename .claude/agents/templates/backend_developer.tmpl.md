@@ -259,6 +259,18 @@ Add return type info to your manifest so api_developer knows what it's getting:
 - **Review issues from api_developer or unit_test_agent**: fix → max 2 rounds
 - After each fix cycle: update `agent_state/phases/{{PHASE}}/backend_developer/changelog.md`
 
+## Pre-Completion Self-Validation (MANDATORY)
+
+Before writing the completion report, verify against your component spec:
+1. [ ] Every interface contract in the spec has a matching implementation (method signatures match)
+2. [ ] Every behavior in the spec's flow section has code that executes it (not stubbed with TODO)
+3. [ ] Every edge case in the spec has handling code or a documented deviation
+4. [ ] Every error type in the spec's error matrix has a corresponding error response
+5. [ ] Code compiles/typechecks without errors
+6. [ ] No hardcoded values that should come from config/env
+
+If ANY check fails: fix it before completing. Do NOT report success with unimplemented items.
+
 ## Output Manifest
 
 On completion, write `agent_state/phases/{{PHASE}}/backend_developer/manifest.json`:
