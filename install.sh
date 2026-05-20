@@ -48,6 +48,15 @@ cp "$REPO_DIR/.claude/agents/generated/"*.tmpl.md "$DEST_TEMPLATES/"
 TMPL_COUNT=$(ls "$REPO_DIR/.claude/agents/generated/"*.tmpl.md | wc -l | tr -d ' ')
 echo "  ✅ $TMPL_COUNT agent templates installed"
 
+# ── Project templates (CLAUDE.md template for /init) ─────────────────────────
+echo "Installing project templates → $CLAUDE_DIR/templates/"
+mkdir -p "$CLAUDE_DIR/templates"
+if ls "$REPO_DIR/.claude/templates/"*.template &>/dev/null; then
+  cp "$REPO_DIR/.claude/templates/"*.template "$CLAUDE_DIR/templates/"
+  PROJ_TMPL_COUNT=$(ls "$REPO_DIR/.claude/templates/"*.template | wc -l | tr -d ' ')
+  echo "  ✅ $PROJ_TMPL_COUNT project templates installed"
+fi
+
 # ── Skill packs (recursive — preserves subdirectory structure) ────────────────
 echo "Installing skill packs → $DEST_SKILLS/"
 mkdir -p "$DEST_SKILLS"
