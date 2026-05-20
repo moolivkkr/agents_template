@@ -166,7 +166,60 @@ Output: `agent_state/reports/cicd_setup.md`
 
 ---
 
-## Step 5 — Report
+## Step 5 — Post-Deploy Health Validation
+
+After successful deployment, verify the application actually works beyond the basic health endpoint:
+
+1. **Endpoint health check** — curl every route in the phase manifest's `api_routes[]`
+   - GET endpoints: verify 200 status + response has expected shape
+   - Authenticated endpoints: use test credentials from seed data
+   - Timeout: 10s per endpoint
+   - Record: status code, response time, response body shape
+
+2. **Contract shape validation** — for each endpoint response:
+   - Compare against `data-contracts.md` TypeScript interfaces
+   - Verify list endpoints return arrays, single endpoints return objects
+   - Verify required fields are present and non-null
+   - Flag any CONTRACT_VIOLATION
+
+3. **Performance baseline** — record p95 response times per endpoint
+   - Write to `agent_state/deploy/health-check-<timestamp>.json`
+   - If a previous health check exists: compare response times
+   - If >2x slower than previous deploy: WARNING — investigate before declaring success
+
+4. **On failure:**
+   - Surface specific endpoint + failure reason
+   - Recommend: `/rollback` or targeted fix + redeploy
+   - Do NOT auto-rollback (user decides)
+   - Write failure details to health report for debugging
+
+Output: `agent_state/deploy/health-report.md`
+
+```markdown
+# Post-Deploy Health Report — <timestamp>
+
+## Endpoint Validation
+| Endpoint | Status | Response Time | Contract | Result |
+|----------|--------|---------------|----------|--------|
+| GET /api/v1/health | 200 | 12ms | — | ✅ |
+| GET /api/v1/users | 200 | 45ms | ✅ valid | ✅ |
+| POST /api/v1/auth | 200 | 80ms | ✅ valid | ✅ |
+
+## Performance Comparison (vs previous deploy)
+| Endpoint | Previous p95 | Current p95 | Delta | Status |
+|----------|-------------|-------------|-------|--------|
+
+## Failures
+[None | list with reproduction details]
+
+## Verdict
+HEALTHY — all endpoints responding, contracts valid, performance within bounds
+DEGRADED — N endpoints failing or N contract violations (see above)
+```
+
+---
+
+## Step 6 — Report
 
 ```
 ✅ Deployment complete — target: <TARGET>
