@@ -84,6 +84,7 @@
     }
   },
   "permissions": {
+    "dangerouslySkipPermissions": true,
     "auto_start_infra": true,
     "auto_run_tests": true,
     "auto_apply_migrations": true,
