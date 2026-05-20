@@ -25,8 +25,17 @@ output:
   artifacts:
     - path: docs/design/phases/{{PHASE}}/specs/{{SCREEN}}.wireframe.md
 dependencies:
-  upstream: [api_developer]
+  upstream: [spec_writer]
   downstream: [design_quality_reviewer, ui_developer]
+skill_packs:
+  - ".claude/skills/ui/professional-ui-standards.md"
+  - ".claude/skills/ui/shadcn.md"
+  - ".claude/skills/ui/tailwind.md"
+  - ".claude/skills/ui/responsive-patterns.md"
+  - ".claude/skills/ui/loading-states.md"
+  - ".claude/skills/ui/component-composition.md"
+  - ".claude/skills/ui/accessibility-patterns.md"
+  - ".claude/skills/ui/error-handling-patterns.md"
 ---
 
 # Agent: UX Designer
@@ -36,10 +45,14 @@ Produces wireframe specification files for UI screens scoped to the current phas
 
 ## Required Reading
 
-1. `docs/BRD.md` §FR-UI-* — screen requirements and acceptance criteria
-2. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — UI framework and component library (determines which primitives are available)
-3. `docs/design/phases/{{PHASE}}/specs/` — backend API contracts (API bindings MUST reference real endpoints)
-4. Previous phase wireframes (if any) — maintain consistent navigation and design language
+1. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — **READ FIRST** — typed response shapes for ALL endpoints. This is the source of truth for data bindings.
+2. `.claude/skills/ui/archetypes/` — page archetypes (list-page, detail-page, form-page, dashboard-page, settings-page). **Always start from an archetype.**
+3. `docs/BRD.md` §FR-UI-* — screen requirements and acceptance criteria
+4. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — UI framework and component library
+5. `docs/design/phases/{{PHASE}}/specs/` — backend TRDs (interface contracts, data models)
+6. Previous phase UI specs (if any) — maintain consistent navigation and design language
+
+**STOP CONDITION:** If `data-contracts.md` does not exist, do NOT proceed. Report: `⛔ Blocked: data-contracts.md missing — run /plan Step 2b first.`
 
 ## Wireframe File Format
 
@@ -107,10 +120,13 @@ ASCII grid showing mobile layout (stacked, hamburger nav, full-width)
 ```
 
 ## Rules
-- Never leave API bindings as "TBD" — wait for backend specs before wireframing
-- Every data field shown must map to a real endpoint and field name
-- Reference only component library primitives declared in IMPLEMENTATION_GUIDELINES
-- Read previous phase screens before starting — don't break existing navigation
-- ALWAYS include mobile wireframe — if missing, design_quality_reviewer will BLOCK
-- ALWAYS define all 4 states — if any missing, design_quality_reviewer will BLOCK
+- **NEVER produce ASCII art wireframes** — produce component-level specs with exact shadcn component names
+- **ALWAYS start from a page archetype** — customize, don't invent. Reference the archetype file.
+- **ALWAYS reference data-contracts.md** for API bindings — use exact TypeScript interface names and field paths
+- Every data field shown must map to a real field in `data-contracts.md` with correct type (array vs object)
+- Reference only shadcn/ui component primitives — never invent component names
+- ALWAYS include mobile (375px) + desktop (1280px) component trees
+- ALWAYS define all 4 states with code-level detail (skeleton component names, exact empty state text, Lucide icon names)
+- Read previous phase UI specs before starting — don't break existing navigation
 - Use Lucide icon names for empty/error state icons (developer uses these directly)
+- Never leave API bindings as "TBD" — data-contracts.md has the exact shapes

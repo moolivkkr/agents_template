@@ -1,6 +1,6 @@
 ---
 name: design_quality_reviewer
-description: Validates wireframe specs against 6 quality dimensions before UI implementation starts
+description: Validates UI specs against 9 quality dimensions before UI implementation starts
 model: sonnet
 category: review
 input:
@@ -14,6 +14,10 @@ output:
 dependencies:
   upstream: [ux_designer]
   downstream: [ui_developer]
+skill_packs:
+  - ".claude/skills/ui/professional-ui-standards.md"
+  - ".claude/skills/ui/accessibility-patterns.md"
+  - ".claude/skills/ui/component-composition.md"
 ---
 
 # Agent: Design Quality Reviewer
@@ -42,6 +46,7 @@ Quality gate between wireframe design and UI implementation. Validates each wire
 | 6 | **Responsive** | Mobile (375px) + Desktop (1280px) wireframe views present | No mobile wireframe |
 | 7 | **Touch Targets** | Interactive elements annotated ≥44px on mobile wireframe | Small targets on mobile |
 | 8 | **Consistency** | Navigation, layout, component usage consistent with previous phases | Layout breaks from prev phase |
+| 9 | **Data Contract Binding** | Every API binding references real field in data-contracts.md; array/object matches component type | Field not in data-contracts.md OR list component bound to object endpoint |
 
 ## Quantitative Quality Metrics
 
