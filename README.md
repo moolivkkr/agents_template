@@ -25,9 +25,16 @@ docs/                          ← GENERATED OUTPUT — agents write here
 /startup/init      →  BRD + agents from requirements
 /startup/plan      →  specs + data-contracts.md + UI specs per phase
 /startup/develop   →  implement + test + review + gate per phase
-/startup/accept    →  full-product validation against all BRD personas
+/startup/accept    →  full-product validation + release notes
+/startup/deploy    →  build + migrate + deploy + health validation
 
 OR: /startup/autonomous  →  all of the above end-to-end with one human checkpoint
+
+Issue resolution (use anytime):
+/startup/hotfix    →  scoped fix + scoped test + scoped review (bypasses full pipeline)
+/startup/diagnose  →  trace symptom to root cause, optional auto-fix
+/startup/benchmark →  performance baselines + regression detection
+/startup/rollback  →  reverse deployment to previous known-good state
 ```
 
 > **Convention:** `requirements/` is read-only input. `docs/` is generated output. Never write `BRD.md` by hand — always run `/startup/init`. The `IMPLEMENTATION_GUIDELINES.md` in `requirements/` is your optional draft; `/init` produces the authoritative confirmed version in `docs/`.
@@ -156,8 +163,12 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup/test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system) |
 | `/startup/review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
 | `/startup/optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
-| `/startup/deploy` | Builds, migrates, and deploys to local / staging / prod |
+| `/startup/deploy` | Builds, migrates, deploys to local / staging / prod, validates health post-deploy |
 | `/startup/status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
+| `/startup/hotfix` | **NEW** Fast-track bug fix — scoped change → scoped test → scoped review → merge. Bypasses full `/develop` cycle |
+| `/startup/diagnose` | **NEW** Structured bug investigation — traces symptom to root cause through spec ↔ implementation comparison |
+| `/startup/benchmark` | **NEW** Performance tracking — captures metrics per phase, saves baselines, flags regressions >10% |
+| `/startup/rollback` | **NEW** Deployment rollback — reverses migrations, redeploys previous build, validates health |
 
 ### Command arguments
 
@@ -229,6 +240,37 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --dry_run                     Show plan without deploying
 ```
 
+**`/startup/hotfix`**
+```
+--phase=N         Phase containing the bug (required)
+--component=NAME  Component to fix (e.g. auth, users)
+--description="…" Bug description for commit message
+--security        Route through security_reviewer instead of code_reviewer_I
+--deploy          Fast-track to /deploy after merge
+```
+
+**`/startup/diagnose`**
+```
+--symptom="…"     What's broken (required, e.g. "GET /users returns 500")
+--phase=N         Phase to investigate (default: auto-detect)
+--component=NAME  Narrow investigation to specific component
+--fix             Auto-apply recommended fix after diagnosis
+```
+
+**`/startup/benchmark`**
+```
+--phase=N           Target phase (default: latest completed)
+--save-baseline     Save results as the baseline for this phase
+--compare           Compare against previous baseline, flag regressions
+--endpoints="…"     Test specific endpoints only (comma-separated)
+```
+
+**`/startup/rollback`**
+```
+--target=local|staging|prod   Environment to roll back (required)
+--confirm                     Required for production rollback
+```
+
 ---
 
 ## The SDLC pipeline
@@ -240,8 +282,10 @@ Step 0    Orient           Detect phase, load previous manifest, start infra
 Step 0.5  Readiness Gate   Verify specs, phase_context, data-contracts.md exist
 Step 1    Audit            Gap report: what's missing vs what the specs require
 Step 2    Implement        Wave-based execution with build checks + smoke test:
-                           DB → backend → BUILD CHECK → API → SMOKE TEST → UI → tests
+                           DB → migration validation (auto-rollback on failure) →
+                           backend → BUILD CHECK → API → SMOKE TEST → UI → tests
 Step 2.5  Contract Valid.  Verify api-contracts.md matches data-contracts.md (UI phases)
+                           + backward compatibility check (field removal = HARD BLOCK)
 Step 3a   Unit Tests       Unit tests for all new code
 Step 3a.5 Regression       Cross-phase regression check (Phase > 1 only)
 Step 3b   Integration      Service↔DB + API endpoint tests + contract shape tests
@@ -250,16 +294,19 @@ Step 3d+e Reconcile        Spec↔Impl + Spec↔Tests (PARALLEL, 4-level verific
 Step 3f   Optimize         Dead code removal + code optimization (backend ∥ UI)
 Step 3g   Re-test          Post-optimization re-run (skipped if zero changes)
 Step 4    PARALLEL TRACKS:
-  Track A: Review          Spec compliance → Style + Arch + Security + Deps (parallel)
-  Track B: Acceptance      Persona tests + contract shape assertions
-Step 5    Gate             12 conditions must pass — writes gate.passed + manifest.json
+  Track A: Review          Spec compliance → Style + Arch + Security + SAST + Deps (parallel)
+  Track B: Acceptance      Persona tests + contract shape assertions + browser E2E (UI phases)
+Step 5    Gate             13 conditions must pass — writes gate.passed + manifest.json
+                           Bug severity classification (critical/high/medium/low)
+                           Flaky test quarantine (auto-skip after 2+ phases, tracked)
 Step 5b   Document         API docs + README updates (non-blocking, parallel)
 Step 6    Report           Summary of what was built, test results, gate status
 ```
 
-### Phase gate — all 11 must pass
+### Phase gate — all 13 must pass
 
 ```
+✅ Spec compliance         implementation matches specs (no missing, no deviations)
 ✅ Unit tests              all passing
 ✅ Integration tests       all passing
 ✅ E2E tests               all passing (only if phase unlocks a workflow)
@@ -268,10 +315,13 @@ Step 6    Report           Summary of what was built, test results, gate status
 ✅ Code optimization       post-optimization tests pass (CLEAN or PARTIAL accepted)
 ✅ UI code optimization    post-optimization tests pass (if frontend enabled)
 ✅ Code review I           no BLOCKING style issues
-✅ Code review II          no architecture violations
+✅ Code review II          no architecture violations + error response shapes match specs
 ✅ Security review         no HIGH severity findings
-✅ Acceptance tests        all in-scope use cases pass
+✅ SAST scan               no CRITICAL/HIGH findings (semgrep/govulncheck/bandit)
+✅ Acceptance tests        all in-scope use cases pass (browser-based for UI phases)
 ```
+
+**Bug severity classification:** Gate blockers are classified as critical/high/medium/low. Critical issues cannot be carried forward. High issues auto-escalate to critical after 1 phase. Medium auto-escalates after 3 phases.
 
 If any condition fails: the gate does not write. The blocker is surfaced with the specific file, finding, and how to fix it. Use `--force_gate` to override known flakes (logged in manifest as `gate_override`).
 
@@ -509,19 +559,20 @@ Each generated agent is pre-loaded with your project's specific language, framew
 
 Skill packs are static knowledge files that agents load as context before executing. They contain idiomatic patterns, code examples, conventions, and anti-patterns for a specific technology. They're how `code_reviewer_I` knows what "idiomatic Go" means vs "idiomatic Python", and how `code_optimizer` knows to check for nil-slice → JSON null bugs in Go but `undefined` → omitted-field bugs in TypeScript.
 
-### Available skill packs (65+)
+### Available skill packs (160+)
 
 | Category | Skill Packs |
 |----------|-------------|
-| **Core** (6) | `api-design` · `security-owasp` · `testing-principles` · `git-workflow` · `auto-research` · `deep-research` |
+| **Core** (16) | `api-design` · `api-excellence` · `security-owasp` · `testing-principles` · `code-quality` · `git-workflow` · `auto-research` · `deep-research` · `debate-protocol` · `software-architecture` · `resiliency-patterns` · `observability-patterns` · `verification-protocol` · `context-budget-protocol` · `shared-backend-patterns` · `implementation-guidelines-template` |
 | **Requirements** (9) | `requirement-clarity` · `acceptance-criteria` · `persona-definition` · `nfr-patterns` · `gap-analysis-checklist` · `conflict-detection` · `business-objectives` · `traceability-matrix` · `edge-case-taxonomy` |
-| **UI Patterns** (10) | `professional-ui-standards` · `error-handling-patterns` · `form-patterns` · `accessibility-patterns` · `responsive-patterns` · `loading-states` · `component-composition` · `api-integration-patterns` · `shadcn` · `tailwind` |
-| **UI Archetypes** (5) | `list-page` · `detail-page` · `form-page` · `dashboard-page` · `settings-page` |
+| **UI Patterns** (14) | `professional-ui-standards` · `error-handling-patterns` · `form-patterns` · `accessibility-patterns` · `responsive-patterns` · `loading-states` · `component-composition` · `api-integration-patterns` · `shadcn` · `tailwind` · **NEW:** `type-generation-protocol` · `form-validation-protocol` · `advanced-state-patterns` · `structured-wireframe-format` |
+| **UI Archetypes** (6) | `list-page` · `detail-page` · `form-page` · `dashboard-page` · `settings-page` · `component-test` |
 | **Languages** (5) | `go` · `python` · `typescript` · `java` · `rust` |
-| **Frameworks** (13) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · `express` · `nestjs` · **Frontend:** `react` · `nextjs` · `vue` · `tanstack-query` |
-| **Databases** (6) | `postgres` · `postgresql` · `mysql` · `mongodb` · `redis` · `sqlite` |
-| **Testing** (6) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` |
-| **Infrastructure** (5) | `docker` · `github-actions` · `kubernetes` |
+| **Frameworks** (18) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · **NEW:** `drf` · `express` · `nestjs` · **NEW:** `fastify` · `spring-boot` · **NEW:** `quarkus` · `axum` · **NEW:** `actix-web` · **NEW:** `graphql` · **Frontend:** `react` · `nextjs` · `vue` · `tanstack-query` |
+| **Databases** (9) | `postgres` · `mysql` · `mongodb` · `redis` · `sqlite` · **NEW:** `dynamodb` · **NEW:** `elasticsearch` · **NEW:** `firestore` · `query-optimization` |
+| **Testing** (13) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` · `junit-mockito` · `pytest` · `rust-test` · **NEW:** `property-based` · **NEW:** `contract-testing` · **NEW:** `load-testing` · **NEW:** `targeted-testing` · **NEW:** `external-service-mocks` |
+| **Backend Archetypes** (60+) | CRUD handler/service/repository + tests (all 5 languages) · auth middleware · error handling · migrations · Dockerfiles · observability · performance · **NEW:** workers · **NEW:** WebSocket · **NEW:** gRPC · **NEW:** message queues |
+| **Infrastructure** (3) | `docker` · `github-actions` · `kubernetes` |
 
 ### Which agents load which skills
 
@@ -799,9 +850,13 @@ requirements/
 | Deploy the app | `/startup/deploy --target=local` |
 | Validate the full product | `/startup/accept` |
 | Resume after a break | `/startup/status` then follow its recommendation |
+| **Fix a bug quickly** | **`/startup/hotfix --phase=N --component=auth`** |
+| **Investigate a bug** | **`/startup/diagnose --symptom="GET /users returns 500"`** |
+| **Track performance over time** | **`/startup/benchmark --save-baseline`** |
+| **Roll back a bad deploy** | **`/startup/rollback --target=local`** |
 | Fix a bug and re-validate | Fix the code, then `/startup/test --phase=N` |
 | Add a feature mid-project | Use `product_manager` agent to update BRD, then `/startup/plan` |
-| Re-do a phase | `rm agent_state/phases/N/gate.passed` then `/startup/develop --phase=N` |
+| Re-do a phase | `/startup/reset-phase --phase=N` then `/startup/develop --phase=N` |
 | Force past a flaky test | `/startup/develop --force_gate` (logged as override) |
 
 ### What you DON'T need to do
@@ -815,11 +870,12 @@ requirements/
 
 ### How the pipeline protects your code
 
-Every phase goes through 11 quality checks before it can pass:
+Every phase goes through 13 quality checks before it can pass:
 
 ```
 Your code
   ↓
+Spec compliance               ← did you build what the spec says?
 Unit tests                    ← does each function work?
 Integration tests             ← do services + DB work together?
 E2E tests                     ← does the full user workflow work?
@@ -828,9 +884,10 @@ Spec ↔ Implementation check   ← is everything from the spec built?
 Spec ↔ Test check             ← is every behavior tested?
 Code optimization             ← dead code removed, code simplified
 Style review                  ← idiomatic, clean, consistent
-Architecture review           ← right patterns, right layers
+Architecture review           ← right patterns, right layers + error response shapes
 Security review               ← no OWASP vulnerabilities
-Acceptance tests              ← works for real users, real scenarios
+SAST scan                     ← automated static analysis (semgrep/govulncheck/bandit)
+Acceptance tests              ← works for real users, real scenarios (browser-based for UI)
   ↓
 Phase gate PASSED ✅
 ```
@@ -840,17 +897,27 @@ If any check fails, the gate blocks and tells you exactly what to fix.
 ### Commands at a glance
 
 ```
+Pipeline:
 /startup/research     Deep market & product research. Vendors, capabilities, moats.
 /startup/init         One-time project setup. Creates BRD + agents from requirements.
 /startup/plan         Plans a phase. Creates specs, data contracts, UI specs.
 /startup/develop      Builds a phase end-to-end with parallel review + acceptance.
 /startup/autonomous   Full pipeline: research → init → plan → develop (all phases).
+/startup/accept       Full-product validation after all phases complete.
+/startup/deploy       Build and deploy to local, staging, or production.
+
+Standalone:
 /startup/test         Runs tests standalone. Many flags for targeting specific tiers.
 /startup/review       Code review: spec compliance → style + arch + security (parallel).
 /startup/optimize     Code cleanup and optimization with before/after comparison.
-/startup/accept       Full-product validation after all phases complete.
-/startup/deploy       Build and deploy to local, staging, or production.
+/startup/benchmark    Performance tracking with baselines and regression detection.
 /startup/status       Where am I? What should I run next?
+
+Issue Resolution:
+/startup/hotfix       Fast-track bug fix. Scoped test + scoped review. No full pipeline.
+/startup/diagnose     Trace a symptom to root cause. Optional auto-fix.
+/startup/rollback     Roll back a deployment. Reverse migrations + redeploy previous build.
+/startup/reset-phase  Reset a phase for re-development with state preservation.
 ```
 
 ### Tips
