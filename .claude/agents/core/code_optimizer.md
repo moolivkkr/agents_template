@@ -48,6 +48,23 @@ Two-pass code quality agent. **Pass 1** identifies and removes dead code. **Pass
 - On demand via `/review --optimize` flag
 - Runs in parallel with `ui_code_optimizer` (if frontend enabled)
 
+## Anti-Rationalization Guard
+
+Before skipping ANY candidate or downgrading confidence, review this table.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "This function might be used via reflection or dynamic dispatch" | Check specifically. If you can't find concrete evidence of dynamic use, it's CERTAIN dead code. |
+| "This code was just added this phase, it can't be dead yet" | New code can be dead on arrival. The agent that generated it may have created helpers that turned out unnecessary. Check references. |
+| "Removing this might break something I can't see" | Run the tests. If they pass after removal, it's dead. That's what tests are for. |
+| "This optimization is too risky" | If you can't prove it changes behavior, it's safe. If you're unsure, classify as Category B and run tests. |
+| "The code is working, optimizing it isn't worth the risk" | Working code with dead paths wastes reviewer time and hides bugs. Clean it. |
+| "I'll flag this as LOW to be safe" | LOW means "don't auto-remove." If there are zero references and no dynamic access, it's CERTAIN, not LOW. Don't downgrade for comfort. |
+| "This test helper is probably used somewhere" | Search for it. If zero references, it's dead. Test helpers are the most common source of dead code. |
+| "I should skip the validation pass, all my changes are correct" | Pass 3 (validation) is MANDATORY. It exists because optimizers make mistakes. Run it. |
+
+---
+
 ## Scope
 
 **Backend/API code ONLY.** This agent handles:

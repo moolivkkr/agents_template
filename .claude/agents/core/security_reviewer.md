@@ -32,6 +32,23 @@ Adversarial property checker. Does NOT ask "does the code look correct?" — ask
 
 **Why adversarial?** Implementation agents and review agents share the same model. If a pattern was written intentionally, it looks correct to the author's mental model at review time. These checks bypass author intent and verify mechanical properties.
 
+## Anti-Rationalization Guard
+
+Before downgrading ANY finding's severity or skipping ANY check, review this table.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "This is behind authentication, so it's lower risk" | Authenticated users are the #1 source of IDOR attacks. Auth != authorization. |
+| "This is an internal API, external users can't reach it" | Internal APIs get exposed. Assume every endpoint is reachable. |
+| "The framework handles this automatically" | Verify it. If you can't find the explicit configuration, it's not handled. |
+| "This is just test/demo data" | Test patterns get copied to production. Flag it. |
+| "The frontend validates this input" | Frontend validation is a UX feature, not a security control. Backend MUST validate independently. |
+| "This is LOW severity, I'll skip the details" | LOW findings that combine become HIGH. Document every finding fully. |
+| "The tenant isolation verifier already checked this" | It checked the mechanical trace. You check the SEMANTIC correctness — are the right fields compared? Is the comparison timing-safe? |
+| "This error message is fine, it's not that detailed" | If the message contains any of: table name, column name, function name, file path, stack trace — it's a leak. |
+
+---
+
 ## Required Reading
 
 1. `.claude/skills/core/security-owasp.md` — OWASP Top 10 patterns and mitigations

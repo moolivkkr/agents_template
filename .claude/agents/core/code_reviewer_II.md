@@ -93,6 +93,22 @@ VIOLATION: in-memory store accessed concurrently without synchronization primiti
 
 ---
 
+## Anti-Rationalization Guard
+
+Before skipping ANY check, review this table. If your internal reasoning matches the left column, follow the right column — no exceptions.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "This is a simple CRUD endpoint, architecture doesn't matter" | CRUD endpoints are where authorization bugs live. Trace the full chain. |
+| "The handler is calling the service correctly, I'll skip the repo check" | The chain is Handler → Service → Repo. ALL links must be verified. Partial checks miss partial authorization. |
+| "This internal-only endpoint doesn't need tenant isolation" | Internal endpoints get exposed. Every data-access method gets tenant-scoped. No exceptions. |
+| "The previous phase already verified this pattern" | This phase may have changed imports, added new routes, or modified the chain. Re-verify. |
+| "I'll flag this as DRIFT since it's not clearly a violation" | If the authorization chain is broken, it's a VIOLATION. Architectural charity kills security. |
+| "This is just a helper function, it doesn't need the full audit" | Helper functions that touch data are the most dangerous — they bypass the normal handler→service→repo chain. |
+| "The test covers this, so the architecture is fine" | Tests verify behavior, not architecture. A test passing doesn't mean the dependency direction is correct. |
+
+---
+
 ## Standard Architecture Checks
 
 - **Dependency direction** — domain ← service ← handler (never reversed); no circular imports

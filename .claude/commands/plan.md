@@ -294,6 +294,38 @@ Does NOT block `/develop`. Runs in parallel with spec verification.
 
 ---
 
+## Step 4c — Future Phase Sketches (Progressive Planning)
+
+**When:** Phase being planned is NOT the last phase in the BRD scope
+**Purpose:** Sketch future phases to capture intent without over-planning
+
+Instead of planning all phases upfront (which produces stale specs), create lightweight sketches for the next 2 phases. These are NOT full plans — they capture intent and constraints.
+
+For each future phase (N+1, N+2):
+```markdown
+# Phase N+1 Sketch (auto-generated — will be refined before execution)
+
+## Goal
+<one-line goal>
+
+## Rough Scope
+- FR-* requirements likely in scope: [IDs only]
+- Components likely touched: [list]
+
+## Dependencies on Phase N
+- Requires: [what Phase N must deliver for N+1 to work]
+- Risk: [what might change between now and N+1 execution]
+
+## Open Questions
+- [questions that must be answered before full planning]
+```
+
+Write sketches to `docs/design/phases/${FUTURE_PHASE}/SKETCH.md`.
+
+**Key insight (from GSD-2 research):** "95% per-step reliability over 20 steps = 36% success." Planning future phases in detail when the codebase hasn't been built yet wastes effort. Sketch now, refine later with actual codebase state.
+
+---
+
 ## Step 5 — Output Index
 
 Write `docs/design/phases/${PHASE}/INDEX.md`:

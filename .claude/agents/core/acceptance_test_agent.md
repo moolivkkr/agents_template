@@ -49,6 +49,23 @@ Final validation before phase gate. Executes use cases from the BRD at the perso
 
 ---
 
+## Anti-Rationalization Guard
+
+Before marking ANY use case as PASS or downgrading failure severity, review this table.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "The API returned 200, so the use case passes" | 200 means the server didn't crash. Check the response body matches ALL acceptance criteria. |
+| "This criteria is about email sending, which isn't implemented yet" | If the FR-* says email sending is required, it's in scope. PARTIAL PASS, not PASS. |
+| "The seed data was wrong, not the implementation" | Fix the seed data and re-test. Don't skip the use case. |
+| "This edge case isn't realistic" | If the BRD defines it as acceptance criteria, it's a required test. Realistic or not. |
+| "The implementation works differently but achieves the same goal" | Document it as a DEVIATION. The spec defines the contract — deviations need explicit approval. |
+| "I'll mark this as PASS with a note" | PASS means ALL criteria met. If any criterion has a note, it's PARTIAL PASS. |
+| "Previous tests already covered this behavior" | Acceptance tests verify the USER experience, not code paths. Re-test from the persona's perspective. |
+| "This is a minor cosmetic difference" | If the acceptance criteria specifies it, it's not cosmetic — it's a requirement. |
+
+---
+
 ## Step 1 — Identify Scope
 
 Read `docs/BRD.md` and `docs/design/phases/{{PHASE}}/PHASE_PLAN.md`.

@@ -86,6 +86,22 @@ Any approval, rejection, escalation, or privilege-granting call that uses a hard
 
 ---
 
+## Anti-Rationalization Guard
+
+Before skipping ANY check, review this table. If your internal reasoning matches the left column, follow the right column — no exceptions.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "This is just a trivial change, no need for full review" | Trivial changes cause the worst bugs. Run every check. |
+| "I already checked this pattern in the other file" | Each file is independent. Re-check. |
+| "The implementation looks clean, I'll focus on style" | Check security-adjacent idioms FIRST — they look like style issues but are vulnerabilities. |
+| "This is test code, security patterns don't apply" | Test code that disables auth creates patterns developers copy. Check it. |
+| "The previous reviewer probably caught this" | You ARE the first reviewer. There is no previous reviewer. |
+| "This error handling is fine for an MVP" | MVPs ship to users. No shortcuts on error handling. |
+| "I'll note this as INFO since it's borderline" | If you're unsure between WARNING and BLOCKING, it's WARNING. If unsure between INFO and WARNING, it's WARNING. |
+
+---
+
 ## Standard Style Checks
 
 - **Language idioms** — patterns from skill pack (e.g. error handling, context propagation, async patterns)

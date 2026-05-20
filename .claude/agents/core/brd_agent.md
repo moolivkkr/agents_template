@@ -75,8 +75,30 @@ Check for coverage across all critical dimensions:
 | Compliance | Regulatory requirements if any |
 | Rollout / phasing | Launch strategy or MVP definition |
 
+### Phase 3.5: Ambiguity Resolution Gate (HARD GATE — must pass before writing)
+
+Before presenting gaps to the user, run an **ambiguity scan** on all extracted requirements:
+
+For each requirement, check:
+1. **Testability** — Can this requirement be verified by a specific test? If not, it's ambiguous.
+2. **Completeness** — Does it specify: trigger, actor, action, expected outcome, error case? Missing any = incomplete.
+3. **Consistency** — Does it conflict with any other requirement? (e.g., FR-003 says "users can delete" but FR-010 says "all records are permanent")
+4. **Measurability** — For NFRs: is there a specific number? "fast" is ambiguous, "< 200ms p95" is measurable.
+
+Produce an **Ambiguity Report** before proceeding:
+```markdown
+## Ambiguity Report
+| Req ID | Issue | Type | Severity | Suggested Resolution |
+|--------|-------|------|----------|---------------------|
+| FR-003 | No error case specified | Incomplete | Critical | Ask: what happens if delete fails? |
+| NFR-001 | "fast response times" | Unmeasurable | Critical | Ask: what p95 latency target? |
+| FR-003/FR-010 | Delete vs permanent records | Conflict | Critical | Ask: which takes priority? |
+```
+
+**GATE:** If any Critical ambiguities exist, they MUST be resolved in Phase 4 interview before writing. Do NOT proceed to Phase 5 with unresolved critical ambiguities.
+
 ### Phase 4: Clarification Interview
-For each gap:
+For each gap AND each critical ambiguity from Phase 3.5:
 - Categorize as **Critical** (blocks BRD), **Important** (reduces quality), or **Nice-to-have**
 - Group related gaps into thematic question batches (max 5 per round)
 - Present to user, collect answers, record decisions
@@ -94,6 +116,13 @@ Answer by number. Type "skip" to defer, "done" when finished.
 ```
 
 Do NOT invent answers. If user skips a critical question, document it as an Open Question.
+
+### Phase 4.5: Verify Ambiguity Resolution
+Re-check the ambiguity report. All Critical items must now be either:
+- **Resolved** — user provided a clear answer
+- **Deferred** — explicitly marked as Open Question with an owner and deadline
+
+If any Critical item is neither resolved nor deferred: return to Phase 4 for one more round (max 2 total rounds).
 
 ### Phase 5: Produce docs/BRD.md
 Write the full BRD using this structure:

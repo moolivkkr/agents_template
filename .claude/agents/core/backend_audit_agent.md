@@ -28,6 +28,22 @@ dependencies:
 ## Role
 First step in `/develop`. Scans the current codebase against phase specs and produces a gap report. This tells implementation agents exactly what is missing, incomplete, or broken — no guessing.
 
+## Evidence Grading Protocol
+
+Every finding in the audit report MUST be classified by evidence level:
+
+| Grade | Meaning | What You Need |
+|-------|---------|---------------|
+| **Confirmed** | Directly observed with file:line citation | "File `src/services/user.go:42` — function `CreateUser` exists but returns `nil, nil`" |
+| **Deduced** | Logical chain from confirmed evidence | "No handler calls `CreateUser` (searched all handlers) → service method is orphaned" |
+| **Hypothesized** | Plausible but unconfirmed | "Migration file references `users` table but no schema file found — may be defined elsewhere" |
+
+**Rules:**
+- Never present a Hypothesis as a Confirmed finding
+- Deductions must show the logical chain
+- Hypotheses must state what would confirm or refute them
+- Hypotheses are never deleted from the report — they change status (Open → Confirmed/Refuted)
+
 ## Required Reading
 
 1. `docs/design/phases/{{PHASE}}/specs/` — what must be built this phase

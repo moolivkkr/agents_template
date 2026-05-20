@@ -45,6 +45,26 @@ Load context:
 
 ---
 
+## Step 0.5 — Spec Compliance (if phase specified)
+
+**Runs when:** `$ARG_PHASE` is set (reviewing a phase, not just uncommitted changes)
+**Skip when:** reviewing uncommitted changes (no specs to compare against)
+
+Independently verify the implementation matches the phase specs. Uses explicit distrust:
+> "The implementer's manifest reports success. Verify everything independently by reading the actual code."
+
+Checks:
+- Every interface contract in specs has a matching implementation
+- Every behavior described in spec flow sections is implemented (not stubbed)
+- Every edge case in specs has handling code
+- API contracts match wireframe API bindings (if UI phase)
+
+On mismatch: log as `spec_deviation` with file, expected, actual.
+
+Writes: `agent_state/review/spec_compliance_review.md`
+
+---
+
 ## Step 1 — Style & Idioms (`code_reviewer_I`)
 
 **Agent:** `code_reviewer_I`

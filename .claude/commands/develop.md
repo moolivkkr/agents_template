@@ -68,6 +68,23 @@ Note: `phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. L
 
 ---
 
+## Pipeline Anti-Rationalization Guard
+
+Before skipping ANY step, shortcutting ANY gate, or accepting partial results, review this table.
+
+| Your Internal Reasoning | Correct Response |
+|---|---|
+| "Tests pass, so the implementation is correct" | Tests verify what the test author thought to check. Specs define what MUST exist. Run reconciliation. |
+| "This is a simple phase, I can skip the audit step" | Simple phases are where assumptions hide. Run the audit. |
+| "The gate has only one minor blocker, I'll pass it" | A blocker is a blocker. Fix it or use `--force_gate` with explicit user approval. |
+| "I already reviewed this code when I wrote it" | You are the author. Authors don't find their own bugs. The reviewers are separate agents for a reason. |
+| "Optimization isn't needed this phase — there's barely any code" | Optimization runs every phase. Even 5 lines of dead code compound over 10 phases. |
+| "The previous phase tests still pass, no need for regression check" | Run them anyway. Silent import breakage is the #1 cross-phase regression. |
+| "I'll skip the acceptance tests — unit and integration tests cover everything" | Unit/integration test code paths. Acceptance tests verify USER EXPERIENCE. They catch different bugs. |
+| "I can combine the review stages to save time" | Review stages are separated for a reason. Spec compliance and code quality are DIFFERENT concerns. |
+
+---
+
 ## Step 0 — Orient
 
 ### Detect current phase
@@ -99,6 +116,54 @@ docker compose up -d  # (or equivalent from project setup)
 # Health check command from IMPLEMENTATION_GUIDELINES
 ```
 
+### Decision Log Protocol
+
+All agents MUST log significant decisions to `agent_state/phases/${PHASE}/decision-log.md` (append-only):
+
+```markdown
+## Decision: <short title>
+- **Agent:** <agent name>
+- **Context:** <what prompted this decision>
+- **Options considered:** <what alternatives existed>
+- **Decision:** <what was chosen>
+- **Rationale:** <why>
+- **Impact:** <what this affects downstream>
+```
+
+Log when:
+- Choosing between alternative implementations
+- Deviating from spec (even slightly)
+- Making an assumption not in the spec
+- Choosing a library, pattern, or approach not prescribed
+
+**Why:** Decisions made by agents in session 3 are invisible in session 7. The decision log creates persistent memory with accountability.
+
+### Mid-Execution Escalation Protocol
+
+When an agent encounters uncertainty that is NOT a full blocker but needs user input:
+
+```json
+{
+  "type": "escalation",
+  "agent": "<agent name>",
+  "question": "<what needs clarification>",
+  "options": [
+    {"label": "A", "description": "...", "tradeoff": "..."},
+    {"label": "B", "description": "...", "tradeoff": "..."}
+  ],
+  "recommendation": "A",
+  "continueWithDefault": true
+}
+```
+
+Write to `agent_state/phases/${PHASE}/escalations/<agent>-<N>.json`.
+
+If `continueWithDefault: true`: proceed with the recommended option. The user can review and override later — the correction injects into the next task's carry-forward context.
+
+If `continueWithDefault: false`: STOP and surface to user immediately.
+
+**This replaces the binary "guess or block" with structured uncertainty handling.**
+
 ### Universal Agent Return Protocol
 
 Every agent spawned during this command MUST end by returning this exact format — nothing more — to the parent conversation:
@@ -116,6 +181,24 @@ If the agent encountered blockers, append:
 ```
 
 **The parent reads the output file to get details. It does NOT ask the agent to reproduce or summarize the file contents.**
+
+### Analysis Paralysis Guard (applies to ALL agents spawned by this command)
+
+If an agent makes **5+ consecutive read-only tool calls** (Read, Grep, Glob, Bash with read-only commands) without any write action (Edit, Write, Bash with write commands), the agent MUST:
+
+1. **Stop exploring** — do not make another read call
+2. **State the blocker** — write a 1-line summary of what's preventing action:
+   - "Blocker: can't find the file X expected by spec Y"
+   - "Blocker: interface mismatch between service and handler"
+3. **Take action** — either:
+   - Write code to resolve the blocker
+   - Write the blocker to the output file and return to the parent with `status: blocked`
+
+**Why:** Agents get stuck in read-loops, consuming context tokens without making progress. 5 consecutive reads without a write is a strong signal of analysis paralysis.
+
+**Exception:** `backend_audit_agent` and `ui_audit_agent` are read-only by design — this guard does NOT apply to audit agents.
+
+---
 
 ### Placeholder Convention
 Throughout all agent files and commands:
@@ -149,6 +232,46 @@ Agents reading `{{PHASE-1}}` in their instructions should resolve this to `PHASE
 - The entire `docs/BRD.md` (except: brd_spec_reconciler, requirements_brd_reconciler, acceptance_test_agent)
 - The entire `docs/IMPLEMENTATION_GUIDELINES.md` (except: agent_factory, architecture_orchestrator)
 - All spec files at once — load your component's spec only
+
+---
+
+## Step 0.5 — Implementation Readiness Gate (HARD GATE)
+
+**Before ANY implementation starts, verify these prerequisites.** This prevents wasted implementation cycles when specs are incomplete or misaligned.
+
+```bash
+# Check 1: Specs exist for this phase
+SPECS_DIR="docs/design/phases/${PHASE}/specs"
+SPEC_COUNT=$(ls ${SPECS_DIR}/*.md 2>/dev/null | wc -l)
+if [ "$SPEC_COUNT" -eq 0 ]; then
+  echo "⛔ BLOCKED: No specs found at ${SPECS_DIR}/. Run /plan --phase=${PHASE} first."
+  exit 1
+fi
+
+# Check 2: phase_context.md exists and is non-trivial
+CONTEXT_FILE="docs/design/phases/${PHASE}/phase_context.md"
+if [ ! -f "$CONTEXT_FILE" ] || [ $(wc -l < "$CONTEXT_FILE") -lt 20 ]; then
+  echo "⛔ BLOCKED: phase_context.md missing or too short. Run /plan --phase=${PHASE} first."
+  exit 1
+fi
+
+# Check 3: VERIFICATION_REPORT.md exists (specs were verified against BRD)
+VERIFY_FILE="docs/design/phases/${PHASE}/VERIFICATION_REPORT.md"
+if [ ! -f "$VERIFY_FILE" ]; then
+  echo "⛔ BLOCKED: No verification report. Run /plan --phase=${PHASE} to verify specs against BRD."
+  exit 1
+fi
+
+# Check 4: BRD↔Spec reconciliation passed (no unresolved MISSING coverage)
+RECON_FILE="agent_state/reconciliation/phase-${PHASE}/brd_vs_specs.md"
+if [ -f "$RECON_FILE" ] && grep -q "MISSING" "$RECON_FILE"; then
+  echo "⚠ WARNING: BRD↔Spec reconciliation has MISSING coverage. Review before implementing."
+fi
+```
+
+**If any check fails:** STOP. Do not proceed to Step 1. Surface the specific failure and recommend `/plan --phase=${PHASE}`.
+
+**Anti-rationalization:** "The specs are good enough to start" → No. Incomplete specs produce incomplete implementations that fail at acceptance tests. Fix the specs first.
 
 ---
 
@@ -471,28 +594,79 @@ The Phase Gate (Step 6) checks the post-optimization test status:
 
 ---
 
-## Step 4 — Code Review
+## Step 4 — Code Review (Three-Stage Pipeline)
 
-**Agents:** `code_reviewer_I` (style + idioms) then `code_reviewer_II` (architecture)
+Review runs as three sequential stages. Each stage catches a different class of defect. Stages are NOT combined.
 
-Run sequentially — `code_reviewer_II` reads `code_reviewer_I`'s report.
+### Stage 4a — Spec Compliance Review (FIRST — catches "clean code, wrong spec")
 
-On issues found:
+**Purpose:** Independently verify the implementation matches the specs. This is NOT a code quality check — it's a "did you build the right thing" check.
+
+**Approach:** Read each spec in `docs/design/phases/${PHASE}/specs/`, then verify the implementation delivers what the spec defines. Use explicit distrust:
+
+> "The implementer's manifest reports success. Their report may be incomplete, inaccurate, or optimistic. Verify everything independently by reading the actual code — do NOT trust the manifest alone."
+
+**Checks (per spec):**
+- Every interface contract in the spec has a matching implementation (method signatures, route paths, request/response shapes)
+- Every behavior described in the spec's flow section is implemented (not just stubbed)
+- Every edge case in the spec has handling code (or a documented deviation)
+- Every error type in the spec's error matrix has a corresponding error response
+- API contracts match the wireframe API bindings (if UI phase)
+
+**On mismatch:**
+- Route back to implementation agent for fix (max 1 round)
+- Log as `spec_deviation` with details
+
+**Output:** `agent_state/phases/${PHASE}/reports/spec_compliance_review.md`
+
+```markdown
+# Spec Compliance Review — Phase N
+
+## Summary
+COMPLIANT | N deviations | N missing implementations
+
+## Per-Spec Results
+| Spec File | Contracts Verified | Behaviors Verified | Edge Cases | Result |
+|-----------|-------------------|--------------------|------------|--------|
+
+## Deviations
+| Spec | Expected | Actual | Severity | Action |
+|------|----------|--------|----------|--------|
+
+## Missing Implementations
+| Spec | What's Missing | Blocking |
+|------|---------------|----------|
+```
+
+### Stage 4b — All remaining reviews (PARALLEL)
+
+After spec compliance passes, run ALL remaining reviews in parallel to maximize speed:
+
+```
+Stage 4b (ALL PARALLEL):
+  ├─ code_reviewer_I     → style + idioms (reads language skill pack)
+  ├─ code_reviewer_II    → architecture compliance (reads IMPLEMENTATION_GUIDELINES)
+  ├─ security_reviewer   → OWASP + adversarial property checks
+  └─ dependency_scanner  → CVE + outdated packages
+```
+
+On issues found from any reviewer:
 - Implementation agent addresses each comment
 - Reviewer re-checks
 - **Max 2 rounds** → unresolved issues go to `known_issues` in manifest
 
-`code_reviewer_I` reads the active language skill pack for language-specific idiom checks.
-`code_reviewer_II` reads `docs/IMPLEMENTATION_GUIDELINES.md` for architecture compliance.
-
-**Security gate:** `security_reviewer` runs in parallel with code review. Any HIGH severity finding is **blocking** — must be fixed before gate can pass.
-
-**Dependency scan:** `dependency_scanner` runs in parallel with security review. CRITICAL/HIGH vulnerabilities with available fixes are **blocking**. Auto-applies non-breaking fixes (`npm audit fix` etc.). Breaking fixes flagged for user decision.
+**Blocking rules:**
+- `code_reviewer_I`: BLOCKING issues must fix
+- `code_reviewer_II`: VIOLATION findings must fix
+- `security_reviewer`: HIGH severity findings must fix
+- `dependency_scanner`: CRITICAL/HIGH with available fixes must apply. Auto-applies non-breaking fixes (`npm audit fix` etc.). Breaking fixes flagged for user decision.
 
 Reports written to `agent_state/phases/${PHASE}/reports/`:
-- `code_review_I.md`
-- `code_review_II.md`
-- `security_review.md`
+- `spec_compliance_review.md` (Stage 4a)
+- `code_review_I.md` (Stage 4b)
+- `code_review_II.md` (Stage 4b)
+- `security_review.md` (Stage 4c)
+- `dependency_scan.md` (Stage 4c)
 
 ---
 
@@ -530,6 +704,7 @@ Read the output file for each gate item below. Evaluate the specific pass/fail c
 ```
 Gate Item                    Source File                                          Pass Condition
 ─────────────────────────────────────────────────────────────────────────────────────────────────
+Spec compliance              agent_state/phases/${PHASE}/reports/spec_compliance_review.md   COMPLIANT — no missing implementations
 Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests
 Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests
 E2E tests (if unlocked)      agent_state/e2e/results.md                          No FAILED workflows
