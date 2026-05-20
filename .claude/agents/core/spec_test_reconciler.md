@@ -1,7 +1,7 @@
 ---
 name: spec_test_reconciler
 description: Bidirectional reconciliation between phase specs (TRDs) and test coverage
-model: sonnet
+model: opus
 category: quality
 input:
   required:

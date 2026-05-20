@@ -1,7 +1,7 @@
 ---
 name: spec_verifier
 description: Validates all phase specs cover BRD requirements and are internally consistent
-model: sonnet
+model: opus
 category: planning
 input:
   required:

@@ -1,7 +1,7 @@
 ---
 name: requirements_brd_reconciler
 description: Bidirectional reconciliation between ./requirements/ source documents and generated docs/BRD.md
-model: sonnet
+model: opus
 category: quality
 input:
   required:

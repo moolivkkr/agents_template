@@ -1,7 +1,7 @@
 ---
 name: brd_spec_reconciler
 description: Bidirectional reconciliation between docs/BRD.md requirements and phase specs (TRDs)
-model: sonnet
+model: opus
 category: quality
 input:
   required:
