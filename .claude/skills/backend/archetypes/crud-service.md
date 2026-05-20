@@ -46,12 +46,27 @@ type ListFilters struct {
     Fields   map[string]string `json:"fields,omitempty"` // dynamic field filters
 }
 
-// ListResult wraps paginated results.
+// ListResult wraps cursor-paginated results.
 type ListResult[T any] struct {
     Items   []T    `json:"items"`
     Cursor  string `json:"cursor,omitempty"`
     HasMore bool   `json:"has_more"`
     Total   int    `json:"total"`
+}
+
+// OffsetListFilters defines offset-based pagination parameters (for admin/reporting UIs).
+type OffsetListFilters struct {
+    Page    int               `json:"page"`
+    PerPage int               `json:"per_page"`
+    SortBy  string            `json:"sort_by"`
+    SortDir string            `json:"sort_dir"`
+    Fields  map[string]string `json:"fields,omitempty"`
+}
+
+// OffsetListResult wraps offset-paginated results.
+type OffsetListResult[T any] struct {
+    Items []T `json:"items"`
+    Total int `json:"total"`
 }
 
 // AuditEntry records a mutation for compliance.
@@ -168,8 +183,13 @@ func (s *service) Create(ctx context.Context, input CreateInput) (*Widget, error
             metric.WithAttributes(attribute.String("op", "create")))
     }()
 
+    // Extract request_id for structured logging across the service layer
+    reqID := RequestIDFromContext(ctx)
+    logger := s.logger.With("request_id", reqID, "method", "Create")
+
     // 1. Validate input
     if err := input.Validate(); err != nil {
+        logger.WarnContext(ctx, "validation failed", "error", err)
         return nil, NewValidationError("create", err)
     }
 
@@ -207,7 +227,7 @@ func (s *service) Create(ctx context.Context, input CreateInput) (*Widget, error
     s.auditLog(ctx, "widget.created", w.ID, tenantID, userID, w)
 
     s.metrics.OpCount.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "create")))
-    s.logger.InfoContext(ctx, "widget created",
+    logger.InfoContext(ctx, "widget created",
         "widget_id", w.ID,
         "tenant_id", tenantID,
     )
@@ -227,6 +247,9 @@ func (s *service) Get(ctx context.Context, id uuid.UUID) (*Widget, error) {
             metric.WithAttributes(attribute.String("op", "get")))
     }()
 
+    reqID := RequestIDFromContext(ctx)
+    logger := s.logger.With("request_id", reqID, "method", "Get", "widget_id", id)
+
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
         return nil, NewUnauthorizedError("missing tenant context")
@@ -238,10 +261,12 @@ func (s *service) Get(ctx context.Context, id uuid.UUID) (*Widget, error) {
         var w Widget
         if err := json.Unmarshal(data, &w); err == nil {
             s.metrics.CacheHits.Add(ctx, 1)
+            logger.DebugContext(ctx, "cache hit")
             return &w, nil
         }
     }
     s.metrics.CacheMiss.Add(ctx, 1)
+    logger.DebugContext(ctx, "cache miss, querying database")
 
     // 2. Query DB
     w, err := s.repo.GetByID(ctx, tenantID, id)
@@ -270,7 +295,11 @@ func (s *service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (
             metric.WithAttributes(attribute.String("op", "update")))
     }()
 
+    reqID := RequestIDFromContext(ctx)
+    logger := s.logger.With("request_id", reqID, "method", "Update", "widget_id", id)
+
     if err := input.Validate(); err != nil {
+        logger.WarnContext(ctx, "validation failed", "error", err)
         return nil, NewValidationError("update", err)
     }
 
@@ -323,6 +352,9 @@ func (s *service) Delete(ctx context.Context, id uuid.UUID) error {
     ctx, span := s.tracer.Start(ctx, "widget.delete")
     defer span.End()
 
+    reqID := RequestIDFromContext(ctx)
+    logger := s.logger.With("request_id", reqID, "method", "Delete", "widget_id", id)
+
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
         return NewUnauthorizedError("missing tenant context")
@@ -343,7 +375,7 @@ func (s *service) Delete(ctx context.Context, id uuid.UUID) error {
     s.auditLog(ctx, "widget.deleted", id, tenantID, userID, nil)
 
     s.metrics.OpCount.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "delete")))
-    s.logger.InfoContext(ctx, "widget deleted", "widget_id", id, "tenant_id", tenantID)
+    logger.InfoContext(ctx, "widget deleted", "tenant_id", tenantID)
     return nil
 }
 ```
@@ -354,6 +386,9 @@ func (s *service) Delete(ctx context.Context, id uuid.UUID) error {
 func (s *service) List(ctx context.Context, filters domain.ListFilters) (*domain.ListResult[Widget], error) {
     ctx, span := s.tracer.Start(ctx, "widget.list")
     defer span.End()
+
+    reqID := RequestIDFromContext(ctx)
+    logger := s.logger.With("request_id", reqID, "method", "List")
 
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
@@ -376,10 +411,15 @@ func (s *service) List(ctx context.Context, filters domain.ListFilters) (*domain
 
     result, err := s.repo.List(ctx, tenantID, filters)
     if err != nil {
+        logger.ErrorContext(ctx, "list failed", "error", err)
         return nil, fmt.Errorf("widget list: %w", err)
     }
 
     s.metrics.OpCount.Add(ctx, 1, metric.WithAttributes(attribute.String("op", "list")))
+    logger.InfoContext(ctx, "list completed",
+        "result_count", len(result.Items),
+        "has_more", result.HasMore,
+    )
     return result, nil
 }
 ```
@@ -486,3 +526,5 @@ func (i CreateInput) Validate() error {
 - Max 40 lines of logic per function — extract helpers for complex steps
 - Accept interfaces, return structs — constructor takes interfaces, returns concrete type
 - Never return unbounded lists — always enforce PageSize max (100)
+- Every service method MUST extract `request_id` from context via `RequestIDFromContext(ctx)` and include it in all structured log lines
+- The `request_id` is set by auth middleware and MUST propagate through service → repository layers for end-to-end traceability

@@ -184,6 +184,15 @@ Generate a traceability matrix mapping every requirement ID to:
 
 ---
 
+## BRD Lifecycle Ownership
+
+- **Initial creation**: brd_agent (this agent) -- invoked by /init
+- **Post-creation changes**: product_manager -- invoked manually for change requests
+- **Validation**: requirements_brd_reconciler -- invoked by /init to verify BRD matches source requirements
+- **This agent does NOT handle**: mid-project scope changes (use product_manager instead)
+
+---
+
 ## QUALITY GATES
 
 - [ ] All `requirements/` files processed (log any unreadable files)

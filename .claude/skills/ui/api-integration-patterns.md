@@ -28,9 +28,13 @@ async function fetcher<T>(path: string, init?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const error: any = new Error(body.message ?? body.error ?? `Request failed: ${res.status}`);
+    // Backend returns: {"error": {"code": "...", "message": "...", "details": {...}}}
+    // Unwrap the error envelope so consumers can access .code, .message, .details directly.
+    const envelope = body.error ?? body;
+    const error: any = new Error(envelope.message ?? `Request failed: ${res.status}`);
     error.status = res.status;
-    error.details = body.details ?? body.errors; // For 422 field errors
+    error.code = envelope.code;
+    error.details = envelope.details; // For 422 field-level validation errors
     throw error;
   }
 
@@ -231,6 +235,44 @@ export default async function UsersPage() {
   );
 }
 ```
+
+## HTTP Client Error Interceptor
+
+The `fetcher` function above already unwraps the backend error envelope (`{"error": {"code": "...", ...}}`). If you use a different HTTP client (e.g., Axios), add an interceptor to normalize the error shape:
+
+```tsx
+// lib/axios-client.ts — alternative to fetch-based client
+import axios from "axios";
+
+const apiClient = axios.create({
+  baseURL: process.env.NEXT_PUBLIC_API_URL ?? "/api",
+});
+
+// Response interceptor: unwrap error envelope from backend
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response) {
+      // Backend returns: {"error": {"code": "...", "message": "...", "details": {...}}}
+      const envelope = error.response.data?.error ?? error.response.data;
+      const normalized: any = new Error(envelope?.message ?? error.message);
+      normalized.status = error.response.status;
+      normalized.code = envelope?.code;
+      normalized.details = envelope?.details;
+      return Promise.reject(normalized);
+    }
+    return Promise.reject(error);
+  },
+);
+
+export { apiClient };
+```
+
+This ensures that regardless of HTTP client, error consumers always see the same shape:
+- `error.status` — HTTP status code (e.g., 422, 404, 409)
+- `error.code` — machine-readable code (e.g., `"VALIDATION_ERROR"`, `"NOT_FOUND"`)
+- `error.message` — human-readable message
+- `error.details` — structured details (field errors for 422, resource info for 404, etc.)
 
 ## Anti-Patterns
 

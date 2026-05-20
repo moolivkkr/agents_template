@@ -12,6 +12,8 @@ tags:
 
 # Error Handling Archetype
 
+> **CANONICAL REFERENCE**: This file is the single source of truth for backend error handling patterns. All other skill packs that mention error handling should defer to this file for definitive guidance. For the TypeScript equivalent, see `backend/archetypes/error-handling-typescript.md`.
+
 Complete error handling system for Go backend services. Every generated service MUST follow this pattern.
 
 ## Domain Error Type
@@ -78,13 +80,26 @@ func (e *AppError) WithError(err error) *AppError {
 ## Error Taxonomy — Constructor Functions
 
 ```go
-// --- 400 Bad Request: Validation Errors ---
+// --- 400 Bad Request: Malformed Request (JSON parse errors, wrong content type) ---
+
+func NewBadRequestError(reason string, err error) *AppError {
+    return &AppError{
+        Code:       "BAD_REQUEST",
+        Message:    reason,
+        HTTPStatus: http.StatusBadRequest,
+        Err:        err,
+    }
+}
+
+// --- 422 Unprocessable Entity: Business Validation Errors ---
+// Use 422 for well-formed requests that fail domain/business validation rules.
+// Use 400 (above) for malformed JSON, wrong content type, or request parsing errors.
 
 func NewValidationError(field string, err error) *AppError {
     return &AppError{
         Code:       "VALIDATION_ERROR",
         Message:    fmt.Sprintf("invalid value for field '%s'", field),
-        HTTPStatus: http.StatusBadRequest,
+        HTTPStatus: http.StatusUnprocessableEntity,
         Details:    map[string]any{"field": field, "reason": err.Error()},
         Err:        err,
     }
@@ -94,7 +109,7 @@ func NewMultiValidationError(fieldErrors map[string]string) *AppError {
     return &AppError{
         Code:       "VALIDATION_ERROR",
         Message:    "one or more fields failed validation",
-        HTTPStatus: http.StatusBadRequest,
+        HTTPStatus: http.StatusUnprocessableEntity,
         Details:    map[string]any{"fields": fieldErrors},
     }
 }
@@ -220,7 +235,15 @@ type ErrorDetail struct {
 
 // Example error responses:
 //
-// 400 Validation Error:
+// 400 Bad Request (malformed input):
+// {
+//   "error": {
+//     "code": "BAD_REQUEST",
+//     "message": "invalid JSON in request body"
+//   }
+// }
+//
+// 422 Validation Error (business rule violation):
 // {
 //   "error": {
 //     "code": "VALIDATION_ERROR",
@@ -417,7 +440,8 @@ func TestServiceReturnsConflict(t *testing.T) {
 
 | Error Type | HTTP Status | Code | When to Use |
 |---|---|---|---|
-| `ValidationError` | 400 | `VALIDATION_ERROR` | Invalid input, bad format, missing required field |
+| `BadRequestError` | 400 | `BAD_REQUEST` | Malformed JSON, wrong content type, request parsing failure |
+| `ValidationError` | 422 | `VALIDATION_ERROR` | Well-formed request that fails business/domain validation rules |
 | `UnauthorizedError` | 401 | `UNAUTHORIZED` | Missing or invalid credentials (JWT, API key) |
 | `ForbiddenError` | 403 | `FORBIDDEN` | Valid credentials but insufficient permissions |
 | `NotFoundError` | 404 | `NOT_FOUND` | Resource does not exist or was soft-deleted |
@@ -430,7 +454,8 @@ func TestServiceReturnsConflict(t *testing.T) {
 
 - Every error returned from service/repo layers MUST be an `*AppError` or wrapped with `fmt.Errorf("context: %w", err)`
 - Internal error messages (500, 502) MUST NOT leak to clients — always return generic message
-- Validation errors (400) SHOULD include the field name and reason in `details`
+- Validation errors (422) SHOULD include the field name and reason in `details`
+- Bad request errors (400) are for malformed JSON/request parsing — NOT business validation
 - `errors.Is` and `errors.As` MUST work — implement `Unwrap()` on all custom error types
 - Log errors ONCE at the top of the call stack — never log at every layer
 - Create domain errors at the BOUNDARY where you know the error type (repo maps pgx errors, service maps business rule violations)

@@ -89,6 +89,63 @@ Before skipping ANY step, shortcutting ANY gate, or accepting partial results, r
 
 ---
 
+## Phase Re-Development Protocol
+
+When re-developing a phase (e.g., `gate.passed` was removed, or `/reset-phase` was run):
+
+### 1. Before re-running
+
+- Git tag current state: `git tag "phase-${PHASE}-attempt-${ATTEMPT}" -m "Phase ${PHASE} attempt ${ATTEMPT}: $(date)"`
+  - `ATTEMPT` is determined by counting existing `phase-${PHASE}-attempt-*` tags + 1
+- Archive previous reports: `mv agent_state/phases/${PHASE}/reports agent_state/phases/${PHASE}/reports.attempt-${ATTEMPT}`
+- Clear ready signals: `rm -f agent_state/phases/${PHASE}/.*_ready`
+
+```bash
+# Detect attempt number
+ATTEMPT=$(git tag -l "phase-${PHASE}-attempt-*" | wc -l | tr -d ' ')
+ATTEMPT=$((ATTEMPT + 1))
+
+# Tag current state
+git tag "phase-${PHASE}-attempt-${ATTEMPT}" -m "Phase ${PHASE} attempt ${ATTEMPT}: $(date)"
+
+# Archive previous reports (if they exist)
+if [ -d "agent_state/phases/${PHASE}/reports" ]; then
+  mv "agent_state/phases/${PHASE}/reports" "agent_state/phases/${PHASE}/reports.attempt-${ATTEMPT}"
+fi
+
+# Clear ready signals
+rm -f agent_state/phases/${PHASE}/.*_ready
+```
+
+### 2. During re-run
+
+- All agents run fresh (no caching from previous attempt)
+- Previous attempt's code is NOT automatically reverted (agents build on existing code)
+- If clean slate needed: user should `git reset` to the phase tag first (use `/reset-phase --hard`)
+
+### 3. After completion
+
+- Manifest includes: `"attempt": N, "previous_attempts": ["phase-N-attempt-1", "phase-N-attempt-2"]`
+- Gate report includes diff from previous attempt:
+  ```
+  ## Changes from Previous Attempt
+  - Attempt 1: 3 blockers (auth flow, CORS, migration order)
+  - Attempt 2: 1 blocker (migration order — fixed by reordering)
+  - Attempt 3: PASSED ✅
+  ```
+
+### Detection
+
+At the start of Step 0, detect if this is a re-run:
+```bash
+if [ -d "agent_state/phases/${PHASE}/reports" ] || [ -d "agent_state/phases/${PHASE}/reports.attempt-1" ]; then
+  echo "⚠ Phase ${PHASE} re-development detected — archiving previous attempt"
+  # Execute pre-run archival steps above
+fi
+```
+
+---
+
 ## Step 0 — Orient
 
 ### Detect current phase
@@ -109,6 +166,42 @@ If `docs/design/phases/${PHASE}/INDEX.md` is missing:
 Read `agent_state/phases/$((PHASE-1))/manifest.json` (if PHASE > 1):
 - Surface `carried_forward[]` issues at the top of the Step 1 audit report
 - Note existing code paths, API routes, DB schema from previous phases
+
+### Cross-Phase Contract Validation (Phase > 1)
+
+Before starting Phase N implementation, validate that data contracts are consistent with the previous phase's actual outputs:
+
+1. Read `docs/design/phases/${PHASE}/specs/data-contracts.md`
+2. Compare against Phase N-1 manifest's `api_routes` and `artifacts.code` to identify endpoints/fields that changed
+3. If `data-contracts.md` references endpoints or fields that were modified, renamed, or removed in Phase N-1:
+   - **BLOCKING** — data contracts may be stale. Re-run `/plan --phase=${PHASE}` or manually update `data-contracts.md`.
+4. If Phase N specs extend an endpoint from Phase N-1 (e.g., adding fields to an existing response):
+   - Verify the existing fields in `data-contracts.md` match what Phase N-1 actually implemented (check the code, not just the spec)
+   - If mismatch: surface as `⚠ STALE CONTRACT: data-contracts.md says X, but Phase N-1 code returns Y`
+
+```bash
+# Quick staleness check
+if [ $PHASE -gt 1 ]; then
+  PREV_MANIFEST="agent_state/phases/$((PHASE-1))/manifest.json"
+  CONTRACTS="docs/design/phases/${PHASE}/specs/data-contracts.md"
+  if [ -f "$PREV_MANIFEST" ] && [ -f "$CONTRACTS" ]; then
+    echo "Validating data contracts against Phase $((PHASE-1)) manifest..."
+    # Extract api_routes from previous manifest and verify they still exist in contracts
+    python3 -c "
+import json, sys
+manifest = json.load(open('$PREV_MANIFEST'))
+routes = manifest.get('artifacts', {}).get('api_routes', [])
+contracts = open('$CONTRACTS').read()
+stale = [r for r in routes if r.split()[-1] not in contracts]
+if stale:
+    print('⚠ STALE CONTRACTS — routes in previous manifest not found in data-contracts.md:')
+    for r in stale: print(f'  - {r}')
+    sys.exit(1)
+print('✅ Data contracts consistent with Phase $((PHASE-1)) manifest')
+" || echo "⚠ Contract validation failed — review data-contracts.md before proceeding"
+  fi
+fi
+```
 
 ### Start infrastructure
 ```bash
@@ -178,6 +271,33 @@ The `debate_moderator` picks it up and runs:
 Verdict written to `agent_state/debates/<topic>-verdict.json`. The requesting agent reads it and continues.
 
 **This replaces guessing with researched, debated, scored decisions.**
+
+### Escalation Circuit Breaker
+
+Prevent runaway escalation loops that consume context and time:
+
+- **Max escalations per step:** 3 — if a single step (e.g., Step 2 Implementation) triggers more than 3 debate requests, STOP escalating. Write remaining decisions to `agent_state/debates/unresolved.json` with recommended defaults.
+- **In `--auto` mode:** continue with defaults for all unresolved decisions, but flag ALL as `"⚠ AUTO-RESOLVED — may need review"` in the decision log and manifest `known_issues[]`.
+- **Max total escalations per phase:** 10 — if exceeded, EXIT auto mode entirely. Surface all unresolved decisions to the user with: `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
+- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator can't decide and re-escalates), the second-level debate auto-resolves with the recommended default. A third-level escalation is NEVER allowed.
+
+```json
+// agent_state/debates/unresolved.json
+{
+  "phase": N,
+  "unresolved_count": 4,
+  "decisions": [
+    {
+      "topic": "cache_strategy",
+      "from_agent": "backend_developer",
+      "auto_resolved_with": "A",
+      "confidence": "LOW",
+      "reason": "escalation_limit_exceeded",
+      "needs_review": true
+    }
+  ]
+}
+```
 
 ### Universal Agent Return Protocol
 
@@ -359,7 +479,21 @@ Wave 2a.5 (BUILD CHECK — catches type errors before api_developer starts):
        go build ./... | tsc --noEmit | python -m py_compile (per tech stack)
        If FAILS → route back to backend_developer for fix (max 1 retry)
 
-Wave 2b (depends on 2a passing build):
+### Agent Handoff Protocol (Wave 2a → Wave 2b)
+
+After backend_developer completes:
+1. Verify report exists: `test -f agent_state/phases/${PHASE}/reports/backend_developer.md`
+2. Verify agent manifest is valid JSON (if JSON): `python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/backend_developer/manifest.json`
+3. Touch ready signal: `touch agent_state/phases/${PHASE}/.backend_developer_ready`
+
+Before api_developer starts:
+1. Check: `test -f agent_state/phases/${PHASE}/.backend_developer_ready`
+2. If missing: WAIT or FAIL — do not proceed with stale/missing data
+3. Read `backend_developer/manifest.json` for service method return types
+
+This pattern applies to ALL wave transitions where one agent depends on another's output. The ready signal prevents race conditions where a downstream agent starts before the upstream agent's files are fully written.
+
+Wave 2b (depends on 2a passing build + backend_developer ready signal):
   └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
        ↓ reads data-contracts.md from /plan as MANDATORY source of truth for response shapes
        ↓ api-contracts.md is DERIVED from data-contracts.md (validates, doesn't reinvent)
@@ -447,6 +581,34 @@ Runs unit tests. On failure:
 - Fixes implementation (not the tests)
 - Reruns
 - **Max 3 attempts** → then surfaces unresolved failures with reproduction steps
+
+### Test Attempt Tracking
+
+When a test agent retries (attempt > 1), track ALL retry information for visibility:
+
+1. Log: `"⚠ Test [test_name] required [N] attempts to pass"`
+2. Add to manifest under test_results: `"flaky_tests": ["test_name (passed on attempt N)"]`
+3. Add to gate report: `"⚠ FLAKY: [count] tests required multiple attempts"`
+4. Carry forward: flaky tests appear in next phase's audit as known instability
+
+```json
+// In manifest.json test_results section:
+"test_results": {
+  "unit": {
+    "status": "passed",
+    "total": 24,
+    "passed": 24,
+    "failed": 0,
+    "flaky_tests": [
+      "TestCreateUser (passed on attempt 2)",
+      "TestListResources (passed on attempt 3)"
+    ],
+    "report": "agent_state/phases/N/reports/unit_tests.md"
+  }
+}
+```
+
+**Why track flaky tests?** A test that needs 3 attempts to pass is a signal of non-deterministic behavior (race condition, timing dependency, test isolation failure). If the same test is flaky across 2+ phases, it becomes a reliability risk that compounds.
 
 ### Step 3a.5 — Cross-Phase Regression (PHASE > 1 only)
 
@@ -815,6 +977,34 @@ If `--force_gate` flag is set AND the gate has failures:
 2. Add overridden failures to manifest `known_issues[]` with `"severity": "gate_override"`
 3. Print warning: `⚠ Gate forced with N unresolved blockers — review before release`
 4. Next phase will show these in its audit report as critical carried-forward items
+
+### Manifest Write Protocol (Atomic)
+
+All manifest writes MUST use atomic write protocol to prevent corrupt JSON from crashing downstream phases:
+
+1. Write to `agent_state/phases/${PHASE}/manifest.json.tmp`
+2. Validate: `cat manifest.json.tmp | python3 -c "import json,sys; json.load(sys.stdin)" && echo "valid" || echo "CORRUPT"`
+3. If valid: `mv manifest.json.tmp manifest.json`
+4. If invalid: STOP — do not proceed. Log error and retry write.
+
+```bash
+# Atomic manifest write
+python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/manifest.json.tmp && \
+  mv agent_state/phases/${PHASE}/manifest.json.tmp agent_state/phases/${PHASE}/manifest.json || \
+  { echo "⛔ CORRUPT manifest — aborting"; exit 1; }
+```
+
+This protocol also applies to any agent-level manifest writes in `agent_state/phases/${PHASE}/<agent>/manifest.json` — always write to `.tmp`, validate, then `mv`.
+
+### Phase Completion Tagging
+
+After gate passes and manifest is written:
+1. `git tag "phase-${PHASE}-complete" -m "Phase ${PHASE} gate passed: $(date)"`
+2. This tag serves as the rollback point for future phase resets
+
+```bash
+git tag "phase-${PHASE}-complete" -m "Phase ${PHASE} gate passed: $(date)"
+```
 
 ### Write gate files
 

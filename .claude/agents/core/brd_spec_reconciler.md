@@ -65,6 +65,16 @@ PASS | N gaps | N misalignments
 [APPROVE — proceed to /develop] or [FIX — update specs/BRD before proceeding]
 ```
 
+## Reconciliation Sequence
+
+This agent is step 2 of 4 in the reconciliation pipeline:
+1. **spec_verifier** -- validates specs are complete and internally consistent (runs after /plan)
+2. **brd_spec_reconciler** (this) -- validates BRD<->specs alignment (runs after spec_verifier)
+3. **spec_impl_reconciler** -- validates specs<->code alignment (runs during /develop Step 5)
+4. **spec_test_reconciler** -- validates specs<->tests coverage (runs during /develop Step 5)
+
+---
+
 ## When to Run
 - Automatically after `spec_verifier` completes during `/plan`
 - Blocks `/develop` if MISSING coverage found

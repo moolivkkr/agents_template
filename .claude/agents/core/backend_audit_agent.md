@@ -96,6 +96,47 @@ Flag: "Handler extracts auth context but does not forward tenantID to service ca
 
 ---
 
+## Carried-Forward Enforcement Protocol
+
+When reading `carried_forward[]` from previous manifests, apply escalating severity based on how many consecutive phases an issue has persisted:
+
+1. **Track:** For each issue in `carried_forward[]`, count how many consecutive phases it appears in by reading manifests backwards from Phase N-1
+2. **If issue appears in 3+ consecutive phases:** ELEVATE to **BLOCKING**
+   - Format: `"BLOCKING: [issue description] — carried forward from Phase N-2, unresolved for 3 phases"`
+   - This issue MUST be resolved before the phase gate passes — it cannot be carried forward again
+   - Add to audit report under a dedicated `## BLOCKING Carried-Forward Issues` section
+3. **If issue appears in 2 consecutive phases:** FLAG as **WARNING**
+   - Format: `"WARNING: [issue description] — carried forward from Phase N-1, must resolve this phase or becomes BLOCKING"`
+   - Implementation agents receive this as a priority item
+4. **If issue appears in 1 phase:** SURFACE as **INFO**
+   - Format: `"INFO: [issue description] — carried forward from Phase N-1, first occurrence"`
+   - Normal priority — address if in scope, carry forward if not
+
+### Detection Logic
+
+```bash
+# For each issue in carried_forward[]:
+# 1. Read Phase N-1 manifest → check carried_forward[]
+# 2. Read Phase N-2 manifest → check carried_forward[]
+# 3. Count consecutive appearances
+# Issues with matching description across 3+ manifests = BLOCKING
+```
+
+### Audit Report Format
+
+```markdown
+## BLOCKING Carried-Forward Issues (3+ phases — MUST fix)
+- BLOCKING: <issue> — carried from Phase N-3, unresolved for 3 phases
+
+## WARNING Carried-Forward Issues (2 phases — fix or becomes BLOCKING)
+- WARNING: <issue> — carried from Phase N-1, must resolve this phase
+
+## INFO Carried-Forward Issues (1 phase — first occurrence)
+- INFO: <issue> — carried from Phase N-1
+```
+
+---
+
 ## Standard Gap Analysis
 
 - **Missing implementations** — spec defines interface X, no implementation found

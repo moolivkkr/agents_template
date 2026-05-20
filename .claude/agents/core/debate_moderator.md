@@ -114,9 +114,34 @@ Write full transcript to `agent_state/debates/{topic}-transcript.md` (all resear
 
 The requesting agent reads the verdict JSON and continues pipeline execution.
 
+## Operational Limits
+
+Hard limits to prevent resource exhaustion and infinite escalation loops:
+
+- **Max concurrent debates:** 3 — queue additional debates with a 5-minute timeout per queued item. If a queued debate times out waiting, it auto-resolves with the first option's recommended default.
+- **Max debate duration:** 10 minutes total
+  - Research phase: 5 minutes max
+  - Advocacy phase: 3 minutes max (HIGH impact only)
+  - Arbitration phase: 2 minutes max
+- **Max web searches per researcher:** 10 — prevents unbounded research loops
+- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator needs more info and re-escalates), the second-level debate auto-resolves with the recommended default. A third-level escalation is NEVER allowed.
+- **If timeout hit:** Arbitrator decides on incomplete research. Verdict is flagged as `"INCOMPLETE — timed out"` with `"confidence": "LOW"`.
+
+```json
+// Timeout verdict format
+{
+  "topic": "...",
+  "verdict": "A",
+  "confidence": "LOW",
+  "status": "INCOMPLETE",
+  "reason": "debate_timeout_10m",
+  "note": "Arbitrator decided on incomplete research — review recommended"
+}
+```
+
 ## Concurrent Debates
 
-Multiple escalations can be debated simultaneously — each gets its own researcher/debater/arbitrator set. The moderator manages the queue.
+Multiple escalations can be debated simultaneously (up to the max concurrent limit of 3) — each gets its own researcher/debater/arbitrator set. The moderator manages the queue. Debates beyond the concurrent limit are queued FIFO with a 5-minute timeout.
 
 ## Human Checkpoint Integration
 

@@ -1,3 +1,5 @@
+> **Foundation:** This file extends [shared-backend-patterns.md](../core/shared-backend-patterns.md) with language-specific implementations. Read the shared patterns first for language-agnostic contracts.
+
 # TypeScript patterns and conventions for type-safe, maintainable applications.
 
 ## Compiler Config

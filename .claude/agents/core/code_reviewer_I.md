@@ -114,7 +114,31 @@ Before skipping ANY check, review this table. If your internal reasoning matches
 
 ---
 
-## Severity Levels
+## Scope Boundary
+
+This agent reviews CODE-LEVEL quality:
+- Language idioms, naming, formatting
+- Function size, parameter count, nesting depth
+- Error handling patterns (are errors wrapped? are they checked?)
+- Type safety (unsafe casts, any types)
+- Import hygiene, dead code
+
+This agent does NOT review (deferred to code_reviewer_II):
+- Architecture compliance (layer violations, dependency direction)
+- Auth chain integrity (IDOR, tenant isolation)
+- Interface usage patterns
+- SOLID principle violations
+
+---
+
+## Severity Levels (Standardized)
+
+| Level | Meaning | Maps to Gate |
+|---|---|---|
+| BLOCKING | Must fix before gate | Phase gate blocker |
+| WARNING | Should fix, not blocking | Carried forward if unfixed |
+| INFO | Optional improvement | No gate impact |
+
 - `BLOCKING` — must fix before phase gate passes
 - `WARNING` — should fix; logged as known issue if deferred
 - `INFO` — suggestion; no action required

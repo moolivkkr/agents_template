@@ -137,3 +137,89 @@ def test_admin_can_delete_user():
 - Write the test before the fix when resolving bugs (regression test)
 - Flaky tests must be fixed immediately — a flaky test is worse than no test
 - Do not mock what you own; mock what you do not own (third-party APIs, external services)
+
+## Go Test Factory Pattern
+
+Use functional options to build test entities with sensible defaults. Override only what matters for each test.
+
+```go
+func makeUser(t *testing.T, opts ...func(*User)) *User {
+    t.Helper()
+    u := &User{
+        ID:       uuid.New(),
+        TenantID: uuid.New(),
+        Email:    fmt.Sprintf("user-%s@test.com", uuid.New().String()[:8]),
+        Name:     "Test User",
+        Role:     "member",
+        Version:  1,
+    }
+    for _, opt := range opts {
+        opt(u)
+    }
+    return u
+}
+
+func withTenant(tenantID uuid.UUID) func(*User) {
+    return func(u *User) { u.TenantID = tenantID }
+}
+
+func withRole(role string) func(*User) {
+    return func(u *User) { u.Role = role }
+}
+
+func withEmail(email string) func(*User) {
+    return func(u *User) { u.Email = email }
+}
+```
+
+**Why this pattern:**
+- Each test only specifies what it cares about — the rest gets safe defaults
+- `t.Helper()` ensures test failures point to the calling test, not the factory
+- Functional options compose cleanly: `makeUser(t, withTenant(id), withRole("admin"))`
+- Unique IDs prevent cross-test data collisions in integration tests
+
+## TypeScript Test Factory Pattern
+
+```typescript
+function makeUser(overrides: Partial<User> = {}): User {
+    return {
+        id: crypto.randomUUID(),
+        tenantId: crypto.randomUUID(),
+        email: `user-${Math.random().toString(36).slice(2)}@test.com`,
+        name: 'Test User',
+        role: 'member',
+        ...overrides,
+    };
+}
+
+function makeUsers(count: number, overrides: Partial<User> = {}): User[] {
+    return Array.from({ length: count }, () => makeUser(overrides));
+}
+```
+
+**Why this pattern:**
+- Spread operator `...overrides` lets callers override any field inline
+- `makeUsers(count)` variant for list/pagination tests
+- `crypto.randomUUID()` generates unique IDs to prevent test collisions
+- Factory returns a plain object — no class instantiation needed
+
+## When to Test Private Functions
+
+Test private functions **only** when ALL of these conditions are met:
+1. The function is complex (>20 lines of logic, not boilerplate)
+2. The function is used by multiple public callers (shared internal logic)
+3. Testing through the public API would require contrived or fragile setups
+
+**Otherwise, test through the public API.** Private functions are implementation details — testing them directly couples tests to internal structure and makes refactoring harder.
+
+```go
+// DO: Test through the public API
+func TestCalculateDiscount_AppliesVolumeDiscount(t *testing.T) {
+    // applyVolumeRate is private, but we test it through CalculateDiscount
+    result := svc.CalculateDiscount(Order{Quantity: 100, UnitPrice: 50})
+    assert.Equal(t, 4500.0, result.Total) // 10% volume discount applied
+}
+
+// DON'T: Test the private function directly (unless it meets all 3 criteria above)
+// func TestApplyVolumeRate(t *testing.T) { ... }  // couples to implementation
+```

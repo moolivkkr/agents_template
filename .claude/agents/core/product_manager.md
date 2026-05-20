@@ -142,6 +142,15 @@ Scenario 2: Error case
 
 ---
 
+## BRD Lifecycle Ownership
+
+- **Initial creation**: brd_agent -- invoked by /init (this agent does NOT create the initial BRD)
+- **Post-creation changes**: product_manager (this agent) -- invoked manually for change requests, scope additions, and BRD amendments
+- **Validation**: requirements_brd_reconciler -- invoked by /plan to verify BRD matches source requirements
+- **This agent does NOT handle**: initial BRD creation from raw requirements (use brd_agent via /init instead)
+
+---
+
 ## QUALITY GATES
 
 - [ ] Every `FR-*` in BRD has at least one linked user story

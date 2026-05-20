@@ -81,6 +81,16 @@ PASS | N untested spec behaviors | N specless tests
 [APPROVE — test coverage sufficient] or [ADD TESTS — list of missing coverage]
 ```
 
+## Reconciliation Sequence
+
+This agent is step 4 of 4 in the reconciliation pipeline:
+1. **spec_verifier** -- validates specs are complete and internally consistent (runs after /plan)
+2. **brd_spec_reconciler** -- validates BRD<->specs alignment (runs after spec_verifier)
+3. **spec_impl_reconciler** -- validates specs<->code alignment (runs during /develop Step 5)
+4. **spec_test_reconciler** (this) -- validates specs<->tests coverage (runs during /develop Step 5)
+
+---
+
 ## When to Run
 - Automatically during `/develop` after tests pass, before acceptance tests
 - Untested HIGH-priority edge cases = blocker

@@ -61,6 +61,8 @@ cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
 
 ## Input Validation
 
+> **Canonical reference**: For the definitive error type taxonomy and HTTP status mapping for validation errors (422) vs. bad requests (400), see `backend/archetypes/error-handling.md`.
+
 - Validate all inputs: type, format, length, range, allowed values
 - Reject at the boundary — do not sanitize and continue on clearly invalid input
 - Use allowlists, not denylists, for format validation (e.g., email regex)

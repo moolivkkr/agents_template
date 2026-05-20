@@ -212,7 +212,20 @@ HIGH: data exfiltration keywords (`UNION`, `INTO`) absent from blocklist.
 
 ---
 
-## Severity
+## Severity Levels (Standardized)
+
+| Level | Meaning | Maps to Gate |
+|---|---|---|
+| BLOCKING | Must fix before gate | Phase gate blocker |
+| WARNING | Should fix, not blocking | Carried forward if unfixed |
+| INFO | Optional improvement | No gate impact |
+
+Mapping from this agent's native severity:
+- `HIGH` -> BLOCKING (exploitable vulnerability or verifiable security property failure)
+- `MEDIUM` -> WARNING (security weakness that reduces defense in depth)
+- `LOW` -> INFO (hardening opportunity)
+
+## Severity (Native)
 
 - `HIGH` — exploitable vulnerability or verifiable security property failure (phase gate BLOCKER — must fix)
 - `MEDIUM` — security weakness that reduces defense in depth (should fix before release)

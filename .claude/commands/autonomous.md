@@ -161,6 +161,17 @@ Fully autonomous — no more human prompts.
   - After 3 cycles: Force-gate with full logging → continue to next phase
 - **Test failures:** Fix implementation, not tests (max 3 retries per test agent)
 
+### Escalation Circuit Breaker
+
+Prevent runaway escalation loops in autonomous mode:
+
+- **Max escalations per step:** 3 — additional escalations auto-resolve with recommended defaults
+- **In --auto mode:** continue with defaults but flag all as `"⚠ AUTO-RESOLVED — may need review"` in decision log and manifest `known_issues[]`
+- **Max total escalations per phase:** 10 — if exceeded, EXIT auto mode entirely and surface to user:
+  `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
+- Unresolved decisions written to `agent_state/debates/unresolved.json`
+- All auto-resolved decisions appear in the final report (Step 7) under "Decisions Made → Escalations resolved with default"
+
 ### Git branching:
 ```bash
 # Before each phase

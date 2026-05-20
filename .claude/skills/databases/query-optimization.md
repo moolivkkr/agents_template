@@ -443,6 +443,7 @@ func (r *UserRepo) FindByID(ctx context.Context, id string) (*User, error) {
     if errors.Is(err, sql.ErrNoRows) {
         return nil, ErrNotFound
     }
+    // For the canonical error wrapping and mapping patterns, see backend/archetypes/error-handling.md
     return &u, err
 }
 ```

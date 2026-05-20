@@ -62,6 +62,16 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 - Specs with DB changes declare migrations needed
 - Every spec with API endpoints has a "Data Contracts" section with TypeScript interfaces
 
+## Reconciliation Sequence
+
+This agent is step 1 of 4 in the reconciliation pipeline:
+1. **spec_verifier** (this) -- validates specs are complete and internally consistent (runs after /plan)
+2. **brd_spec_reconciler** -- validates BRD<->specs alignment (runs after spec_verifier)
+3. **spec_impl_reconciler** -- validates specs<->code alignment (runs during /develop Step 5)
+4. **spec_test_reconciler** -- validates specs<->tests coverage (runs during /develop Step 5)
+
+---
+
 ## Auto-Retry
 For each verification failure: flag the specific spec, describe the gap, allow the originating agent to fix it. Max 2 retries per spec before escalating to user.
 

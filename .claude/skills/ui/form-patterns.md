@@ -43,10 +43,20 @@ export function CreateUserForm({ onSuccess }: { onSuccess?: () => void }) {
       form.reset();
       onSuccess?.();
     } catch (error: any) {
-      if (error.status === 422 && error.details) {
-        mapServerErrors(form, error.details);
+      // error.details is already unwrapped from the backend envelope
+      // by the HTTP client (see api-integration-patterns.md).
+      // Backend sends: {"error": {"code": "VALIDATION_ERROR", "details": {"fields": {...}}}}
+      // HTTP client normalizes to: error.status, error.code, error.details
+      if (error.status === 422 && error.details?.fields) {
+        mapServerErrors(form, error.details.fields);
+      } else if (error.status === 422 && error.details?.field) {
+        // Single field validation error
+        form.setError(error.details.field as any, {
+          type: "server",
+          message: error.details.reason ?? error.message,
+        });
       } else {
-        toast.error("Failed to create user");
+        toast.error(error.message ?? "Failed to create user");
       }
     }
   }
@@ -99,11 +109,17 @@ export function CreateUserForm({ onSuccess }: { onSuccess?: () => void }) {
 
 ## Server Error Mapping (422 → Field Errors)
 
+The backend error envelope is `{"error": {"code": "VALIDATION_ERROR", "details": {"fields": {...}}}}`.
+The HTTP client in `api-integration-patterns.md` unwraps the outer `.error` layer, so by the time
+errors reach these functions, `error.details` already contains the inner details object.
+
 ```tsx
 import { UseFormReturn } from "react-hook-form";
 
-function mapServerErrors(form: UseFormReturn<any>, errors: Record<string, string>) {
-  Object.entries(errors).forEach(([field, message]) => {
+// Maps multi-field validation errors from backend to react-hook-form field errors.
+// Backend sends: details.fields = { "email": "invalid format", "name": "required" }
+function mapServerErrors(form: UseFormReturn<any>, fieldErrors: Record<string, string>) {
+  Object.entries(fieldErrors).forEach(([field, message]) => {
     form.setError(field as any, { type: "server", message });
   });
 }

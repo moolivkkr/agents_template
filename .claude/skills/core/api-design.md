@@ -69,6 +69,8 @@ POST   /api/v1/users/search       # complex search (body payload)
 ```
 
 ### Error (RFC 7807 Problem Details)
+
+> **Canonical reference**: For the definitive backend error type taxonomy, HTTP status mapping, and implementation patterns, see `backend/archetypes/error-handling.md` (Go) and `backend/archetypes/error-handling-typescript.md` (TypeScript).
 ```json
 {
   "type": "https://api.example.com/errors/validation-failed",

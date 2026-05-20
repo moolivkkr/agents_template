@@ -128,7 +128,36 @@ Before skipping ANY check, review this table. If your internal reasoning matches
 
 ---
 
-## Severity
+## Scope Boundary
+
+This agent reviews ARCHITECTURE-LEVEL compliance:
+- Layer boundaries (handler -> service -> repository, no skipping)
+- Dependency direction (inner layers don't import outer)
+- Auth chain integrity (IDOR, tenant context propagation)
+- Interface segregation, dependency inversion
+- Multi-tenant isolation in queries and caches
+
+This agent does NOT review (handled by code_reviewer_I):
+- Language idioms, naming conventions
+- Function size limits, formatting
+- Import hygiene
+
+---
+
+## Severity Levels (Standardized)
+
+| Level | Meaning | Maps to Gate |
+|---|---|---|
+| BLOCKING | Must fix before gate | Phase gate blocker |
+| WARNING | Should fix, not blocking | Carried forward if unfixed |
+| INFO | Optional improvement | No gate impact |
+
+Mapping from this agent's native severity:
+- `VIOLATION` -> BLOCKING (architecture boundary crossed or authorization chain broken)
+- `DRIFT` -> WARNING (diverging from intended pattern)
+- `SUGGESTION` -> INFO (improvement opportunity)
+
+## Severity (Native)
 - `VIOLATION` — architecture boundary crossed or authorization chain broken (blocking)
 - `DRIFT` — diverging from intended pattern (warning)
 - `SUGGESTION` — improvement opportunity (info)

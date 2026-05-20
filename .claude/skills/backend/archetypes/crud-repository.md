@@ -113,6 +113,9 @@ func (r *widgetRepo) Create(ctx context.Context, w *widget.Widget) error {
     ctx, span := r.tracer.Start(ctx, "repo.widget.create")
     defer span.End()
 
+    reqID := RequestIDFromContext(ctx)
+    logger := r.logger.With("request_id", reqID, "method", "Create")
+
     ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
     defer cancel()
 
@@ -125,8 +128,11 @@ func (r *widgetRepo) Create(ctx context.Context, w *widget.Widget) error {
         w.CreatedAt, w.UpdatedAt, w.CreatedBy, w.UpdatedBy, w.Version,
     )
     if err != nil {
+        logger.ErrorContext(ctx, "create failed", "widget_id", w.ID, "error", err)
         return r.mapError(err, "create")
     }
+
+    logger.InfoContext(ctx, "widget created", "widget_id", w.ID, "tenant_id", w.TenantID)
     return nil
 }
 ```
@@ -137,6 +143,9 @@ func (r *widgetRepo) Create(ctx context.Context, w *widget.Widget) error {
 func (r *widgetRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (*widget.Widget, error) {
     ctx, span := r.tracer.Start(ctx, "repo.widget.get_by_id")
     defer span.End()
+
+    reqID := RequestIDFromContext(ctx)
+    logger := r.logger.With("request_id", reqID, "method", "GetByID", "widget_id", id)
 
     cacheKey := fmt.Sprintf("widget:%s:%s", tenantID, id)
 
@@ -174,8 +183,11 @@ func (r *widgetRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (*widg
         &w.CreatedAt, &w.UpdatedAt, &w.DeletedAt, &w.CreatedBy, &w.UpdatedBy, &w.Version,
     )
     if err != nil {
+        logger.ErrorContext(ctx, "get_by_id failed", "error", err)
         return nil, r.mapError(err, "get_by_id")
     }
+
+    logger.DebugContext(ctx, "widget retrieved from database")
 
     // Populate both cache levels
     r.l1Store(cacheKey, &w)
@@ -288,6 +300,9 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
     ctx, span := r.tracer.Start(ctx, "repo.widget.list")
     defer span.End()
 
+    reqID := RequestIDFromContext(ctx)
+    logger := r.logger.With("request_id", reqID, "method", "List")
+
     ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
     defer cancel()
 
@@ -366,6 +381,12 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
 
     // Count total (optional — use for UI, skip for performance on huge tables)
     total := r.countTotal(ctx, tenantID, filters)
+
+    logger.InfoContext(ctx, "list completed",
+        "result_count", len(items),
+        "has_more", hasMore,
+        "total", total,
+    )
 
     return &domain.ListResult[widget.Widget]{
         Items:   items,
@@ -540,6 +561,103 @@ func sanitizeColumn(col string) string {
 }
 ```
 
+## List with Offset-Based Pagination (Admin/Reporting)
+
+Use offset pagination for admin dashboards, reporting UIs, and data export previews where users need "jump to page N" functionality. See the handler archetype's "Pagination Strategy" section for when to use cursor vs. offset.
+
+```go
+// OffsetListFilters defines offset-based pagination parameters.
+// Add this to the domain package alongside ListFilters.
+type OffsetListFilters struct {
+    Page    int               `json:"page"`
+    PerPage int               `json:"per_page"`
+    SortBy  string            `json:"sort_by"`
+    SortDir string            `json:"sort_dir"`
+    Fields  map[string]string `json:"fields,omitempty"`
+}
+
+// OffsetListResult wraps offset-paginated results.
+type OffsetListResult[T any] struct {
+    Items []T `json:"items"`
+    Total int `json:"total"`
+}
+
+func (r *widgetRepo) ListOffset(ctx context.Context, tenantID uuid.UUID, filters domain.OffsetListFilters) (*domain.OffsetListResult[widget.Widget], error) {
+    ctx, span := r.tracer.Start(ctx, "repo.widget.list_offset")
+    defer span.End()
+
+    reqID := RequestIDFromContext(ctx)
+    logger := r.logger.With("request_id", reqID, "method", "ListOffset")
+
+    ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+    defer cancel()
+
+    // Calculate offset from page number
+    offset := (filters.Page - 1) * filters.PerPage
+
+    // Build query with dynamic filters
+    qb := newQueryBuilder()
+    qb.WriteString(`
+        SELECT id, tenant_id, name, description, status,
+               created_at, updated_at, created_by, updated_by, version
+        FROM widgets
+        WHERE tenant_id = `)
+    qb.AddParam(tenantID)
+    qb.WriteString(` AND deleted_at IS NULL`)
+
+    // Apply dynamic field filters (allow-listed in handler)
+    for field, value := range filters.Fields {
+        qb.WriteString(fmt.Sprintf(` AND %s = `, sanitizeColumn(field)))
+        qb.AddParam(value)
+    }
+
+    // Order, limit, and offset
+    qb.WriteString(fmt.Sprintf(` ORDER BY %s %s, id %s`,
+        sanitizeColumn(filters.SortBy), filters.SortDir, filters.SortDir))
+    qb.WriteString(` LIMIT `)
+    qb.AddParam(filters.PerPage)
+    qb.WriteString(` OFFSET `)
+    qb.AddParam(offset)
+
+    rows, err := r.pool.Query(ctx, qb.String(), qb.Params()...)
+    if err != nil {
+        logger.ErrorContext(ctx, "list_offset query failed", "error", err)
+        return nil, r.mapError(err, "list_offset")
+    }
+    defer rows.Close()
+
+    var items []widget.Widget
+    for rows.Next() {
+        var w widget.Widget
+        if err := rows.Scan(
+            &w.ID, &w.TenantID, &w.Name, &w.Description, &w.Status,
+            &w.CreatedAt, &w.UpdatedAt, &w.CreatedBy, &w.UpdatedBy, &w.Version,
+        ); err != nil {
+            return nil, fmt.Errorf("widget list_offset scan: %w", err)
+        }
+        items = append(items, w)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, r.mapError(err, "list_offset")
+    }
+
+    // Count total (required for offset pagination to calculate total_pages)
+    total := r.countTotal(ctx, tenantID, domain.ListFilters{Fields: filters.Fields})
+
+    logger.InfoContext(ctx, "list_offset completed",
+        "page", filters.Page,
+        "per_page", filters.PerPage,
+        "result_count", len(items),
+        "total", total,
+    )
+
+    return &domain.OffsetListResult[widget.Widget]{
+        Items: items,
+        Total: total,
+    }, nil
+}
+```
+
 ## Error Mapping
 
 ```go
@@ -599,3 +717,5 @@ func (r *widgetRepo) mapError(err error, operation string) error {
 - pgx errors MUST be mapped to domain errors at the repository boundary
 - Cache MUST be invalidated on every write (Update, Delete) — both L1 and L2
 - L1 cache entries MUST have TTL checked on read — stale entries are evicted lazily
+- Every repository method MUST extract `request_id` from context and include it in structured log lines
+- `RequestIDFromContext(ctx)` extracts the request ID set by auth middleware — propagate it through all layers

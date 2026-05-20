@@ -1,3 +1,5 @@
+> **Foundation:** This file extends [shared-backend-patterns.md](../core/shared-backend-patterns.md) with language-specific implementations. Read the shared patterns first for language-agnostic contracts.
+
 ---
 skill: go
 description: Go patterns — error handling, interfaces, context, goroutines, table-driven tests, module conventions, DI without frameworks
@@ -330,6 +332,8 @@ var _ Notifier = (*EmailNotifier)(nil)
 - Return concrete types from constructors — let callers decide what interface they need
 
 ## Error Patterns
+
+> **Canonical reference**: For the full error type taxonomy, HTTP status mapping, error middleware, and structured error response format, see `backend/archetypes/error-handling.md`.
 
 ```go
 // Sentinel errors for expected, recoverable cases

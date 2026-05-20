@@ -22,7 +22,7 @@ Before marking ANY task done, re-read every file you touched. Check for:
 2. **Dead code** — no commented-out blocks, no unreachable branches
 3. **TODO/FIXME placeholders** — replace with real implementation or remove
 4. **Hardcoded values** — extract to config, constants, or environment variables
-5. **Missing error handling** — every error path must be handled explicitly
+5. **Missing error handling** — every error path must be handled explicitly (see `backend/archetypes/error-handling.md` for the canonical error handling reference)
 6. **Inconsistent naming** — all names in a file should follow the same convention
 7. **Missing tests** — new public functions need at least one test
 
