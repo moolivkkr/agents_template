@@ -109,6 +109,24 @@ Before skipping ANY check, review this table. If your internal reasoning matches
 
 ---
 
+## Error Response Shape Compliance (VIOLATION if mismatch)
+
+For every error handler in the codebase:
+1. Read the error response shape from the component's spec (§Error Matrix)
+2. Verify the error handler produces EXACTLY that shape
+3. Common mismatches to catch:
+   - Spec says `{ error: { code: "...", message: "...", details: {...} } }` but handler returns `{ error: "string" }`
+   - Spec says 422 for validation errors but handler returns 400
+   - Spec says field-level errors in `details` but handler returns flat string
+   - Generic error middleware overrides component-specific error shapes
+
+For each mismatch: log as VIOLATION with:
+
+| Handler | Spec Shape | Actual Shape | File:Line |
+|---------|-----------|--------------|-----------|
+
+---
+
 ## Standard Architecture Checks
 
 - **Dependency direction** — domain ← service ← handler (never reversed); no circular imports

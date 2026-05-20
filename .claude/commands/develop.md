@@ -161,6 +161,56 @@ PHASE=${ARG_PHASE:-$(( ${LAST_PASSED:-0} + 1 ))}
 echo "▶ Running Phase $PHASE"
 ```
 
+### Failure Pattern Detection
+
+Check if previous attempts at this phase failed at specific steps:
+
+```bash
+# Check for previous gate.failed files
+PREV_FAILURES=$(ls agent_state/phases/${PHASE}/gate.failed* 2>/dev/null)
+if [ -n "$PREV_FAILURES" ]; then
+  echo "⚠ Phase ${PHASE} has previous failure(s):"
+  for f in $PREV_FAILURES; do
+    BLOCKERS=$(python3 -c "import json; d=json.load(open('$f')); print(', '.join(b.get('gate_item','?') for b in d.get('blockers',[])))" 2>/dev/null)
+    echo "  - $(basename $f): blocked by $BLOCKERS"
+  done
+  echo "  → Extra scrutiny will be applied to previously-failing steps"
+fi
+```
+
+When a step that previously failed is reached:
+- Log: `⚠ Step ${STEP} failed in previous attempt — applying extra verification`
+- For test steps: run tests TWICE (once normally, once with verbose output)
+- For review steps: lower the threshold for BLOCKING (MEDIUM → BLOCKING for previously-failing areas)
+- For gate: explicitly verify previously-blocking items are resolved before checking new items
+
+### Phase Lock (Advisory)
+
+Before starting implementation, check for and create a lock:
+
+```bash
+LOCK_FILE="agent_state/phases/${PHASE}/.lock"
+if [ -f "$LOCK_FILE" ]; then
+  LOCK_OWNER=$(cat "$LOCK_FILE" | head -1)
+  LOCK_TIME=$(cat "$LOCK_FILE" | tail -1)
+  echo "⚠ Phase ${PHASE} is locked by ${LOCK_OWNER} since ${LOCK_TIME}"
+  echo "  If this is stale, remove with: rm ${LOCK_FILE}"
+  echo "  Proceeding may cause file conflicts in agent_state/phases/${PHASE}/"
+  # In --auto mode: STOP. In interactive mode: ask user to confirm.
+fi
+
+# Create lock
+echo "$(whoami)@$(hostname)" > "$LOCK_FILE"
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LOCK_FILE"
+```
+
+Release lock at the end of Step 6 (gate write):
+```bash
+rm -f "agent_state/phases/${PHASE}/.lock"
+```
+
+This is advisory — it warns but doesn't prevent. Two developers CAN override, but they're warned.
+
 ### Gate check
 If PHASE > 1 and `agent_state/phases/$((PHASE-1))/gate.passed` is missing:
 **STOP** — `Phase $((PHASE-1)) gate not found. Run /develop --phase=$((PHASE-1)) first.`
@@ -191,6 +241,18 @@ Before starting Phase N implementation, validate that data contracts are consist
    - If Phase N adds new required fields to a request: **WARNING** — Phase N-1 callers won't send them
    - Compare actual TypeScript interfaces from both `data-contracts.md` files, not just endpoint names
    - Surface any breaking changes: `⛔ BREAKING CHANGE: GET /users/:id field 'role' changed from string to enum — Phase N-1 code returns string`
+
+### Breaking Change Detection (HARD BLOCK — not warning)
+
+When comparing Phase N data-contracts.md against Phase N-1 actual implementation:
+
+- **Field REMOVED from response** → ⛔ HARD BLOCK: `Field '${field}' was in Phase ${N-1} response but missing in Phase ${N} contract. This breaks Phase ${N-1} consumers.`
+- **Field RENAMED** → ⛔ HARD BLOCK: `Field '${oldName}' renamed to '${newName}'. Phase ${N-1} consumers reference the old name.`
+- **Field TYPE CHANGED** → ⛔ HARD BLOCK: `Field '${field}' changed from ${oldType} to ${newType}. Type mismatch.`
+- **Field ADDED (optional)** → ✅ OK (additive, backward-compatible)
+- **Field ADDED (required to request)** → ⚠ WARNING: Phase ${N-1} callers won't send this field
+
+Hard blocks CANNOT be force-gated. Fix the contract or provide a migration path (deprecated field alias).
 
 ```bash
 # Quick staleness check
@@ -270,6 +332,31 @@ Log when:
 - Choosing a library, pattern, or approach not prescribed
 
 **Why:** Decisions made by agents in session 3 are invisible in session 7. The decision log creates persistent memory with accountability.
+
+### Spec Amendment Protocol (Intentional Deviations)
+
+When an implementation agent intentionally deviates from a spec:
+
+1. **Log the deviation** in decision-log.md:
+   ```
+   ## Spec Deviation: <component> — <what changed>
+   - **Spec says:** <original spec behavior>
+   - **Implementation does:** <actual behavior>
+   - **Rationale:** <why the deviation was necessary>
+   - **Impact:** <what downstream artifacts need updating>
+   ```
+
+2. **Auto-update the spec** (append, don't overwrite):
+   ```markdown
+   ## Implementation Notes (auto-generated)
+   > ⚠ Deviation from original spec — see decision-log.md
+   > - <what changed and why>
+   > - Original behavior preserved in section above
+   ```
+
+3. **Flag for reconciliation:** spec_impl_reconciler treats documented deviations as ACKNOWLEDGED (not MISSING).
+
+This prevents specs from going stale after implementation while preserving the original design intent.
 
 ### Mid-Execution Escalation Protocol
 
@@ -508,6 +595,24 @@ Wave 1.5 (sequential gate — validates migrations before applying):
       4. UP re-applies after DOWN (idempotency)
       If validation fails → block Wave 2, surface error to migration_agent for fix (max 1 retry)
 
+### Migration Failure Auto-Recovery
+
+If UP migration fails:
+1. Immediately run the DOWN migration for the failed file to restore schema consistency
+2. Log the specific error: `⛔ Migration ${FILE} UP failed: ${ERROR}`
+3. Log the rollback: `↩ Auto-rolled back ${FILE} DOWN to restore schema`
+4. Route back to migration_agent with the specific error for fix (max 1 retry)
+5. After fix: re-run UP → validate → proceed if success
+
+If DOWN rollback also fails:
+- STOP immediately — schema is now in an unknown state
+- Surface: `⛔ CRITICAL: Migration UP failed AND DOWN rollback failed. Manual intervention required.`
+- Write to agent_state/phases/${PHASE}/migration_failure.json with full error details
+- Do NOT proceed to Wave 2
+
+This prevents the common failure where Phase N migration adds a table, fails partway through,
+and Phase N re-development tries to add the same table again.
+
 Wave 2a (sequential — api_developer depends on backend service interfaces):
   └─ backend_developer  → domain models, services, repositories
        ↓ writes manifest with service method return types (list/single/none)
@@ -660,6 +765,24 @@ When a test agent retries (attempt > 1), track ALL retry information for visibil
 ```
 
 **Why track flaky tests?** A test that needs 3 attempts to pass is a signal of non-deterministic behavior (race condition, timing dependency, test isolation failure). If the same test is flaky across 2+ phases, it becomes a reliability risk that compounds.
+
+### Flaky Test Quarantine
+
+When a test appears in `flaky_tests[]` across 2+ consecutive phases:
+
+1. **Detect:** Check previous phase manifest's `flaky_tests[]`. If current phase has the same test name: it's chronically flaky.
+2. **Quarantine:** Mark with `@flaky` tag/annotation (language-specific):
+   - Go: `t.Skip("QUARANTINED: flaky across phases N-1, N")`
+   - Python: `@pytest.mark.skip(reason="QUARANTINED: flaky")`
+   - TypeScript: `test.skip('QUARANTINED: flaky')`
+   - Java: `@Disabled("QUARANTINED: flaky")`
+   - Rust: `#[ignore]`
+3. **Log:** Add to manifest: `"quarantined_tests": ["TestName (flaky since phase N-1)"]`
+4. **Track:** Quarantined tests appear in gate report as: `⚠ QUARANTINED: N tests skipped (flaky across 2+ phases)`
+5. **Escalate:** If quarantined count > 5: surface to user as `⚠ Too many quarantined tests — investigate root cause`
+6. **Unquarantine:** If a quarantined test passes 3 consecutive phases: auto-remove quarantine
+
+This prevents flaky tests from blocking every phase while maintaining visibility.
 
 ### Step 3a.5 — Cross-Phase Regression (PHASE > 1 only)
 
@@ -970,8 +1093,32 @@ Reports written to `agent_state/phases/${PHASE}/reports/`:
 - `spec_compliance_review.md` (Stage 4a)
 - `code_review_I.md` (Stage 4b)
 - `code_review_II.md` (Stage 4b)
-- `security_review.md` (Stage 4c)
-- `dependency_scan.md` (Stage 4c)
+- `security_review.md` (Stage 4b)
+- `dependency_scan.md` (Stage 4b)
+- `sast_scan.md` (Stage 4c)
+
+### Stage 4c — Static Application Security Testing (parallel with review)
+
+Run SAST scan on all code changed in this phase:
+
+```bash
+# Language-specific SAST (from IMPLEMENTATION_GUIDELINES)
+# Go: govulncheck ./...
+# Python: bandit -r src/ -f json
+# TypeScript/JavaScript: semgrep --config auto src/
+# Java: spotbugs or semgrep
+# Rust: cargo audit
+
+SAST_CMD=$(detect_sast_command)  # from IMPLEMENTATION_GUIDELINES
+$SAST_CMD > agent_state/phases/${PHASE}/reports/sast_scan.md
+```
+
+Severity mapping:
+- CRITICAL/HIGH → BLOCKING (must fix before gate)
+- MEDIUM → WARNING (logged in known_issues)
+- LOW → INFO (logged but not blocking)
+
+If no SAST tool is configured in IMPLEMENTATION_GUIDELINES: skip with warning log.
 
 ---
 
@@ -1028,10 +1175,29 @@ UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimiz
 Code review I                agent_state/phases/${PHASE}/reports/code_review_I.md   No BLOCKING issues
 Code review II               agent_state/phases/${PHASE}/reports/code_review_II.md  No architecture violations
 Security review              agent_state/phases/${PHASE}/reports/security_review.md  No HIGH severity findings
+SAST scan                    agent_state/phases/${PHASE}/reports/sast_scan.md        No CRITICAL or HIGH findings
 Acceptance tests             agent_state/phases/${PHASE}/reports/acceptance_report.md   All in-scope use cases: PASS
 ```
 
 **E2E gate is active only when `PHASE_PLAN.md` has a non-empty `e2e_workflows_unlocked` list.**
+
+### Bug Severity Classification
+
+All items in `known_issues[]` and `carried_forward[]` MUST have a severity level:
+
+| Severity | Definition | Gate Impact | Carry-Forward Limit |
+|----------|-----------|-------------|-------------------|
+| `critical` | Data loss, security breach, complete feature broken | BLOCKS gate — must fix | 0 phases (fix immediately) |
+| `high` | Major feature broken, significant UX degradation | BLOCKS gate — must fix | 1 phase max |
+| `medium` | Minor feature broken, workaround exists | Does not block gate | 3 phases max |
+| `low` | Cosmetic, minor inconvenience | Does not block gate | No limit (tracked) |
+
+When severity is not explicitly set, default to `medium`.
+
+Carry-forward enforcement:
+- `critical` items that appear in `carried_forward[]` → ⛔ IMMEDIATE BLOCK, cannot proceed
+- `high` items carried for >1 phase → becomes `critical` (auto-escalation)
+- `medium` items carried for >3 phases → becomes `high` (auto-escalation)
 
 If any gate item fails:
 1. Write `gate.failed` with structured failure data (enables next-phase detection of "ran but failed" vs "never ran"):
@@ -1134,6 +1300,23 @@ python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}
 ```
 
 This protocol also applies to any agent-level manifest writes in `agent_state/phases/${PHASE}/<agent>/manifest.json` — always write to `.tmp`, validate, then `mv`.
+
+### Schema Validation
+
+After JSON syntax validation, also validate against the manifest schema (`agent_state/manifest_schema.json`):
+
+```bash
+python3 -c "
+import json, sys
+manifest = json.load(sys.stdin)
+required = ['phase', 'goal', 'started_at', 'brd_requirements_met', 'test_results', 'artifacts', 'known_issues', 'carried_forward']
+missing = [f for f in required if f not in manifest]
+if missing:
+    print(f'⛔ MANIFEST MISSING FIELDS: {missing}')
+    sys.exit(1)
+print('✅ Manifest schema valid')
+" < agent_state/phases/${PHASE}/manifest.json.tmp
+```
 
 ### Phase Completion Tagging
 

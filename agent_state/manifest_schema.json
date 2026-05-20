@@ -1,0 +1,78 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["phase", "goal", "started_at", "completed_at", "attempt", "brd_requirements_met", "test_results", "artifacts", "known_issues", "carried_forward"],
+  "properties": {
+    "phase": { "type": "integer", "minimum": 1 },
+    "goal": { "type": "string" },
+    "started_at": { "type": "string", "format": "date-time" },
+    "completed_at": { "type": "string", "format": "date-time" },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "previous_attempts": { "type": "array", "items": { "type": "string" } },
+    "brd_requirements_met": { "type": "array", "items": { "type": "string", "pattern": "^(FR|NFR|OBJ)-" } },
+    "test_results": {
+      "type": "object",
+      "properties": {
+        "unit": { "$ref": "#/$defs/test_tier" },
+        "integration": { "$ref": "#/$defs/test_tier" },
+        "e2e": { "$ref": "#/$defs/test_tier" },
+        "acceptance": { "$ref": "#/$defs/test_tier" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "properties": {
+        "code": { "type": "array", "items": { "type": "string" } },
+        "api_routes": { "type": "array", "items": { "type": "string" } },
+        "migrations": { "type": "array", "items": { "type": "string" } },
+        "schemas": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "known_issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
+    "carried_forward": { "type": "array", "items": { "$ref": "#/$defs/carried_item" } },
+    "hotfixes": { "type": "array", "items": { "$ref": "#/$defs/hotfix" } }
+  },
+  "$defs": {
+    "test_tier": {
+      "type": "object",
+      "required": ["status", "total", "passed", "failed"],
+      "properties": {
+        "status": { "enum": ["passed", "failed", "skipped"] },
+        "total": { "type": "integer" },
+        "passed": { "type": "integer" },
+        "failed": { "type": "integer" },
+        "flaky_tests": { "type": "array", "items": { "type": "string" } },
+        "report": { "type": "string" }
+      }
+    },
+    "issue": {
+      "type": "object",
+      "required": ["description", "severity"],
+      "properties": {
+        "description": { "type": "string" },
+        "severity": { "enum": ["critical", "high", "medium", "low", "gate_override"] },
+        "component": { "type": "string" },
+        "from_phase": { "type": "integer" }
+      }
+    },
+    "carried_item": {
+      "type": "object",
+      "required": ["issue", "from_phase", "phases_carried"],
+      "properties": {
+        "issue": { "type": "string" },
+        "from_phase": { "type": "integer" },
+        "phases_carried": { "type": "integer" },
+        "severity": { "enum": ["critical", "high", "medium", "low"] }
+      }
+    },
+    "hotfix": {
+      "type": "object",
+      "properties": {
+        "description": { "type": "string" },
+        "applied_at": { "type": "string", "format": "date-time" },
+        "component": { "type": "string" },
+        "commit": { "type": "string" }
+      }
+    }
+  }
+}
