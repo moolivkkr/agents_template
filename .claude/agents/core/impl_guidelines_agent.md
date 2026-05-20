@@ -33,6 +33,14 @@ skill_packs:
 
 # Agent: Implementation Guidelines Agent
 
+## Skill Packs to Load
+Load and apply the following skill packs:
+- `.claude/skills/core/implementation-guidelines-template.md` — 24-section template for generating comprehensive guidelines
+- `.claude/skills/core/code-quality.md` — code quality standards to embed in guidelines
+- `.claude/skills/core/software-architecture.md` — architecture patterns to reference
+- `.claude/skills/core/resiliency-patterns.md` — resiliency patterns to include
+- `.claude/skills/core/observability-patterns.md` — observability standards to include
+
 ## Auto Mode (`--auto` flag from /init or /autonomous)
 
 When running in auto mode, do NOT present questions to the user. Instead, for each missing tech decision:

@@ -119,6 +119,13 @@ Before skipping ANY check, review this table. If your internal reasoning matches
 - **Cross-cutting concerns** — logging, tracing, error handling applied consistently at correct layers
 - **Configuration** — no hardcoded environment-specific values; all via config/env
 
+## Additional Architecture Checks
+- **SOLID Enforcement**: Verify Single Responsibility (one struct/class, one reason to change), check for Interface Segregation violations (interfaces with 4+ methods)
+- **Function Size**: Flag functions > 40 lines, flag functions with > 4 parameters, flag nesting > 2 levels
+- **Interface Usage**: Verify dependencies are injected as interfaces not concrete types, check constructor signatures follow `New*(deps...) *Type` pattern
+- **Error Handling**: Verify domain error types are used (not raw errors), check error wrapping at boundaries, verify no swallowed errors
+- **Observability**: Verify tenant_id on all log lines and metrics, check structured logging usage, verify spans on external calls
+
 ---
 
 ## Severity
