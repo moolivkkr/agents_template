@@ -11,19 +11,23 @@ You provide requirements. The agents do the rest — from turning a pitch deck i
 ```
 requirements/                  ← YOUR INPUT — agents read but never modify this
     ├── feature-spec.md        ← user stories, PRD, pitch deck (any format)
+    ├── research/              ← optional: output from /startup/research
     ├── IMPLEMENTATION_GUIDELINES.md  ← optional DRAFT: fill in what you know
     └── test-data/             ← optional: seed data per phase
 
                 ↓ /startup/init reads requirements/, interviews for gaps ↓
 
 docs/                          ← GENERATED OUTPUT — agents write here
-    ├── BRD.md                 ← numbered requirements (FR-*, NFR-*) — always generated, never hand-written
-    └── IMPLEMENTATION_GUIDELINES.md  ← confirmed tech stack — generated from your draft + interview
+    ├── BRD.md                 ← numbered requirements (FR-*, NFR-*) — always generated
+    └── IMPLEMENTATION_GUIDELINES.md  ← confirmed tech stack
 
-/startup/plan  →  docs/design/phases/1/specs/  (TRDs + wireframes)
-/startup/develop  →  implement + test + review + gate
-(repeat plan/develop per phase)
-/startup/accept  →  full-product validation against all BRD personas
+/startup/research  →  ultra-deep market & product research (optional, before init)
+/startup/init      →  BRD + agents from requirements
+/startup/plan      →  specs + data-contracts.md + UI specs per phase
+/startup/develop   →  implement + test + review + gate per phase
+/startup/accept    →  full-product validation against all BRD personas
+
+OR: /startup/autonomous  →  all of the above end-to-end with one human checkpoint
 ```
 
 > **Convention:** `requirements/` is read-only input. `docs/` is generated output. Never write `BRD.md` by hand — always run `/startup/init`. The `IMPLEMENTATION_GUIDELINES.md` in `requirements/` is your optional draft; `/init` produces the authoritative confirmed version in `docs/`.
@@ -143,29 +147,40 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 | Command | What it does |
 |---------|-------------|
-| `/startup/init` | Reads `requirements/`, creates `docs/BRD.md` + `docs/IMPLEMENTATION_GUIDELINES.md`, generates project-specific agents, writes `CLAUDE.md` |
-| `/startup/plan` | Creates technical specs (TRDs) and wireframes for the next phase |
-| `/startup/develop` | Implements the current phase end-to-end: audit → code → tests → review → gate |
-| `/startup/accept` | Runs full-product acceptance tests after all phases complete |
+| `/startup/research` | **NEW** Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
+| `/startup/init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode |
+| `/startup/plan` | Creates TRDs, typed data contracts, and component-level UI specs per phase. Supports `--auto` |
+| `/startup/develop` | Implements phase end-to-end: audit → build checks → code → tests → review + acceptance (parallel) → gate. Supports `--auto` |
+| `/startup/autonomous` | **NEW** Runs the full pipeline end-to-end — auto-researches decisions, one human checkpoint, then autonomous develop for all phases |
+| `/startup/accept` | Runs full-product acceptance tests + contract shape assertions after all phases |
 | `/startup/test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system) |
-| `/startup/review` | Standalone code review: style + architecture + security |
+| `/startup/review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
 | `/startup/optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
 | `/startup/deploy` | Builds, migrates, and deploys to local / staging / prod |
 | `/startup/status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
 
 ### Command arguments
 
+**`/startup/research`**
+```
+--domain="..."    Product domain to research (required, e.g., "XDR/EDR cybersecurity")
+--depth=deep      Research depth: quick | deep (default) | ultra
+--focus=all       Focus area: vendors | capabilities | technical | personas | moats | all
+```
+
 **`/startup/init`**
 ```
 --update_agents   Re-generate project agents only (use after tech stack changes)
 --brd_only        Regenerate BRD only
+--auto            Auto-research mode — agents research answers instead of asking user
 ```
 
 **`/startup/plan`**
 ```
 --phase=N         Override phase number (default: auto-detect next unplanned)
---ui_only         Regenerate wireframes only
+--ui_only         Regenerate UI specs only
 --verify_only     Verify existing specs against BRD — no new generation
+--auto            Auto-assign FR-* to phases by dependency analysis
 ```
 
 **`/startup/develop`**
@@ -174,6 +189,15 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --audit_only      Gap report only — no implementation changes
 --test_only       Run tests only — no implementation changes
 --force_gate      Force gate to pass with failures (logged as gate_override in manifest)
+--auto            Autonomous mode — auto-resolve escalations, auto-fix gate failures
+```
+
+**`/startup/autonomous`**
+```
+--confirm_each_phase   Pause for human review before EACH phase (default: Phase 1 only)
+--resume               Resume from last checkpoint
+--skip_init            Use existing BRD + IMPL_GUIDELINES
+--max_phases=N         Limit to N phases
 ```
 
 **`/startup/test`**
@@ -213,22 +237,24 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 ```
 Step 0    Orient           Detect phase, load previous manifest, start infra
+Step 0.5  Readiness Gate   Verify specs, phase_context, data-contracts.md exist
 Step 1    Audit            Gap report: what's missing vs what the specs require
-Step 2    Implement        Wave-based execution (DB → backend → contract validation → UI → tests)
-Step 2.5  Contract Valid.  Verify api-contracts.md before UI starts (UI phases only)
+Step 2    Implement        Wave-based execution with build checks + smoke test:
+                           DB → backend → BUILD CHECK → API → SMOKE TEST → UI → tests
+Step 2.5  Contract Valid.  Verify api-contracts.md matches data-contracts.md (UI phases)
 Step 3a   Unit Tests       Unit tests for all new code
 Step 3a.5 Regression       Cross-phase regression check (Phase > 1 only)
-Step 3b   Integration      Service↔DB + API endpoint tests + response shape contract tests
+Step 3b   Integration      Service↔DB + API endpoint tests + contract shape tests
 Step 3c   E2E Tests        Full user workflow tests (if workflow unlocked this phase)
-Step 3d   Reconcile C      Spec ↔ Implementation (bidirectional)
-Step 3e   Reconcile D      Spec ↔ Tests (bidirectional)
-Step 3f   Optimize         Dead code removal + code optimization (backend ∥ UI, mandatory)
-Step 3g   Re-test          Post-optimization test re-run (mandatory safety net)
-Step 4    Review           Style → Architecture + Security + Dependency scan (parallel)
-Step 5    Acceptance       Use case + persona level validation with seed data
-Step 6    Gate             11 conditions must pass — writes gate.passed + manifest.json
-Step 6b   Document         API docs + README updates (non-blocking, parallel)
-Step 7    Report           Summary of what was built, test results, gate status
+Step 3d+e Reconcile        Spec↔Impl + Spec↔Tests (PARALLEL, 4-level verification)
+Step 3f   Optimize         Dead code removal + code optimization (backend ∥ UI)
+Step 3g   Re-test          Post-optimization re-run (skipped if zero changes)
+Step 4    PARALLEL TRACKS:
+  Track A: Review          Spec compliance → Style + Arch + Security + Deps (parallel)
+  Track B: Acceptance      Persona tests + contract shape assertions
+Step 5    Gate             12 conditions must pass — writes gate.passed + manifest.json
+Step 5b   Document         API docs + README updates (non-blocking, parallel)
+Step 6    Report           Summary of what was built, test results, gate status
 ```
 
 ### Phase gate — all 11 must pass
@@ -483,17 +509,19 @@ Each generated agent is pre-loaded with your project's specific language, framew
 
 Skill packs are static knowledge files that agents load as context before executing. They contain idiomatic patterns, code examples, conventions, and anti-patterns for a specific technology. They're how `code_reviewer_I` knows what "idiomatic Go" means vs "idiomatic Python", and how `code_optimizer` knows to check for nil-slice → JSON null bugs in Go but `undefined` → omitted-field bugs in TypeScript.
 
-### Available skill packs (37)
+### Available skill packs (65+)
 
 | Category | Skill Packs |
 |----------|-------------|
+| **Core** (6) | `api-design` · `security-owasp` · `testing-principles` · `git-workflow` · `auto-research` · `deep-research` |
+| **Requirements** (9) | `requirement-clarity` · `acceptance-criteria` · `persona-definition` · `nfr-patterns` · `gap-analysis-checklist` · `conflict-detection` · `business-objectives` · `traceability-matrix` · `edge-case-taxonomy` |
+| **UI Patterns** (10) | `professional-ui-standards` · `error-handling-patterns` · `form-patterns` · `accessibility-patterns` · `responsive-patterns` · `loading-states` · `component-composition` · `api-integration-patterns` · `shadcn` · `tailwind` |
+| **UI Archetypes** (5) | `list-page` · `detail-page` · `form-page` · `dashboard-page` · `settings-page` |
 | **Languages** (5) | `go` · `python` · `typescript` · `java` · `rust` |
-| **Frameworks** (11) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · `express` · `nestjs` · **Frontend:** `react` · `nextjs` · `vue` · `tanstack-query` |
+| **Frameworks** (13) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · `express` · `nestjs` · **Frontend:** `react` · `nextjs` · `vue` · `tanstack-query` |
 | **Databases** (6) | `postgres` · `postgresql` · `mysql` · `mongodb` · `redis` · `sqlite` |
 | **Testing** (6) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` |
-| **UI** (2) | `shadcn` · `tailwind` |
-| **Infrastructure** (3) | `docker` · `github-actions` · `kubernetes` |
-| **Core** (4) | `api-design` · `security-owasp` · `testing-principles` · `git-workflow` |
+| **Infrastructure** (5) | `docker` · `github-actions` · `kubernetes` |
 
 ### Which agents load which skills
 
@@ -731,12 +759,36 @@ requirements/
 8. FINAL VALIDATION        /startup/accept
 ```
 
-That's it. Everything else is automatic.
+### Fully autonomous mode (minimal interaction)
+
+```
+1. INSTALL (once)          bash install.sh
+2. CREATE PROJECT          bash new-project.sh my-app ~/development
+3. ADD REQUIREMENTS        Drop specs/stories into my-app/requirements/
+4. RUN                     /startup/autonomous
+   → Auto-researches all decisions
+   → One checkpoint: review decisions before implementation
+   → Builds all phases end-to-end
+   → Produces working app + full audit trail
+```
+
+### Starting with deep research (new product/market)
+
+```
+1. /startup/research --domain="XDR/EDR cybersecurity"
+   → 6 parallel agents research vendors, capabilities, personas, moats
+   → Produces 12+ research documents in requirements/research/
+   → Auto-generates draft BRD sections
+2. Review research, adjust priorities
+3. /startup/autonomous (or /startup/init → /plan → /develop manually)
+```
 
 ### What to run when
 
 | I want to... | Run this |
 |-------------|----------|
+| Research a market before building | `/startup/research --domain="..."` |
+| Build everything autonomously | `/startup/autonomous` |
 | Start a new project | `bash new-project.sh my-app` then `/startup/init` |
 | Build the next feature set | `/startup/plan` then `/startup/develop` |
 | See where I am | `/startup/status` |
@@ -788,15 +840,17 @@ If any check fails, the gate blocks and tells you exactly what to fix.
 ### Commands at a glance
 
 ```
-/startup/init       One-time project setup. Creates BRD + agents from your requirements.
-/startup/plan       Plans the next phase. Creates specs and wireframes.
-/startup/develop    Builds a phase end-to-end. Fully autonomous.
-/startup/test       Runs tests standalone. Many flags for targeting specific tiers.
-/startup/review     Code review: style + architecture + security.
-/startup/optimize   Code cleanup and optimization with before/after comparison.
-/startup/accept     Full-product validation after all phases complete.
-/startup/deploy     Build and deploy to local, staging, or production.
-/startup/status     Where am I? What should I run next?
+/startup/research     Deep market & product research. Vendors, capabilities, moats.
+/startup/init         One-time project setup. Creates BRD + agents from requirements.
+/startup/plan         Plans a phase. Creates specs, data contracts, UI specs.
+/startup/develop      Builds a phase end-to-end with parallel review + acceptance.
+/startup/autonomous   Full pipeline: research → init → plan → develop (all phases).
+/startup/test         Runs tests standalone. Many flags for targeting specific tiers.
+/startup/review       Code review: spec compliance → style + arch + security (parallel).
+/startup/optimize     Code cleanup and optimization with before/after comparison.
+/startup/accept       Full-product validation after all phases complete.
+/startup/deploy       Build and deploy to local, staging, or production.
+/startup/status       Where am I? What should I run next?
 ```
 
 ### Tips
