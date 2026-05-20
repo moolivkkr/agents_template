@@ -172,6 +172,95 @@ export default {
 } satisfies Config
 ```
 
+## Professional Polish Patterns
+
+### Interactive States (apply to ALL clickable elements)
+```tsx
+// Button/link hover + focus + disabled + transition
+"transition-colors duration-200 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50"
+
+// Card hover effect
+"transition-shadow hover:shadow-md"
+
+// Row hover
+"transition-colors hover:bg-muted/50"
+```
+
+### Shadow Hierarchy
+```
+shadow-sm   → cards, elevated surfaces
+shadow-md   → dropdowns, popovers
+shadow-lg   → modals, dialogs, sheets
+shadow-none → flat elements within cards
+```
+
+### Group Tailwind Classes Logically
+```tsx
+<div className={cn(
+  // Layout
+  "flex items-center justify-between gap-4",
+  // Sizing
+  "h-16 w-full px-4",
+  // Visual
+  "rounded-lg border bg-card shadow-sm",
+  // Typography
+  "text-sm font-medium text-card-foreground",
+  // Interactive
+  "transition-shadow hover:shadow-md",
+  // Responsive
+  "md:h-20 md:px-6"
+)}>
+```
+
+## Dark Mode (class strategy)
+```css
+/* globals.css — light and dark tokens */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 84% 4.9%;
+    --card: 0 0% 100%;
+    --primary: 222.2 47.4% 11.2%;
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+    /* ... all tokens */
+  }
+  .dark {
+    --background: 222.2 84% 4.9%;
+    --foreground: 210 40% 98%;
+    --card: 222.2 84% 4.9%;
+    --primary: 210 40% 98%;
+    --muted: 217.2 32.6% 17.5%;
+    --muted-foreground: 215 20.2% 65.1%;
+  }
+}
+```
+
+Use `next-themes` for theme switching:
+```tsx
+import { useTheme } from "next-themes"
+const { theme, setTheme } = useTheme()
+<Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+  <Sun className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
+  <Moon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
+</Button>
+```
+
+## Anti-Patterns (NEVER DO)
+
+| Never Do | Instead Do |
+|----------|-----------|
+| `bg-blue-500`, `text-gray-700` | `bg-primary`, `text-muted-foreground` |
+| `w-[347px]`, `mt-[13px]` | `w-full max-w-sm`, `mt-3` |
+| `outline-none` without replacement | `focus-visible:ring-2 ring-ring ring-offset-2` |
+| `style={{ marginTop: '16px' }}` | `className="mt-4"` |
+| 20+ classes on one line | Group logically in `cn()` with comments |
+| `@apply` for everything | Extract React components instead |
+| `gap-3` then `gap-4` then `gap-5` randomly | Pick ONE default gap (`gap-4`) for consistency |
+| `bg-white dark:bg-black` | `bg-background` (uses CSS variable, auto dark mode) |
+| String concatenation for classes | `cn()` from `@/lib/utils` |
+| Mixing `space-y-*` and `gap-*` in same container | Pick one: `gap-*` on flex/grid, `space-y-*` on simple stacks |
+
 ## Rules
 - Mobile-first: write base styles for small screens, add `sm:`, `md:`, `lg:` for larger
 - Use `cn()` for conditional classes — never string concatenation or template literals
@@ -179,3 +268,6 @@ export default {
 - Use `gap-*` on flex/grid containers instead of margins on children
 - Use `space-y-*` or `space-x-*` for simple vertical/horizontal stacks without flex
 - Prefer `rounded-lg border` over `shadow-*` — shadows should be subtle (`shadow-sm`)
+- Every `bg-*` must pair with its `text-*-foreground` counterpart
+- Stick to the 4px spacing scale: `gap-1` (4px), `gap-2` (8px), `gap-4` (16px), `gap-6` (24px), `gap-8` (32px)
+- All interactive elements need `transition-colors duration-200` for smooth state changes
