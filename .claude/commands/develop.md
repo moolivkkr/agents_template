@@ -153,6 +153,29 @@ REQUIRED_REPORTS=(
   "agent_state/phases/${PHASE}/manifest.json"
 )
 
+# ⛔ FULL REGRESSION TEST (not just current phase)
+# Run the ENTIRE test suite — all phases — before writing gate.passed.
+# This catches regressions where Phase N changes break Phase 1-N-1 tests.
+# This was added after Phase 4 broke 6 Phase 1/2 E2E tests and gate.passed was written anyway.
+
+echo "Running full regression test suite (all phases)..."
+cd frontend && npx vitest run --reporter=verbose 2>&1 | tee /tmp/gate-unit-results.txt
+UNIT_EXIT=$?
+npx playwright test --reporter=list 2>&1 | tee /tmp/gate-e2e-results.txt
+E2E_EXIT=$?
+cd ../backend && go test ./... 2>&1 | tee /tmp/gate-backend-results.txt
+BACKEND_EXIT=$?
+
+if [ $UNIT_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ] || [ $BACKEND_EXIT -ne 0 ]; then
+    echo "⛔ GATE BLOCKED: Full regression test suite has failures"
+    echo "   Unit tests: $([ $UNIT_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+    echo "   E2E tests:  $([ $E2E_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+    echo "   Backend:    $([ $BACKEND_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+    echo "   Fix regressions before gating. Route failures to Wave 5 feedback loop."
+    exit 1
+fi
+echo "✅ Full regression: all tests pass"
+
 for f in "${REQUIRED_REPORTS[@]}"; do
   if [ ! -f "$f" ]; then
     echo "⛔ GATE BLOCKED: Missing required report: $f"
