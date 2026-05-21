@@ -26,12 +26,14 @@ Runs `/init` → `/plan` → `/develop` for all phases with auto-research for de
 ```
 Phase 0:  Environment pre-flight
 Phase 1:  /init --auto (research all decisions)
-Phase 2:  /plan --auto --phase=1
-Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions)
+Phase 1b: /map (persistent codebase knowledge base)
+Phase 2:  /discuss --auto --phase=1 (surface assumptions)
+Phase 2b: /plan --auto --phase=1
+Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions)
 Phase 4:  /develop --auto --phase=1
-Phase 5:  Repeat plan→develop for remaining phases
+Phase 5:  Repeat discuss→plan→develop for remaining phases
 Phase 6:  /accept --auto (global acceptance)
-Phase 7:  Final report
+Phase 7:  Final report + /health check
 ```
 
 ---
@@ -85,12 +87,49 @@ Run `/init` with auto-research protocol:
 
 ---
 
-## Step 2 — Plan Phase 1 (`/plan --auto --phase=1`)
+## Step 1b — Map Codebase (`/map`)
+
+**Run once after /init.** Creates persistent codebase knowledge base consumed by all downstream agents.
+
+```bash
+# Only run if project has existing code (not greenfield)
+if [ -n "$(find . -name '*.go' -o -name '*.ts' -o -name '*.py' -o -name '*.java' | head -1)" ]; then
+  # Run /map to produce agent_state/codebase/
+  echo "▶ Mapping codebase..."
+fi
+```
+
+Produces: `agent_state/codebase/` (tech-stack.md, architecture.md, quality.md, concerns.md, SUMMARY.md)
+
+**Greenfield projects:** Skip this step (nothing to map). The codebase mapper handles empty codebases gracefully.
+
+**Checkpoint:** Write checkpoint with codebase mapping summary.
+
+---
+
+## Step 2 — Discuss + Plan Phase 1
+
+### Step 2a — Discuss Phase 1 (`/discuss --auto --phase=1`)
+
+Surface assumptions and research decisions BEFORE planning:
+- `phase_assumptions_analyzer` reads BRD + codebase state → structured assumptions with evidence levels
+- `decision_researcher` investigates each MEDIUM/LOW confidence assumption (parallel, one per question)
+- All decisions auto-resolved with recommended defaults in `--auto` mode
+- Decision log: `agent_state/phases/1/decisions.jsonl`
+
+Output: `agent_state/phases/1/DISCUSSION.md` (consumed by `/plan`)
+
+**Checkpoint:** Write checkpoint with assumption count and auto-resolved decision count.
+
+### Step 2b — Plan Phase 1 (`/plan --auto --phase=1`)
 
 Run `/plan` with auto scope assignment:
 - `project_planner` auto-assigns FR-* to Phase 1 by dependency analysis (foundational requirements first)
 - All specs, data contracts, UI specs produced
 - Verification + reconciliation runs
+- `plan_goal_verifier` runs goal-backward check — in `--auto` mode: BLOCK verdict triggers auto-fix (route gaps to spec_writer, max 1 cycle), then force-proceed with warnings logged
+
+**plan_goal_verifier in auto mode:** If BLOCK persists after auto-fix cycle, downgrade to WARN and log to `agent_state/autonomous/auto-resolved.jsonl` with `"category": "architecture"`. Do NOT halt the pipeline — surface in the HUMAN CHECKPOINT instead.
 
 **Checkpoint:** Write checkpoint with phase plan summary.
 
@@ -129,8 +168,16 @@ Present a structured review document:
 ## Tech Stack
 [from IMPLEMENTATION_GUIDELINES]
 
-## Key Assumptions
-[from assumptions registry]
+## Key Assumptions (from /discuss)
+[from DISCUSSION.md — CONFIRMED/DEDUCED/HYPOTHESIZED with evidence]
+
+### HYPOTHESIZED Assumptions — NEEDS YOUR INPUT (N items)
+| # | Assumption | Evidence Level | Impact if Wrong |
+|---|-----------|---------------|-----------------|
+
+### DEDUCED Assumptions — Quick Review (N items)
+| # | Assumption | Evidence Chain | Confidence |
+|---|-----------|---------------|------------|
 
 ────────────────────────────────────────
 To proceed: type "go" or "approve"
@@ -231,10 +278,12 @@ Log failure report → continue to next phase if independent, or STOP if blockin
 
 ```
 For each phase N (2, 3, ... max_phases):
-  1. /plan --auto --phase=N
-  2. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3)
-  3. /develop --auto --phase=N
-  4. Checkpoint
+  1. /map --incremental (update codebase knowledge with changes from previous phase)
+  2. /discuss --auto --phase=N (surface assumptions for THIS phase)
+  3. /plan --auto --phase=N
+  4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3)
+  5. /develop --auto --phase=N
+  6. Checkpoint
 ```
 
 ### Post-Phase Auto-Resolution Review
@@ -332,8 +381,13 @@ Full audit trail: agent_state/autonomous/auto-resolved.jsonl
 - Phases: N × (plan + develop)
 - Checkpoints written: N
 
+## Pipeline Health
+[output of /health --verbose — integrity check of all agent_state/ artifacts]
+
 ## Next Steps
 [recommendations based on known issues and deferred items]
+[if any health issues found: recommend /health --fix]
+[if any forced gates: recommend /forensics --phase=N for investigation]
 ```
 
 ---
