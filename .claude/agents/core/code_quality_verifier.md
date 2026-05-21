@@ -296,7 +296,9 @@ Scan for:
 
 ---
 
-## Check 8 — Test Coverage Threshold
+## Check 8 — Test Quality Assessment (5 Dimensions)
+
+### 8a — Coverage Threshold
 
 Read the test coverage report (if available) or scan test files:
 
@@ -304,6 +306,82 @@ Read the test coverage report (if available) or scan test files:
 2. If a coverage tool output exists, compare against the threshold from IMPLEMENTATION_GUIDELINES or phase_context
 3. Flag components with no test file as BLOCKING
 4. Flag components with test files but below threshold as WARNING
+
+### 8b — Test Anti-Pattern Detection
+
+Scan test files for patterns that indicate low-quality tests:
+
+**Search commands:**
+
+```bash
+# Assertion-free tests (test functions with no assert/expect/require)
+# Go: functions starting with Test that have no assert/require calls
+grep -rn "func Test" --include="*_test.go" src/ internal/ | while read line; do
+  file=$(echo "$line" | cut -d: -f1)
+  grep -c "assert\.\|require\.\|t\.Error\|t\.Fatal" "$file"
+done
+
+# TypeScript: test blocks with no expect()
+grep -rn "it(\|test(" --include="*.test.ts" --include="*.test.tsx" --include="*.spec.ts" src/
+
+# Flaky patterns: sleep/setTimeout in tests
+grep -rn "time\.Sleep\|setTimeout\|sleep(" --include="*_test.go" --include="*.test.ts" --include="*.test.tsx" --include="*.spec.ts" src/ tests/
+
+# Over-mocking: tests with >3 mock/stub/spy setup calls
+grep -rn "mock\.\|stub\.\|spy\.\|jest\.fn\|jest\.mock\|jest\.spyOn\|gomock\.\|mockgen" --include="*_test.go" --include="*.test.ts" --include="*.test.tsx" --include="*.spec.ts" src/ tests/
+
+# Shared mutable state between tests (global var assignment in test files)
+grep -rn "^var \|^let \|^const.*= \[\|^const.*= {" --include="*_test.go" --include="*.test.ts" --include="*.test.tsx" src/ tests/
+```
+
+| Anti-Pattern | Detection | Severity | Why |
+|-------------|-----------|----------|-----|
+| Assertion-free tests | Test function with 0 assert/expect/require calls | BLOCKING | Test that asserts nothing verifies nothing — worse than no test (false confidence) |
+| Tautological tests | Test asserts on mock return value, not on system behavior | WARNING | Testing the mock, not the code — catches no real bugs |
+| Flaky assertions | `time.Sleep`, `setTimeout`, non-deterministic ordering in tests | WARNING | Flaky tests erode trust in the entire suite and slow CI |
+| Over-mocking | >3 mock/stub/spy setup calls in a single test function | INFO | High mock count often means testing implementation details, not behavior |
+| Test pollution | Global mutable state (non-const vars) in test files shared across tests | WARNING | Test order dependency — tests pass individually but fail together |
+| Mystery guests | Test depends on external state (files, env vars, DB) not set up in the test itself | WARNING | Breaks when environment changes, hard to run in isolation |
+
+### 8c — Test Pyramid Balance
+
+Count tests by type and verify the pyramid isn't inverted:
+
+```bash
+# Count unit tests
+UNIT_COUNT=$(find src/ tests/unit/ -name "*_test.go" -o -name "*.test.ts" -o -name "*.test.tsx" | wc -l)
+# Count integration tests
+INTEGRATION_COUNT=$(find tests/integration/ -name "*_test.go" -o -name "*.test.ts" | wc -l)
+# Count E2E tests
+E2E_COUNT=$(find tests/e2e/ e2e/ -name "*.spec.ts" -o -name "*.test.ts" 2>/dev/null | wc -l)
+```
+
+| Shape | Unit : Integration : E2E | Verdict | Severity |
+|-------|--------------------------|---------|----------|
+| Healthy pyramid | Many : Moderate : Few (e.g., 80:15:5) | PASS | — |
+| Ice cream cone | Few : Moderate : Many (e.g., 10:20:70) | WARNING | Slow CI, brittle tests, high maintenance cost |
+| Hourglass | Many : Few : Many (e.g., 40:5:55) | WARNING | Missing integration layer — unit and E2E pass but integration breaks |
+| No pyramid | Only one type of test | INFO | Note which types are missing |
+
+### 8d — Test Naming Audit
+
+Sample up to 5 test names per test file and check if they follow a descriptive pattern:
+
+**Good patterns (any of these):**
+- `test_<what>_<condition>_<expected>` (e.g., `test_create_user_with_duplicate_email_returns_conflict`)
+- `TestCreateUser_DuplicateEmail_ReturnsConflict` (Go convention)
+- `"should return conflict when email is duplicate"` (BDD/describe style)
+
+**Bad patterns:**
+- `test1`, `test2`, `testIt`
+- `testCreateUser` (no condition or expected outcome)
+- `TestFunc` (completely generic)
+
+| Pattern | Severity | Action |
+|---------|----------|--------|
+| ≥80% of sampled names are descriptive | PASS | — |
+| 50-80% descriptive | INFO | Note: "Test naming could be more descriptive" |
+| <50% descriptive | WARNING | "Test names don't describe behavior — makes failures hard to diagnose" |
 
 ---
 

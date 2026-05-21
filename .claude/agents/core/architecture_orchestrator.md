@@ -19,7 +19,7 @@ output:
 dependencies:
   upstream: [impl_guidelines_agent, brd_agent]
   downstream: [project_planner]
-subagents: [c4_diagram_agent, sequence_diagram_agent, deployment_diagram_agent, adr_agent]
+subagents: [c4_diagram_agent, sequence_diagram_agent, deployment_diagram_agent, adr_agent, eagle_diagram_agent]
 ---
 
 # Agent: Architecture Orchestrator
@@ -32,12 +32,12 @@ Lightweight coordinator that spawns specialized architecture subagents in parall
 ```
 architecture_orchestrator
         │
-  ┌─────┼──────┬──────┐
-  ▼     ▼      ▼      ▼
- c4  sequence deploy  adr
+  ┌─────┼──────┬──────┬──────┐
+  ▼     ▼      ▼      ▼      ▼
+ c4  sequence deploy  adr   eagle
 ```
 
-All four subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md` independently.
+All five subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md` independently.
 
 ## Subagent Assignments
 
@@ -47,6 +47,7 @@ All four subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEM
 | `sequence_diagram_agent` | `docs/architecture/sequence-diagrams.md` | Key flow sequence diagrams (Mermaid) |
 | `deployment_diagram_agent` | `docs/architecture/deployment-diagram.md` | Infrastructure topology |
 | `adr_agent` | `docs/architecture/adrs/ADR-001.md` etc. | Key tech decisions with rationale |
+| `eagle_diagram_agent` | `docs/architecture/eagle-overview.md` | 10,000-foot strategic architecture overview |
 
 ## Completion
 

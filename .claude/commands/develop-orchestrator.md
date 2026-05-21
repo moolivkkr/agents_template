@@ -75,6 +75,31 @@ test -f agent_state/phases/${PHASE}/reports/unit_tests.md || echo "⛔ BLOCKED"
 test -f agent_state/phases/${PHASE}/reports/e2e_results.md || echo "⛔ BLOCKED"
 ```
 
+### Test Failure Recovery Guardrails
+
+When tests fail and the test agent or a subsequent fix agent attempts auto-remediation, these guardrails are **absolute constraints** — they cannot be overridden by any agent:
+
+**NEVER do these to make tests pass:**
+- Delete, `.skip`, or comment out an existing test assertion or test function
+- Reduce test coverage threshold to pass a gate
+- Downgrade a dependency version to fix a build (may reintroduce CVEs)
+- Modify test expectations to match buggy behavior instead of fixing the bug
+- Remove a test file to reduce failure count
+- Add `// @ts-ignore`, `//nolint`, or equivalent to suppress test-adjacent type errors
+
+**Confidence-based escalation:**
+- If root cause is clear (missing import, typo, wrong return type, obvious logic error) → auto-fix
+- If root cause is unclear after reading the full failure output → escalate to user: "Test failure in [component] — root cause unclear. Options: [A] [B] [C]"
+- Maximum 3 auto-fix attempts per failing test → then escalate (do NOT loop indefinitely)
+
+**CI log sanitization (before feeding test output to any agent):**
+Strip these patterns from test/build output before including in any agent prompt:
+- Environment variables (`KEY=value`, `export VAR=`)
+- Connection strings (`postgres://`, `redis://`, `mongodb://`, `mysql://`)
+- Token-like strings (`sk-*`, `ghp_*`, `gho_*`, `Bearer *`, `token=*`)
+- File paths containing `/secrets/`, `/.env`, `/credentials`, `/private/`
+- Stack traces that include home directory paths (`/Users/`, `/home/`)
+
 ---
 
 ## Wave 4: REVIEW + ACCEPTANCE (parallel)

@@ -79,6 +79,59 @@ NEXT ACTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
+### Git Activity Summary
+
+Between the current phase (or latest gate) and HEAD, gather git activity metrics:
+
+```bash
+# Determine baseline: latest gate tag or first commit
+BASELINE=$(git tag -l "phase-*-gate" --sort=-version:refname | head -1)
+if [ -z "$BASELINE" ]; then
+  BASELINE=$(git rev-list --max-parents=0 HEAD)
+  IS_ROOT_BASELINE=true
+fi
+
+# Commit counts by type (conventional commit prefix)
+TOTAL_COMMITS=$(git log ${BASELINE}..HEAD --oneline | wc -l)
+FEAT_COMMITS=$(git log ${BASELINE}..HEAD --oneline --grep="^feat" | wc -l)
+FIX_COMMITS=$(git log ${BASELINE}..HEAD --oneline --grep="^fix" | wc -l)
+TEST_COMMITS=$(git log ${BASELINE}..HEAD --oneline --grep="^test" | wc -l)
+CHORE_COMMITS=$(git log ${BASELINE}..HEAD --oneline --grep="^chore" | wc -l)
+OTHER_COMMITS=$((TOTAL_COMMITS - FEAT_COMMITS - FIX_COMMITS - TEST_COMMITS - CHORE_COMMITS))
+
+# Files and lines changed (use space not .. for root commit baseline)
+if [ "$IS_ROOT_BASELINE" = "true" ]; then
+  DIFF_STAT=$(git diff --shortstat ${BASELINE} HEAD)
+else
+  DIFF_STAT=$(git diff --shortstat ${BASELINE}..HEAD)
+fi
+
+# Days since baseline
+BASELINE_DATE=$(git log -1 --format=%ci ${BASELINE})
+DAYS_ELAPSED=$(( ($(date +%s) - $(date -d "$BASELINE_DATE" +%s 2>/dev/null || date -jf "%Y-%m-%d %H:%M:%S %z" "$BASELINE_DATE" +%s)) / 86400 ))
+
+# Open PRs (if gh is available)
+OPEN_PRS=$(gh pr list --state open --json number,title 2>/dev/null || echo "")
+```
+
+Display:
+```
+GIT ACTIVITY (since last gate)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Commits: N (feat: X, fix: Y, test: Z, chore: W, other: V)
+  Changes: N files changed (+X / -Y lines)
+  Timeline: N days since last gate
+  Open PRs: N (or "none" or "gh CLI not available")
+```
+
+If no gate tags exist (fresh project):
+```
+GIT ACTIVITY (all time)
+━━━━━━━━━━━━━━━━━━━━━━
+  Commits: N total
+  Changes: (use git log --stat for full project stats)
+```
+
 ### Execution History
 
 For each completed phase, if `agent_state/phases/N/execution.jsonl` exists:

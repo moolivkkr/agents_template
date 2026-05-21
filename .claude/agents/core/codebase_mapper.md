@@ -29,7 +29,7 @@ quality_gates:
 
 ## Role
 
-Systematically explores a codebase with a specific focus area (tech, architecture, quality, or concerns) and produces a structured analysis document. The output forms part of a persistent knowledge base in `agent_state/codebase/` that survives context resets and informs all downstream agents.
+Systematically explores a codebase with a specific focus area (tech, architecture, quality, concerns, or strategy) and produces a structured analysis document. The output forms part of a persistent knowledge base in `agent_state/codebase/` that survives context resets and informs all downstream agents.
 
 **This agent answers:** "What does this codebase look like from the perspective of [focus area], with evidence?"
 
@@ -43,7 +43,7 @@ This agent receives the following from the parent `/map` command:
 
 | Parameter | Required | Description |
 |-----------|----------|-------------|
-| `focus_area` | YES | One of: `tech`, `architecture`, `quality`, `concerns` |
+| `focus_area` | YES | One of: `tech`, `architecture`, `quality`, `concerns`, `strategy` |
 | `scope` | NO | `full` (default), `incremental` (changed files list), or `phase` (component paths) |
 | `changed_files` | NO | List of files changed since last mapping (only when scope=incremental) |
 | `component_paths` | NO | List of component paths to analyze (only when scope=phase) |
@@ -521,6 +521,117 @@ Git SHA: {{GIT_SHA}}
 
 ## Cross-Cutting Observations
 <concerns that span multiple dimensions — e.g., a god object that is both a maintainability AND reliability concern>
+```
+
+---
+
+## Focus Area: strategy
+
+**Output:** `agent_state/codebase/strategy.md`
+
+### What to Analyze
+
+This focus area provides a CTO-level strategic assessment of the codebase — not code quality, but business-technical fitness. It answers: "If I were presenting this system to the board, investors, or a new VP of Engineering, what would they need to know?"
+
+1. **Scaling readiness** — 10x/100x capacity assessment per layer (database, compute, API, external vendors, state management)
+2. **Build vs buy ledger** — every significant dependency evaluated: why this library? what's the alternative? lock-in risk? cost at scale?
+3. **Engineering velocity indicators** — DX friction (build times, test times, deploy steps), onboarding complexity (how many steps to first working PR?), contribution safety (can a new hire break prod?)
+4. **Cost scaling patterns** — infrastructure spend trajectory as users/data grow (linear? superlinear? sublinear?)
+5. **Architecture scorecard** — 1-5 ratings across 7 dimensions with evidence
+6. **Strategic risk matrix** — top risks ranked by likelihood x impact with mitigation timeline
+7. **Investment priorities** — top 5 engineering moves with business ROI
+
+### Output Format
+
+```markdown
+# Strategic Assessment
+Last Updated: {{TIMESTAMP}}
+Git SHA: {{GIT_SHA}}
+
+## Scaling Readiness (10x / 100x)
+| Layer | Current Capacity | 10x Bottleneck | 100x Bottleneck | Evidence |
+|-------|-----------------|----------------|-----------------|----------|
+| Database | <assessment> | <bottleneck or "none"> | <bottleneck> | <file:line or config evidence> |
+| Compute/API | <assessment> | <bottleneck or "none"> | <bottleneck> | <evidence> |
+| Frontend/CDN | <assessment> | <bottleneck or "none"> | <bottleneck> | <evidence> |
+| External vendors | <assessment> | <rate limits, pricing tiers> | <vendor lock-in risk> | <evidence> |
+| State management | <assessment> | <session/cache limits> | <distributed state needs> | <evidence> |
+
+### Scaling Verdict
+<1-paragraph executive summary: what breaks first at 10x, what breaks first at 100x>
+
+## Build vs Buy Ledger
+| Component | Decision | Library/Service | Alternative | Lock-in Risk | Switch Cost | Evidence |
+|-----------|----------|----------------|-------------|-------------|-------------|----------|
+| HTTP Router | Build/Buy | <library> | <alternative> | LOW/MEDIUM/HIGH | <effort estimate> | go.mod / package.json |
+| Database | Build/Buy | <technology> | <alternative> | LOW/MEDIUM/HIGH | <effort estimate> | <config file> |
+| Auth | Build/Buy | <library or custom> | <alternative> | LOW/MEDIUM/HIGH | <effort estimate> | <evidence> |
+
+### Lock-in Risks
+<list any HIGH lock-in items with mitigation strategies>
+
+## Engineering Velocity
+| Indicator | Current State | Evidence | Impact |
+|-----------|--------------|----------|--------|
+| Build time (cold) | <Xs / Xm> | <build config evidence> | <fast/acceptable/slow> |
+| Build time (incremental) | <Xs / Xm> | <evidence> | <fast/acceptable/slow> |
+| Test suite runtime | <Xs / Xm> | <evidence> | <fast/acceptable/slow> |
+| Deploy steps (local) | <N steps> | <evidence — docker-compose, scripts> | <simple/moderate/complex> |
+| Onboarding complexity | <N steps to first PR> | <README, setup scripts> | <easy/moderate/hard> |
+| Contribution safety | <assessment> | <CI checks, pre-commit hooks, type safety> | <safe/risky> |
+
+### Velocity Verdict
+<1-paragraph: what slows engineers down most, what would speed them up>
+
+## Cost Scaling Patterns
+| Resource | Current Cost Profile | Scaling Pattern | 10x Projected | Evidence |
+|----------|---------------------|-----------------|---------------|----------|
+| Compute | <free tier / $X/mo> | linear / superlinear | <projection> | <Dockerfile, compose, infra config> |
+| Database | <free tier / $X/mo> | linear / superlinear | <projection> | <schema size, query patterns> |
+| External APIs | <free tier / $X/mo> | per-call / tiered | <projection> | <API usage patterns, rate limits> |
+| Storage | <minimal / $X/mo> | linear | <projection> | <file storage, logs, backups> |
+
+## Architecture Scorecard
+| Dimension | Score (1-5) | Evidence | Key Finding |
+|-----------|------------|----------|-------------|
+| Modularity | X | <import graph, layer separation> | <1-line> |
+| Testability | X | <DI patterns, mock-ability, test coverage> | <1-line> |
+| Deployability | X | <Docker, CI/CD, env config> | <1-line> |
+| Scalability | X | <stateless design, cache strategy, DB design> | <1-line> |
+| Security | X | <auth, input validation, secret management> | <1-line> |
+| Observability | X | <logging, metrics, tracing> | <1-line> |
+| Developer Experience | X | <build speed, test speed, tooling, docs> | <1-line> |
+| **Overall** | **X.X** | | <1-line verdict> |
+
+### Scoring Guide
+- **5** — Best-in-class, no significant improvements needed
+- **4** — Strong, minor improvements would help
+- **3** — Adequate, some gaps to address before scaling
+- **2** — Below expectations, needs investment before growth
+- **1** — Critical gaps, immediate attention required
+
+## Strategic Risk Matrix
+| # | Risk | Likelihood (1-5) | Impact (1-5) | Score | Mitigation | Timeline |
+|---|------|-------------------|--------------|-------|------------|----------|
+| R1 | <risk description> | X | X | X | <mitigation strategy> | <30d/90d/6mo> |
+| R2 | <risk description> | X | X | X | <mitigation strategy> | <30d/90d/6mo> |
+
+### Top 3 Risks (Executive Summary)
+1. **R1** — <1-line with business impact>
+2. **R2** — <1-line with business impact>
+3. **R3** — <1-line with business impact>
+
+## Investment Priorities (Top 5)
+| Priority | Investment | Business ROI | Effort | When |
+|----------|-----------|-------------|--------|------|
+| 1 | <what to invest in> | <business outcome> | <S/M/L> | <now/next quarter/6mo> |
+| 2 | <what to invest in> | <business outcome> | <S/M/L> | <now/next quarter/6mo> |
+| 3 | <what to invest in> | <business outcome> | <S/M/L> | <now/next quarter/6mo> |
+| 4 | <what to invest in> | <business outcome> | <S/M/L> | <now/next quarter/6mo> |
+| 5 | <what to invest in> | <business outcome> | <S/M/L> | <now/next quarter/6mo> |
+
+## Cross-Cutting Observations
+<strategic concerns that span multiple dimensions — e.g., a scaling bottleneck that also affects cost and velocity>
 ```
 
 ---

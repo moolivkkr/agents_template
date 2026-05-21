@@ -148,6 +148,15 @@ Run ONLY tests related to the affected component — not the full test suite.
 1. If tests fail: diagnose, fix (still scoped to component), re-run (max 2 retries)
 2. If tests still fail after retries: STOP — do not merge a failing hotfix
 
+### Test Failure Recovery Guardrails (same as /develop)
+
+When auto-fixing test failures, these constraints are absolute:
+- **NEVER** delete, skip, or comment out an existing test to make the suite pass
+- **NEVER** modify test expectations to match buggy behavior
+- **NEVER** downgrade a dependency to fix a build
+- If root cause is unclear after reading failure output → STOP and escalate to user
+- Strip secrets/tokens/connection strings from test output before analysis
+
 ```
 ⛔ Hotfix tests failing after 2 retries
   Component: ${COMPONENT}

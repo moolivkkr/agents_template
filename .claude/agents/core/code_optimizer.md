@@ -197,6 +197,27 @@ Failures introduced: [list if any — should be zero]
 
 Run AFTER Pass 1 (dead code removed). Optimize the surviving codebase.
 
+### Risk-Tiered Execution Order
+
+Apply optimizations in risk order — safest first. Within each category (A/B/C), sort candidates by tier before applying:
+
+| Tier | Operation | Risk | Examples | Failure Protocol |
+|------|-----------|------|---------|------------------|
+| 1 (safest) | Rename / consolidate imports | Minimal | Rename variable, merge import statements | If fails on 1st attempt → revert immediately (don't retry — a rename that fails is a signal, not a fluke) |
+| 2 | Extract method / simplify conditional | Low | Extract 3+ identical blocks, flatten if/else, early returns | Standard fix cycle (3 attempts) |
+| 3 | Move / relocate | Medium | Move function to different module, consolidate tiny files | Standard fix cycle (3 attempts) |
+| 4 | Inline / collapse abstraction | Medium | Inline single-use interface, remove pass-through wrapper | Standard fix cycle (3 attempts) |
+| 5 (highest) | Extract class / split module | High | Split god object into services, extract domain from handler | If fails on 1st attempt → revert immediately and log as "skipped — high-risk extraction, needs manual review" |
+
+**Execution rule:** Process ALL Tier 1 candidates before any Tier 2, ALL Tier 2 before Tier 3, etc. This ensures the safest changes land first and the codebase is maximally clean before attempting riskier transformations.
+
+### Scope Guard — Optimization vs Feature Creep
+
+Before applying ANY optimization, verify:
+- **Am I refactoring or adding features?** If the change adds new behavior (new function, new error path, new API), STOP — this is not optimization.
+- **Am I simplifying or over-engineering?** If the change introduces a new abstraction (interface, factory, strategy pattern) that didn't exist before, STOP — optimization removes complexity, not adds it.
+- **Am I fixing a bug I found?** Log it in the report under `## Bugs Discovered During Optimization` but do NOT fix it — that's for the developer or `/hotfix`. Optimizers must not change behavior.
+
 ### Optimization Categories
 
 **Category A — Code Reduction (fewer lines, same behavior):**

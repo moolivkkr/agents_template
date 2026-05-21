@@ -4,7 +4,7 @@ description: "Analyze codebase with parallel mapper agents. Produces persistent 
 arguments:
   - name: focus
     required: false
-    description: "Focus area: 'tech', 'architecture', 'quality', 'concerns', or 'all' (default: 'all')"
+    description: "Focus area: 'tech', 'architecture', 'quality', 'concerns', 'strategy', or 'all' (default: 'all')"
   - name: incremental
     required: false
     default: false
@@ -110,7 +110,7 @@ mkdir -p agent_state/codebase
 ```bash
 FOCUS="${ARG_FOCUS:-all}"
 if [ "$FOCUS" = "all" ]; then
-  FOCUS_AREAS="tech architecture quality concerns"
+  FOCUS_AREAS="tech architecture quality concerns strategy"
 else
   FOCUS_AREAS="$FOCUS"
 fi
@@ -172,6 +172,17 @@ The `codebase_mapper` with `focus=concerns` analyzes:
 
 Each concern is classified: **HIGH** (likely to cause issues), **MEDIUM** (should address), **LOW** (improvement opportunity).
 
+### Focus: strategy → `agent_state/codebase/strategy.md`
+
+The `codebase_mapper` with `focus=strategy` provides a CTO-level strategic assessment:
+- Scaling readiness — 10x/100x capacity assessment per layer (DB, compute, API, vendors, state)
+- Build vs buy ledger — every significant dependency evaluated for lock-in risk and switch cost
+- Engineering velocity indicators — build times, test times, deploy steps, onboarding complexity, contribution safety
+- Cost scaling patterns — infrastructure spend trajectory as users/data grow
+- Architecture scorecard — 1-5 ratings across 7 dimensions (modularity, testability, deployability, scalability, security, observability, DX)
+- Strategic risk matrix — top risks ranked by likelihood x impact with mitigation timeline
+- Investment priorities — top 5 engineering moves with business ROI
+
 ---
 
 ## Step 2 — Synthesize
@@ -184,6 +195,7 @@ Read each produced document:
 - `agent_state/codebase/architecture.md`
 - `agent_state/codebase/quality.md`
 - `agent_state/codebase/concerns.md`
+- `agent_state/codebase/strategy.md`
 
 ### Write SUMMARY.md
 
@@ -274,6 +286,7 @@ Print the mapping summary:
     agent_state/codebase/architecture.md
     agent_state/codebase/quality.md
     agent_state/codebase/concerns.md
+    agent_state/codebase/strategy.md
 ```
 
 If `--incremental`:
