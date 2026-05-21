@@ -23,18 +23,31 @@ docs/                          ← GENERATED OUTPUT — agents write here
 
 /startup/research  →  ultra-deep market & product research (optional, before init)
 /startup/init      →  BRD + agents from requirements
-/startup/plan      →  specs + data-contracts.md + UI specs per phase
+/startup/map       →  persistent codebase knowledge base (4 parallel focus areas)
+/startup/discuss   →  surface assumptions + research decisions (before /plan)
+/startup/plan      →  specs + data-contracts.md + UI specs + goal verification per phase
 /startup/develop   →  implement + test + review + gate per phase
 /startup/accept    →  full-product validation + release notes
 /startup/deploy    →  build + migrate + deploy + health validation
 
 OR: /startup/autonomous  →  all of the above end-to-end with one human checkpoint
 
+Session management:
+/startup/pause     →  save session state for later resumption
+/startup/resume    →  restore paused session and continue
+
+Parallel work:
+/startup/workstream →  manage concurrent feature branches (create, switch, merge)
+
 Issue resolution (use anytime):
 /startup/hotfix    →  scoped fix + scoped test + scoped review (bypasses full pipeline)
 /startup/diagnose  →  trace symptom to root cause, optional auto-fix
 /startup/benchmark →  performance baselines + regression detection
 /startup/rollback  →  reverse deployment to previous known-good state
+
+Pipeline diagnostics:
+/startup/health    →  diagnose agent_state integrity + auto-repair
+/startup/forensics →  post-mortem analysis of failed pipeline runs
 ```
 
 > **Convention:** `requirements/` is read-only input. `docs/` is generated output. Never write `BRD.md` by hand — always run `/startup/init`. The `IMPLEMENTATION_GUIDELINES.md` in `requirements/` is your optional draft; `/init` produces the authoritative confirmed version in `docs/`.
@@ -154,21 +167,28 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 | Command | What it does |
 |---------|-------------|
-| `/startup/research` | **NEW** Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
+| `/startup/research` | Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
 | `/startup/init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode |
-| `/startup/plan` | Creates TRDs, typed data contracts, and component-level UI specs per phase. Supports `--auto` |
+| `/startup/map` | **NEW** Analyzes codebase with 4 parallel mapper agents (tech, architecture, quality, concerns). Produces persistent knowledge base in `agent_state/codebase/` |
+| `/startup/discuss` | **NEW** Pre-planning context gathering — surfaces assumptions (CONFIRMED/DEDUCED/HYPOTHESIZED), researches gray area decisions, identifies risks. Run before `/plan` |
+| `/startup/plan` | Creates TRDs, typed data contracts, component-level UI specs, and **goal-backward verification** per phase. Supports `--auto` |
 | `/startup/develop` | Implements phase end-to-end: audit → build checks → code → tests → review + acceptance (parallel) → gate. Supports `--auto` |
-| `/startup/autonomous` | **NEW** Runs the full pipeline end-to-end — auto-researches decisions, one human checkpoint, then autonomous develop for all phases |
+| `/startup/autonomous` | Runs the full pipeline end-to-end — `/map` → `/discuss` → `/plan` → `/develop` for all phases. One human checkpoint. Auto-researches all decisions |
 | `/startup/accept` | Runs full-product acceptance tests + contract shape assertions after all phases |
 | `/startup/test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system) |
 | `/startup/review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
 | `/startup/optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
 | `/startup/deploy` | Builds, migrates, deploys to local / staging / prod, validates health post-deploy |
 | `/startup/status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
-| `/startup/hotfix` | **NEW** Fast-track bug fix — scoped change → scoped test → scoped review → merge. Bypasses full `/develop` cycle |
-| `/startup/diagnose` | **NEW** Structured bug investigation — traces symptom to root cause through spec ↔ implementation comparison |
-| `/startup/benchmark` | **NEW** Performance tracking — captures metrics per phase, saves baselines, flags regressions >10% |
-| `/startup/rollback` | **NEW** Deployment rollback — reverses migrations, redeploys previous build, validates health |
+| `/startup/pause` | **NEW** Saves session state (phase, step, completed items, blockers, decisions) for later resumption. Supports named threads |
+| `/startup/resume` | **NEW** Restores paused session state and routes to the appropriate command to continue. Use `--list` to see all paused sessions |
+| `/startup/workstream` | **NEW** Manages parallel workstreams — create, list, switch, status, complete, merge. Enables concurrent work on independent features |
+| `/startup/hotfix` | Fast-track bug fix — scoped change → scoped test → scoped review → merge. Bypasses full `/develop` cycle |
+| `/startup/diagnose` | Structured bug investigation — traces symptom to root cause through spec ↔ implementation comparison |
+| `/startup/benchmark` | Performance tracking — captures metrics per phase, saves baselines, flags regressions >10% |
+| `/startup/rollback` | Deployment rollback — reverses migrations, redeploys previous build, validates health |
+| `/startup/health` | **NEW** Diagnoses pipeline state integrity — manifest validity, gate consistency, file references. Use `--fix` for auto-repair |
+| `/startup/forensics` | **NEW** Post-mortem investigation for failed pipeline runs — timeline reconstruction, root cause classification, recovery recommendations |
 
 ### Command arguments
 
@@ -203,12 +223,61 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --auto            Autonomous mode — auto-resolve escalations, auto-fix gate failures
 ```
 
+**`/startup/discuss`**
+```
+--phase=N         Phase to discuss (default: auto-detect next unplanned)
+--auto            Skip interactive questions — use recommended defaults, log all decisions
+--focus=all       Focus: assumptions | risks | decisions | all
+```
+
+**`/startup/map`**
+```
+--focus=all       Focus: tech | architecture | quality | concerns | all
+--incremental     Only re-map files changed since last mapping
+--phase=N         Scope mapping to components relevant to a specific phase
+```
+
 **`/startup/autonomous`**
 ```
 --confirm_each_phase   Pause for human review before EACH phase (default: Phase 1 only)
 --resume               Resume from last checkpoint
 --skip_init            Use existing BRD + IMPL_GUIDELINES
 --max_phases=N         Limit to N phases
+```
+
+**`/startup/pause`**
+```
+--phase=N         Phase being worked on (auto-detected)
+--reason="..."    Why work is being paused
+--thread=NAME     Named thread for this work (enables multiple paused contexts)
+```
+
+**`/startup/resume`**
+```
+--thread=NAME     Named thread to resume (default: latest session)
+--list            List all paused sessions instead of resuming
+```
+
+**`/startup/workstream`**
+```
+--action=ACTION   create | list | switch | status | complete | merge (required)
+--name=NAME       Workstream name (required for create/switch/complete/merge)
+--phase=N         Phase(s) this workstream covers (comma-separated)
+--description="…" Workstream description (for create)
+```
+
+**`/startup/health`**
+```
+--fix             Attempt automatic repair of detected issues
+--phase=N         Check specific phase only
+--verbose         Show detailed results including passing checks
+```
+
+**`/startup/forensics`**
+```
+--phase=N         Phase to investigate (default: most recently failed)
+--command=CMD     Which command failed: plan | develop | test | review | deploy
+--depth=standard  Investigation depth: quick | standard | deep
 ```
 
 **`/startup/test`**
@@ -392,6 +461,19 @@ my-project/
 │   │       ├── brd_vs_specs.md
 │   │       ├── specs_vs_impl.md
 │   │       └── specs_vs_tests.md
+│   ├── codebase/                        ← GENERATED by /map
+│   │   ├── SUMMARY.md                   ← 1-page overview
+│   │   ├── tech-stack.md                ← languages, frameworks, build tools
+│   │   ├── architecture.md              ← module boundaries, API surface, data models
+│   │   ├── quality.md                   ← test coverage, patterns, tech debt
+│   │   └── concerns.md                  ← security, performance, reliability issues
+│   ├── sessions/                        ← GENERATED by /pause
+│   │   └── {thread}/
+│   │       └── LATEST.md               ← most recent pause snapshot
+│   ├── workstreams/                     ← GENERATED by /workstream
+│   │   └── registry.json               ← active workstreams + state
+│   ├── forensics/                       ← GENERATED by /forensics
+│   │   └── {timestamp}-phase-N.md      ← post-mortem reports
 │   ├── e2e/
 │   │   └── results.md
 │   └── phases/
@@ -449,6 +531,9 @@ These live in `~/.claude/agents/` after install. No project setup required.
 | `spec_writer` | Generates TRD for one component/flow — interface contracts, data model, 10+ edge cases, test coverage requirements | sonnet |
 | `agent_factory` | Reads confirmed IMPLEMENTATION_GUIDELINES, populates agent templates, writes project-specific agents to `.claude/agents/generated/` | sonnet |
 | `product_manager` | Handles change requests and BRD amendments after `/init` — invoke manually | opus |
+| `phase_assumptions_analyzer` | **NEW** Deep codebase analysis — surfaces structured assumptions with evidence levels (CONFIRMED/DEDUCED/HYPOTHESIZED) before planning | opus |
+| `decision_researcher` | **NEW** Researches gray area decisions — produces comparison tables with pros/cons/risk/recommendation for each option | sonnet |
+| `plan_goal_verifier` | **NEW** Goal-backward verification — traces phase goal → specs → components → contracts to verify the plan will achieve its objective | opus |
 
 **BRD pipeline sub-agents** (invoked internally by `brd_agent`):
 
@@ -464,6 +549,7 @@ These live in `~/.claude/agents/` after install. No project setup required.
 |-------|------|---------|
 | `backend_audit_agent` | Gap analysis for backend codebase vs phase specs | Every phase |
 | `ui_audit_agent` | Gap analysis for UI layer vs wireframes, API bindings, state handling | UI phases only |
+| `codebase_mapper` | **NEW** Explores codebase with focus area (tech/arch/quality/concerns), writes persistent knowledge base | `/map` |
 
 #### Specification & Design
 
@@ -671,9 +757,9 @@ Providing your own seed data gives you deterministic acceptance tests from day o
 
 | Tier | Agents | Rationale |
 |------|--------|-----------|
-| **opus** | `architecture_orchestrator`, `backend_developer`, `api_developer`, `ux_designer`, `code_reviewer_II`, `security_reviewer`, `acceptance_test_agent`, `spec_impl_reconciler`, `product_manager` | Deep reasoning: architecture design, complex code generation, security analysis, nuanced acceptance validation |
-| **sonnet** | `code_optimizer`, `ui_code_optimizer`, `code_reviewer_I`, all spec/reconciliation/planning agents (33 agents) | Structured output, document processing, spec generation, reconciliation, code review style, optimization |
-| **haiku** | `demo_executor`, `test_runner`, `status`, `dependency_scanner` | Lightweight execution, result formatting, audit tool invocation |
+| **opus** (12) | `architecture_orchestrator`, `backend_developer`, `api_developer`, `ux_designer`, `code_reviewer_II`, `security_reviewer`, `acceptance_test_agent`, `spec_impl_reconciler`, `product_manager`, **`phase_assumptions_analyzer`**, **`plan_goal_verifier`**, `tenant_isolation_verifier` | Deep reasoning: architecture design, complex code generation, security analysis, nuanced acceptance validation, assumption surfacing, goal-backward verification |
+| **sonnet** (41) | `code_optimizer`, `ui_code_optimizer`, `code_reviewer_I`, **`decision_researcher`**, **`codebase_mapper`**, all spec/reconciliation/planning agents | Structured output, document processing, spec generation, reconciliation, code review style, optimization, codebase mapping, decision research |
+| **haiku** (3) | `demo_executor`, `test_runner`, `dependency_scanner` | Lightweight execution, result formatting, audit tool invocation |
 
 To adjust: edit `~/.claude/settings.json` `agents.opus_agents` array.
 
@@ -726,11 +812,29 @@ The full implementation is in files. The parent reads the output file path when 
 
 ### If the window fills mid-pipeline
 
-All state is in `agent_state/phases/N/`. Start a new conversation and resume from the last completed step — the step reads its input files, runs, writes output, returns 3-line summary. No conversation history needed.
+Use `/startup/pause` to explicitly save your session state before context runs out:
 
+```
+/startup/pause --reason="context limit"   ← saves phase, step, completed items, blockers
+```
+
+Then in a new conversation:
+```
+/startup/resume                           ← restores full context, routes to the right command
+```
+
+Or use the lightweight approach — all state is in `agent_state/phases/N/`:
 ```
 /startup/status          ← shows exactly where you stopped
 /startup/develop --phase=N   ← resumes from last incomplete step
+```
+
+For named threads (multiple paused sessions):
+```
+/startup/pause --thread=auth-refactor
+/startup/pause --thread=phase-3-ui
+/startup/resume --list                    ← shows all paused sessions
+/startup/resume --thread=auth-refactor    ← resumes specific thread
 ```
 
 ---
@@ -797,17 +901,35 @@ requirements/
 
 ## User Guide
 
-### Your first project — step by step
+### Your first project — step by step (manual)
 
 ```
 1. INSTALL (once)          bash install.sh
 2. CREATE PROJECT          bash new-project.sh my-app ~/development
 3. ADD REQUIREMENTS        Drop specs/stories into my-app/requirements/
 4. INITIALIZE              /startup/init
-5. PLAN PHASE 1            /startup/plan
-6. BUILD PHASE 1           /startup/develop
-7. REPEAT 5-6              For each phase until all features are built
-8. FINAL VALIDATION        /startup/accept
+5. MAP CODEBASE            /startup/map           ← builds persistent knowledge base
+6. DISCUSS PHASE 1         /startup/discuss        ← surface assumptions + decisions
+7. PLAN PHASE 1            /startup/plan           ← specs + goal verification
+8. BUILD PHASE 1           /startup/develop
+9. REPEAT 5-8              For each phase until all features are built
+10. FINAL VALIDATION       /startup/accept
+```
+
+**Session management:** If context runs out mid-phase:
+```
+/startup/pause              ← saves where you are
+(start new conversation)
+/startup/resume             ← picks up exactly where you left off
+```
+
+**Parallel features:** If two features are independent:
+```
+/startup/workstream create --name=auth --phase=3
+/startup/workstream create --name=dashboard --phase=4
+/startup/workstream switch --name=auth     ← work on auth
+/startup/workstream switch --name=dashboard ← switch to dashboard
+/startup/workstream merge --name=auth      ← merge completed auth back
 ```
 
 ### Fully autonomous mode (minimal interaction)
@@ -817,10 +939,26 @@ requirements/
 2. CREATE PROJECT          bash new-project.sh my-app ~/development
 3. ADD REQUIREMENTS        Drop specs/stories into my-app/requirements/
 4. RUN                     /startup/autonomous
-   → Auto-researches all decisions
-   → One checkpoint: review decisions before implementation
-   → Builds all phases end-to-end
+   → /init          Creates BRD + agents
+   → /map           Builds codebase knowledge base
+   → For each phase:
+     → /discuss     Surfaces assumptions (auto-resolved)
+     → /plan        Specs + goal verification
+     → /develop     Implementation + tests + review + gate
+   → 🛑 ONE CHECKPOINT: review assumptions + decisions before Phase 1 implementation
+   → All remaining phases run fully autonomous
+   → /accept        Global validation
+   → /health        Final integrity check
    → Produces working app + full audit trail
+```
+
+### When things go wrong
+
+```
+/startup/health             ← check pipeline state integrity
+/startup/health --fix       ← auto-repair common issues
+/startup/forensics          ← investigate failed pipeline runs
+/startup/diagnose           ← trace a specific bug to root cause
 ```
 
 ### Starting with deep research (new product/market)
@@ -841,19 +979,25 @@ requirements/
 | Research a market before building | `/startup/research --domain="..."` |
 | Build everything autonomously | `/startup/autonomous` |
 | Start a new project | `bash new-project.sh my-app` then `/startup/init` |
-| Build the next feature set | `/startup/plan` then `/startup/develop` |
+| Understand the codebase first | `/startup/map` |
+| Surface assumptions before planning | `/startup/discuss` |
+| Build the next feature set | `/startup/discuss` → `/startup/plan` → `/startup/develop` |
 | See where I am | `/startup/status` |
+| Save my progress and resume later | `/startup/pause` then `/startup/resume` in new session |
+| Work on two features in parallel | `/startup/workstream create --name=feature-a` |
 | Run tests without building | `/startup/test` |
 | Review code quality | `/startup/review` |
 | Clean up and optimize code | `/startup/optimize` |
 | Preview optimizations without changing code | `/startup/optimize --dry_run` |
 | Deploy the app | `/startup/deploy --target=local` |
 | Validate the full product | `/startup/accept` |
-| Resume after a break | `/startup/status` then follow its recommendation |
-| **Fix a bug quickly** | **`/startup/hotfix --phase=N --component=auth`** |
-| **Investigate a bug** | **`/startup/diagnose --symptom="GET /users returns 500"`** |
-| **Track performance over time** | **`/startup/benchmark --save-baseline`** |
-| **Roll back a bad deploy** | **`/startup/rollback --target=local`** |
+| Resume after a break | `/startup/resume` or `/startup/status` |
+| Fix a bug quickly | `/startup/hotfix --phase=N --component=auth` |
+| Investigate a bug | `/startup/diagnose --symptom="GET /users returns 500"` |
+| Track performance over time | `/startup/benchmark --save-baseline` |
+| Roll back a bad deploy | `/startup/rollback --target=local` |
+| Check pipeline health | `/startup/health` |
+| Investigate a failed pipeline run | `/startup/forensics` |
 | Fix a bug and re-validate | Fix the code, then `/startup/test --phase=N` |
 | Add a feature mid-project | Use `product_manager` agent to update BRD, then `/startup/plan` |
 | Re-do a phase | `/startup/reset-phase --phase=N` then `/startup/develop --phase=N` |
@@ -897,14 +1041,21 @@ If any check fails, the gate blocks and tells you exactly what to fix.
 ### Commands at a glance
 
 ```
-Pipeline:
+Pipeline (23 commands total):
 /startup/research     Deep market & product research. Vendors, capabilities, moats.
 /startup/init         One-time project setup. Creates BRD + agents from requirements.
-/startup/plan         Plans a phase. Creates specs, data contracts, UI specs.
+/startup/map          Codebase knowledge base — 4 parallel focus areas.
+/startup/discuss      Surface assumptions + research decisions. Run before /plan.
+/startup/plan         Plans a phase. Creates specs, data contracts, goal verification.
 /startup/develop      Builds a phase end-to-end with parallel review + acceptance.
-/startup/autonomous   Full pipeline: research → init → plan → develop (all phases).
+/startup/autonomous   Full pipeline: map → discuss → plan → develop (all phases).
 /startup/accept       Full-product validation after all phases complete.
 /startup/deploy       Build and deploy to local, staging, or production.
+
+Session & Workflow:
+/startup/pause        Save session state for later resumption.
+/startup/resume       Restore paused session and continue working.
+/startup/workstream   Manage parallel workstreams (create/switch/merge).
 
 Standalone:
 /startup/test         Runs tests standalone. Many flags for targeting specific tiers.
@@ -918,6 +1069,10 @@ Issue Resolution:
 /startup/diagnose     Trace a symptom to root cause. Optional auto-fix.
 /startup/rollback     Roll back a deployment. Reverse migrations + redeploy previous build.
 /startup/reset-phase  Reset a phase for re-development with state preservation.
+
+Pipeline Diagnostics:
+/startup/health       Check pipeline state integrity. Use --fix for auto-repair.
+/startup/forensics    Investigate failed pipeline runs. Timeline + root cause + recovery.
 ```
 
 ### Tips
