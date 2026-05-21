@@ -5,8 +5,12 @@ model: sonnet
 category: review
 input:
   required:
-    - type: wireframes
+    - type: wireframes_html
+      path: docs/design/phases/{{PHASE}}/specs/*.wireframe.html
+      description: HTML wireframes — primary visual reference (open in browser to verify)
+    - type: wireframes_md
       path: docs/design/phases/{{PHASE}}/specs/*.wireframe.md
+      description: Markdown specs — behavior, data bindings, accessibility
     - type: guidelines
       path: docs/IMPLEMENTATION_GUIDELINES.md
 output:

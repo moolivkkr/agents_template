@@ -23,6 +23,7 @@ input:
 output:
   primary: docs/design/phases/{{PHASE}}/specs/
   artifacts:
+    - path: docs/design/phases/{{PHASE}}/specs/{{SCREEN}}.wireframe.html
     - path: docs/design/phases/{{PHASE}}/specs/{{SCREEN}}.wireframe.md
 dependencies:
   upstream: [spec_writer]
@@ -56,9 +57,57 @@ Produces wireframe specification files for UI screens scoped to the current phas
 
 ## Wireframe File Format
 
-One file per screen: `docs/design/phases/N/specs/<screen-name>.wireframe.md`
+**TWO files per screen:**
+1. `docs/design/phases/N/specs/<screen-name>.wireframe.html` — **PRIMARY** visual reference (open in browser)
+2. `docs/design/phases/N/specs/<screen-name>.wireframe.md` — component spec, data bindings, interactions, accessibility
 
-Every wireframe MUST include BOTH mobile (375px) and desktop (1280px) layouts.
+**The HTML wireframe is the source of truth for visual appearance. The markdown spec is the source of truth for behavior, data, and accessibility.**
+
+### HTML Wireframe Requirements
+
+The `.wireframe.html` file is a **standalone, self-contained HTML file** with inline CSS. No external dependencies, no build step — opens directly in any browser.
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>[Screen Name] — Wireframe</title>
+  <style>
+    /* ALL CSS inline — this IS the visual spec */
+    /* Use exact values that ui_developer must implement */
+    /* Include both light and dark theme (toggle via checkbox or class) */
+    /* Include responsive breakpoints */
+  </style>
+</head>
+<body>
+  <!-- Static HTML structure matching the component tree -->
+  <!-- Use real text content, not "Lorem ipsum" -->
+  <!-- Include all 4 states as separate sections or toggle -->
+</body>
+</html>
+```
+
+**HTML wireframe rules:**
+- Self-contained: inline `<style>`, no `<link>` or `<script src="...">`, no CDN
+- Pixel-accurate: exact colors (hex), exact sizes (px), exact border-radius, exact gaps
+- Interactive states: show default + hover + active + selected via CSS pseudo-classes
+- Both themes: include dark and light mode (e.g., checkbox toggle that swaps data-theme)
+- Both breakpoints: responsive at 375px and 1280px (use media queries)
+- All 4 states visible: loading, empty, error, populated (as separate sections on the page)
+- Real content: use realistic data values, not placeholders
+- Annotations: HTML comments marking component boundaries (`<!-- Button variant="operator" -->`)
+
+**Why HTML instead of ASCII:**
+- Unambiguous: border-radius: 50% LOOKS circular when you open it
+- Inspectable: ui_developer can right-click → Inspect to get exact CSS
+- Verifiable: compare wireframe side-by-side with implementation
+- Diffable: visual regression by screenshot comparison
+
+### Markdown Spec Requirements
+
+The `.wireframe.md` file contains everything that can't be expressed visually:
 
 ```markdown
 # Screen: <Screen Name>
@@ -67,11 +116,8 @@ Every wireframe MUST include BOTH mobile (375px) and desktop (1280px) layouts.
 User story: "As a <persona>, I want to <action> so that <outcome>"
 BRD Requirement: FR-NNN
 
-## Layout — Desktop (1280px)
-ASCII grid showing major regions (header / sidebar / main / footer)
-
-## Layout — Mobile (375px)
-ASCII grid showing mobile layout (stacked, hamburger nav, full-width)
+## Visual Reference
+Open `<screen-name>.wireframe.html` in a browser for the exact visual target.
 
 ## Components
 | Component | Library Primitive | Purpose | Touch Target (mobile) |
@@ -141,13 +187,16 @@ For each data-fetching component on the screen, specify:
 ```
 
 ## Rules
-- **NEVER produce ASCII art wireframes** — produce component-level specs with exact shadcn component names
+- **ALWAYS produce an HTML wireframe first** — the `.wireframe.html` is the PRIMARY visual contract
+- **HTML must be self-contained** — inline CSS only, opens in any browser with no build step
 - **ALWAYS start from a page archetype** — customize, don't invent. Reference the archetype file.
 - **ALWAYS reference data-contracts.md** for API bindings — use exact TypeScript interface names and field paths
 - Every data field shown must map to a real field in `data-contracts.md` with correct type (array vs object)
-- Reference only shadcn/ui component primitives — never invent component names
-- ALWAYS include mobile (375px) + desktop (1280px) component trees
-- ALWAYS define all 4 states with code-level detail (skeleton component names, exact empty state text, Lucide icon names)
+- If using shadcn/ui: reference component primitives. If using CSS Modules: provide exact CSS in the HTML wireframe.
+- ALWAYS include mobile (375px) + desktop (1280px) layouts in the HTML wireframe
+- ALWAYS define all 4 states in the HTML wireframe (as visible sections or toggleable)
 - Read previous phase UI specs before starting — don't break existing navigation
-- Use Lucide icon names for empty/error state icons (developer uses these directly)
 - Never leave API bindings as "TBD" — data-contracts.md has the exact shapes
+- **Use literal Unicode characters** in HTML content: ÷ × − ±, NOT escape sequences
+- **CSS values in the HTML wireframe ARE the spec** — ui_developer must match them exactly
+- If visual spec research (08d) exists, HTML wireframe must use those exact values
