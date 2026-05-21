@@ -2,17 +2,22 @@
 
 ## Purpose
 
-Before writing a single requirement, research the domain so thoroughly that the BRD writes itself. This protocol produces a complete market analysis, capability matrix, persona map, and competitive moat strategy — all from automated research.
+Before writing a single requirement, research the domain so thoroughly that the BRD writes itself. This protocol produces a complete market analysis, capability matrix, persona map, competitive moat strategy, behavioral edge case inventory, evidence-based performance baselines, and completeness audit — all from automated research.
 
-## The 6-Phase Research Framework
+## The Research Framework
 
 ```
-Phase 1: Market Landscape    → Who are the players? What do they offer?
-Phase 2: Capability Matrix   → What features exist? What's the full taxonomy?
-Phase 3: Technical Deep Dive → How are they built? What architectures? What data?
-Phase 4: Persona & Workflow  → Who uses these products? What are their daily workflows?
-Phase 5: Gap & Moat Analysis → What's missing? Where can we differentiate?
-Phase 6: Requirements Seed   → Auto-generate draft BRD sections from research
+Phase 1:   Market Landscape       → Who are the players? What do they offer?
+Phase 2:   Capability Matrix      → What features exist? What's the full taxonomy?
+Phase 3:   Technical Deep Dive    → How are they built? What architectures? What data?
+Phase 3.5: Behavioral Edge Cases  → What happens at the boundaries of every P0 feature?
+Phase 3.6: Performance Baselines  → What are evidence-based latency/SLA targets?
+Phase 3.7: Visual Specifications  → What are the exact measurements? (UI products only)
+Phase 4:   Persona & Workflow     → Who uses these products? What are their interaction journeys?
+Phase 5:   Gap & Moat Analysis    → What's missing? Where can we differentiate?
+Phase 6:   Requirements Seed      → Auto-generate draft BRD sections from research
+Phase 6.5: Contradiction Audit    → Do research findings conflict with input requirements?
+Phase 6.8: Completeness Audit     → Are all 17 gap-analysis dimensions covered?
 ```
 
 ---
@@ -27,53 +32,24 @@ Research and catalog EVERY vendor in the space:
 
 ### Tier 1 — Market Leaders (>$500M revenue or >5000 customers)
 | Vendor | Founded | HQ | Revenue | Customers | Key Product |
-|--------|---------|-----|---------|-----------|-------------|
 
 ### Tier 2 — Established Players ($50M-$500M)
 | Vendor | Founded | HQ | Revenue | Customers | Key Product |
-|--------|---------|-----|---------|-----------|-------------|
 
 ### Tier 3 — Emerging / Startup (<$50M or <3 years old)
 | Vendor | Founded | HQ | Funding | Customers | Key Product |
-|--------|---------|-----|---------|-----------|-------------|
 
 ### Tier 4 — Open Source / Community
 | Project | Stars | Contributors | License | Commercial Support |
-|---------|-------|-------------|---------|-------------------|
 ```
 
 ### 1a.5 — Startup Deep Dive (CRITICAL — these are your direct competitors)
 
 Startups matter MORE than incumbents for moat analysis. Research EVERY startup in the space:
 
-```markdown
-## Startup Intelligence
+For each startup (minimum 10-15): Name, Founded, Funding (total + last round + investors), Team background, Technical approach, Go-to-market, Traction, Positioning, Open source strategy, Technical moat claim + actual assessment.
 
-### For each startup (minimum 10-15):
-| Field | Detail |
-|-------|--------|
-| Name | |
-| Founded | |
-| Funding | Total raised, last round, investors |
-| Team | Founders' background (ex-CrowdStrike? ex-NSA? ex-Google?) |
-| Technical approach | What's novel about their architecture? |
-| Go-to-market | PLG? Enterprise sales? MSP channel? |
-| Traction | Customer count, ARR if known, logo customers |
-| Positioning | "We are X for Y because Z" |
-| Open source? | Core OSS? Freemium? Fully commercial? |
-| Technical moat claim | What they say is hard to replicate |
-| Actual moat assessment | Is their moat real? How defensible? |
-
-### Startup Comparison Matrix
-| Startup | Approach | Moat Claim | Funding | Traction | Threat Level |
-|---------|----------|-----------|---------|----------|-------------|
-
-### What startups are doing that incumbents aren't
-[Patterns across startup approaches — where is innovation happening?]
-
-### Startup failure patterns
-[Which startups failed and why? What to avoid?]
-```
+**Startup Comparison Matrix:** Approach | Moat Claim | Funding | Traction | Threat Level
 
 **Research sources for startups:**
 - Crunchbase / PitchBook — funding, investors, team
@@ -82,475 +58,279 @@ Startups matter MORE than incumbents for moat analysis. Research EVERY startup i
 - LinkedIn — founder backgrounds, team growth rate
 - Job postings — what they're building next
 - Y Combinator / TechStars batches — recent cohort companies in this space
-- Security conference talks (Black Hat, DEF CON, RSA) — startup demos reveal technical approach
 
 ### 1b — Market Dynamics
-```markdown
-## Market Overview
-- TAM / SAM / SOM estimates with sources
-- Growth rate (CAGR) and projections
-- Key market drivers (regulations, threats, trends)
-- Buyer segments (enterprise, mid-market, SMB, government)
-- Pricing models (per-endpoint, per-user, per-GB, flat)
-- Distribution channels (direct, partners, marketplace)
-- Regulatory landscape (compliance requirements that DRIVE adoption)
-```
+TAM / SAM / SOM estimates with sources. Growth rate (CAGR). Key market drivers. Buyer segments. Pricing models. Distribution channels. Regulatory landscape.
 
 ### 1c — Acquisition & Consolidation Map
-```markdown
-## M&A Activity (last 3 years)
-| Acquirer | Target | Date | Price | Strategic Rationale |
-|----------|--------|------|-------|---------------------|
-
-## Partnerships & Integrations
-| Vendor A | Vendor B | Integration Type | What It Does |
-|----------|----------|-----------------|-------------|
-```
+M&A Activity (last 3 years): Acquirer, Target, Date, Price, Strategic Rationale.
+Partnerships: Vendor A, Vendor B, Integration Type, What It Does.
 
 ---
 
 ## Phase 2: Capability Matrix
 
 ### 2a — Feature Taxonomy
-Build the COMPLETE feature taxonomy for the product category. Every capability that ANY vendor offers, organized hierarchically:
-
-```markdown
-## Capability Taxonomy
-
-### 1. Detection & Prevention
-  1.1 Endpoint Detection
-    1.1.1 File-based malware detection (signature, heuristic, ML)
-    1.1.2 Fileless attack detection (memory, script, LOLBins)
-    1.1.3 Behavioral analysis (process trees, anomaly detection)
-    1.1.4 Exploit prevention (memory corruption, buffer overflow)
-  1.2 Network Detection
-    1.2.1 Network traffic analysis (DPI, flow analysis)
-    1.2.2 DNS threat detection
-    1.2.3 Lateral movement detection
-  1.3 Email/Identity Detection
-    1.3.1 Phishing detection
-    1.3.2 Identity threat detection (impossible travel, credential abuse)
-  ...
-
-### 2. Investigation & Response
-  2.1 Alert Triage
-  2.2 Threat Hunting
-  2.3 Forensic Analysis
-  2.4 Automated Response (SOAR)
-  ...
-
-### 3. Data Collection & Telemetry
-  3.1 Endpoint telemetry
-  3.2 Network telemetry
-  3.3 Cloud telemetry
-  3.4 Identity/IAM telemetry
-  ...
-
-[Continue for ALL capability areas]
-```
+Build the COMPLETE feature taxonomy for the product category. Every capability that ANY vendor offers, organized hierarchically.
 
 ### 2b — Capability Groups (CRITICAL — must be exhaustive)
-
-Group capabilities into logical clusters that map to product modules. Each group becomes a potential product pillar:
-
-```markdown
-## Capability Groups
-
-### Group 1: Endpoint Protection
-  Capabilities: [1.1.1, 1.1.2, 1.1.3, 1.1.4]
-  What it does: Prevent and detect threats on endpoints
-  Who needs it: Every customer (table stakes)
-  Buy vs Build: Most vendors have this — differentiation is in accuracy
-
-### Group 2: Network Visibility
-  Capabilities: [1.2.1, 1.2.2, 1.2.3]
-  What it does: Detect threats in network traffic
-  Who needs it: Mid-market+ with on-prem infrastructure
-  Buy vs Build: Consider integrating with existing NDR vendors
-
-### Group 3: Investigation & Hunting
-  Capabilities: [2.1, 2.2, 2.3]
-  What it does: Enable analysts to investigate and hunt threats
-  Who needs it: Organizations with SOC teams
-  Buy vs Build: Core differentiator — UX and speed matter most here
-
-### Group 4: Automation & Response
-  Capabilities: [2.4, ...]
-  What it does: Automate containment and remediation
-  Who needs it: Teams with limited staff (force multiplier)
-  Buy vs Build: Build core, integrate with SOAR vendors
-
-[Continue for ALL capability groups]
-```
-
-For each capability group, assess:
-- **Table stakes?** (must have to compete) vs **Differentiator?** (where we can win)
-- **Build vs Buy vs Integrate** — which capabilities to build natively vs integrate via vendor APIs
+Group capabilities into logical clusters that map to product modules. Each group becomes a potential product pillar. For each group: capabilities, description, who needs it, buy vs build assessment, table-stakes vs differentiator.
 
 ### 2c — Detailed Capability Specifications
-
-For EACH capability (not just groups), document the FULL specification:
-
-```markdown
-## Capability 1.1.3: Behavioral Analysis
-
-### What It Does
-Monitors process behavior in real-time to detect malicious patterns without relying on signatures.
-
-### How Vendors Implement It
-| Vendor | Approach | Strengths | Weaknesses |
-|--------|----------|-----------|-----------|
-| CrowdStrike | Cloud-based ML on process trees | Low FP rate, fast updates | Requires cloud connectivity |
-| SentinelOne | On-agent AI engine | Works offline | Higher resource usage |
-| Microsoft Defender | Cloud + local heuristics | Built into OS | Detection gaps on non-Windows |
-
-### Data Requirements
-- Input: Process creation events, file operations, registry changes, network connections
-- Volume: ~50-200 events/second per endpoint
-- Retention: 7-30 days for correlation
-- Format: Structured JSON (process tree with parent-child relationships)
-
-### User Expectations
-- Alert within <5 seconds of malicious behavior
-- False positive rate <1% on standard enterprise workloads
-- Must detect: ransomware, credential theft, lateral movement, persistence mechanisms
-
-### Integration Points
-- Feeds INTO: Alert pipeline, SIEM, threat intelligence enrichment
-- Consumes FROM: Threat intel (IOC matching), policy engine (exception rules)
-
-### Our Implementation Consideration
-- Priority: HIGH (core differentiator)
-- Approach: [build/buy/integrate]
-- Estimated complexity: [low/medium/high]
-```
+For EACH capability: How vendors implement it (approaches + strengths/weaknesses), data requirements (input, volume, retention, format), user expectations (latency, accuracy), integration points, implementation priority/approach/complexity.
 
 ### 2d — Vendor × Capability Matrix
-
-For EVERY vendor and EVERY capability, rate coverage:
-
-```markdown
-| Capability | Vendor A | Vendor B | Vendor C | ... |
-|------------|----------|----------|----------|-----|
-| 1.1.1 File malware | ●●●● | ●●●○ | ●●○○ | ... |
-| 1.1.2 Fileless | ●●●○ | ●●●● | ●○○○ | ... |
-| 1.1.3 Behavioral | ●●●● | ●●○○ | ●●●○ | ... |
-
-Legend: ●●●● = Best in class, ●●●○ = Strong, ●●○○ = Basic, ●○○○ = Minimal, ○○○○ = Not offered
-```
+Rate every vendor on every capability: `●●●●` (best) to `○○○○` (not offered).
 
 ### 2e — Pricing & Packaging Comparison
-```markdown
-| Vendor | Pricing Model | Entry Price | Mid-Market | Enterprise | Free Tier |
-|--------|--------------|-------------|-----------|-----------|-----------|
-```
+Vendor, Pricing Model, Entry Price, Mid-Market, Enterprise, Free Tier.
 
 ---
 
 ## Phase 2.5: Integration Ecosystem Analysis (CRITICAL)
 
-### Vendor Integration Map
+### Per Major Vendor
+- Native integrations (built-in): Integration, Category, Direction, What It Does
+- API/SDK: Type, Auth, Rate Limits, Docs Quality
+- Marketplace: Items, Categories, Developer Program, Revenue Share
 
-For EVERY major vendor, document their COMPLETE integration ecosystem:
+### Integration Categories
+1. **Inbound data sources** — with protocols and formats
+2. **Outbound actions** — containment, ticketing, notification
+3. **Bidirectional enrichment** — with latency budgets per enrichment type
+4. **Compliance/Reporting** — GRC, SOAR, Board reporting
 
-```markdown
-## Integration Ecosystem: [Vendor]
-
-### Native Integrations (built-in, no extra cost)
-| Integration | Category | Direction | What It Does |
-|-------------|----------|-----------|-------------|
-| Splunk | SIEM | Outbound | Send alerts + telemetry to Splunk |
-| ServiceNow | Ticketing | Bidirectional | Create tickets, sync status |
-| Active Directory | Identity | Inbound | User/group context for alerts |
-| AWS CloudTrail | Cloud | Inbound | Ingest cloud audit logs |
-
-### API/SDK Integrations (build your own)
-| API Type | Authentication | Rate Limits | Documentation Quality |
-|----------|---------------|-------------|----------------------|
-| REST API | OAuth2 + API key | 1000 req/min | Excellent (OpenAPI spec) |
-| Streaming API | WebSocket | N/A | Good |
-| Python SDK | pip install vendor-sdk | N/A | Excellent |
-
-### Marketplace / App Store
-| Items | Categories | Developer Program | Revenue Share |
-|-------|-----------|-------------------|---------------|
-| 200+ apps | Detection rules, response actions, dashboards | Yes (free) | 70/30 |
-```
-
-### Integration Categories (research ALL of these)
-
-```markdown
-## Integration Categories
-
-### 1. Security Data Sources (INBOUND — we consume their data)
-| Source Type | Examples | Protocol | Data Format |
-|------------|---------|----------|-------------|
-| SIEM | Splunk, Elastic, Sentinel | Syslog, API, Kafka | CEF, JSON, ECS |
-| Cloud | AWS, Azure, GCP | CloudTrail API, Event Hub | JSON, Parquet |
-| Identity | AD, Okta, Entra ID | LDAP, SCIM, API | SAML, OIDC |
-| Network | Firewalls, Proxies, NDR | Syslog, NetFlow, API | CEF, IPFIX |
-| Email | M365, Google Workspace | Graph API, Gmail API | EML, JSON |
-| Threat Intel | MISP, OTX, VirusTotal | STIX/TAXII, API | STIX 2.1, JSON |
-| Vulnerability | Qualys, Tenable, Rapid7 | API | JSON, CSV |
-
-### 2. Security Actions (OUTBOUND — we trigger their actions)
-| Action Type | Examples | Protocol | Use Case |
-|-------------|---------|----------|----------|
-| Firewall | Block IP, isolate host | API | Containment |
-| EDR | Kill process, quarantine file | API | Response |
-| IAM | Disable account, force MFA | SCIM, API | Identity response |
-| Ticketing | Create incident, update status | API, webhook | Workflow |
-| Communication | Slack alert, email, PagerDuty | Webhook, API | Notification |
-
-### 3. Data Enrichment (BIDIRECTIONAL — we query for context)
-| Enrichment | Examples | What It Adds | Latency Budget |
-|-----------|---------|-------------|---------------|
-| Threat Intel | VirusTotal, AbuseIPDB | IOC reputation, malware family | <500ms |
-| GeoIP | MaxMind, IPinfo | Location, ASN, org | <50ms |
-| WHOIS | DomainTools | Domain registration, age | <200ms |
-| Asset | CMDB, Intune, Jamf | Asset owner, criticality, OS | <100ms |
-| User | HR system, AD | Department, role, manager | <100ms |
-
-### 4. Compliance & Reporting (OUTBOUND — we feed their dashboards)
-| System | Examples | Data | Format |
-|--------|---------|------|--------|
-| GRC | Archer, ServiceNow GRC | Compliance evidence | API, CSV |
-| SOAR | Palo Alto XSOAR, Tines | Playbook triggers | Webhook, API |
-| Board reporting | PowerBI, Tableau | Risk metrics | API, CSV |
-```
-
-### Integration Effort Assessment
-
-For our product, estimate integration complexity:
-
-```markdown
-## Integration Build Priority
-
-### Must-Have at Launch (blocks sales if missing)
-| Integration | Category | Effort | Reason |
-|-------------|----------|--------|--------|
-| Splunk/Elastic | SIEM | Medium | Every customer has a SIEM |
-| AD/Entra ID | Identity | Medium | Required for user context |
-| ServiceNow/Jira | Ticketing | Low | Workflow integration expected |
-
-### Must-Have by GA+6 months
-| Integration | Category | Effort | Reason |
-|-------------|----------|--------|--------|
-
-### Nice-to-Have (competitive advantage)
-| Integration | Category | Effort | Reason |
-|-------------|----------|--------|--------|
-
-### Build as Platform (enable community)
-| Integration Framework | What It Enables |
-|----------------------|-----------------|
-| Webhook system | Any system can receive our alerts |
-| REST API | Full CRUD + search for all entities |
-| Python SDK | Custom detection rules + response actions |
-| App marketplace | Third-party integrations |
-```
+### Integration Build Priority
+Must-Have at Launch | Must-Have GA+6mo | Nice-to-Have | Platform (webhooks, REST API, SDK, marketplace)
 
 ---
 
 ## Phase 3: Technical Deep Dive
 
 ### 3a — Architecture Patterns
-For each major vendor, research:
-```markdown
-## Architecture Analysis: [Vendor]
-- Agent architecture (kernel driver? user-mode? eBPF?)
-- Cloud backend (multi-tenant? single-tenant? hybrid?)
-- Data pipeline (real-time streaming? batch? event-driven?)
-- Storage (data lake? time-series DB? graph DB?)
-- Detection engine (rules? ML models? behavioral graphs?)
-- API architecture (REST? GraphQL? gRPC?)
-- Integration ecosystem (SIEM, SOAR, ticketing, cloud)
-- Deployment model (SaaS, on-prem, hybrid, air-gapped)
-```
+For each major vendor, research: Agent architecture, cloud backend, data pipeline, storage, detection engine, API architecture, integration ecosystem, deployment model.
 
 ### 3b — Data Requirements
-```markdown
-## Data Model Analysis
-- What data do they collect? (processes, files, network, registry, etc.)
-- Data volume estimates (GB/day per endpoint)
-- Data retention policies (hot/warm/cold storage tiers)
-- Data formats (CEF, JSON, STIX/TAXII, custom)
-- Data enrichment sources (threat intel, GeoIP, WHOIS, ASN)
-- Privacy considerations (PII in telemetry, GDPR, data residency)
-```
+What data collected, data volume estimates, retention policies (hot/warm/cold), data formats, enrichment sources, privacy considerations.
 
 ### 3c — Technology Stack Research
-```markdown
-## Common Technology Choices in This Space
-| Layer | Common Choices | Why | Our Consideration |
-|-------|---------------|-----|-------------------|
-| Agent language | C/C++, Rust, Go | Performance, low-level access | |
-| Backend | Go, Java, Scala | Scale, streaming | |
-| Data pipeline | Kafka, Pulsar, Kinesis | Real-time event streaming | |
-| Storage | ClickHouse, Elasticsearch, S3+Parquet | Time-series queries + long retention | |
-| Detection | Python/ML, YARA, Sigma rules | Flexibility + community rules | |
-| Frontend | React, TypeScript | Rich investigation UI | |
-| API | REST + GraphQL | CRUD + complex queries | |
-```
+Common technology choices with rationale: agent language, backend, data pipeline, storage, detection, frontend, API — with our consideration.
 
 ---
 
-## Phase 4: Persona & Workflow Mapping
+## Phase 3.5: Behavioral Edge Cases (CRITICAL — NEW)
 
-### 4a — Persona Discovery
-Research EVERY persona who interacts with this product:
+**Business impact:** Without systematically documenting edge cases, implementation teams make inconsistent assumptions about undefined behavior. This is the #1 cause of rework — estimated 20-30% of development time is spent fixing behaviors that were ambiguous in the requirements.
+
+### What to Research
+
+For EVERY P0 capability in the capability matrix:
+
+**1. Boundary Behavior**
+- What happens at zero? Negative? Maximum value? Overflow? Underflow? Empty input?
+- At what exact threshold does behavior change? (e.g., 9 digits → 10 digits → scientific notation)
+
+**2. Invalid Input**
+- What happens with wrong data type? Special characters? Conflicting state?
+- What happens when user pastes garbage from clipboard?
+- What happens with ambiguous input (e.g., multiple decimal points)?
+
+**3. State-Dependent Behavior**
+- Same operation producing DIFFERENT results based on current state
+- This is the #1 source of wrong implementations
+- Example: `%` means "÷100" standalone, but "add X% of left operand" after `+`
+
+**4. Operation Sequencing**
+- What happens when operations combine unexpectedly?
+- Operator after operator, equals after equals, function after error, rapid input
+
+**5. Error Recovery**
+- Exact path from EVERY error state back to valid state
+- Which buttons work in error state? Which don't?
+- Is error auto-cleared on next input, or only by explicit clear?
+
+**6. Copy/Paste Behavior**
+- Paste valid number, paste text, paste formatted number (commas, currency)
+- Copy result — what format? With or without formatting?
+
+**7. Display Formatting Dynamics**
+- When does auto-scaling kick in? Exact breakpoints.
+- Do thousands separators appear during input or only on result?
+- When are trailing zeros stripped?
+
+### Output Format
 
 ```markdown
-## Persona: SOC Analyst (Tier 1)
-- **Role:** First responder to alerts
-- **Daily workflow:** Monitor dashboard → triage alerts → escalate or close
-- **Pain points:** Alert fatigue, too many false positives, context switching
-- **Tools they use today:** SIEM, ticketing, email, wiki
-- **Key metric:** Mean time to triage (MTTT), alerts processed per shift
-- **What they need from us:** Fewer false positives, auto-triage, one-click context
-
-## Persona: Threat Hunter
-- **Role:** Proactive search for undetected threats
-- **Daily workflow:** Form hypothesis → query data → investigate → document findings
-- **Pain points:** Slow queries, limited data retention, can't correlate across sources
-- ...
-
-## Persona: CISO / Security Director
-- **Role:** Strategic oversight, budget, compliance
-- **Key concerns:** Risk posture, compliance, ROI, board reporting
-- ...
-
-[Map ALL personas with this depth]
+| # | Feature | Input/Action | Precondition | Expected Behavior | Source | Verified? |
 ```
 
-### 4b — Workflow Mapping
-For each persona, map their critical workflows:
+Mark unverifiable behaviors as **ASSUMPTION** — flagged for human review.
+
+**Output:** `requirements/research/08b-edge-cases.md`
+
+---
+
+## Phase 3.6: Performance Baselines & SLA Research (NEW)
+
+**Business impact:** Without evidence-based targets, NFRs are arbitrary. Too aggressive = wasted engineering effort on premature optimization. Too lenient = poor UX and user trust erosion.
+
+### What to Research
+
+**1. User Perception Thresholds** (cite UX research)
+- Instant feedback: < 100ms (Jakob Nielsen, NNGroup)
+- Noticeable delay: 100ms-1s
+- Attention break: > 1s
+- Abandonment: > 3s (Google research on mobile)
+
+**2. Competitor Benchmarks** (measure real products)
+- Lighthouse scores of competitor/similar products
+- Time to interactive for comparable web apps
+- Bundle sizes of comparable React/JS applications
+
+**3. Domain-Specific SLAs**
+- What response time does this product type demand?
+- Cost of being slow: user abandonment rate, trust erosion research
+
+**4. Infrastructure Performance Baselines**
+- Typical DB query latency for chosen database
+- HTTP handler overhead for chosen framework
+- React render cycle time for component updates
+- Network round-trip estimates for target deployment
+
+**5. Per-Persona SLA Expectations**
 ```markdown
-## Workflow: Alert Investigation (SOC Analyst Tier 1)
-1. Alert fires in dashboard
-2. Analyst reads alert summary (what, where, when, severity)
-3. Analyst checks: is this a known false positive? (lookup in tuning rules)
-4. If not known: examine process tree, file details, network connections
-5. Check threat intel: is this IOC known malicious?
-6. Decision: escalate to Tier 2, close as false positive, or auto-remediate
-7. Document decision and evidence
-
-## Workflow: Incident Response (Tier 2/3)
-...
-
-## Workflow: Compliance Reporting (CISO)
-...
+| Persona | Operation | Expected Latency | Why | Source |
 ```
+
+**Output:** `requirements/research/08c-performance-baselines.md`
+
+Every NFR-PERF-* in the draft BRD MUST trace to a finding in this document.
+
+---
+
+## Phase 3.7: Visual Specifications (UI Products Only — NEW)
+
+**Business impact:** For any product with a visual fidelity goal, research must produce measurable specs. Without exact measurements, the UI phase becomes subjective ("does this look right?") instead of objective ("is this the correct 12px border-radius?").
+
+**Skip this phase** if the product has no visual fidelity goal.
+
+### What to Research
+
+1. **Color palette** — every unique hex color per element, per theme (light + dark)
+2. **Typography** — font family, weights, sizes per context (display, buttons, labels)
+3. **Spacing** — padding, margins, gaps, button dimensions in px
+4. **Border radius** — per element type
+5. **Shadows/effects** — box-shadow, backdrop-filter, opacity values
+6. **Window dimensions** — per mode/state
+7. **Interactive states** — default, hover, active, focused, disabled for every element
+8. **Animations** — property, duration, easing for every transition
+9. **Auto-scaling rules** — font size breakpoints by content length
+
+Every visual claim must include source: documentation URL, measured from screenshot, or inferred (flagged as ASSUMPTION).
+
+**Output:** `requirements/research/08d-visual-specifications.md`
+
+---
+
+## Phase 4: Persona & Workflow Mapping (ENHANCED)
+
+### 4a — Persona Discovery (same as before)
+Research EVERY persona who interacts with this product. For each: Role, daily workflow, pain points, current tools, key metric, what they need from us.
+
+### 4b — Feature Interaction Matrix (NEW — REQUIRED)
+For EACH persona, map which features they use, how frequently, and how critically:
+
+```markdown
+| Feature | Uses It? | Frequency | Criticality | Typical Workflow |
+```
+
+### 4c — Journey Maps (NEW — REQUIRED)
+For each persona's top 3 workflows, document the EXACT step-by-step interaction:
+- What they see at each step
+- What they input
+- What they expect to happen
+- What can go wrong (error paths at each step)
+- SLA expectation per step (reference Phase 3.6)
+
+### 4d — Persona-to-NFR Mapping (NEW — REQUIRED)
+```markdown
+| Persona | Performance Expectation | Accessibility Need | Why |
+```
+
+**Output:** `requirements/research/11-personas.md`
 
 ---
 
 ## Phase 5: Gap & Moat Analysis
 
 ### 5a — Gap Identification
-From the capability matrix, identify:
-```markdown
-## Gaps in Current Market
+- **Underserved capabilities** (no vendor does this well)
+- **Underserved segments** (buyer types not well served)
+- **Integration gaps** (things that should connect but don't)
+- **UX gaps** (things that are possible but painful)
+- **Edge case gaps (NEW)** — features where competitors have WRONG behavior that we can get right. These are high-value differentiators because users notice correctness immediately.
 
-### Underserved Capabilities (no vendor does this well)
-| Gap | Current State | Why It Matters | Opportunity Size |
-|-----|--------------|----------------|-----------------|
-
-### Underserved Segments (buyer types not well served)
-| Segment | Current Options | Why Underserved | Opportunity |
-|---------|----------------|-----------------|-------------|
-
-### Integration Gaps (things that should connect but don't)
-| System A | System B | Gap | Impact |
-|----------|----------|-----|--------|
-
-### UX Gaps (things that are possible but painful)
-| Workflow | Current UX | Pain | Better Approach |
-|----------|-----------|------|----------------|
-```
-
-### 5b — Startup-vs-Startup Moat Comparison (YOUR competitive landscape)
-
-Incumbents are less relevant for moat analysis — they have distribution and brand. Your REAL competition is other startups. Compare:
-
-```markdown
-## Our Position vs Startup Competitors
-
-| Dimension | Startup A | Startup B | Startup C | US (proposed) |
-|-----------|-----------|-----------|-----------|---------------|
-| Detection approach | ML-first | Rule-based + ML | eBPF kernel | [our approach] |
-| Data architecture | Cloud-only | Hybrid | Edge-first | [our approach] |
-| Open source strategy | Closed | Core OSS | Fully OSS | [our approach] |
-| GTM | Enterprise sales | PLG + community | MSP channel | [our approach] |
-| Funding stage | Series B | Series A | Seed | [our stage] |
-| Technical team strength | 5 PhDs (ML) | 3 ex-FAANG | 2 ex-NSA | [our strength] |
-| Unique capability | AutoML tuning | 1-day deploy | Zero kernel driver | [our unique] |
-
-## Where we can win (realistic assessment)
-| Advantage | Why it's real | Effort to build | Defensibility |
-|-----------|--------------|-----------------|---------------|
-
-## Where we're behind (honest gaps)
-| Gap | Who's ahead | How far behind | Catch-up plan |
-|-----|-----------|---------------|---------------|
-
-## Recommended positioning
-"We are [X] for [Y] because [Z] — unlike [Startup A] which [limitation] and [Startup B] which [limitation]"
-```
+### 5b — Startup-vs-Startup Moat Comparison
+Compare on: approach, data architecture, OSS strategy, GTM, funding, team, unique capability.
+Assess: Where we can win (realistic), where we're behind (honest), recommended positioning.
 
 ### 5c — Competitive Moat Strategy
-```markdown
-## Potential Moats
-
-### Technical Moats
-| Moat | Description | Defensibility | Build Effort |
-|------|-------------|--------------|-------------|
-| Detection accuracy | Better ML models, lower FP rate | HIGH (data advantage) | HIGH |
-| Query speed | Sub-second search on petabytes | HIGH (engineering) | HIGH |
-| API-first platform | Developers build on top of us | MEDIUM (network effect) | MEDIUM |
-
-### Business Moats
-| Moat | Description | Defensibility | Build Effort |
-|------|-------------|--------------|-------------|
-| Open source core | Community + commercial | HIGH (community lock-in) | MEDIUM |
-| Data network effect | More customers = better detection | VERY HIGH | LONG |
-| Integration ecosystem | Marketplace of integrations | HIGH (switching cost) | MEDIUM |
-
-### Strategic Positioning
-[Where we sit vs incumbents — "we are X for Y" framing]
-```
+Technical moats (accuracy, speed, platform) + Business moats (OSS, data network effect, integrations) — with defensibility and build effort ratings.
 
 ---
 
 ## Phase 6: Requirements Seed (Auto-Generate Draft BRD Sections)
 
-From all research above, auto-generate:
+From all research, auto-generate:
+
+- **`draft-brd-objectives.md`** — every objective MUST have measurable success criteria with specific numbers (not "good performance" but "LCP < 1.5s per Web Vitals standard")
+- **`draft-brd-personas.md`** — include feature interaction matrix + SLA expectations per persona
+- **`draft-brd-requirements.md`** — every P0 FR MUST have acceptance criteria covering: happy path + 2 error paths + 1 boundary case (sourced from 08b-edge-cases.md)
+- **`draft-brd-nfrs.md`** — every NFR MUST cite its evidence source from 08c-performance-baselines.md
+- **`draft-brd-constraints.md`** — from regulatory + market constraints
+- **`draft-brd-differentiators.md`** — from moat analysis + edge case advantages
+- **`IMPLEMENTATION_GUIDELINES.md`** — from tech stack research
+
+---
+
+## Phase 6.5: Contradiction Audit (CRITICAL — NEW)
+
+Re-read the original `requirements/` documents (product-spec.md, etc.).
+For EVERY claim in the input requirements, verify it against research findings:
 
 ```markdown
-## Draft Business Objectives (from market analysis)
-OBJ-001: [derived from market gap]
-OBJ-002: [derived from underserved segment]
+| Spec Claim | Location | Research Finding | Status | Source |
 
-## Draft Personas (from persona research)
-[Complete persona definitions with workflows]
-
-## Draft Functional Requirements (from capability taxonomy)
-FR-001: [each capability becomes a candidate FR]
-FR-002: ...
-
-## Draft Non-Functional Requirements (from technical deep dive)
-NFR-PERF-001: [from competitor benchmarks]
-NFR-SEC-001: [from compliance requirements]
-NFR-SCALE-001: [from data volume estimates]
-
-## Draft Constraints (from market dynamics)
-CON-001: [regulatory constraints]
-CON-002: [deployment constraints]
-
-## Competitive Differentiators (from moat analysis)
-[Features/approaches that set us apart]
+Status values:
+- CONFIRMED: research supports the claim
+- CONFLICT: research disproves the claim (provide correct value)
+- CORRECTION: claim is partially wrong (provide corrected version)
+- REFINEMENT: claim is vague, research provides specific numbers
+- UNVERIFIABLE: no research data available (flag for human decision)
 ```
 
-This becomes the input to `/startup:init` — the `requirements/` folder.
+**Output:** `requirements/research/contradiction-audit.md`
+
+CONFLICTS and CORRECTIONS must be listed prominently at the top.
+
+---
+
+## Phase 6.8: Completeness Self-Audit (NEW)
+
+Audit ALL research output against the 17-dimension gap-analysis checklist:
+
+```markdown
+| # | Dimension | Covered? | Primary Source | Completeness | Gap if Incomplete |
+```
+
+Additionally verify:
+- Can acceptance criteria be written for every FR? If not → gap in edge cases
+- Does every NFR cite a source? If not → gap in performance baselines
+- Does every persona have a journey map? If not → gap in workflow mapping
+
+**Output:** `requirements/research/completeness-audit.md`
+
+Any dimension below 70% coverage = INCOMPLETE. User must see this before `/init`.
 
 ---
 
@@ -560,7 +340,6 @@ This becomes the input to `/startup:init` — the `requirements/` folder.
 - **Quantitative where possible** — revenue numbers, customer counts, response times
 - **Recency bias** — prefer 2025-2026 sources over older data
 - **Multiple sources** — cross-reference claims across 2+ sources
-- **Competitor product pages** — primary source for feature claims
-- **Gartner/Forrester/IDC** — for market sizing and positioning
-- **GitHub/docs** — for open-source projects' actual capabilities
-- **Job postings** — reveal what vendors are building next
+- **Primary sources** — competitor product pages, Gartner/Forrester/IDC, GitHub/docs, job postings
+- **Document behavior, not just features** — "what happens when X" is more valuable than "supports X"
+- **Flag assumptions explicitly** — unverifiable claims marked ASSUMPTION for human review
