@@ -32,10 +32,12 @@ dependencies:
 skill_packs:
   - ".claude/skills/requirements/requirement-clarity.md"
   - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/edge-case-taxonomy.md"
   - ".claude/skills/requirements/persona-definition.md"
   - ".claude/skills/requirements/nfr-patterns.md"
   - ".claude/skills/requirements/business-objectives.md"
   - ".claude/skills/requirements/traceability-matrix.md"
+  - ".claude/skills/requirements/gap-analysis-checklist.md"
 ---
 
 # Agent: BRD Writer
@@ -132,10 +134,17 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
 1. Load `analysis.yaml` for the full extracted requirements list
 2. Load `decisions.yaml` if present — merge resolved answers into requirements
 3. Detect any remaining unresolved gaps → surface as Open Questions in Section 9
-4. Draft `docs/BRD.md` following the format above
-5. Generate `docs/traceability-matrix.md` with all requirement IDs
-6. Run quality gate checklist — flag any unfilled sections
-7. Summarize what is complete vs. pending for the user
+4. **If `requirements/research/` exists:**
+   a. Load `contradiction-audit.md` → apply all CONFLICT/CORRECTION fixes to the BRD (do NOT use original spec values for contradicted claims)
+   b. Load `completeness-audit.md` → address all dimensions < 70% (as requirements, constraints, or explicit out-of-scope with rationale)
+   c. Load `08b-edge-cases.md` → for every P0 FR-*, write acceptance criteria that cover: **happy path + 2 error paths + 1 boundary case** (sourced from edge cases)
+   d. Load `08c-performance-baselines.md` → every NFR-PERF-* must cite its evidence source
+   e. Load `08d-visual-specifications.md` → any UI fidelity FR-* must reference specific measurements: "Implements visual specifications documented in 08d-visual-specifications.md" + cite key values (hex colors, px dimensions, animation durations)
+5. Draft `docs/BRD.md` following the format above
+6. Generate `docs/traceability-matrix.md` with all requirement IDs
+7. Run quality gate checklist — flag any unfilled sections
+8. Run 17-dimension gap-analysis checklist against the BRD itself (self-audit)
+9. Summarize what is complete vs. pending for the user
 
 ---
 
@@ -146,3 +155,9 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
 - [ ] All unresolved gaps captured in Open Questions
 - [ ] Traceability matrix covers 100% of requirement IDs
 - [ ] Definition of Ready and Definition of Done checklists present
+- [ ] Every P0 FR-* has acceptance criteria: happy path + 2 error paths + 1 boundary
+- [ ] Every NFR-PERF-* cites an evidence source (not arbitrary)
+- [ ] Every OBJ-* has measurable success criteria with specific numbers
+- [ ] All contradiction-audit CONFLICT/CORRECTION items incorporated (if research exists)
+- [ ] UI fidelity FR-* references visual specifications with key values (if 08d exists)
+- [ ] 17-dimension gap-analysis self-audit score >= 80%
