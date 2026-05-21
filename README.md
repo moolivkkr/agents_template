@@ -901,107 +901,356 @@ requirements/
 
 ## User Guide
 
-### Your first project — step by step (manual)
+This guide walks you through the system incrementally — from your first command to fully autonomous runs. Use as much or as little as you need.
 
-```
-1. INSTALL (once)          bash install.sh
-2. CREATE PROJECT          bash new-project.sh my-app ~/development
-3. ADD REQUIREMENTS        Drop specs/stories into my-app/requirements/
-4. INITIALIZE              /startup/init
-5. MAP CODEBASE            /startup/map           ← builds persistent knowledge base
-6. DISCUSS PHASE 1         /startup/discuss        ← surface assumptions + decisions
-7. PLAN PHASE 1            /startup/plan           ← specs + goal verification
-8. BUILD PHASE 1           /startup/develop
-9. REPEAT 5-8              For each phase until all features are built
-10. FINAL VALIDATION       /startup/accept
-```
+---
 
-**Session management:** If context runs out mid-phase:
-```
-/startup/pause              ← saves where you are
-(start new conversation)
-/startup/resume             ← picks up exactly where you left off
-```
+### Level 1: Just try it (5 minutes)
 
-**Parallel features:** If two features are independent:
-```
-/startup/workstream create --name=auth --phase=3
-/startup/workstream create --name=dashboard --phase=4
-/startup/workstream switch --name=auth     ← work on auth
-/startup/workstream switch --name=dashboard ← switch to dashboard
-/startup/workstream merge --name=auth      ← merge completed auth back
+The fastest way to see the system in action. One paragraph of requirements is enough.
+
+```bash
+# 1. Install (one time)
+git clone <this-repo> ~/development/startup-agents
+cd ~/development/startup-agents && bash install.sh
+
+# 2. Create a project
+bash new-project.sh my-app ~/development
+cd ~/development/my-app
+
+# 3. Add ONE requirement file (even a single paragraph works)
+cat > requirements/spec.md << 'EOF'
+Build a REST API for a task management app.
+Users can create, list, update, and delete tasks.
+Each task has a title, description, status (todo/in-progress/done), and due date.
+Use Go with Chi router and PostgreSQL.
+EOF
+
+# 4. Open Claude Code in this directory and run:
+/startup/init
 ```
 
-### Fully autonomous mode (minimal interaction)
+That's it. `/init` reads your paragraph, interviews you for gaps, creates a structured BRD with numbered requirements (FR-001, FR-002, ...), confirms your tech stack, and generates project-specific agents.
+
+**What you now have:**
+```
+docs/BRD.md                          ← 30+ numbered requirements extracted from your paragraph
+docs/IMPLEMENTATION_GUIDELINES.md    ← confirmed: Go 1.22 / Chi / PostgreSQL / Docker
+.claude/agents/generated/            ← 8 agents customized for Go + Chi + PostgreSQL
+```
+
+**Next step:** Run `/startup/status` to see what the system recommends.
+
+---
+
+### Level 2: Build one phase (30-60 minutes)
+
+Now build the first feature set. The system breaks your BRD into phases automatically.
 
 ```
-1. INSTALL (once)          bash install.sh
-2. CREATE PROJECT          bash new-project.sh my-app ~/development
-3. ADD REQUIREMENTS        Drop specs/stories into my-app/requirements/
-4. RUN                     /startup/autonomous
-   → /init          Creates BRD + agents
-   → /map           Builds codebase knowledge base
-   → For each phase:
-     → /discuss     Surfaces assumptions (auto-resolved)
-     → /plan        Specs + goal verification
-     → /develop     Implementation + tests + review + gate
-   → 🛑 ONE CHECKPOINT: review assumptions + decisions before Phase 1 implementation
-   → All remaining phases run fully autonomous
-   → /accept        Global validation
-   → /health        Final integrity check
-   → Produces working app + full audit trail
+/startup/plan               ← creates specs for Phase 1 (auto-detected)
 ```
+
+This produces:
+- Technical specs (TRDs) for each component
+- Typed data contracts (TypeScript interfaces for every endpoint)
+- UI specs (if frontend enabled)
+- Goal verification: "will these specs achieve the phase goal?"
+
+Review the specs in `docs/design/phases/1/specs/`. Then:
+
+```
+/startup/develop            ← implements Phase 1 end-to-end
+```
+
+This runs the full pipeline: audit → code → tests → review → acceptance → gate. Takes 15-40 minutes depending on phase size. You don't need to do anything — watch the progress.
+
+**What happens inside `/develop`:**
+```
+Wave 1:  Database schema + migrations
+Wave 2:  Backend services → API handlers (sequential — API needs service interfaces)
+Wave 3:  UI components (if frontend enabled)
+Wave 4:  Unit tests + integration tests (parallel)
+Wave 5:  Code review (style + architecture + security) + acceptance tests (parallel)
+Wave 6:  13-point quality gate — all must pass to proceed
+```
+
+**If the gate passes:** `agent_state/phases/1/gate.passed` is written. You're done with Phase 1.
+
+**If the gate blocks:** The system tells you exactly what failed and how to fix it. Fix it, then re-run `/startup/develop`.
+
+---
+
+### Level 3: Add pre-planning rigor (recommended for complex projects)
+
+Before planning, surface assumptions and research decisions. This prevents "assumption bugs" — the #1 cause of mid-implementation rework.
+
+```
+/startup/map                ← maps the codebase (skip for greenfield projects)
+/startup/discuss            ← surfaces assumptions + researches decisions
+/startup/plan               ← plans with full context
+/startup/develop            ← implements with confidence
+```
+
+**What `/discuss` does:**
+
+1. **Assumption analysis** — An opus-tier agent reads your codebase + BRD and identifies what the planner would ASSUME silently. Each assumption is classified:
+   - **CONFIRMED** — directly observed with file:line reference
+   - **DEDUCED** — logical inference, chain of evidence shown
+   - **HYPOTHESIZED** — plausible but unverified, states what would confirm it
+
+2. **Decision research** — For each open question or low-confidence assumption, a parallel agent researches options and produces a comparison table:
+   ```
+   | Option | Pros | Cons | Risk | Effort | Recommendation |
+   ```
+
+3. **Risk assessment** — Technical, integration, data, performance, and security risks ranked by impact × likelihood
+
+You review the output, confirm or override decisions, then `/plan` uses your confirmed decisions instead of guessing.
+
+**Use `--auto` to skip the interactive review** (agents pick recommended defaults):
+```
+/startup/discuss --auto     ← auto-resolves all decisions, logs everything
+/startup/plan               ← reads DISCUSSION.md automatically
+```
+
+**What `/map` does:**
+
+4 parallel agents explore the codebase with different lenses:
+```
+agent_state/codebase/
+├── tech-stack.md      ← languages, frameworks, build tools, dependency counts
+├── architecture.md    ← module boundaries, API surface, data models, cross-cutting concerns
+├── quality.md         ← test coverage, code patterns, tech debt indicators
+└── concerns.md        ← security, performance, reliability, maintainability issues
+```
+
+This knowledge base persists across sessions. All planning agents read it instead of re-exploring the codebase each time. Use `--incremental` after Phase 1 to update only what changed.
+
+---
+
+### Level 4: Full manual workflow (maximum control)
+
+The complete step-by-step workflow for each phase:
+
+```
+# ── Phase N ───────────────────────────────────────────────
+
+# 1. Update codebase knowledge (skip for Phase 1 of greenfield)
+/startup/map --incremental
+
+# 2. Surface assumptions and research decisions
+/startup/discuss --phase=N
+
+# 3. Generate specs with goal verification
+/startup/plan --phase=N
+
+# 4. Review specs (optional but recommended)
+#    Check: docs/design/phases/N/specs/
+#    Check: agent_state/phases/N/plan_check.md (goal verification)
+
+# 5. Implement end-to-end
+/startup/develop --phase=N
+
+# 6. Gate passes → Phase N complete!
+#    Repeat from step 1 for Phase N+1
+```
+
+**Between phases — optional quality commands:**
+```
+/startup/test --phase=N          ← re-run tests independently
+/startup/review                  ← standalone code review
+/startup/optimize                ← dead code removal + performance
+/startup/benchmark --save-baseline  ← capture performance metrics
+```
+
+**After all phases:**
+```
+/startup/accept                  ← global acceptance testing (all personas, all use cases)
+/startup/deploy --target=local   ← deploy locally
+```
+
+---
+
+### Level 5: Fully autonomous (hands-off)
+
+Let the system build everything. You review once, then walk away.
+
+```
+/startup/autonomous
+```
+
+**What happens:**
+
+```
+Phase 0:   Environment pre-flight (Docker, ports, tools)
+Phase 1:   /init --auto         Creates BRD + agents (auto-researches all gaps)
+Phase 1b:  /map                 Codebase knowledge base
+Phase 2:   /discuss --auto      Surfaces assumptions (auto-resolved)
+Phase 2b:  /plan --auto         Specs + goal verification
+
+     ┌─────────────────────────────────────────────────────────┐
+     │  🛑 HUMAN CHECKPOINT — the ONE required interaction     │
+     │                                                         │
+     │  Review:                                                │
+     │  • LOW confidence decisions (need your input)           │
+     │  • HYPOTHESIZED assumptions (unverified)                │
+     │  • Phase 1 scope + tech stack                           │
+     │                                                         │
+     │  Type "go" to approve, or describe changes              │
+     └─────────────────────────────────────────────────────────┘
+
+Phase 4:   /develop --auto      Implements Phase 1
+Phase 5:   For each remaining phase:
+             /map --incremental → /discuss --auto → /plan --auto → /develop --auto
+Phase 6:   /accept --auto       Global validation
+Phase 7:   Final report + /health integrity check
+```
+
+**Safety guarantees in autonomous mode:**
+- Security decisions NEVER auto-resolve permissively (uses hardened defaults)
+- Escalation circuit breaker: >10 auto-resolutions per phase → exits auto mode
+- Every auto-decision is logged to `agent_state/autonomous/auto-resolved.jsonl`
+- Force-gated phases are fully documented (what failed, why it was forced)
+- Git branch per phase with immutable tags at each boundary
+
+**Customize autonomous runs:**
+```
+/startup/autonomous --confirm_each_phase    ← checkpoint before EVERY phase
+/startup/autonomous --max_phases=2          ← only build first 2 phases
+/startup/autonomous --skip_init             ← reuse existing BRD
+/startup/autonomous --resume                ← continue from last checkpoint
+```
+
+---
+
+### Session management
+
+**Save and resume work across conversations:**
+```
+/startup/pause                              ← saves phase, step, decisions, blockers
+/startup/pause --reason="end of day"        ← with reason
+/startup/pause --thread=auth-work           ← named thread (multiple paused contexts)
+
+# In a new conversation:
+/startup/resume                             ← restores latest session
+/startup/resume --list                      ← shows all paused sessions
+/startup/resume --thread=auth-work          ← resumes specific thread
+```
+
+**Context window fills up?** Same flow:
+```
+/startup/pause --reason="context limit"
+# Start new conversation
+/startup/resume
+```
+
+---
+
+### Parallel workstreams
+
+Work on independent features concurrently:
+
+```
+# Create workstreams (each gets its own git branch)
+/startup/workstream create --name=auth --phase=3 --description="Authentication system"
+/startup/workstream create --name=reports --phase=4 --description="Reporting dashboard"
+
+# Work on auth
+/startup/workstream switch --name=auth
+/startup/discuss --phase=3
+/startup/plan --phase=3
+/startup/develop --phase=3
+
+# Switch to reports (auth progress is saved automatically)
+/startup/workstream switch --name=reports
+/startup/discuss --phase=4
+/startup/plan --phase=4
+/startup/develop --phase=4
+
+# Check progress across all workstreams
+/startup/workstream list
+# Output:
+#   ● auth      (active)  Phase 3   branch: workstream/auth      progress: 100%
+#   ○ reports   (paused)  Phase 4   branch: workstream/reports   progress: 60%
+
+# Merge completed auth back to main (runs integration check + regression tests)
+/startup/workstream merge --name=auth
+```
+
+**When to use workstreams:** Features that don't share components. If Phase 3 and Phase 4 both modify the same service, use sequential phases instead.
+
+---
+
+### Starting with deep research
+
+For new products or unfamiliar markets:
+
+```
+# 1. Research first (6 parallel agents, 15-30 minutes)
+/startup/research --domain="XDR/EDR cybersecurity"
+
+# Produces:
+#   requirements/research/01-vendors.md
+#   requirements/research/02-market-dynamics.md
+#   requirements/research/03-vendor-leaders.md
+#   requirements/research/07-capability-matrix.md
+#   requirements/research/08b-edge-cases.md
+#   requirements/research/contradiction-audit.md
+#   ... (12+ documents)
+
+# 2. Review research, adjust priorities
+
+# 3. Build (research feeds into /init automatically)
+/startup/autonomous
+# OR manually: /startup/init → /startup/plan → /startup/develop
+```
+
+---
 
 ### When things go wrong
 
-```
-/startup/health             ← check pipeline state integrity
-/startup/health --fix       ← auto-repair common issues
-/startup/forensics          ← investigate failed pipeline runs
-/startup/diagnose           ← trace a specific bug to root cause
-```
+| Situation | What to run | What it does |
+|-----------|------------|-------------|
+| Pipeline failed mid-run | `/startup/forensics` | Timeline reconstruction → root cause → recovery steps |
+| Suspect corrupted state | `/startup/health` | Checks manifest integrity, gate consistency, file references |
+| Auto-repair state issues | `/startup/health --fix` | Fixes orphaned reports, dead refs, incomplete logs |
+| Bug in the built app | `/startup/diagnose --symptom="..."` | Traces symptom → spec → implementation → root cause |
+| Quick fix needed | `/startup/hotfix --phase=N --component=auth` | Scoped fix → scoped test → scoped review → merge |
+| Need to undo a deploy | `/startup/rollback --target=local` | Reverses migrations, redeploys previous build |
+| Phase needs a redo | `/startup/reset-phase --phase=N` | Archives state, creates safety tag, prepares clean re-run |
+| Flaky test blocking gate | `/startup/develop --force_gate` | Forces gate with full logging (tracked in manifest) |
 
-### Starting with deep research (new product/market)
+---
 
-```
-1. /startup/research --domain="XDR/EDR cybersecurity"
-   → 6 parallel agents research vendors, capabilities, personas, moats
-   → Produces 12+ research documents in requirements/research/
-   → Auto-generates draft BRD sections
-2. Review research, adjust priorities
-3. /startup/autonomous (or /startup/init → /plan → /develop manually)
-```
-
-### What to run when
+### Quick reference — what to run when
 
 | I want to... | Run this |
 |-------------|----------|
-| Research a market before building | `/startup/research --domain="..."` |
-| Build everything autonomously | `/startup/autonomous` |
-| Start a new project | `bash new-project.sh my-app` then `/startup/init` |
-| Understand the codebase first | `/startup/map` |
+| Build everything hands-off | `/startup/autonomous` |
+| Research a market first | `/startup/research --domain="..."` |
+| Start a new project | `bash new-project.sh my-app` → `/startup/init` |
+| Understand codebase before planning | `/startup/map` |
 | Surface assumptions before planning | `/startup/discuss` |
 | Build the next feature set | `/startup/discuss` → `/startup/plan` → `/startup/develop` |
 | See where I am | `/startup/status` |
-| Save my progress and resume later | `/startup/pause` then `/startup/resume` in new session |
+| Save progress for later | `/startup/pause` → (new session) → `/startup/resume` |
 | Work on two features in parallel | `/startup/workstream create --name=feature-a` |
-| Run tests without building | `/startup/test` |
+| Run tests without building | `/startup/test --phase=N` |
 | Review code quality | `/startup/review` |
-| Clean up and optimize code | `/startup/optimize` |
-| Preview optimizations without changing code | `/startup/optimize --dry_run` |
-| Deploy the app | `/startup/deploy --target=local` |
+| Optimize code | `/startup/optimize` |
+| Deploy | `/startup/deploy --target=local` |
 | Validate the full product | `/startup/accept` |
-| Resume after a break | `/startup/resume` or `/startup/status` |
-| Fix a bug quickly | `/startup/hotfix --phase=N --component=auth` |
-| Investigate a bug | `/startup/diagnose --symptom="GET /users returns 500"` |
-| Track performance over time | `/startup/benchmark --save-baseline` |
-| Roll back a bad deploy | `/startup/rollback --target=local` |
+| Fix a bug fast | `/startup/hotfix --phase=N --component=auth` |
+| Investigate a bug | `/startup/diagnose --symptom="..."` |
 | Check pipeline health | `/startup/health` |
-| Investigate a failed pipeline run | `/startup/forensics` |
-| Fix a bug and re-validate | Fix the code, then `/startup/test --phase=N` |
-| Add a feature mid-project | Use `product_manager` agent to update BRD, then `/startup/plan` |
-| Re-do a phase | `/startup/reset-phase --phase=N` then `/startup/develop --phase=N` |
-| Force past a flaky test | `/startup/develop --force_gate` (logged as override) |
+| Investigate a failure | `/startup/forensics` |
+| Track performance | `/startup/benchmark --save-baseline` |
+| Roll back a deploy | `/startup/rollback --target=local` |
+| Add a feature mid-project | `product_manager` agent → `/startup/plan` |
+| Re-do a phase | `/startup/reset-phase --phase=N` → `/startup/develop` |
+
+---
 
 ### What you DON'T need to do
 
@@ -1010,7 +1259,9 @@ requirements/
 - **Don't manage phases manually** — commands auto-detect the current phase
 - **Don't write test data** — agents generate it (or use yours if you provide it)
 - **Don't configure skill packs** — `agent_factory` assigns them based on your tech stack
-- **Don't worry about context windows** — the framework manages token budgets internally
+- **Don't worry about context windows** — use `/pause` and `/resume` when they fill up
+- **Don't manually track decisions** — `/discuss` logs all assumptions and decisions to files
+- **Don't investigate failures manually** — `/forensics` reconstructs the timeline for you
 
 ### How the pipeline protects your code
 
