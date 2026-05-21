@@ -50,6 +50,10 @@ Complete index of all agents in the SDLC pipeline.
 | Validate demo works | `demo_validator` | manual |
 | Make a technical decision | `debate_moderator` | any agent (escalation) |
 | Review UI spec quality | `design_quality_reviewer` | `/plan` (UI phases) |
+| Surface assumptions before planning | `phase_assumptions_analyzer` | `/discuss` |
+| Research gray area decisions | `decision_researcher` | `/discuss` |
+| Verify plan achieves phase goal | `plan_goal_verifier` | `/plan` Step 4b |
+| Map codebase for persistent knowledge | `codebase_mapper` | `/map` |
 
 ---
 
@@ -74,6 +78,9 @@ Complete index of all agents in the SDLC pipeline.
 | `project_planner` | sonnet | BRD, guidelines, prev manifest | PHASE_PLAN.md, phase_context.md | Defines scope, exit criteria, waves |
 | `spec_writer` | sonnet | PHASE_PLAN.md, BRD | docs/design/phases/N/specs/*.md | One TRD per component/flow |
 | `spec_verifier` | sonnet | BRD, PHASE_PLAN, specs | VERIFICATION_REPORT.md | Quality gate for specs completeness |
+| `phase_assumptions_analyzer` | opus | BRD, guidelines, codebase | assumptions.md, open_questions.md | Deep pre-planning assumption surfacing |
+| `decision_researcher` | sonnet | open question, guidelines | research/*.md | Gray area decision comparison tables |
+| `plan_goal_verifier` | opus | PHASE_PLAN, BRD, specs | plan_check.md | Goal-backward plan verification |
 
 ### Design
 
@@ -155,6 +162,7 @@ Complete index of all agents in the SDLC pipeline.
 | `ui_audit_agent` | sonnet | PHASE_PLAN, specs | UI audit report | Pre-implementation UI gap analysis |
 | `code_optimizer` | sonnet | guidelines | optimization report | Dead code removal, perf optimization |
 | `ui_code_optimizer` | sonnet | guidelines | UI optimization report | Bundle size, render performance |
+| `codebase_mapper` | sonnet | guidelines, codebase | agent_state/codebase/*.md | Persistent codebase knowledge base |
 
 ### Documentation & Demo
 
@@ -182,6 +190,15 @@ Complete index of all agents in the SDLC pipeline.
     │         └→ adr_agent
     └→ product_manager (manual, post-init)
 
+/discuss pipeline (NEW — runs before /plan):
+  phase_assumptions_analyzer (deep codebase + BRD analysis)
+    └→ decision_researcher (parallel, one per open question)
+  Output: DISCUSSION.md, decisions.jsonl → consumed by /plan
+
+/map pipeline (NEW — standalone codebase knowledge):
+  codebase_mapper (parallel: tech, architecture, quality, concerns)
+  Output: agent_state/codebase/*.md → consumed by all planning agents
+
 /plan pipeline:
   project_planner
     ├→ spec_writer (parallel, one per component)
@@ -189,6 +206,7 @@ Complete index of all agents in the SDLC pipeline.
     │    └→ design_quality_reviewer
     ├→ spec_verifier
     │    └→ brd_spec_reconciler
+    ├→ plan_goal_verifier (NEW — goal-backward verification)
     └→ adr_agent (if architectural decisions detected)
 
 /develop pipeline:
@@ -235,14 +253,22 @@ debate team (on-demand, any pipeline):
 
 | Command | Agents Used (in order) |
 |---|---|
+| `/research` | 6 parallel research agents -> synthesis -> human review |
 | `/init` | brd_agent -> requirements_brd_reconciler -> impl_guidelines_agent -> agent_factory -> architecture_orchestrator (c4 + sequence + deploy + adr) |
-| `/plan` | project_planner -> spec_writer (parallel) -> ux_designer -> design_quality_reviewer -> spec_verifier -> brd_spec_reconciler -> adr_agent |
+| `/discuss` | phase_assumptions_analyzer -> decision_researcher (parallel, one per question) |
+| `/map` | codebase_mapper (parallel: tech + architecture + quality + concerns) |
+| `/plan` | project_planner -> spec_writer (parallel) -> ux_designer -> design_quality_reviewer -> spec_verifier -> brd_spec_reconciler -> plan_goal_verifier -> adr_agent |
 | `/develop` | backend_audit_agent -> database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer] -> code_reviewer_I -> code_reviewer_II -> security_reviewer -> tenant_isolation_verifier -> code_quality_verifier -> spec_impl_reconciler -> spec_test_reconciler -> acceptance_test_agent -> documentation_agent |
 | `/test` | test_runner, e2e_orchestrator, performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
 | `/review` | code_reviewer_I -> code_reviewer_II -> security_reviewer + dependency_scanner |
 | `/optimize` | code_optimizer + ui_code_optimizer (parallel) |
 | `/deploy` | deployment_agent + ci_cd_agent + observability_agent |
 | `/accept` | acceptance_test_agent (global, all phases) |
+| `/pause` | No agents — captures session state to agent_state/sessions/ |
+| `/resume` | No agents — restores session state and routes to appropriate command |
+| `/workstream` | No agents — manages parallel workstream branches and state |
+| `/health` | No agents — diagnoses agent_state/ integrity and repairs issues |
+| `/forensics` | No agents — post-mortem analysis of failed pipeline runs |
 | debate (on-demand) | debate_moderator -> debate_researcher(s) -> debate_advocate(s) -> debate_arbitrator |
 
 ---
@@ -251,14 +277,14 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 48 |
+| Core agents (`.claude/agents/core/`) | 52 |
 | Generated templates (`.claude/agents/generated/`) | 4 |
-| **Total** | **52** |
+| **Total** | **56** |
 
 | Category | Count |
 |---|---|
 | Requirements | 7 |
-| Planning | 3 |
+| Planning | 6 (+3: phase_assumptions_analyzer, decision_researcher, plan_goal_verifier) |
 | Design | 7 |
 | Implementation (generated) | 4 |
 | Testing | 6 |
@@ -266,11 +292,11 @@ debate team (on-demand, any pipeline):
 | Reconciliation | 5 |
 | Decision Support | 4 |
 | Infrastructure | 3 |
-| Quality & Optimization | 4 |
+| Quality & Optimization | 5 (+1: codebase_mapper) |
 | Documentation & Demo | 4 |
 
 | Model | Count |
 |---|---|
-| opus | 10 |
-| sonnet | 39 |
+| opus | 12 (+2: phase_assumptions_analyzer, plan_goal_verifier) |
+| sonnet | 41 (+2: decision_researcher, codebase_mapper) |
 | haiku | 3 |

@@ -115,6 +115,33 @@
 
 ---
 
+## 5. GSD Pattern Adoption Log (2026-05-21)
+
+Patterns adopted from GSD g-stack review, implemented as 6 sprints:
+
+| # | Pattern | Source | Implementation | Status |
+|---|---------|--------|---------------|--------|
+| GA-1 | **Discussion-before-planning** | GSD `gsd:discuss-phase` | `/discuss` command + `phase_assumptions_analyzer` + `decision_researcher` agents | ✅ IMPLEMENTED |
+| GA-2 | **Session state persistence** | GSD `gsd:pause-work` / `gsd:resume-work` | `/pause` + `/resume` commands with `agent_state/sessions/` state files | ✅ IMPLEMENTED |
+| GA-3 | **Persistent codebase knowledge** | GSD `gsd-codebase-mapper` | `/map` command + `codebase_mapper` agent with 4 parallel focus areas | ✅ IMPLEMENTED |
+| GA-4 | **Goal-backward plan verification** | GSD `gsd-plan-checker` | `plan_goal_verifier` agent integrated into `/plan` Step 4b | ✅ IMPLEMENTED |
+| GA-5 | **Parallel workstreams** | GSD `gsd:workstreams` | `/workstream` command (create, list, switch, status, complete, merge) | ✅ IMPLEMENTED |
+| GA-6 | **Pipeline self-diagnosis** | GSD `gsd:health` / `gsd:forensics` | `/health` (integrity check + repair) + `/forensics` (post-mortem analysis) commands | ✅ IMPLEMENTED |
+| GA-7 | **Evidence-graded assumptions** | GSD `gsd-assumptions-analyzer` + BMAD evidence grading | CONFIRMED/DEDUCED/HYPOTHESIZED classification in `phase_assumptions_analyzer` | ✅ IMPLEMENTED |
+
+### Patterns NOT Adopted (with rationale)
+
+| Pattern | Source | Why Skipped |
+|---------|--------|-------------|
+| `gsd:new-workspace` (worktree isolation) | GSD | Our phase-branch model achieves similar isolation |
+| `gsd:set-profile` (model switching) | GSD | Our `settings.json` with per-agent model allocation is more granular |
+| `gsd:profile-user` (behavioral profiling) | GSD | Auto-memory system is sufficient for user preferences |
+| `gsd:review` (cross-AI peer review) | GSD | Novel but unclear ROI; our 4-layer review is comprehensive |
+| `gsd:plant-seed` / `gsd:note` (idea capture) | GSD | Low priority; can be added later as /backlog command |
+| `gsd:manager` (interactive command center) | GSD | Our /status + /workstream covers the use case |
+
+---
+
 ## 3. Strengths We Have That Others Don't
 
 | Our Strength | Who Lacks It |

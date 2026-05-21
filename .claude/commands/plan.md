@@ -42,6 +42,7 @@ Generates detailed technical specifications (TRDs), typed data contracts, and co
 | Step 2b Data contracts | ~8K (extract from backend specs only) |
 | Step 3 UI specs | ~15K (phase_context + data-contracts.md + archetype reference) |
 | Step 4 Verify | ~20K (all specs + data-contracts.md + BRD FR-* list) |
+| Step 4b Plan check | ~15K (PHASE_PLAN.md + all specs + BRD objectives) |
 
 **Agent return protocol:** Every agent returns 3 lines to the parent:
 ```
@@ -99,6 +100,7 @@ HAS_PHASE_CONTEXT=$([ -f "docs/design/phases/${PHASE}/phase_context.md" ] && ech
 HAS_DATA_CONTRACTS=$([ -f "docs/design/phases/${PHASE}/specs/data-contracts.md" ] && echo true || echo false)
 HAS_SPECS=$(ls docs/design/phases/${PHASE}/specs/*.md 2>/dev/null | head -1 && echo true || echo false)
 HAS_VERIFICATION=$([ -f "docs/design/phases/${PHASE}/VERIFICATION_REPORT.md" ] && echo true || echo false)
+HAS_PLAN_CHECK=$([ -f "agent_state/phases/${PHASE}/plan_check.md" ] && echo true || echo false)
 ```
 
 **Resume rules:**
@@ -106,7 +108,9 @@ HAS_VERIFICATION=$([ -f "docs/design/phases/${PHASE}/VERIFICATION_REPORT.md" ] &
 - If backend specs exist in `specs/` → skip Step 2 for those components
 - If `data-contracts.md` exists → skip Step 2b
 - If UI specs exist in `specs/` → skip Step 3 for those screens
-- If `VERIFICATION_REPORT.md` exists → skip to Step 5
+- If `VERIFICATION_REPORT.md` exists → skip Step 4
+- If `plan_check.md` exists with PASS or WARN verdict → skip Step 4b, proceed to Step 5
+- If `plan_check.md` exists with BLOCK verdict → re-run Step 4b (specs may have been amended)
 - **Always re-run Step 1b (phase_context validation)** on resume — cheap and catches stale context
 
 ### Agent Context Protocol — ALL agents read these before producing output
@@ -354,7 +358,47 @@ If INVENTED behaviors: surface to user — may be valid technical decisions or m
 
 ---
 
-## Step 4b — Architecture Decision Records (parallel with Step 4)
+## Step 4b — Goal-Backward Plan Check
+
+**Agent:** `plan_goal_verifier`
+**Runs after:** Step 4a (brd_spec_reconciler complete)
+**Runs before:** Step 4c (ADRs) and Step 4d (future phase sketches)
+
+Performs goal-backward verification: starting from the phase goal, traces backward through specs → components → contracts to verify the plan will achieve its stated objective.
+
+This is fundamentally different from spec_verifier (which checks spec completeness) and brd_spec_reconciler (which checks BRD alignment). plan_goal_verifier asks: "If every spec is implemented perfectly, will the phase goal actually be achieved?"
+
+Reads:
+- `PHASE_PLAN.md` (goal, exit criteria, E2E workflows unlocked)
+- All specs in `docs/design/phases/${PHASE}/specs/`
+- BRD objectives and requirements mapped to this phase
+- `data-contracts.md` (if exists — validates integration contracts)
+- `DISCUSSION.md` (if exists — resolved assumptions and decisions)
+
+Writes: `agent_state/phases/${PHASE}/plan_check.md`
+
+**Analysis:**
+1. Traces each exit criterion backward to specs → components → endpoints → data models → integration points
+2. Checks component completeness (all required pieces defined)
+3. Checks cross-component integration (interfaces match, data flows correctly)
+4. Checks NFR coverage (performance, security requirements have actionable spec constraints)
+5. Validates E2E workflow feasibility (full user journeys can execute end-to-end)
+
+**Verdicts:**
+- **PASS** → continue to Step 4c
+- **WARN** → display warnings, continue to Step 4c (warnings carry into phase_context.md)
+- **BLOCK** → STOP. Display gaps. Route specific gaps back to spec_writer for amendment (max 1 cycle). If still BLOCK after amendment: surface to user.
+
+```
+plan_goal_verifier → agent_state/phases/${PHASE}/plan_check.md
+  Verdict: PASS | WARN | BLOCK
+  Gaps: <N> | none
+  Coverage: <N>/<N> exit criteria covered
+```
+
+---
+
+## Step 4c — Architecture Decision Records (parallel with Step 4)
 
 **Agent:** `adr_agent`
 **When:** Any spec introduces a significant architectural decision
@@ -367,7 +411,7 @@ Does NOT block `/develop`. Runs in parallel with spec verification.
 
 ---
 
-## Step 4c — Future Phase Sketches (Progressive Planning)
+## Step 4d — Future Phase Sketches (Progressive Planning)
 
 **When:** Phase being planned is NOT the last phase in the BRD scope
 **Purpose:** Sketch future phases to capture intent without over-planning
@@ -416,6 +460,9 @@ Write `docs/design/phases/${PHASE}/INDEX.md`:
 
 ## Verification
 - VERIFICATION_REPORT.md — spec + data contract coverage against BRD
+
+## Plan Check
+- agent_state/phases/N/plan_check.md — goal-backward verification
 ```
 
 Print summary:
@@ -427,6 +474,7 @@ Print summary:
   Data contracts: N endpoints typed in data-contracts.md
   UI specs: N files (or: not a UI phase)
   Verification: PASSED
+  Plan check: PASS | WARN (N warnings) — N/N exit criteria covered
 
   ▶ Next: /develop --phase=N
 ```
