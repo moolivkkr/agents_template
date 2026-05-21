@@ -137,6 +137,7 @@ The agent:
 ## Step 1.5 — Post-Clarification Cross-Validation (CLOSED LOOP)
 
 **Runs after:** Both `brd_agent` and `impl_guidelines_agent` have completed their user interviews and produced draft outputs.
+**Executor:** Init orchestrator (inline — reads both documents and runs checklist, no subagent needed)
 **Purpose:** Catch contradictions between user answers given to different agents, internal inconsistencies within the BRD, and NFR↔tech stack feasibility gaps.
 
 **Checks:**
@@ -189,6 +190,7 @@ User decides: update BRD, or accept with rationale. Does not auto-proceed if gap
 ## Step 2c — Research ↔ BRD Reconciliation (when research/ exists)
 
 **Runs after:** Step 2b
+**Executor:** `requirements_brd_reconciler` agent (extended scope — same agent as Step 2b, second pass with research inputs)
 **Skip if:** No `requirements/research/` directory exists (project initialized without `/research`)
 
 When `/research` was run before `/init`, the research directory contains critical audit documents that the BRD MUST incorporate. This step verifies incorporation.
@@ -244,6 +246,7 @@ If BLOCK items found: surface to user. Do NOT auto-proceed.
 ## Step 2d — BRD Quality Self-Audit
 
 **Runs after:** Step 2c (or Step 2b if no research exists)
+**Executor:** Init orchestrator (inline — reads BRD and runs gap-analysis checklist)
 **Purpose:** Quality gate on the BRD itself — ensures the BRD covers all dimensions downstream agents expect.
 
 Run the 17-dimension gap-analysis checklist (`.claude/skills/requirements/gap-analysis-checklist.md`) against `docs/BRD.md`:
@@ -295,6 +298,7 @@ See `agent_factory.md` for full template-population logic.
 ## Step 3.5 — Validate Generated Agents
 
 **Runs after:** Step 3
+**Executor:** Init orchestrator (inline — reads agent frontmatter and checks file paths)
 **Purpose:** Ensure generated agents are correctly instantiated and will work when `/develop` invokes them.
 
 For each agent in `.claude/agents/generated/`:
