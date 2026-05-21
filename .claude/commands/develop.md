@@ -1245,14 +1245,61 @@ Requires infra running (started in Step 0). Tests service↔DB and service↔cac
 
 Same iteration rules: fix → retry → max 3 attempts.
 
-### Step 3c — E2E Tests (conditional)
-**Trigger:** `PHASE_PLAN.md` has non-empty `e2e_workflows_unlocked` list
+### Step 3c — E2E Tests (MANDATORY every phase)
+
+**CRITICAL CHANGE:** E2E tests are NOT conditional. Every phase ships as a fully baked app. E2E tests validate the app works from a user's perspective in a real browser.
 
 **Agent:** `e2e_orchestrator` + generated `ui_test_agent` (if UI phase)
 
-Runs complete user workflow tests. Same iteration rules: fix → retry → max 2 attempts.
+**Step 3c.1 — Ensure E2E Tests Exist:**
+If no E2E test files exist for this phase:
+1. `ui_test_agent` writes Playwright E2E tests covering ALL in-scope FR-* acceptance criteria
+2. Tests must cover: functional flows, keyboard input, error recovery, accessibility (ARIA), display formatting
+3. Every P0 FR-* must have at least one E2E test
+4. Tests use `data-testid` attributes for reliable element selection
+5. Playwright config must exist — create if missing (chromium, baseURL, webServer)
 
-**All three tiers must pass before the reconciliation steps.**
+**Step 3c.2 — Run E2E Tests (Feedback Loop):**
+```
+Cycle 1: Run all E2E tests
+  → All pass? → proceed to Step 3c.3
+  → Failures? → diagnose root cause (test bug vs implementation bug)
+    → Fix implementation (or test if test is wrong)
+    → Re-run ONLY failed tests
+
+Cycle 2: Re-run failed tests
+  → All pass? → proceed to Step 3c.3
+  → Failures? → deeper diagnosis
+    → If same failures: likely architectural issue
+    → Fix and re-run
+
+Cycle 3: Final attempt
+  → All pass? → proceed
+  → Still failing? → ESCALATE to debate_moderator:
+    debate_request: {
+      topic: "E2E test failure after 3 fix attempts",
+      context: "Test: <name>, Error: <error>, Attempts: 3",
+      options: [
+        "Architectural change to fix root cause",
+        "Simplify the feature to make it testable",
+        "Mark as known_issue with workaround",
+        "The test expectation is wrong — adjust test"
+      ]
+    }
+    → debate_moderator spawns researchers + advocates + arbitrator
+    → Arbitrator verdict determines action
+    → Implement verdict → re-run E2E → if still fails: BLOCK gate
+```
+
+**Step 3c.3 — Visual Validation (if wireframe.html exists):**
+If `docs/design/phases/${PHASE}/specs/*.wireframe.html` exists:
+1. Open wireframe HTML in Playwright → screenshot at 1280px and 375px
+2. Open implementation at localhost → screenshot at same viewports
+3. Compare screenshots (perceptual diff)
+4. If mismatch > 10%: flag visual discrepancies for ui_developer to fix
+5. Max 2 visual fix rounds → remaining discrepancies logged as `known_issues`
+
+**All tiers (unit + integration + E2E + visual) must pass before reconciliation.**
 
 ### Step 3c.5 — Post-Implementation Re-Audit (CLOSED LOOP)
 
@@ -1586,9 +1633,44 @@ For EVERY API endpoint called during acceptance testing, verify:
 - Empty list returns `{ data: [], meta: { total: 0 } }`, not `null` or `{}`
 - Log mismatches as `CONTRACT_VIOLATION` — these are the exact bugs that crash the UI
 
-### Iteration
-- Acceptance failure → implementation agent fixes → re-test → max 2 rounds
-- After max rounds: log as unresolved → **phase gate blocked**
+### Iteration (Feedback Loop with Escalation)
+
+Acceptance testing is NOT read-only. Failures drive implementation fixes:
+
+```
+Cycle 1: Run all acceptance tests
+  → All PASS? → proceed to gate
+  → PARTIAL or FAIL? → categorize each failure:
+    A) Implementation bug (feature doesn't work) → route to implementation agent
+    B) Spec ambiguity (unclear what "correct" means) → route to spec_writer for clarification
+    C) Test data issue (seed data wrong) → fix seed data
+    D) Architectural limitation (can't be fixed without redesign) → ESCALATE
+
+  → Fix category A/B/C → re-run ONLY failed acceptance tests
+
+Cycle 2: Re-run failed tests
+  → All PASS? → proceed
+  → Still failing? → deeper analysis
+    → If same test keeps failing: likely category D (architectural)
+    → ESCALATE to debate_moderator:
+      debate_request: {
+        topic: "Acceptance test failure: <FR-*> <persona> <use case>",
+        context: "BRD says X, implementation does Y, cannot reconcile after 2 attempts",
+        options: [
+          "Redesign the feature architecture to meet the AC",
+          "Amend the BRD acceptance criteria (with justification)",
+          "Defer to next phase with documented workaround",
+          "The acceptance test interpretation is wrong"
+        ]
+      }
+    → Arbitrator decides → implement → final re-test
+
+Cycle 3: Final acceptance
+  → PASS? → proceed to gate
+  → FAIL? → BLOCK gate with detailed failure report
+```
+
+**Key principle:** Acceptance tests represent the BRD contract. If implementation can't meet the AC, the debate team decides whether to fix the code, amend the BRD, or defer — but it's never silently skipped.
 
 ### Outputs
 - `agent_state/phases/${PHASE}/reports/acceptance_report.md` — full results
@@ -1607,7 +1689,8 @@ Gate Item                    Source File                                        
 Spec compliance              agent_state/phases/${PHASE}/reports/spec_compliance_review.md   COMPLIANT — no missing implementations
 Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests
 Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests
-E2E tests (if unlocked)      agent_state/e2e/results.md                          No FAILED workflows
+E2E tests (MANDATORY)        agent_state/phases/${PHASE}/reports/e2e_results.md    No FAILED tests (written or generated this phase)
+Visual validation (if HTML)  agent_state/phases/${PHASE}/reports/visual_validation.md  Mismatch < 10% (skip if no wireframe.html)
 Reconciliation C (spec↔impl) agent_state/reconciliation/phase-${PHASE}/specs_vs_impl.md   No MISSING implementations AND unspecced items acknowledged (count logged)
 Reconciliation D (spec↔tests)agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md  No HIGH-priority untested behaviors
 Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     Post-optimization tests: PASS (CLEAN or PARTIAL accepted)
@@ -1621,7 +1704,7 @@ Cross-phase regression       manifest.json → cross_phase_regression           
 Migration safety              agent_state/phases/${PHASE}/reports/migration_safety.md   Zero CRITICAL findings, DOWN coverage ≥ 90%
 ```
 
-**E2E gate is active only when `PHASE_PLAN.md` has a non-empty `e2e_workflows_unlocked` list.**
+**E2E gate is ALWAYS active.** Every phase must have E2E tests — generated during Step 3c.1 if they don't exist. Visual validation gate is active only when `*.wireframe.html` files exist for this phase.
 
 ### Bug Severity Classification
 
