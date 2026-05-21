@@ -167,6 +167,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 | Command | What it does |
 |---------|-------------|
+| `/startup/product-workflows` | **NEW** Product workflow intelligence — researches docs, videos, APIs, forums for a named product. Produces screen-by-screen workflows, config schemas, dependency graphs, API coverage matrix, persona flows |
 | `/startup/research` | Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
 | `/startup/init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode |
 | `/startup/map` | **NEW** Analyzes codebase with 4 parallel mapper agents (tech, architecture, quality, concerns). Produces persistent knowledge base in `agent_state/codebase/` |
@@ -221,6 +222,16 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --test_only       Run tests only — no implementation changes
 --force_gate      Force gate to pass with failures (logged as gate_override in manifest)
 --auto            Autonomous mode — auto-resolve escalations, auto-fix gate failures
+```
+
+**`/startup/product-workflows`**
+```
+--product="..."   Product name (required, e.g., "Trellix DLP", "CrowdStrike Falcon")
+--capabilities="…" Comma-separated list (omit to discover and document FULL system)
+--screenshots=DIR  Path to screenshot directory for visual analysis
+--depth=standard  Research depth: quick | standard | deep (adds video + community analysis)
+--version="..."   Target product version (e.g., "11.x")
+--output=DIR      Output directory (default: docs/product-workflows)
 ```
 
 **`/startup/discuss`**
@@ -1228,6 +1239,7 @@ For new products or unfamiliar markets:
 | I want to... | Run this |
 |-------------|----------|
 | Build everything hands-off | `/startup/autonomous` |
+| Understand a competitor's product deeply | `/startup/product-workflows --product="Trellix DLP"` |
 | Research a market first | `/startup/research --domain="..."` |
 | Start a new project | `bash new-project.sh my-app` → `/startup/init` |
 | Understand codebase before planning | `/startup/map` |
@@ -1292,7 +1304,8 @@ If any check fails, the gate blocks and tells you exactly what to fix.
 ### Commands at a glance
 
 ```
-Pipeline (23 commands total):
+Pipeline (24 commands total):
+/startup/product-workflows  Product workflow intelligence (docs + videos + APIs).
 /startup/research     Deep market & product research. Vendors, capabilities, moats.
 /startup/init         One-time project setup. Creates BRD + agents from requirements.
 /startup/map          Codebase knowledge base — 4 parallel focus areas.

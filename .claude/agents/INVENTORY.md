@@ -54,6 +54,11 @@ Complete index of all agents in the SDLC pipeline.
 | Research gray area decisions | `decision_researcher` | `/discuss` |
 | Verify plan achieves phase goal | `plan_goal_verifier` | `/plan` Step 4b |
 | Map codebase for persistent knowledge | `codebase_mapper` | `/map` |
+| Research product documentation | `product_doc_researcher` | `/product-workflows` |
+| Extract workflow intelligence from videos | `product_video_researcher` | `/product-workflows` |
+| Research product APIs + automation gaps | `product_api_researcher` | `/product-workflows` |
+| Map capability into screen-by-screen workflow | `capability_flow_mapper` | `/product-workflows` |
+| Synthesize workflows into unified intelligence | `workflow_synthesizer` | `/product-workflows` |
 
 ---
 
@@ -70,6 +75,16 @@ Complete index of all agents in the SDLC pipeline.
 | `product_manager` | opus | docs/BRD.md, change request | docs/BRD.md (amended), docs/user-stories/ | Post-init BRD amendments |
 | `impl_guidelines_agent` | sonnet | docs/BRD.md | docs/IMPLEMENTATION_GUIDELINES.md | Tech stack confirmation |
 | `agent_factory` | sonnet | IMPLEMENTATION_GUIDELINES.md | .claude/agents/generated/ | Generates project-specific agents |
+
+### Product Workflow Intelligence
+
+| Agent | Model | Input | Output | Notes |
+|---|---|---|---|---|
+| `product_doc_researcher` | opus | product name, capabilities | doc-corpus.md, CAPABILITY-TAXONOMY.md | Official docs, KB, training, forums |
+| `product_video_researcher` | sonnet | product name, capabilities | video-intelligence.md | YouTube demos, conference talks, webinars |
+| `product_api_researcher` | sonnet | product name, capabilities | api-intelligence.md, api-schemas.yaml, api-coverage-matrix.md | REST/GraphQL/SDK/CLI research |
+| `capability_flow_mapper` | sonnet | capability + doc corpus + video/API intel | workflow.md, quickstart.md, advanced.md, prerequisites.md, gotchas.md, lifecycle.md | Per-capability deep mapping (parallel) |
+| `workflow_synthesizer` | sonnet | all capability flows + API intel | OVERVIEW.md, dependency-graph.md, personas/*.md, reference/*.yaml | Final assembly + persona summaries |
 
 ### Planning & Specs
 
@@ -245,6 +260,13 @@ debate team (on-demand, any pipeline):
     → debate_researcher (parallel, one per option)
     → debate_advocate (parallel, HIGH impact only)
     → debate_arbitrator
+
+/product-workflows pipeline (NEW — product workflow intelligence):
+  product_doc_researcher (official docs, KB, training, forums)
+    ├→ product_video_researcher (YouTube demos, conference talks, webinars)
+    ├→ product_api_researcher (REST/GraphQL/SDK/CLI, automation gaps)
+    └→ capability_flow_mapper (parallel, one per capability)
+         └→ workflow_synthesizer (assembly: overview, personas, dependency graph)
 ```
 
 ---
@@ -269,6 +291,7 @@ debate team (on-demand, any pipeline):
 | `/workstream` | No agents — manages parallel workstream branches and state |
 | `/health` | No agents — diagnoses agent_state/ integrity and repairs issues |
 | `/forensics` | No agents — post-mortem analysis of failed pipeline runs |
+| `/product-workflows` | product_doc_researcher -> product_video_researcher + product_api_researcher (parallel) -> capability_flow_mapper (parallel per capability) -> workflow_synthesizer |
 | debate (on-demand) | debate_moderator -> debate_researcher(s) -> debate_advocate(s) -> debate_arbitrator |
 
 ---
@@ -277,14 +300,15 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 52 |
+| Core agents (`.claude/agents/core/`) | 57 |
 | Generated templates (`.claude/agents/generated/`) | 4 |
-| **Total** | **56** |
+| **Total** | **61** |
 
 | Category | Count |
 |---|---|
 | Requirements | 7 |
-| Planning | 6 (+3: phase_assumptions_analyzer, decision_researcher, plan_goal_verifier) |
+| Product Workflow Intelligence | 5 (product_doc_researcher, product_video_researcher, product_api_researcher, capability_flow_mapper, workflow_synthesizer) |
+| Planning | 6 (phase_assumptions_analyzer, decision_researcher, plan_goal_verifier) |
 | Design | 7 |
 | Implementation (generated) | 4 |
 | Testing | 6 |
@@ -292,11 +316,11 @@ debate team (on-demand, any pipeline):
 | Reconciliation | 5 |
 | Decision Support | 4 |
 | Infrastructure | 3 |
-| Quality & Optimization | 5 (+1: codebase_mapper) |
+| Quality & Optimization | 5 (codebase_mapper) |
 | Documentation & Demo | 4 |
 
 | Model | Count |
 |---|---|
-| opus | 12 (+2: phase_assumptions_analyzer, plan_goal_verifier) |
-| sonnet | 41 (+2: decision_researcher, codebase_mapper) |
+| opus | 13 (+1: product_doc_researcher) |
+| sonnet | 45 (+4: product_video_researcher, product_api_researcher, capability_flow_mapper, workflow_synthesizer) |
 | haiku | 3 |
