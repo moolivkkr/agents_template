@@ -105,6 +105,113 @@ Note: `phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. L
 
 ---
 
+## Orchestration Protocol (HOW to execute this pipeline)
+
+**CRITICAL:** This pipeline CANNOT be executed as a single agent pass. A single agent will drop steps (reviews, E2E, acceptance) because implementation consumes most of the context. The pipeline MUST be executed as **multiple agent waves** with the parent orchestrator managing handoffs.
+
+### Wave Execution Model
+
+```
+Wave 1: ORIENT + AUDIT
+  └─ Single agent: Read phase_context.md, run audit, produce gap report
+  └─ Output: agent_state/phases/${PHASE}/audit_report.md
+
+Wave 2: IMPLEMENT (parallel agents per spec)
+  ├─ database_agent → schema + migrations
+  ├─ backend_developer → services + repositories
+  ├─ api_developer → handlers + middleware + OTEL + OpenAPI
+  └─ ui_developer → components + hooks + engine + styles
+  └─ Output: source code committed per wave
+
+Wave 3: TEST (parallel)
+  ├─ unit_test_agent → write + run unit tests
+  ├─ integration_test_agent → write + run integration tests
+  └─ ui_test_agent → write + run Playwright E2E tests (MANDATORY)
+  └─ Output: test results in agent_state/phases/${PHASE}/reports/
+
+Wave 4: REVIEW + ACCEPTANCE (parallel tracks)
+  ├─ Track A (sequential): code_reviewer_I → code_reviewer_II → security_reviewer
+  ├─ Track B (parallel): acceptance_test_agent (persona-based)
+  ├─ Track C (parallel): code_quality_verifier (TODOs, stubs, secrets)
+  └─ Track D (parallel): spec_impl_reconciler (specs match code?)
+  └─ Output: review reports in agent_state/phases/${PHASE}/reports/
+
+Wave 5: COLLECTIVE FEEDBACK → ITERATE
+  └─ Orchestrator collects ALL findings from Waves 3 + 4:
+     - Test failures (unit, integration, E2E)
+     - Review violations (style, architecture, security)
+     - Acceptance failures (per persona, per FR-*)
+     - Reconciliation gaps (spec vs implementation)
+     - Quality gate violations (TODOs, stubs, dead code)
+  └─ Categorize each finding:
+     A) Code fix needed → route to implementation agent
+     B) Test fix needed → route to test agent
+     C) Spec ambiguity → route to spec_writer for clarification
+     D) Architectural issue → route to debate_moderator
+  └─ Fix all category A + B + C items
+  └─ Re-run ONLY the checks that failed (not full pipeline)
+  └─ Max 3 iteration cycles → then gate with remaining issues
+
+Wave 6: GATE
+  └─ Read all report files → evaluate pass/fail conditions
+  └─ Write gate.passed or gate.failed
+  └─ Write manifest.json
+  └─ Git tag phase-N-complete
+```
+
+### Orchestrator Rules
+
+1. **Never combine waves.** Each wave completes before the next starts. Wave 2 waits for Wave 1. Wave 3 waits for Wave 2. etc.
+2. **Maximize parallelism within waves.** All agents in a wave that don't depend on each other run simultaneously.
+3. **Each agent gets its own context.** Don't pass one agent's full output to another — pass file paths and 3-line summaries.
+4. **Wave 5 is the feedback hub.** ALL findings from Waves 3+4 are collected in one place, categorized, and routed. This prevents the "fix one thing, break another" cycle.
+5. **Re-runs are targeted.** After fixes in Wave 5, only re-run the specific checks that failed — not the entire review suite.
+
+### Wave 5 Collective Feedback Format
+
+The orchestrator builds a single feedback document before routing fixes:
+
+```markdown
+# Phase ${PHASE} — Collective Feedback (Iteration ${N})
+
+## Test Failures (Wave 3)
+| Source | Test | Error | Category | Route To |
+|--------|------|-------|----------|----------|
+| unit | TestPercentage | expected 110, got 10 | A (code fix) | calculator.ts |
+| e2e | keyboard escape | timeout waiting for "0" | B (test fix) | calculator.spec.ts |
+
+## Review Findings (Wave 4 Track A)
+| Reviewer | File | Issue | Severity | Category | Route To |
+|----------|------|-------|----------|----------|----------|
+| code_reviewer_I | handler/health.go | missing error wrap | medium | A (code fix) | health.go |
+| security_reviewer | middleware/cors.go | wildcard origin in dev | high | A (code fix) | cors.go |
+
+## Acceptance Failures (Wave 4 Track B)
+| FR-* | Persona | AC# | Issue | Category | Route To |
+|------|---------|-----|-------|----------|----------|
+| FR-003 | P-2 | 2 | 100+10%=10 not 110 | A (code fix) | calculator.ts |
+
+## Quality Violations (Wave 4 Track C)
+| File | Issue | Category |
+|------|-------|----------|
+| engine/operations.ts:42 | TODO: handle edge case | A (code fix) |
+
+## Spec Gaps (Wave 4 Track D)
+| Spec | Missing Implementation | Category |
+|------|----------------------|----------|
+
+## Iteration Plan
+- Category A fixes: 5 items → implementation agent
+- Category B fixes: 1 item → test agent
+- Category C fixes: 0 items
+- Category D escalations: 0 items
+- After fixes: re-run unit tests, e2e test "keyboard escape", security review on cors.go
+```
+
+This collective feedback document is the KEY innovation — it prevents the pipeline from fixing issues one-at-a-time across separate re-runs, which wastes cycles and causes fix→break→fix loops.
+
+---
+
 ## Pipeline Anti-Rationalization Guard
 
 **One rule:** Never skip a step, shortcut a gate, or accept partial results — even if it "seems fine." If you're tempted to skip, that's exactly when the step matters most. The table below lists specific temptations and their correct responses.
