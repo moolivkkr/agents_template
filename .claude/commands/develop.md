@@ -107,7 +107,9 @@ Note: `phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. L
 
 ## Orchestration Protocol (HOW to execute this pipeline)
 
-**⛔ HARD RULE: This pipeline MUST be executed as SEPARATE sequential agent calls from the parent session. A single agent WILL drop review and acceptance steps — this has been proven twice (Phase 1 and Phase 2 of the calculator project). This is NOT advisory — it is a structural requirement.**
+**⛔ HARD RULE: Use `/develop-orchestrator` instead of delegating this entire file to a single agent. The orchestrator script spawns separate agents per wave with verification between each. A single agent WILL drop review and acceptance steps — proven in Phase 1, 2, and 4 of the calculator project. This is NOT advisory — it is a structural requirement.**
+
+**If you are a subagent reading this:** You should be executing ONE wave, not the entire pipeline. If your prompt says "run all 6 waves" — STOP. Tell the parent to use `/develop-orchestrator` instead.
 
 ### Mandatory Execution Pattern
 
