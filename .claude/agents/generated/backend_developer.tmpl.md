@@ -110,6 +110,36 @@ Before marking the task complete, verify:
 
 ---
 
+## PRODUCTION HARDENING RULES (from validation testing)
+
+These rules come from A/B testing the SDLC pipeline on real projects. Violations in these areas are the most common cause of review findings.
+
+1. **Interface-based dependency injection:** Handlers and services MUST accept interfaces, not concrete types. `func NewHealthHandler(db DatabasePinger)` not `func NewHealthHandler(db *pgxpool.Pool)`. This enables unit testing without a live database.
+
+2. **ALL DB access through repository layer:** No SQL in handlers OR middleware. If middleware needs DB access (e.g., session management), it calls a repository method. Inline SQL in middleware is a layering violation.
+
+3. **Production fail-fast for required config:** If a config value is required in production (secrets, API keys, DB URLs), the server MUST fail to start if it's missing. Never silently use insecure defaults. Pattern:
+   ```
+   if cfg.Environment == "production" && cfg.SessionSecret == defaultSecret {
+     log.Fatal("SESSION_SECRET must be set in production")
+   }
+   ```
+
+4. **Wire observability, don't just declare it:** If you define Prometheus metrics, they MUST be incremented in the request pipeline. Dead metric declarations are worse than no metrics — they create false confidence. Every metric variable must have at least one `.Inc()`, `.Observe()`, or `.Set()` call.
+
+5. **Goroutines must be cancellable:** Background goroutines (cleanup timers, watchers) MUST accept a `context.Context` and stop when cancelled. Leaked goroutines are resource leaks. Pattern:
+   ```
+   func StartCleanup(ctx context.Context, interval time.Duration) {
+     ticker := time.NewTicker(interval)
+     go func() {
+       defer ticker.Stop()
+       for { select { case <-ticker.C: cleanup() case <-ctx.Done(): return } }
+     }()
+   }
+   ```
+
+6. **Self-consistency check:** Before completing, verify your middleware stack doesn't violate itself. Example: if CSP middleware sets `script-src 'self'`, don't serve HTML that loads scripts from CDNs.
+
 ## QUALITY GATES
 
 - [ ] All endpoints from the TRD are implemented
@@ -118,6 +148,10 @@ Before marking the task complete, verify:
 - [ ] Code follows IMPLEMENTATION_GUIDELINES coding standards
 - [ ] Repository methods include tenant_id scoping
 - [ ] Service methods validate authorization
-- [ ] Handlers contain no business logic
+- [ ] Handlers contain no business logic — AND accept interfaces, not concrete types
 - [ ] Structured logging present in all services
 - [ ] Error responses use domain error types
+- [ ] All declared metrics are wired into the request pipeline (no dead metric variables)
+- [ ] No inline SQL outside repository layer (including middleware)
+- [ ] Production-required config fails fast if missing
+- [ ] All background goroutines are cancellable via context

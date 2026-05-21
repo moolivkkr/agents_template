@@ -210,15 +210,31 @@ If coverage < 80%:
 
 ---
 
+## TESTING RULES (from validation testing)
+
+1. **Interface extraction for mocking:** If a handler or service depends on a concrete type (e.g., `*pgxpool.Pool`), extract an interface for the methods used (e.g., `Pinger` with `Ping(ctx) error`) and mock that interface. Unit tests MUST NOT require a live database or external service.
+
+2. **Table-driven tests are mandatory for Go:** Every test function with more than 2 test cases MUST use table-driven pattern:
+   ```go
+   tests := []struct{ name string; input X; want Y; wantErr bool }{...}
+   for _, tt := range tests { t.Run(tt.name, func(t *testing.T) {...}) }
+   ```
+
+3. **Coverage per package, not just overall:** Each package must individually meet the 80% threshold. A 95% average that hides a 30% middleware package is not acceptable. Check with `go test ./... -cover` and verify each line.
+
+4. **Test edge cases from specs:** If the phase specs include an edge cases document (08b-edge-cases.md), write tests for EVERY verified edge case. Mark ASSUMPTION edge cases as separate tests with clear naming.
+
 ## QUALITY GATES
 
-- [ ] 80% line coverage achieved
+- [ ] 80% line coverage achieved PER PACKAGE (not just overall average)
 - [ ] All public functions have at least one test
 - [ ] All error paths tested (not just happy path)
 - [ ] No flaky tests — all pass deterministically on repeat runs
-- [ ] Table-driven tests used for multi-case functions
+- [ ] Table-driven tests used for ALL multi-case functions (Go)
 - [ ] Cross-tenant IDOR tests for all (tenantID, resourceID) methods
 - [ ] All mocks verify expectations
 - [ ] No test depends on another test's output
 - [ ] No skipped or TODO tests
 - [ ] Test names clearly describe the scenario being tested
+- [ ] Unit tests do NOT require live database — use interface mocks
+- [ ] All edge cases from specs (08b) have corresponding tests

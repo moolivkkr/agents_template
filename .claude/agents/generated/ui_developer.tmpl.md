@@ -244,9 +244,24 @@ function ResourceList() {
 
 ---
 
+## UI IMPLEMENTATION RULES (from validation testing)
+
+1. **Use literal Unicode characters:** `÷ × − ± → ←`, NOT escape sequences `\u00F7 \u00D7 \u2212`. Escape sequences render literally in some build pipelines and produce broken UI.
+
+2. **CSS from wireframe.html is the spec:** If the phase includes a `.wireframe.html` file, open it, inspect the CSS, and implement those EXACT values. The HTML wireframe is the visual contract — not the ASCII art in markdown.
+
+3. **Document spec deviations:** If you intentionally deviate from the spec (e.g., title bar 36px instead of 28px), add a code comment explaining WHY. Undocumented deviations get flagged as bugs in review.
+
+4. **Use every prop or don't accept it:** If a component accepts a prop in its interface, it MUST use that prop in rendering or logic. Accepting `memoryActive` and renaming to `_memoryActive` to suppress the warning is a code smell — either use it (dim memory buttons) or remove it from the interface.
+
+5. **Build CSS layout first:** Implement the CSS Grid/Flexbox layout skeleton BEFORE adding interactivity. Verify the static layout matches the wireframe, then add event handlers. This catches visual issues early.
+
+6. **Verify in actual browser:** After implementation, open the app in a real browser and compare side-by-side with the wireframe HTML. Don't trust jsdom test output for visual correctness.
+
 ## QUALITY GATES
 
 - [ ] All wireframe components from TRD/specs are implemented
+- [ ] If wireframe.html exists: implementation visually matches when opened side-by-side
 - [ ] API bindings match data-contracts.md — no guessed shapes
 - [ ] Loading states: skeleton screens on every async data component (no spinners)
 - [ ] Error states: specific message + retry on every error boundary
@@ -256,4 +271,6 @@ function ResourceList() {
 - [ ] Accessibility: ARIA labels, semantic HTML, focus rings, form labels
 - [ ] No `any` types, no inline styles, no hardcoded strings, no raw colors
 - [ ] All forms have validation on blur + submit with server error mapping
-- [ ] No direct API calls — all through TanStack Query hooks/services
+- [ ] No unused props — every accepted prop is used in rendering or logic
+- [ ] Literal Unicode characters in all UI strings (no escape sequences)
+- [ ] All spec deviations documented with code comments explaining rationale

@@ -162,15 +162,35 @@ Every handler follows this exact flow. No exceptions.
 
 ---
 
+## PRODUCTION HARDENING RULES (from validation testing)
+
+1. **OpenAPI spec auto-generated, not inline:** Use the tool specified in IMPLEMENTATION_GUIDELINES (e.g., swaggo/swag) to generate the OpenAPI spec from code annotations. Never maintain an inline JSON/YAML spec string — it drifts from the implementation.
+
+2. **Serve documentation assets locally:** If providing Swagger UI or similar, serve all JS/CSS from local files (bundled or vendored), NOT from CDN URLs. CDN references violate CSP `script-src 'self'` policy that your own middleware sets.
+
+3. **Middleware must use repository layer:** If middleware needs database access (session management, rate limiting with DB backing, etc.), it MUST call repository methods. No inline SQL in middleware files.
+
+4. **Wire ALL declared observability:** Every Prometheus metric, OTEL span, and structured log field declared in the spec MUST be actually wired into the request pipeline. Verify by: calling each endpoint and checking that metrics increment, traces appear in Jaeger, and logs contain all declared fields.
+
+5. **Self-consistency verification:** Before completing, test that your middleware stack doesn't conflict with itself. Run each endpoint and verify:
+   - CSP headers don't block your own page resources
+   - CORS allows your own frontend origin
+   - Rate limiter doesn't block health checks
+   - Session middleware doesn't create sessions for metrics/health endpoints
+
 ## QUALITY GATES
 
 - [ ] All routes from TRD/data contracts are implemented
-- [ ] OpenAPI spec matches implementation
+- [ ] OpenAPI spec auto-generated from code annotations (not inline JSON/YAML)
 - [ ] No business logic in handlers (only parse → validate → call service → respond)
 - [ ] All responses follow the standard envelope pattern
 - [ ] All errors use domain error types
 - [ ] Auth middleware on all protected routes
 - [ ] Request validation with clear error messages
 - [ ] Pagination on all list endpoints
-- [ ] Structured logging with tenant_id
+- [ ] Structured logging with trace_id/span_id
 - [ ] Rate limiting configured per IMPLEMENTATION_GUIDELINES
+- [ ] No inline SQL in middleware — all DB access through repository layer
+- [ ] All declared metrics wired and incrementing (verify via /metrics endpoint)
+- [ ] Swagger UI serves assets locally (no CDN), compatible with CSP policy
+- [ ] Middleware self-consistency verified (CSP doesn't block own resources)
