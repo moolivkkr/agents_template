@@ -380,17 +380,49 @@ Set: {field} = {value}
 
 ---
 
-## Output Artifact 3: advanced.md (Full Reference)
+## Output Artifact 3: advanced.md (Full Reference + Examples + UI Diagrams)
 
 **Path:** `docs/product-workflows/{{PRODUCT_SLUG}}/capabilities/{{CAPABILITY_SLUG}}/advanced.md`
 
-Every option documented, organized by screen (not by workflow step). This is the reference manual.
+Every option documented, organized by screen. This is both a **reference manual** and a **learning document** — each section includes real-world examples extracted from documentation and video demos, plus ASCII UI diagrams showing screen layout.
+
+**Three additions beyond plain field tables:**
+
+1. **UI Screen Diagrams** — ASCII/box-drawing representations of each screen's layout showing where fields, buttons, tabs, and panels are positioned. This gives readers a mental model of the UI without needing screenshots.
+
+2. **Worked Examples** — For each major object type (definition, classification, rule, rule set, policy), include 2-3 complete real-world examples showing actual field values. Extract examples from official documentation, training materials, and video demos. Examples should cover: (a) a simple/common case, (b) an advanced/complex case, (c) an edge case or gotcha scenario.
+
+3. **Example Configuration Blocks** — Show the complete configuration as it would appear, with all fields filled in for a realistic scenario. Include comments explaining WHY each value was chosen.
 
 ```markdown
-# {Capability Name} — Advanced Configuration Reference
+# {Capability Name} — Advanced Configuration Reference & Examples
 
-## {Screen 1 Name}
+## {Screen Name}
 **Navigation:** {click path}
+
+### Screen Layout
+{ASCII UI diagram showing the screen's visual structure}
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ ePO Console > Data Protection > Classification                   │
+├─────────┬───────────────────────────────────────────────────────┤
+│ Sidebar │  [Manual Classification] [Register Docs] [Definitions] │
+│         │                                                         │
+│ • PII   │  ┌─ Content Classification Criteria ──────────────────┐│
+│ • PCI   │  │                                                     ││
+│ • HIPAA │  │  Name: [________________________]                   ││
+│         │  │                                                     ││
+│         │  │  Criteria:  [+ Add]  [- Remove]                    ││
+│         │  │  ┌─────────────────────────────────────────┐       ││
+│         │  │  │ Type: [Advanced Pattern ▼]              │       ││
+│         │  │  │ Pattern: [SSN-Pattern     ▼]            │       ││
+│         │  │  │ Threshold: [1        ]                  │       ││
+│         │  │  └─────────────────────────────────────────┘       ││
+│         │  │                                                     ││
+│         │  │  [Save]  [Cancel]  [Test]                          ││
+│         │  └─────────────────────────────────────────────────────┘│
+└─────────┴───────────────────────────────────────────────────────┘
+```
 
 ### Fields
 | Field | Type | Required | Default | Options | Validation | Description |
@@ -400,12 +432,46 @@ Every option documented, organized by screen (not by workflow step). This is the
 ### Conditional Fields
 {Fields that appear only when specific options are selected}
 
+### Examples
+
+#### Example 1: {Simple/Common Case} — {title}
+{Complete worked example with all field values filled in}
+```yaml
+# Example: SSN Detection Pattern
+name: "US-SSN-Standard"
+regex: "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+case_sensitive: false
+validator: "None"      # Luhn only for credit cards
+threshold: 1           # Flag on first occurrence
+description: "Matches US Social Security Numbers in XXX-XX-XXXX format"
+# WHY: Standard SSN format. Threshold=1 because a single SSN in a document is PII.
+# GOTCHA: Does not catch SSNs written as XXXXXXXXX (no dashes) — need second pattern.
+```
+
+#### Example 2: {Advanced/Complex Case} — {title}
+{More complex scenario showing advanced options, multiple fields, conditional behavior}
+
+#### Example 3: {Edge Case / Gotcha Scenario} — {title}
+{Scenario that demonstrates a common mistake or non-obvious behavior}
+
 ### Edge Cases
 {Behavior when fields interact in non-obvious ways}
 
 ## {Screen 2 Name}
 ...
 ```
+
+**Example extraction rules:**
+- Extract real examples from official documentation (training guides, getting started guides, use case documents)
+- Extract examples demonstrated in video walkthroughs (cite video + timestamp)
+- If no real examples exist, construct realistic examples based on documented field constraints — mark as `[Constructed example]`
+- Every example must have a `# WHY:` comment explaining the reasoning behind each non-obvious value choice
+- Every example should note at least one `# GOTCHA:` if a common mistake exists for that configuration
+- **Quantity:** Include 5-7 examples per major object type (definitions, classifications, rules, rule sets, policies). More is better — variety teaches patterns.
+- **Variety:** Examples should span different use cases (compliance: PCI/HIPAA/GDPR, IP protection, internal data, custom business data), different complexity levels (simple single-field to complex multi-criteria), and different channels (email, web, USB, cloud, print)
+- **Progression:** Order examples from simplest to most complex within each section, building on previous examples
+- **Cross-references:** Later examples should reference earlier ones by name (e.g., a classification example references a definition example created earlier)
+- **Real-world scenarios:** Frame each example as a real business scenario ("Your CISO wants to prevent credit card data from being emailed to external recipients...")
 
 ---
 
