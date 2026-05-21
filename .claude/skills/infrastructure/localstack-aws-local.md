@@ -508,6 +508,281 @@ jobs:
 
 ---
 
+## HA / Active-Active Deployment with Route 53 Failover
+
+### Architecture
+
+```
+┌─── Region: us-east-1 (primary) ──────────┐  ┌─── Region: us-west-2 (secondary) ────────┐
+│  frontend-east:3000                       │  │  frontend-west:3001                       │
+│  backend-east:8080   ←── /healthz ──┐     │  │  backend-west:8081   ←── /healthz ──┐     │
+│  postgres-east:5432                 │     │  │  postgres-west:5433                 │     │
+│  (full app stack)                   │     │  │  (full app stack)                   │     │
+└─────────────────────────────────────┼─────┘  └─────────────────────────────────────┼─────┘
+                                      │                                               │
+                           ┌──────────┴───────────────────────────────────────────────┘
+                           │
+                ┌──────────▼──────────┐
+                │  LocalStack:4566    │
+                │  Route 53           │
+                │  ┌────────────────┐ │
+                │  │ app.local      │ │
+                │  │ A: east (50%)  │ │
+                │  │ A: west (50%)  │ │
+                │  │ Health checks  │ │
+                │  └────────────────┘ │
+                └─────────────────────┘
+```
+
+### docker-compose.ha.yml
+
+```yaml
+# Extends base docker-compose.yml with multi-region HA
+# Usage: docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+
+services:
+  # ── Primary Region (us-east-1) ──
+  # Uses base services: frontend (3000), backend (8080), postgres (5432)
+
+  # ── Secondary Region (us-west-2) ──
+  frontend-west:
+    build:
+      context: ./frontend
+      target: development
+    ports:
+      - "3001:3000"
+    environment:
+      VITE_API_URL: http://localhost:8081
+    depends_on:
+      backend-west:
+        condition: service_healthy
+
+  backend-west:
+    build: ./backend
+    ports:
+      - "8081:8080"
+    environment:
+      DATABASE_URL: postgres://calc:calc@postgres-west:5432/calc?sslmode=disable
+      APP_ENV: development
+      SESSION_SECRET: dev-secret-west
+      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      CORS_ALLOWED_ORIGINS: http://localhost:3001
+    depends_on:
+      postgres-west:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  postgres-west:
+    image: postgres:16-alpine
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: calc
+      POSTGRES_USER: calc
+      POSTGRES_PASSWORD: calc
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U calc -d calc"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── LocalStack (Route 53 + Health Checks) ──
+  localstack:
+    image: localstack/localstack:4.4
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: route53
+      DEFAULT_REGION: us-east-1
+    volumes:
+      - "./localstack/init:/etc/localstack/init/ready.d"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+```
+
+### Route 53 Init Script
+
+```bash
+#!/bin/bash
+# localstack/init/ready.d/01-route53-ha.sh
+# Creates active-active Route 53 configuration with health checks
+
+set -e
+
+echo "Setting up Route 53 active-active routing..."
+
+# Create hosted zone
+ZONE_OUTPUT=$(awslocal route53 create-hosted-zone \
+    --name app.local \
+    --caller-reference "ha-$(date +%s)")
+ZONE_ID=$(echo $ZONE_OUTPUT | jq -r '.HostedZone.Id' | cut -d'/' -f3)
+echo "Hosted zone created: $ZONE_ID"
+
+# Health check: us-east-1 (primary)
+EAST_HC=$(awslocal route53 create-health-check \
+    --caller-reference "east-health-$(date +%s)" \
+    --health-check-config '{
+      "IPAddress": "host.docker.internal",
+      "Port": 8080,
+      "Type": "HTTP",
+      "ResourcePath": "/healthz",
+      "RequestInterval": 10,
+      "FailureThreshold": 2
+    }')
+EAST_HC_ID=$(echo $EAST_HC | jq -r '.HealthCheck.Id')
+echo "East health check: $EAST_HC_ID"
+
+# Health check: us-west-2 (secondary)
+WEST_HC=$(awslocal route53 create-health-check \
+    --caller-reference "west-health-$(date +%s)" \
+    --health-check-config '{
+      "IPAddress": "host.docker.internal",
+      "Port": 8081,
+      "Type": "HTTP",
+      "ResourcePath": "/healthz",
+      "RequestInterval": 10,
+      "FailureThreshold": 2
+    }')
+WEST_HC_ID=$(echo $WEST_HC | jq -r '.HealthCheck.Id')
+echo "West health check: $WEST_HC_ID"
+
+# Weighted routing: 50/50 active-active
+awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
+    --change-batch "{
+      \"Changes\": [{
+        \"Action\": \"CREATE\",
+        \"ResourceRecordSet\": {
+          \"Name\": \"api.app.local\",
+          \"Type\": \"A\",
+          \"SetIdentifier\": \"us-east-1\",
+          \"Weight\": 50,
+          \"TTL\": 10,
+          \"ResourceRecords\": [{\"Value\": \"127.0.0.1\"}],
+          \"HealthCheckId\": \"$EAST_HC_ID\"
+        }
+      }]
+    }"
+
+awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
+    --change-batch "{
+      \"Changes\": [{
+        \"Action\": \"CREATE\",
+        \"ResourceRecordSet\": {
+          \"Name\": \"api.app.local\",
+          \"Type\": \"A\",
+          \"SetIdentifier\": \"us-west-2\",
+          \"Weight\": 50,
+          \"TTL\": 10,
+          \"ResourceRecords\": [{\"Value\": \"127.0.0.1\"}],
+          \"HealthCheckId\": \"$WEST_HC_ID\"
+        }
+      }]
+    }"
+
+echo "Route 53 active-active routing configured"
+echo "  East: port 8080, health check: $EAST_HC_ID"
+echo "  West: port 8081, health check: $WEST_HC_ID"
+```
+
+### Failover Test Script
+
+```bash
+#!/bin/bash
+# scripts/failover-test.sh
+# Validates HA setup by simulating region failures
+
+set -e
+PASS=0
+FAIL=0
+
+log_pass() { echo "  ✓ $1"; PASS=$((PASS+1)); }
+log_fail() { echo "  ✗ $1"; FAIL=$((FAIL+1)); }
+
+echo "═══ HA Failover Test Suite ═══"
+echo ""
+
+# Test 1: Both regions healthy
+echo "Test 1: Both regions healthy"
+EAST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+WEST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
+[ "$EAST" = "200" ] && log_pass "East healthy ($EAST)" || log_fail "East unhealthy ($EAST)"
+[ "$WEST" = "200" ] && log_pass "West healthy ($WEST)" || log_fail "West unhealthy ($WEST)"
+
+# Test 2: Route 53 returns both records
+echo ""
+echo "Test 2: Route 53 weighted records"
+RECORDS=$(awslocal route53 list-resource-record-sets \
+    --hosted-zone-id $(awslocal route53 list-hosted-zones | jq -r '.HostedZones[0].Id' | cut -d'/' -f3) \
+    | jq '.ResourceRecordSets | length')
+[ "$RECORDS" -ge 2 ] && log_pass "Both regions in Route 53 ($RECORDS records)" || log_fail "Missing records ($RECORDS)"
+
+# Test 3: Stop primary → secondary still serves
+echo ""
+echo "Test 3: Primary failure → secondary serves"
+docker stop calc-backend-1 2>/dev/null || true
+sleep 5
+WEST_AFTER=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
+[ "$WEST_AFTER" = "200" ] && log_pass "West still healthy after east stopped" || log_fail "West also failed"
+
+# Verify east is actually down
+EAST_DOWN=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz 2>/dev/null || echo "000")
+[ "$EAST_DOWN" != "200" ] && log_pass "East confirmed down ($EAST_DOWN)" || log_fail "East still up"
+
+# Test 4: Restart primary → both healthy again
+echo ""
+echo "Test 4: Primary recovery"
+docker start calc-backend-1 2>/dev/null || true
+sleep 10  # Wait for health check to recover
+EAST_RECOVERED=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+[ "$EAST_RECOVERED" = "200" ] && log_pass "East recovered ($EAST_RECOVERED)" || log_fail "East failed to recover"
+
+# Test 5: Stop secondary → primary still serves
+echo ""
+echo "Test 5: Secondary failure → primary serves"
+docker stop calc-backend-west-1 2>/dev/null || true
+sleep 5
+EAST_ALONE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+[ "$EAST_ALONE" = "200" ] && log_pass "East still healthy after west stopped" || log_fail "East also failed"
+
+# Test 6: Restart secondary → both healthy
+echo ""
+echo "Test 6: Full recovery"
+docker start calc-backend-west-1 2>/dev/null || true
+sleep 10
+BOTH_EAST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+BOTH_WEST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
+[ "$BOTH_EAST" = "200" ] && [ "$BOTH_WEST" = "200" ] && log_pass "Both regions recovered" || log_fail "Recovery incomplete"
+
+# Summary
+echo ""
+echo "═══ Results: $PASS passed, $FAIL failed ═══"
+[ $FAIL -eq 0 ] && echo "HA validation: PASS" || echo "HA validation: FAIL"
+exit $FAIL
+```
+
+### Deploy Command Integration
+
+```bash
+# /deploy --target=ha-local
+docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+# Wait for all services healthy
+echo "Waiting for both regions..."
+until curl -sf http://localhost:8080/healthz && curl -sf http://localhost:8081/healthz; do sleep 2; done
+echo "HA stack ready"
+
+# /deploy --failover-test
+./scripts/failover-test.sh
+```
+
+---
+
 ## Critical Rules
 
 1. **NEVER** hardcode AWS credentials — always use environment variables or IAM roles

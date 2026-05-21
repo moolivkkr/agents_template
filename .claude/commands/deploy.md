@@ -5,7 +5,11 @@ arguments:
   - name: target
     required: false
     default: local
-    description: "Deployment target: local | staging | prod"
+    description: "Deployment target: local | ha-local | staging | prod"
+  - name: failover_test
+    required: false
+    default: false
+    description: "Run failover test suite after HA deployment (requires --target=ha-local)"
   - name: phase
     required: false
     description: "Deploy artifacts from a specific phase. Omit to deploy current state."
