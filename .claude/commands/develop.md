@@ -107,108 +107,111 @@ Note: `phase_context.md` is 6-8K but replaces 30-70K of BRD + IMPL_GUIDELINES. L
 
 ## Orchestration Protocol (HOW to execute this pipeline)
 
-**CRITICAL:** This pipeline CANNOT be executed as a single agent pass. A single agent will drop steps (reviews, E2E, acceptance) because implementation consumes most of the context. The pipeline MUST be executed as **multiple agent waves** with the parent orchestrator managing handoffs.
+**⛔ HARD RULE: This pipeline MUST be executed as SEPARATE sequential agent calls from the parent session. A single agent WILL drop review and acceptance steps — this has been proven twice (Phase 1 and Phase 2 of the calculator project). This is NOT advisory — it is a structural requirement.**
 
-### Wave Execution Model
+### Mandatory Execution Pattern
+
+The PARENT session (the one running /develop) MUST spawn separate agents for each wave and WAIT for completion before proceeding. DO NOT delegate the entire pipeline to a single subagent.
 
 ```
-Wave 1: ORIENT + AUDIT
-  └─ Single agent: Read phase_context.md, run audit, produce gap report
-  └─ Output: agent_state/phases/${PHASE}/audit_report.md
+PARENT SESSION executes this sequence (not delegated):
 
-Wave 2: IMPLEMENT (parallel agents per spec)
-  ├─ database_agent → schema + migrations
-  ├─ backend_developer → services + repositories
-  ├─ api_developer → handlers + middleware + OTEL + OpenAPI
-  └─ ui_developer → components + hooks + engine + styles
-  └─ Output: source code committed per wave
+1. Spawn Agent → Wave 1: ORIENT + AUDIT → wait for completion
+   Verify: agent_state/phases/${PHASE}/audit_report.md exists
 
-Wave 3: TEST (parallel)
-  ├─ unit_test_agent → write + run unit tests
-  ├─ integration_test_agent → write + run integration tests
-  └─ ui_test_agent → write + run Playwright E2E tests (MANDATORY)
-  └─ Output: test results in agent_state/phases/${PHASE}/reports/
+2. Spawn Agent(s) → Wave 2: IMPLEMENT → wait for completion
+   Verify: source code committed, git diff shows new files
 
-Wave 4: REVIEW + ACCEPTANCE (parallel tracks)
-  ├─ Track A (sequential): code_reviewer_I → code_reviewer_II → security_reviewer
-  ├─ Track B (parallel): acceptance_test_agent (persona-based)
-  ├─ Track C (parallel): code_quality_verifier (TODOs, stubs, secrets)
-  └─ Track D (parallel): spec_impl_reconciler (specs match code?)
-  └─ Output: review reports in agent_state/phases/${PHASE}/reports/
+3. Spawn Agent(s) → Wave 3: TEST → wait for completion
+   Verify: agent_state/phases/${PHASE}/reports/unit_tests.md exists
+   Verify: agent_state/phases/${PHASE}/reports/e2e_results.md exists
 
-Wave 5: COLLECTIVE FEEDBACK → ITERATE
-  └─ Orchestrator collects ALL findings from Waves 3 + 4:
-     - Test failures (unit, integration, E2E)
-     - Review violations (style, architecture, security)
-     - Acceptance failures (per persona, per FR-*)
-     - Reconciliation gaps (spec vs implementation)
-     - Quality gate violations (TODOs, stubs, dead code)
-  └─ Categorize each finding:
-     A) Code fix needed → route to implementation agent
-     B) Test fix needed → route to test agent
-     C) Spec ambiguity → route to spec_writer for clarification
-     D) Architectural issue → route to debate_moderator
-  └─ Fix all category A + B + C items
-  └─ Re-run ONLY the checks that failed (not full pipeline)
-  └─ Max 3 iteration cycles → then gate with remaining issues
+4. Spawn Agent(s) → Wave 4: REVIEW + ACCEPTANCE → wait for completion
+   Verify: agent_state/phases/${PHASE}/reports/code_quality_review.md exists
+   Verify: agent_state/phases/${PHASE}/reports/acceptance_report.md exists
+   ⛔ DO NOT PROCEED WITHOUT THESE FILES
 
-Wave 6: GATE
-  └─ Read all report files → evaluate pass/fail conditions
-  └─ Write gate.passed or gate.failed
-  └─ Write manifest.json
-  └─ Git tag phase-N-complete
+5. PARENT reads all Wave 3+4 reports → builds collective feedback → Wave 5: ITERATE
+   Verify: agent_state/phases/${PHASE}/reports/collective_feedback.md exists
+   If fixes needed: spawn fix agents → re-run failed checks
+
+6. PARENT evaluates gate → Wave 6: GATE
+   Verify: ALL report files exist before writing gate.passed
 ```
 
-### Orchestrator Rules
+### Gate File Precondition Check (HARD GATE)
 
-1. **Never combine waves.** Each wave completes before the next starts. Wave 2 waits for Wave 1. Wave 3 waits for Wave 2. etc.
-2. **Maximize parallelism within waves.** All agents in a wave that don't depend on each other run simultaneously.
-3. **Each agent gets its own context.** Don't pass one agent's full output to another — pass file paths and 3-line summaries.
-4. **Wave 5 is the feedback hub.** ALL findings from Waves 3+4 are collected in one place, categorized, and routed. This prevents the "fix one thing, break another" cycle.
-5. **Re-runs are targeted.** After fixes in Wave 5, only re-run the specific checks that failed — not the entire review suite.
+Before writing `gate.passed`, the parent MUST verify these files exist:
 
-### Wave 5 Collective Feedback Format
+```bash
+REQUIRED_REPORTS=(
+  "agent_state/phases/${PHASE}/reports/unit_tests.md"
+  "agent_state/phases/${PHASE}/reports/e2e_results.md"
+  "agent_state/phases/${PHASE}/reports/code_quality_review.md"
+  "agent_state/phases/${PHASE}/reports/acceptance_report.md"
+  "agent_state/phases/${PHASE}/reports/collective_feedback.md"
+  "agent_state/phases/${PHASE}/manifest.json"
+)
 
-The orchestrator builds a single feedback document before routing fixes:
-
-```markdown
-# Phase ${PHASE} — Collective Feedback (Iteration ${N})
-
-## Test Failures (Wave 3)
-| Source | Test | Error | Category | Route To |
-|--------|------|-------|----------|----------|
-| unit | TestPercentage | expected 110, got 10 | A (code fix) | calculator.ts |
-| e2e | keyboard escape | timeout waiting for "0" | B (test fix) | calculator.spec.ts |
-
-## Review Findings (Wave 4 Track A)
-| Reviewer | File | Issue | Severity | Category | Route To |
-|----------|------|-------|----------|----------|----------|
-| code_reviewer_I | handler/health.go | missing error wrap | medium | A (code fix) | health.go |
-| security_reviewer | middleware/cors.go | wildcard origin in dev | high | A (code fix) | cors.go |
-
-## Acceptance Failures (Wave 4 Track B)
-| FR-* | Persona | AC# | Issue | Category | Route To |
-|------|---------|-----|-------|----------|----------|
-| FR-003 | P-2 | 2 | 100+10%=10 not 110 | A (code fix) | calculator.ts |
-
-## Quality Violations (Wave 4 Track C)
-| File | Issue | Category |
-|------|-------|----------|
-| engine/operations.ts:42 | TODO: handle edge case | A (code fix) |
-
-## Spec Gaps (Wave 4 Track D)
-| Spec | Missing Implementation | Category |
-|------|----------------------|----------|
-
-## Iteration Plan
-- Category A fixes: 5 items → implementation agent
-- Category B fixes: 1 item → test agent
-- Category C fixes: 0 items
-- Category D escalations: 0 items
-- After fixes: re-run unit tests, e2e test "keyboard escape", security review on cors.go
+for f in "${REQUIRED_REPORTS[@]}"; do
+  if [ ! -f "$f" ]; then
+    echo "⛔ GATE BLOCKED: Missing required report: $f"
+    echo "   Wave 4 (review + acceptance) was likely skipped."
+    echo "   Re-run the missing wave before gating."
+    exit 1
+  fi
+done
 ```
 
-This collective feedback document is the KEY innovation — it prevents the pipeline from fixing issues one-at-a-time across separate re-runs, which wastes cycles and causes fix→break→fix loops.
+**If ANY required report is missing, gate.passed MUST NOT be written.** This prevents the exact failure mode we observed: implementation + tests pass, gate written, but no reviews or acceptance tests ever ran.
+
+### Wave Details
+
+**Wave 1: ORIENT + AUDIT**
+- Single agent: read phase_context.md, audit existing code, produce gap report
+- Output: `agent_state/phases/${PHASE}/audit_report.md`
+
+**Wave 2: IMPLEMENT** (parallel agents per spec)
+- database_agent → schema + migrations
+- backend_developer → services + repositories
+- api_developer → handlers + middleware + OTEL + OpenAPI
+- ui_developer → components + hooks + engine + styles
+- Output: source code committed
+
+**Wave 3: TEST** (parallel)
+- unit_test_agent → write + run unit tests
+- integration_test_agent → write + run integration tests
+- ui_test_agent → write + run Playwright E2E tests (MANDATORY)
+- Output: test reports in `agent_state/phases/${PHASE}/reports/`
+
+**Wave 4: REVIEW + ACCEPTANCE** (parallel tracks — ⛔ CANNOT BE SKIPPED)
+- Track A: code review (style + architecture + security)
+- Track B: acceptance tests (persona-based, per FR-*)
+- Track C: code quality verification (TODOs, stubs, secrets, dead code)
+- Track D: spec↔implementation reconciliation
+- Output: review reports in `agent_state/phases/${PHASE}/reports/`
+
+**Wave 5: COLLECTIVE FEEDBACK → ITERATE**
+- Parent collects ALL findings from Waves 3+4 into single feedback document
+- Categorize: A (code fix) / B (test fix) / C (spec ambiguity) / D (architectural)
+- Fix all A+B+C → re-run ONLY failed checks
+- Max 3 cycles → D items escalate to debate_moderator
+- Output: `agent_state/phases/${PHASE}/reports/collective_feedback.md`
+
+**Wave 6: GATE**
+- Verify ALL required reports exist (hard precondition)
+- Evaluate pass/fail per gate item
+- Write gate.passed + manifest.json
+- Git tag `phase-N-complete`
+
+### Why This Matters
+
+In A/B testing, a single subagent executing /develop:
+- Phase 1: Skipped code review, security review, acceptance tests, E2E tests entirely
+- Phase 2: Skipped code review, acceptance tests, collective feedback — only fixed unicode escapes
+- Both phases wrote gate.passed without review evidence
+
+The multi-agent execution model is the ONLY way to guarantee all waves execute. The gate precondition check is the safety net — even if an orchestrator bug skips a wave, the gate won't pass without evidence files.
 
 ---
 
