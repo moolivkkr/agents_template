@@ -34,15 +34,30 @@ TARGET=${ARG_TARGET:-local}
 echo "▶ Deploying to: $TARGET"
 ```
 
-Read `docs/IMPLEMENTATION_GUIDELINES.md` Section 5 (Local Dev Environment) and Section 1 (Infrastructure) for:
-- Container/orchestration technology
-- Environment configuration
-- Required secrets/env vars
+Read `docs/IMPLEMENTATION_GUIDELINES.md` §1 (Tech Stack), §3 (Component Inventory), §5 (Local Dev Environment).
 
-Gate check (non-local only):
+### 0a: Service Discovery (DYNAMIC)
+
+Read §3 Component Inventory and classify each service:
+- **Stateless** (replicate per region): frontends, APIs, workers
+- **Stateful** (per-region or replicated): databases, caches
+- **Shared** (single instance): observability, infrastructure
+
+Output: service topology table in deployment report.
+
+### 0b: Port Allocation
+
+Assign ports from `DEPLOY_PORT_BASE` (default 30000) with +5 increments:
+- Region 1: base+0, base+5, base+10, ...
+- Region 2 (HA only): base+15, base+20, base+25, ...
+- Shared: base+30, base+35, ...
+
+### 0c: Gate Check (non-local targets only)
+
 - Latest phase gate must be passed: `agent_state/phases/*/gate.passed`
 - All tests must be green: check latest test results
 - No HIGH security findings outstanding
+- For HA: verify both regions' health endpoints are configured
 
 ---
 
@@ -104,7 +119,20 @@ On failure:
 
 ### Local
 ```bash
-docker compose up -d  # (or equivalent from IMPLEMENTATION_GUIDELINES)
+docker compose up -d
+```
+
+### Local Dev (with hot reload)
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d
+```
+
+### HA Local (multi-region with Route 53)
+```bash
+docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+# Wait for ALL regions healthy
+# Verify Route 53 records + health checks
+# If --failover-test: run scripts/failover-test.sh
 ```
 
 ### Staging / Production
