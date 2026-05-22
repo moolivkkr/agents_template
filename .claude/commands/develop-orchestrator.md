@@ -61,58 +61,103 @@ EOF
 
 ## Context Pressure Check — MANDATORY Between Every Wave
 
-**⛔ After writing each wave checkpoint, BEFORE starting the next wave, check context usage.**
+**⛔ After writing each wave checkpoint, BEFORE starting the next wave, assess context pressure.**
 
 Performance degrades sharply at ~80% context utilization. The 75% threshold gives a 5% safety margin.
 
-### Protocol
+### How to detect 75% context pressure
+
+Claude Code does NOT expose a `context_percentage` variable. Use these **concrete proxy signals** to self-assess:
+
+1. **Wave count heuristic** — if you have completed **3+ waves** with subagent spawns, you are likely near or past 75%. Each wave with a subagent adds ~15-25K tokens (prompt + result).
+2. **System compression warnings** — if the system has already compressed prior messages (you'll see "[earlier messages compressed]" or similar), you are past 75%.
+3. **Conversation length** — if this orchestrator session has made **15+ tool calls** (reads, writes, agent spawns combined), trigger compaction proactively.
+4. **Cumulative token estimate** — track approximate tokens consumed:
+   - Each subagent spawn + result: ~20K tokens
+   - Each file read: ~2-5K tokens
+   - Each checkpoint write: ~1K tokens
+   - **Trigger at estimated 150K tokens consumed** (75% of 200K window)
+
+**Rule: when in doubt, compact.** The cost of an unnecessary compaction is ~5 seconds. The cost of degraded output quality at 80%+ is wrong code, missed reviews, and dropped steps.
+
+### Protocol — what to do when context pressure is detected
 
 **At every wave boundary (after checkpoint, before next wave):**
 
-1. **Check context usage** — if at or above 75% of context window capacity:
+1. **Assess** — apply the heuristics above. If any signal triggers:
 
-2. **Write compact context summary:**
+2. **Write compact context summary** — this file is the post-compact bootstrap. It must be **self-contained** — after `/compact`, the orchestrator reads ONLY this file + `phase_context.md` to know what happened and what's next:
    ```bash
+   mkdir -p "agent_state/phases/${PHASE}/checkpoints"
    cat > "agent_state/phases/${PHASE}/checkpoints/compact-context.md" << EOF
    # Compact Context — Phase ${PHASE} (post-Wave ${WAVE_NUM})
    Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-   Reason: context window at 75% — auto-compacted before Wave $((WAVE_NUM + 1))
+   Reason: context pressure detected — compacted before Wave $((WAVE_NUM + 1))
+
+   ## RESUME INSTRUCTIONS
+   After /compact, read THIS file + docs/design/phases/${PHASE}/phase_context.md.
+   Then continue directly to Wave $((WAVE_NUM + 1)) of the develop-orchestrator.
+   Do NOT re-run Waves 1-${WAVE_NUM}. Do NOT re-read files already summarized below.
 
    ## Phase Goal
    <1 line from phase_context.md>
 
    ## Completed Waves
-   <for each completed wave: summary + artifacts from checkpoint JSON>
+   - Wave 1 (Orient + Audit): <summary> — artifacts: [agent_state/phases/${PHASE}/audit_report.md]
+   - Wave 2 (Implement): <summary> — artifacts: [<list source files>]
+   ...repeat for each completed wave, pulling from checkpoint JSONs...
 
    ## Key Decisions Made This Session
-   <any architectural decisions, deviations, or patterns noted>
+   - <architectural decisions, pattern choices, deviations from spec>
+   - <e.g., "Used repository pattern with interface DI per IMPL_GUIDELINES">
+
+   ## Blocking Issues
+   - <none, or list with severity>
 
    ## Current State
-   - Last git SHA: $(git rev-parse --short HEAD)
-   - Tests passing: <yes/no/not-yet-run>
-   - Blocking issues: <none or list>
+   - Git SHA: $(git rev-parse --short HEAD)
+   - Tests: <passing/failing/not-yet-run>
+   - Files modified this session: $(git diff --name-only HEAD~${WAVE_NUM} HEAD 2>/dev/null | wc -l | tr -d ' ') files
 
    ## Next Steps
-   - Wave $((WAVE_NUM + 1)): <what needs to happen>
-   - Remaining waves: <list>
+   - Wave $((WAVE_NUM + 1)): <what this wave does — copy from orchestrator>
+   - Remaining waves after that: <list>
    EOF
    ```
 
-3. **Add compaction marker to checkpoint:**
-   Update the latest `wave-${WAVE_NUM}.json` to include `"compacted_before_next": true`.
+3. **Update checkpoint with compaction marker:**
+   ```bash
+   # Read existing checkpoint, add compaction flag
+   python3 -c "
+   import json, sys
+   with open('agent_state/phases/${PHASE}/checkpoints/wave-${WAVE_NUM}.json') as f:
+       data = json.load(f)
+   data['compacted_before_next'] = True
+   data['compact_context_path'] = 'agent_state/phases/${PHASE}/checkpoints/compact-context.md'
+   with open('agent_state/phases/${PHASE}/checkpoints/wave-${WAVE_NUM}.json', 'w') as f:
+       json.dump(data, f, indent=2)
+   " 2>/dev/null || true
+   ```
 
-4. **Run `/compact`** — invoke Claude Code's built-in context compression.
+4. **Announce and compact:**
+   ```
+   ⚡ Context pressure detected after Wave ${WAVE_NUM} — compacting before Wave $((WAVE_NUM + 1)).
+      State saved: agent_state/phases/${PHASE}/checkpoints/compact-context.md
+      Resuming inline after compaction.
+   ```
+   Then run `/compact`.
 
-5. **After compaction — reload and continue:**
-   - Read `agent_state/phases/${PHASE}/checkpoints/compact-context.md`
-   - Read `docs/design/phases/${PHASE}/phase_context.md`
-   - Continue to Wave $((WAVE_NUM + 1)) — do NOT restart earlier waves.
+5. **Post-compact bootstrap** — immediately after `/compact` completes:
+   - Read `agent_state/phases/${PHASE}/checkpoints/compact-context.md` (the RESUME INSTRUCTIONS section tells you exactly what to do)
+   - Read `docs/design/phases/${PHASE}/phase_context.md` (tech stack, conventions, acceptance criteria)
+   - Continue to Wave $((WAVE_NUM + 1)) — do NOT restart earlier waves
 
 ### Key rules
 - **Never compact mid-wave** — only at wave boundaries after the checkpoint is written
-- **Never skip this check** — the 5% gap before 80% is your safety margin
+- **When in doubt, compact** — false positive costs 5 seconds; false negative costs quality
 - **Compact inline, don't break the session** — compaction is a mid-session refresh, not a reason to stop and `/resume`
-- **If compaction happens, say so:** `"⚡ Context at 75% — compacting before Wave N. Resuming inline."`
+- **compact-context.md is the source of truth post-compact** — it replaces conversation scrollback. That's why it includes RESUME INSTRUCTIONS at the top.
+- **If compaction happens, say so:** `"⚡ Context pressure detected — compacting before Wave N. Resuming inline."`
 
 ---
 

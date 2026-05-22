@@ -134,14 +134,25 @@ if [ ! -d "$SESSION_DIR" ]; then
 
   if [ -n "$CHECKPOINT_PHASE" ] && [ -n "$LATEST_WAVE" ]; then
     WAVE_NUM=$(echo "$LATEST_WAVE" | grep -oE 'wave-[0-9]+' | grep -oE '[0-9]+')
+    COMPACT_CTX="agent_state/phases/${CHECKPOINT_PHASE}/checkpoints/compact-context.md"
+    HAS_COMPACT=$([ -f "$COMPACT_CTX" ] && echo true || echo false)
+
     echo "No explicit /pause session found, but auto-checkpoints detected:"
     echo ""
     echo "  Phase:         ${CHECKPOINT_PHASE}"
     echo "  Last wave:     ${WAVE_NUM}"
     echo "  Checkpoint:    ${LATEST_WAVE}"
+    if [ "$HAS_COMPACT" = "true" ]; then
+      echo "  Compact ctx:   ${COMPACT_CTX} (post-compaction state saved)"
+    fi
     echo ""
     echo "  Resume with: /develop --phase=${CHECKPOINT_PHASE}"
     echo "  (Will skip Waves 1-${WAVE_NUM} and start at Wave $((WAVE_NUM + 1)))"
+    if [ "$HAS_COMPACT" = "true" ]; then
+      echo ""
+      echo "  ⚡ Compact context exists — read ${COMPACT_CTX} first for full session state"
+      echo "    (includes completed wave summaries, decisions, and next steps)"
+    fi
     exit 0
   fi
 
