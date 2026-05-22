@@ -27,7 +27,7 @@ docs/                          ← GENERATED OUTPUT — agents write here
 /startup/discuss   →  surface assumptions + research decisions (before /plan)
 /startup/plan      →  specs + data-contracts.md + UI specs + goal verification per phase
 /startup/develop   →  implement + test + review + gate per phase
-/startup/accept    →  full-product validation + release notes
+/startup/accept    →  local deploy + health gate + full-product validation + release notes
 /startup/deploy    →  build + migrate + deploy + health validation
 
 OR: /startup/autonomous  →  all of the above end-to-end with one human checkpoint
@@ -407,7 +407,7 @@ If any condition fails: the gate does not write. The blocker is surfaced with th
 
 ### Bidirectional reconciliation
 
-At four transition points, a reconciler validates in both directions:
+At five transition points, a reconciler validates in both directions:
 
 | Point | Agent | Checks |
 |-------|-------|--------|
@@ -415,8 +415,11 @@ At four transition points, a reconciler validates in both directions:
 | B: BRD → Specs | `brd_spec_reconciler` | Every FR-* has a spec; no gold-plating |
 | C: Specs → Implementation | `spec_impl_reconciler` | Every spec behavior is built; no unspecced code |
 | D: Specs → Tests | `spec_test_reconciler` | Every edge case has a test; no tests for non-spec behavior |
+| E: Full Chain (capstone) | `pipeline_completeness_agent` | Every requirement traces end-to-end; all logged gaps resolved; scored verdict |
 
 Forward gaps = blockers. Reverse gaps (invented/unspecced) = flagged for human review.
+
+Point E runs after `/accept` and validates the ENTIRE chain as a connected whole — catching requirements that passed A-D individually but were dropped between links, forced gate blockers never resolved, and cross-phase coverage holes. Produces a scored completeness verdict (COMPLETE/NEAR COMPLETE/INCOMPLETE/FAILING) that can veto release readiness.
 
 ### Implementation waves
 
@@ -429,7 +432,8 @@ Wave 2a   backend_developer                         (sequential — api needs se
 Wave 2b   api_developer                             (reads backend manifest for return types)
 Wave 2.5  API contract validation                   (UI phases only — blocks Wave 3)
 Wave 3    ui_developer                              (UI phases only — reads api-contracts.md)
-Wave 4    unit_test_agent + integration_test_agent   (parallel)
+Wave 3.5  Local deploy + health check               (build → migrate → start → verify healthy)
+Wave 4    unit_test_agent + integration_test_agent + acceptance_test_agent  (parallel)
 ```
 
 **Key dependency:** api_developer reads backend_developer's manifest to know which response helper to use (`RespondList` for list methods, `RespondOne` for single methods). This is why Wave 2 is sequential (2a → 2b), not parallel.

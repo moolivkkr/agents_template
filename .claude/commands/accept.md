@@ -85,11 +85,114 @@ Pre-flight audit:
   → Proceeding with acceptance testing
 ```
 
-Start full stack:
+## Step 0a — Local Deploy + Health Gate
+
+**Acceptance tests run against a LIVE app. This step ensures it is actually built, deployed, and healthy.**
+
 ```bash
-# Read startup commands from docs/IMPLEMENTATION_GUIDELINES.md §Local Dev
-docker compose up -d  # (or equivalent)
+echo "Deploying locally for acceptance testing..."
+
+# Determine project type from IMPLEMENTATION_GUIDELINES
+if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+  # ── Containerized project ──────────────────────────────────────────
+  echo "  Building containers (--no-cache for clean acceptance run)..."
+  docker compose build --no-cache 2>&1 | tail -5
+
+  echo "  Starting services..."
+  docker compose up -d 2>&1
+
+  # Run pending migrations
+  echo "  Running migrations..."
+  # Read migration command from IMPLEMENTATION_GUIDELINES
+  # e.g., docker compose exec -T api goose up
+  # e.g., docker compose exec -T api npx prisma migrate deploy
+
+  # Health check with retry (up to 90s — acceptance needs all services warm)
+  echo "  Health checking..."
+  HEALTH_URL="http://localhost:${APP_PORT:-8080}/health"
+  HEALTHY=false
+  for i in $(seq 1 18); do
+    if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
+      HEALTHY=true
+      break
+    fi
+    sleep 5
+  done
+
+  if [ "$HEALTHY" = true ]; then
+    echo "  App healthy at $HEALTH_URL"
+
+    # Verify all required services are running (not just the API)
+    EXPECTED_SERVICES=$(docker compose config --services | wc -l | tr -d ' ')
+    RUNNING_SERVICES=$(docker compose ps --status running --format json | wc -l | tr -d ' ')
+    if [ "$RUNNING_SERVICES" -lt "$EXPECTED_SERVICES" ]; then
+      echo "  WARNING: Only $RUNNING_SERVICES/$EXPECTED_SERVICES services running"
+      docker compose ps 2>&1
+    fi
+  else
+    echo "  UNHEALTHY after 90s"
+    docker compose logs --tail 50 2>&1
+    echo ""
+    echo "  Attempting restart..."
+    docker compose restart 2>&1
+    sleep 15
+    if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
+      HEALTHY=true
+      echo "  Healthy after restart"
+    else
+      echo ""
+      echo "  DEPLOY FAILED — acceptance tests will run against a dead service"
+      echo "  This means ALL acceptance results are UNRELIABLE"
+      echo "  Fix the deployment before trusting any acceptance results"
+      # Record in report — do not silently continue
+    fi
+  fi
+
+elif [ -f "go.mod" ]; then
+  # ── Go CLI/library ─────────────────────────────────────────────────
+  echo "  Building Go project..."
+  go build ./... 2>&1 || { echo "  BUILD FAILED"; HEALTHY=false; }
+  go build -o bin/ ./cmd/... 2>&1 || true
+  HEALTHY=true
+
+elif [ -f "package.json" ]; then
+  # ── Node project ───────────────────────────────────────────────────
+  echo "  Building Node project..."
+  npm ci 2>&1 && npm run build 2>&1 || { echo "  BUILD FAILED"; HEALTHY=false; }
+  HEALTHY=true
+
+elif [ -f "Cargo.toml" ]; then
+  # ── Rust project ───────────────────────────────────────────────────
+  echo "  Building Rust project..."
+  cargo build --release 2>&1 || { echo "  BUILD FAILED"; HEALTHY=false; }
+  HEALTHY=true
+fi
+
+# Record deploy status for the acceptance report
+mkdir -p agent_state/accept
+cat > agent_state/accept/deploy_status.json << EOF
+{
+  "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "healthy": $( [ "$HEALTHY" = true ] && echo true || echo false ),
+  "deploy_type": "$( [ -f docker-compose.yml ] && echo 'docker' || echo 'binary' )",
+  "health_url": "${HEALTH_URL:-N/A}"
+}
+EOF
 ```
+
+### Deploy health gate
+
+```bash
+if [ "$HEALTHY" != true ]; then
+  echo ""
+  echo "  DEPLOY STATUS: UNHEALTHY"
+  echo "  All acceptance test results will be marked UNRELIABLE in the report"
+  echo "  Acceptance report header will show: 'TESTED AGAINST: UNHEALTHY DEPLOYMENT'"
+  # Continue running tests (they document what fails) but verdict cannot be READY
+fi
+```
+
+**Impact on release readiness:** If deploy is unhealthy, the acceptance report's release readiness is capped at `NOT READY` regardless of test results. You cannot prove the product works if it won't start.
 
 ---
 
@@ -389,11 +492,77 @@ Write `agent_state/accept/cleanup.md`:
 
 ---
 
+## Step 5b — Pipeline Completeness Validation (Holistic Chain Audit)
+
+**Agent:** `pipeline_completeness_agent`
+
+**Purpose:** Validate the ENTIRE SDLC chain as a connected whole — not just individual links. This is the capstone validation that proves every requirement was carried through BRD -> specs -> code -> tests -> acceptance without being dropped, and every piece of code traces back to a justified requirement.
+
+**Why this runs here (after acceptance, before release notes):** Per-phase reconcilers validate individual links during `/plan` and `/develop`. But no step prior to this verifies:
+1. Requirements that were logged as MISSING in reconciliation reports were actually resolved
+2. Forced gate blockers were addressed in later phases
+3. Requirements split across phases are fully covered when all phases combine
+4. The full forward chain (requirements -> acceptance) is unbroken for EVERY requirement
+5. The full reverse chain (code -> requirements) has no unjustified artifacts
+
+### Execution
+
+```
+Agent prompt: "You are running the Pipeline Completeness Validator.
+Read: requirements/, docs/BRD.md, docs/IMPLEMENTATION_GUIDELINES.md
+Read: ALL agent_state/reconciliation/ reports (one phase at a time)
+Read: ALL agent_state/phases/*/manifest.json (one phase at a time)
+Read: agent_state/accept/acceptance_report.md
+If exists: agent_state/autonomous/auto-resolved.jsonl
+
+Produce:
+  - agent_state/accept/pipeline_completeness_report.md (scored verdict)
+  - agent_state/accept/traceability_matrix.md (full forward+reverse chain)
+  - agent_state/accept/unresolved_gaps.md (all gaps never resolved)
+
+Follow the 6-step protocol defined in your agent definition."
+```
+
+### Verification
+
+```bash
+# All three output files must exist
+test -f agent_state/accept/pipeline_completeness_report.md || echo "BLOCKED: completeness report missing"
+test -f agent_state/accept/traceability_matrix.md || echo "BLOCKED: traceability matrix missing"
+test -f agent_state/accept/unresolved_gaps.md || echo "BLOCKED: unresolved gaps report missing"
+
+# Report must contain a scored verdict
+if ! grep -qP '(COMPLETE|NEAR COMPLETE|INCOMPLETE|FAILING)' agent_state/accept/pipeline_completeness_report.md 2>/dev/null; then
+  echo "BLOCKED: completeness report has no verdict"
+fi
+```
+
+### Impact on Release Readiness
+
+The completeness verdict feeds directly into the release readiness decision:
+
+| Completeness Verdict | Release Readiness Impact |
+|---------------------|--------------------------|
+| COMPLETE (95-100%) | No impact — proceed |
+| NEAR COMPLETE (80-94%) | Release readiness = `CONDITIONAL` (review unresolved items) |
+| INCOMPLETE (60-79%) | Release readiness = `NOT READY` (significant gaps) |
+| FAILING (<60%) | Release readiness = `NOT READY` (major chain breaks) |
+
+If the acceptance report says `READY` but completeness says `INCOMPLETE`, the final verdict is `NOT READY`. Completeness is a veto — the product may work, but if traceability is broken, we can't prove it works for the right reasons.
+
+---
+
 ## Output: `agent_state/accept/acceptance_report.md`
 
 ```markdown
 # Global Acceptance Report
 <project> — <timestamp>
+
+## Deployment Status
+TESTED AGAINST: <HEALTHY | UNHEALTHY | NOT DEPLOYED>
+Deploy type: <docker | binary | N/A>
+Health URL: <url or N/A>
+Deploy log: agent_state/accept/deploy_status.json
 
 ## Executive Summary
 N/N use cases PASSED | N PARTIAL | N FAILED
@@ -421,10 +590,18 @@ Source: <user-provided | auto-generated>
 File: agent_state/accept/seed-applied.yaml
 Cleanup: agent_state/accept/cleanup.md
 
+## Pipeline Completeness
+Score: N% — VERDICT
+Forward traceability: N/N requirements fully traced
+Reverse traceability: N unspecced items
+Reconciliation gaps: N/N resolved
+Full report: agent_state/accept/pipeline_completeness_report.md
+Traceability matrix: agent_state/accept/traceability_matrix.md
+
 ## Release Readiness
-READY — all use cases pass
-NOT READY — N failures must be resolved before release
-CONDITIONAL — N partial passes, product owner acceptance required
+READY — all use cases pass AND pipeline completeness >= 95%
+NOT READY — N failures must be resolved OR pipeline completeness < 80%
+CONDITIONAL — N partial passes OR pipeline completeness 80-94%, product owner acceptance required
 ```
 
 ---

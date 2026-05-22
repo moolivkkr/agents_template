@@ -53,6 +53,7 @@ Complete index of all agents in the SDLC pipeline.
 | Surface assumptions before planning | `phase_assumptions_analyzer` | `/discuss` |
 | Research gray area decisions | `decision_researcher` | `/discuss` |
 | Verify plan achieves phase goal | `plan_goal_verifier` | `/plan` Step 4b |
+| Validate full pipeline chain end-to-end | `pipeline_completeness_agent` | `/accept` Step 5b |
 | Map codebase for persistent knowledge | `codebase_mapper` | `/map` |
 | Research product documentation | `product_doc_researcher` | `/product-workflows` |
 | Extract workflow intelligence from videos | `product_video_researcher` | `/product-workflows` |
@@ -151,6 +152,7 @@ Complete index of all agents in the SDLC pipeline.
 | `brd_spec_reconciler` | sonnet | BRD, PHASE_PLAN, specs | brd_vs_specs.md | Step 2: BRD matches specs |
 | `spec_impl_reconciler` | opus | specs, manifest | specs_vs_impl.md | Step 3: specs match code |
 | `spec_test_reconciler` | sonnet | specs, test results | specs_vs_tests.md | Step 4: specs match tests |
+| `pipeline_completeness_agent` | opus | all reconciliation reports, manifests, BRD | pipeline_completeness_report.md | Step 5: full chain validation (capstone) |
 
 ### Decision Support
 
@@ -285,7 +287,7 @@ debate team (on-demand, any pipeline):
 | `/review` | code_reviewer_I -> code_reviewer_II -> security_reviewer + dependency_scanner |
 | `/optimize` | code_optimizer + ui_code_optimizer (parallel) |
 | `/deploy` | deployment_agent + ci_cd_agent + observability_agent |
-| `/accept` | acceptance_test_agent (global, all phases) |
+| `/accept` | acceptance_test_agent (global, all phases) -> pipeline_completeness_agent (holistic chain audit) |
 | `/pause` | No agents — captures session state to agent_state/sessions/ |
 | `/resume` | No agents — restores session state and routes to appropriate command |
 | `/workstream` | No agents — manages parallel workstream branches and state |
@@ -300,9 +302,9 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 57 |
+| Core agents (`.claude/agents/core/`) | 58 |
 | Generated templates (`.claude/agents/generated/`) | 4 |
-| **Total** | **61** |
+| **Total** | **62** |
 
 | Category | Count |
 |---|---|
@@ -313,7 +315,7 @@ debate team (on-demand, any pipeline):
 | Implementation (generated) | 4 |
 | Testing | 6 |
 | Review & Security | 6 |
-| Reconciliation | 5 |
+| Reconciliation | 6 |
 | Decision Support | 4 |
 | Infrastructure | 3 |
 | Quality & Optimization | 5 (codebase_mapper) |
@@ -321,6 +323,6 @@ debate team (on-demand, any pipeline):
 
 | Model | Count |
 |---|---|
-| opus | 13 (+1: product_doc_researcher) |
+| opus | 14 (+1: product_doc_researcher, +1: pipeline_completeness_agent) |
 | sonnet | 45 (+4: product_video_researcher, product_api_researcher, capability_flow_mapper, workflow_synthesizer) |
 | haiku | 3 |

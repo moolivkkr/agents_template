@@ -112,6 +112,7 @@ CRITICAL_FILES=(
   "$DEST_SKILLS/testing/test-case-generation.md"
   "$DEST_AGENTS_CORE/spec_test_reconciler.md"
   "$DEST_AGENTS_CORE/acceptance_test_agent.md"
+  "$DEST_AGENTS_CORE/pipeline_completeness_agent.md"
   "$DEST_AGENTS_CORE/e2e_orchestrator.md"
   "$DEST_COMMANDS/develop-orchestrator.md"
 )

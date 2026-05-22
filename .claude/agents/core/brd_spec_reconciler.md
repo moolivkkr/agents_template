@@ -83,11 +83,12 @@ For each interface contract, behavior, or constraint defined in the specs:
 
 ## Reconciliation Sequence
 
-This agent is step 2 of 4 in the reconciliation pipeline:
+This agent is step 2 of 5 in the reconciliation pipeline:
 1. **spec_verifier** -- validates specs are complete and internally consistent (runs after /plan)
 2. **brd_spec_reconciler** (this) -- validates BRD<->specs alignment (runs after spec_verifier)
 3. **spec_impl_reconciler** -- validates specs<->code alignment (runs during /develop Step 5)
 4. **spec_test_reconciler** -- validates specs<->tests coverage (runs during /develop Step 5)
+5. **pipeline_completeness_agent** -- validates the ENTIRE chain end-to-end (runs after /accept)
 
 ---
 

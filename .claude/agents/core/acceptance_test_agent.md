@@ -78,6 +78,43 @@ Before marking ANY use case as PASS or downgrading failure severity, review this
 
 ---
 
+## Step 0 — Verify App is Running
+
+**Before any acceptance testing, verify the deployment is healthy.**
+
+```bash
+# Check deploy status from Wave 3.5 (per-phase) or /accept Step 0a (global)
+if [ -f "agent_state/accept/deploy_status.json" ]; then
+  HEALTHY=$(python3 -c "import json; print(json.load(open('agent_state/accept/deploy_status.json')).get('healthy', False))" 2>/dev/null)
+elif [ -f "agent_state/phases/{{PHASE}}/checkpoints/wave-3.5.json" ]; then
+  HEALTHY=$(python3 -c "import json; print(json.load(open('agent_state/phases/{{PHASE}}/checkpoints/wave-3.5.json')).get('deploy_status','unknown'))" 2>/dev/null)
+fi
+
+# For web apps: verify health endpoint
+if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+  HEALTH_URL="http://localhost:${APP_PORT:-8080}/health"
+  if ! curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
+    echo "APP NOT RUNNING at $HEALTH_URL"
+    echo "Acceptance tests require a live deployment."
+    echo "Run Wave 3.5 (local deploy) or /deploy --target=local first."
+    # Report BLOCKED — do NOT write fake PASS results
+  fi
+fi
+
+# For CLI projects: verify binary exists
+if [ -f "go.mod" ] && [ ! -f "docker-compose.yml" ]; then
+  BINARY=$(find bin/ -type f -perm +111 2>/dev/null | head -1)
+  if [ -z "$BINARY" ]; then
+    echo "CLI BINARY NOT BUILT"
+    echo "Run 'go build ./cmd/...' first."
+  fi
+fi
+```
+
+**If the app is not running or binary is not built:** Report `BLOCKED — deployment not healthy` immediately. Do NOT fabricate PASS results against a dead service. Every use case result must be marked `UNTESTED — app not running`.
+
+---
+
 ## Step 1 — Identify Scope
 
 Read `docs/BRD.md` and `docs/design/phases/{{PHASE}}/PHASE_PLAN.md`.

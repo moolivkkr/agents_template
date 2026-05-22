@@ -30,9 +30,10 @@ Phase 1b: /map (persistent codebase knowledge base)
 Phase 2:  /discuss --auto --phase=1 (surface assumptions)
 Phase 2b: /plan --auto --phase=1
 Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions)
-Phase 4:  /develop --auto --phase=1
+Phase 4:  /develop --auto --phase=1 (includes Wave 3.5: local deploy + health check)
 Phase 5:  Repeat discuss→plan→develop for remaining phases
-Phase 6:  /accept --auto (global acceptance)
+Phase 5b: Local deploy (build + migrate + health check for final acceptance)
+Phase 6:  /accept --auto (global acceptance + pipeline completeness)
 Phase 7:  Final report + /health check
 ```
 
@@ -321,6 +322,27 @@ Full log: agent_state/autonomous/auto-resolved.jsonl
 
 ---
 
+## Step 5b — Local Deploy (before acceptance)
+
+**Deploy the complete application locally before running global acceptance tests.**
+
+`/accept` Step 0a handles the deploy + health check internally, but in the autonomous pipeline we surface it explicitly here so it's visible in the flow:
+
+```
+/develop phases complete → Step 5b: local deploy → Step 6: /accept --auto
+```
+
+The `/accept` command's Step 0a will:
+1. Build all containers (--no-cache for clean acceptance run)
+2. Start services via docker compose
+3. Run pending migrations
+4. Health check all endpoints (up to 90s)
+5. Record deploy status to `agent_state/accept/deploy_status.json`
+
+If the deploy is unhealthy, `/accept` still runs (to document failures) but caps release readiness at `NOT READY`.
+
+---
+
 ## Step 6 — Global Acceptance (`/accept --auto`)
 
 Run full acceptance testing across ALL completed phases:
@@ -328,8 +350,16 @@ Run full acceptance testing across ALL completed phases:
 - All FR-* acceptance criteria verified
 - Contract shape assertions for every API endpoint
 - Cross-phase workflow tests
+- **Pipeline completeness validation** — holistic chain audit (requirements -> BRD -> specs -> code -> tests -> acceptance)
 
 Results written to `agent_state/autonomous/acceptance-report.md`.
+
+The pipeline completeness validator (`pipeline_completeness_agent`) runs automatically as part of `/accept` Step 5b. It produces:
+- `agent_state/accept/pipeline_completeness_report.md` — scored verdict
+- `agent_state/accept/traceability_matrix.md` — full forward+reverse chain
+- `agent_state/accept/unresolved_gaps.md` — all gaps never resolved
+
+**Completeness verdict feeds release readiness:** If completeness < 80%, release readiness is `NOT READY` regardless of acceptance test results.
 
 ---
 
@@ -372,6 +402,21 @@ Total auto-resolved across all phases: ${N}
 | ${phase} | ${topic} | ${option} | ${confidence} |
 
 Full audit trail: agent_state/autonomous/auto-resolved.jsonl
+
+## Pipeline Completeness
+Score: N% — VERDICT (COMPLETE / NEAR COMPLETE / INCOMPLETE / FAILING)
+
+| Dimension | Score |
+|-----------|-------|
+| Forward traceability | N% (N/N requirements fully traced) |
+| Reverse traceability | N% (N unspecced items) |
+| Reconciliation gaps resolved | N% (N/N resolved) |
+| TC-* coverage | N% (N/N implemented) |
+| Acceptance coverage | N% (N/N FR-* passed) |
+
+Unresolved gaps: N (N critical, N high, N medium)
+Full report: agent_state/accept/pipeline_completeness_report.md
+Traceability matrix: agent_state/accept/traceability_matrix.md
 
 ## Known Issues
 [carried-forward items, forced gate items, deferred features]

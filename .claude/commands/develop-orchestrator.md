@@ -327,6 +327,104 @@ Strip these patterns from test/build output before including in any agent prompt
 
 ---
 
+## Wave 3.5: LOCAL DEPLOY + HEALTH CHECK
+
+**CRITICAL: Acceptance tests run against a LIVE app. This wave ensures the app is actually built, deployed locally, and healthy before Wave 4 tests against it.**
+
+Without this step, acceptance tests either fail silently (nothing listening) or test against a stale build from a previous session. This was a gap in the original pipeline — acceptance tests claimed to validate "live behavior" but never ensured the app was running.
+
+### Determine project type
+
+Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the deployment strategy:
+
+| Project Type | Deploy Strategy | Health Check |
+|---|---|---|
+| Web API + UI | `docker compose up -d --build` | `curl -sf http://localhost:PORT/health` |
+| CLI tool | `go build ./cmd/...` or `npm run build` | Binary exists + `./bin/app --version` exits 0 |
+| Library/SDK | `go build ./...` or `npm run build` | Build succeeds (no runtime to health check) |
+| WASM module | Build native + WASM targets | Both binaries exist |
+
+### Execute local deploy
+
+```bash
+echo "Wave 3.5: Local Deploy + Health Check"
+
+# Read deploy/build commands from IMPLEMENTATION_GUIDELINES
+# These are EXAMPLES — adapt to the project's actual stack
+
+# For containerized projects:
+if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+  echo "  Building and deploying containers..."
+  docker compose build --no-cache 2>&1 | tail -5
+  docker compose up -d 2>&1
+
+  # Run pending migrations
+  # Migration command from IMPLEMENTATION_GUIDELINES
+  echo "  Running migrations..."
+  # e.g., docker compose exec api goose up
+  # e.g., docker compose exec api npx prisma migrate deploy
+
+  # Health check with retry (up to 60s)
+  echo "  Health checking..."
+  HEALTH_URL="http://localhost:${APP_PORT:-8080}/health"
+  HEALTHY=false
+  for i in $(seq 1 12); do
+    if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
+      HEALTHY=true
+      break
+    fi
+    sleep 5
+  done
+
+  if [ "$HEALTHY" = true ]; then
+    echo "  App healthy at $HEALTH_URL"
+  else
+    echo "  UNHEALTHY after 60s — checking logs..."
+    docker compose logs --tail 30 2>&1
+    echo "  Attempting restart..."
+    docker compose restart 2>&1
+    sleep 10
+    curl -sf "$HEALTH_URL" > /dev/null 2>&1 || echo "  STILL UNHEALTHY after restart"
+  fi
+
+# For CLI/library projects:
+elif [ -f "go.mod" ]; then
+  echo "  Building Go binary..."
+  go build ./cmd/... 2>&1 || echo "  Build failed"
+
+elif [ -f "package.json" ]; then
+  echo "  Building Node project..."
+  npm run build 2>&1 || echo "  Build failed"
+
+elif [ -f "Cargo.toml" ]; then
+  echo "  Building Rust project..."
+  cargo build 2>&1 || echo "  Build failed"
+fi
+```
+
+### Verification gate
+
+```bash
+# For web apps: health endpoint must respond
+if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+  if [ "$HEALTHY" != true ]; then
+    echo "BLOCKED: App not healthy — acceptance tests will fail against a dead service"
+    echo "  Fix the deployment before proceeding to Wave 4"
+    # In --auto mode: attempt auto-fix (check logs, restart, max 2 cycles)
+    # After 2 cycles: force-proceed with WARNING logged to manifest
+  fi
+fi
+
+# For CLI projects: binary must exist
+if [ -f "go.mod" ] && [ ! -f "$(ls bin/* cmd/*/main.go 2>/dev/null | head -1)" ]; then
+  echo "BLOCKED: CLI binary not built — E2E/acceptance tests need a working binary"
+fi
+```
+
+**Auto-checkpoint:** Write `checkpoints/wave-3.5.json` with `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: docker|cli|library`.
+
+---
+
 ## Wave 4: REVIEW + ACCEPTANCE (parallel)
 
 Spawn TWO agents in parallel:
@@ -342,7 +440,12 @@ Produce: agent_state/phases/${PHASE}/reports/code_quality_review.md"
 **Agent B — Acceptance Tests:**
 ```
 Agent prompt: "You are running Wave 4 Track B (Acceptance Tests) for Phase ${PHASE}.
-Test against LIVE running app. Validate every FR-* acceptance criterion.
+PREREQUISITE: Wave 3.5 deployed the app locally. Verify it is running before testing:
+  - For web apps: curl -sf http://localhost:PORT/health must return 200
+  - For CLI tools: the built binary must exist and respond to --version or --help
+If the app is NOT running, report BLOCKED immediately — do NOT write fake PASS results.
+
+Test against the LIVE running app. Validate every FR-* acceptance criterion.
 Test per persona. Verify OTEL traces, API contracts, accessibility.
 Produce: agent_state/phases/${PHASE}/reports/acceptance_report.md"
 ```
