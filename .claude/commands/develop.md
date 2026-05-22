@@ -256,6 +256,8 @@ Before skipping ANY step, shortcutting ANY gate, or accepting partial results, r
 | "The previous phase tests still pass, no need for regression check" | Run them anyway. Silent import breakage is the #1 cross-phase regression. |
 | "I'll skip the acceptance tests — unit and integration tests cover everything" | Unit/integration test code paths. Acceptance tests verify USER EXPERIENCE. They catch different bugs. |
 | "I can combine the review stages to save time" | Review stages are separated for a reason. Spec compliance and code quality are DIFFERENT concerns. |
+| "I've written enough tests — the important ones are covered" | Check the TC-* inventory. If spec defines 153 TC-* IDs and you implemented 34, that's 22% — not "enough". Every TC-* ID must have a test. |
+| "Those TC-* IDs are for a different category, I'll skip them" | Process ALL categories in document order. Part 1 before Part 2. Never cherry-pick the easy tests. |
 
 ---
 
@@ -1502,10 +1504,42 @@ Validates both directions:
 - **Forward:** spec-defined edge cases and behaviors with no test coverage
 - **Reverse:** tests that test behaviors not in any spec
 
-Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md`
+**TC-* ID Inventory Reconciliation (runs FIRST within this step):**
+If specs contain TC-* IDs (pattern `TC-[A-Z]+-\d+`):
+1. Extract all TC-* IDs from `docs/design/phases/${PHASE}/specs/` (the spec inventory)
+2. Extract all TC-* IDs from test files (the implementation inventory)
+3. Compute: missing, orphaned, covered, coverage percentage
+4. Per-category breakdown
+5. Write `agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md`
+6. **GATE DECISION:** missing HIGH or MEDIUM TC-* IDs = HARD BLOCK
+
+```bash
+# Quick TC-* inventory check (runs before behavior-level reconciliation)
+SPEC_DIR="docs/design/phases/${PHASE}/specs"
+SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
+SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+
+if [ "$SPEC_COUNT" -gt 0 ]; then
+  IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
+    --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+  IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+  MISSING_COUNT=$(comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS") | grep -c 'TC-' 2>/dev/null || echo 0)
+  COVERAGE_PCT=$(( IMPL_COUNT * 100 / SPEC_COUNT ))
+
+  echo "TC-* Inventory: ${IMPL_COUNT}/${SPEC_COUNT} implemented (${COVERAGE_PCT}%)"
+  if [ "$MISSING_COUNT" -gt 0 ]; then
+    echo "  MISSING: $MISSING_COUNT TC-* IDs not implemented"
+    comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS") | head -20
+    echo "  Route to Wave 5 feedback loop for remediation"
+  fi
+fi
+```
+
+Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md` + `agent_state/reconciliation/phase-N/test_case_inventory.md`
 
 HIGH-priority untested behaviors = blocker.
-MEDIUM/LOW = logged as known gaps.
+Missing HIGH/MEDIUM TC-* IDs = blocker.
+MEDIUM/LOW behavior gaps = logged as known gaps.
 
 ---
 
@@ -1831,6 +1865,7 @@ E2E tests (MANDATORY)        agent_state/phases/${PHASE}/reports/e2e_results.md 
 Visual validation (if HTML)  agent_state/phases/${PHASE}/reports/visual_validation.md  Mismatch < 10% (skip if no wireframe.html)
 Reconciliation C (spec↔impl) agent_state/reconciliation/phase-${PHASE}/specs_vs_impl.md   No MISSING implementations AND unspecced items acknowledged (count logged)
 Reconciliation D (spec↔tests)agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md  No HIGH-priority untested behaviors
+TC-* ID inventory (if specs) agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md  100% coverage for HIGH+MEDIUM TC-* IDs (skip if no TC-* IDs in specs)
 Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     Post-optimization tests: PASS (CLEAN or PARTIAL accepted)
 UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimization.md  Post-optimization tests: PASS (if frontend.enabled; skip otherwise)
 Code review I                agent_state/phases/${PHASE}/reports/code_review_I.md   No BLOCKING issues
@@ -2057,6 +2092,17 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
       "report": "agent_state/phases/N/reports/ui_code_optimization.md"
     },
     "post_optimization_tests": "PASS | PASS_WITH_REVERTS | not_run"
+  },
+  "test_case_inventory": {
+    "spec_count": 0,
+    "implemented_count": 0,
+    "missing_count": 0,
+    "orphaned_count": 0,
+    "coverage_pct": 100,
+    "by_category": {},
+    "missing_ids": [],
+    "deferred_ids": [],
+    "report": "agent_state/reconciliation/phase-N/test_case_inventory.md"
   },
   "known_issues":    [],
   "carried_forward": [],

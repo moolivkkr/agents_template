@@ -55,6 +55,7 @@ skill_packs:
   - ".claude/skills/databases/{{DB_TECH}}.md"
   - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
   - ".claude/skills/core/testing-principles.md"
+  - ".claude/skills/testing/test-case-traceability.md"
 ---
 
 # Agent: Integration Test Agent — {{PROJECT_NAME}}

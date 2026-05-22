@@ -26,6 +26,7 @@ skill_packs:
   - ".claude/skills/requirements/nfr-patterns.md"
   - ".claude/skills/requirements/requirement-clarity.md"
   - ".claude/skills/core/api-design.md"
+  - ".claude/skills/testing/test-case-traceability.md"
 ---
 
 # Agent: Spec Writer
@@ -156,6 +157,31 @@ Errors:
 
 ## Test Coverage Required
 
+### Test Case Inventory (MANDATORY — TC-* IDs)
+
+Every testable behavior in this spec MUST be assigned a unique TC-* ID. These IDs are tracked through implementation and gated at phase completion. See `.claude/skills/testing/test-case-traceability.md` for conventions.
+
+**Format:** `TC-{CATEGORY}-{NNN}` where CATEGORY is a 2-5 char uppercase code (E=Entity, API=API, S=Scope, etc.)
+
+| TC ID | Category | Test Description | Priority | Tier |
+|-------|----------|-----------------|----------|------|
+| TC-XXX-001 | [category] | [what this test verifies] | HIGH/MEDIUM/LOW | unit/integration/e2e/component |
+| TC-XXX-002 | [category] | [what this test verifies] | HIGH/MEDIUM/LOW | unit/integration/e2e/component |
+| ... | ... | ... | ... | ... |
+
+**Minimum TC-* IDs per spec:**
+- Each happy path: 1 TC-* ID
+- Each error path: 1 TC-* ID
+- Each edge case from the table above: 1 TC-* ID
+- Each API endpoint (request validation + response shape): 2+ TC-* IDs
+- Each DB interaction (CRUD round-trip): 1+ TC-* IDs
+
+**Rules:**
+- Every edge case row in the "Edge Cases" table above MUST have a corresponding TC-* ID
+- TC-* IDs must be unique within the phase (coordinate with other specs via range allocation)
+- Assign contiguous ranges per entity/component for easy bulk tracking
+- Declare the tier (unit/integration/e2e/component) so test agents know ownership
+
 ### Unit Tests
 - [ ] Happy path for each public function
 - [ ] Each error path with correct error type returned
@@ -225,3 +251,6 @@ type GetUsersResponse = {
 - If DB changes needed: migration is required, not optional
 - Performance targets must cite a specific NFR-* ID — generic targets are not acceptable
 - Do NOT describe UI layout in a backend spec (that belongs in a wireframe)
+- Every spec MUST include a "Test Case Inventory" table with unique TC-* IDs for every testable behavior — see `.claude/skills/testing/test-case-traceability.md`
+- Every edge case row MUST map to at least one TC-* ID
+- TC-* ID ranges must be coordinated across specs within the same phase (use contiguous non-overlapping ranges)

@@ -35,6 +35,7 @@ skill_packs:
   - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
   - ".claude/skills/core/testing-principles.md"
   - ".claude/skills/backend/archetypes/shared-backend-patterns.md"
+  - ".claude/skills/testing/test-case-traceability.md"
 ---
 
 # Agent: Integration Test Agent
@@ -77,11 +78,19 @@ Integration tests require live services. Before running:
 
 ## WORKFLOW
 
+### Phase 0: Extract TC-* ID Inventory (MANDATORY)
+1. Read all spec files in `docs/design/phases/{{PHASE}}/specs/` including any `TEST-SUITE.md`
+2. Extract all TC-* IDs assigned to `tier: integration` from the Test Case Inventory tables
+3. Build the complete list of TC-* IDs this agent is responsible for
+4. Log: `"Integration test agent responsible for N TC-* IDs"`
+5. **This list is the contract — every ID must have a corresponding test when this agent completes**
+
 ### Phase 1: Understand Integration Surface
 1. Read service and repository code implemented this phase
 2. Read data-contracts.md for API response shape verification
 3. Identify all repository methods, cache operations, and API endpoints to test
-4. Create test plan in `agent_state/phases/{{PHASE}}/reports/integration_tests.md`
+4. Cross-reference against TC-* ID inventory — every TC-* ID must map to a test target
+5. Create test plan in `agent_state/phases/{{PHASE}}/reports/integration_tests.md`
 
 ### Phase 2: Set Up Test Infrastructure
 1. Configure test database connection (isolated test DB or per-test transactions)
@@ -151,8 +160,16 @@ If `data-contracts.md` exists, verify for EVERY endpoint:
 - Pagination metadata has correct numeric values
 - Empty state returns `{ "data": [], ... }` not `{ "data": null }`
 
-### Phase 8: Self-Review
+### Phase 8: TC-* ID Completion Self-Check (MANDATORY)
+Before marking the task complete, run the TC-* ID self-check:
+1. Count TC-* IDs this agent was responsible for (from Phase 0 inventory)
+2. Count TC-* IDs annotated in test files this agent wrote
+3. If `IMPLEMENTED < RESPONSIBLE`: **DO NOT mark complete** — continue writing tests
+4. Log: `"TC-* coverage: N/M (X%) — [COMPLETE|INCOMPLETE: N remaining]"`
+
+### Phase 9: Self-Review
 Before marking the task complete, verify:
+- [ ] **All responsible TC-* IDs have corresponding annotated tests**
 - [ ] All repository methods tested against real DB
 - [ ] Create → Read → Update → Delete round-trip verified
 - [ ] Cache miss/hit/expiry/invalidation tested
@@ -228,6 +245,7 @@ create_user(overrides):
 
 ## QUALITY GATES
 
+- [ ] **TC-* ID coverage: 100% of responsible IDs annotated in tests**
 - [ ] All repository methods tested against real {{DB_TECH}}
 - [ ] Cache interactions verified (miss/hit/expiry/invalidation)
 - [ ] Transaction rollback and concurrent modification tested

@@ -5,12 +5,14 @@
 Every requirement must be traceable end-to-end:
 
 ```markdown
-| Req ID | Source | Design Artifact | Test ID | Deploy Check | Status |
-|--------|--------|----------------|---------|--------------|--------|
-| FR-001 | requirements/user-stories.md:L12 | specs/auth-flow.md | UT-001, IT-001, AT-001 | /api/v1/auth/login responds 200 | Verified |
-| FR-002 | requirements/pitch-deck.md:S5 | specs/user-mgmt.md | UT-010, IT-005 | GET /api/v1/users returns list | Verified |
-| NFR-PERF-001 | requirements/nfr.md:L3 | specs/performance-budget.md | PERF-001 | k6 load test passes | Pending |
+| Req ID | Source | Design Artifact | Test ID | TC-* IDs | Deploy Check | Status |
+|--------|--------|----------------|---------|----------|--------------|--------|
+| FR-001 | requirements/user-stories.md:L12 | specs/auth-flow.md | UT-001, IT-001, AT-001 | TC-AUTH-001 to TC-AUTH-010 | /api/v1/auth/login responds 200 | Verified |
+| FR-002 | requirements/pitch-deck.md:S5 | specs/user-mgmt.md | UT-010, IT-005 | TC-E-001 to TC-E-015 | GET /api/v1/users returns list | Verified |
+| NFR-PERF-001 | requirements/nfr.md:L3 | specs/performance-budget.md | PERF-001 | TC-PERF-001 to TC-PERF-005 | k6 load test passes | Pending |
 ```
+
+The **TC-* IDs** column links to explicit test case IDs defined in spec documents (see `.claude/skills/testing/test-case-traceability.md`). Each FR-* should map to a range of TC-* IDs that verify its behavior.
 
 ## Bidirectional Tracing
 
@@ -18,9 +20,10 @@ Every requirement must be traceable end-to-end:
 Every FR-* must have:
 - At least 1 design artifact (spec/wireframe)
 - At least 1 test (unit, integration, or acceptance)
+- At least 1 TC-* ID range (explicit test case IDs from spec)
 - A deployment verification method
 
-**Gap = BLOCKER:** If any FR-* has no test, it cannot pass the phase gate.
+**Gap = BLOCKER:** If any FR-* has no test or no TC-* IDs, it cannot pass the phase gate.
 
 ### Reverse Trace (implementation → requirement)
 Every spec behavior and test must trace back to a requirement:
@@ -50,13 +53,15 @@ Every spec behavior and test must trace back to a requirement:
 | FR-* with source | 24/24 | 100% |
 | FR-* with design artifact | 24/24 | 100% |
 | FR-* with test coverage | 22/24 | 92% |
+| FR-* with TC-* IDs | 24/24 | 100% |
+| TC-* IDs implemented | 148/153 | 97% |
 | FR-* with deploy check | 20/24 | 83% |
 | NFR-* with verification method | 8/10 | 80% |
 | Untraced specs (no FR source) | 2 | Flag for review |
 | Untraced tests (no FR source) | 1 | Flag for review |
 ```
 
-**Phase gate requires:** FR-* with test coverage >= 95%
+**Phase gate requires:** FR-* with test coverage >= 95%, TC-* ID coverage = 100% for HIGH+MEDIUM
 
 ## Source Attribution Rules
 

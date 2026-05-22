@@ -28,6 +28,30 @@
         "schemas": { "type": "array", "items": { "type": "string" } }
       }
     },
+    "test_case_inventory": {
+      "type": "object",
+      "properties": {
+        "spec_count": { "type": "integer", "minimum": 0 },
+        "implemented_count": { "type": "integer", "minimum": 0 },
+        "missing_count": { "type": "integer", "minimum": 0 },
+        "orphaned_count": { "type": "integer", "minimum": 0 },
+        "coverage_pct": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "by_category": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "spec": { "type": "integer" },
+              "impl": { "type": "integer" },
+              "missing": { "type": "integer" }
+            }
+          }
+        },
+        "missing_ids": { "type": "array", "items": { "type": "string", "pattern": "^TC-[A-Z]+-\\d+$" } },
+        "deferred_ids": { "type": "array", "items": { "type": "string", "pattern": "^TC-[A-Z]+-\\d+$" } },
+        "report": { "type": "string" }
+      }
+    },
     "known_issues": { "type": "array", "items": { "$ref": "#/$defs/issue" } },
     "carried_forward": { "type": "array", "items": { "$ref": "#/$defs/carried_item" } },
     "hotfixes": { "type": "array", "items": { "$ref": "#/$defs/hotfix" } },

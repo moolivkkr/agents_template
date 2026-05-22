@@ -56,11 +56,39 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 - If UI specs exist: list components bind to ARRAY endpoints, detail components bind to OBJECT endpoints (**BLOCKING** mismatch)
 
 ### Completeness
-- Every spec has: interface contracts, edge cases (≥10 meaningful), test coverage requirements
+- Every spec has: interface contracts, edge cases (>=10 meaningful), test coverage requirements
 - Edge cases are specific (not generic "invalid input")
 - Acceptance criteria are testable (verifiable by single yes/no automated test)
 - Specs with DB changes declare migrations needed
 - Every spec with API endpoints has a "Data Contracts" section with TypeScript interfaces
+
+### TC-* ID Inventory Validation
+- Every spec's "Test Coverage Required" section SHOULD include a "Test Case Inventory" table with TC-* IDs
+- If TC-* IDs are present: validate format matches `TC-[A-Z]+-\d+` pattern
+- If TC-* IDs are present: validate no duplicate IDs within the phase (across all specs)
+- If TC-* IDs are present: validate each edge case row maps to at least one TC-* ID
+- If TC-* IDs are present: validate each TC-* ID has a declared priority (HIGH/MEDIUM/LOW) and tier (unit/integration/e2e/component)
+- Missing TC-* IDs = **WARNING** (not blocking at plan time — blocking at develop time via spec_test_reconciler)
+- Duplicate TC-* IDs across specs = **BLOCKING** (ambiguous ownership)
+
+```bash
+# Quick TC-* ID validation
+SPEC_DIR="docs/design/phases/${PHASE}/specs"
+ALL_TC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort)
+UNIQUE_TC_IDS=$(echo "$ALL_TC_IDS" | sort -u)
+TOTAL=$(echo "$ALL_TC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+UNIQUE=$(echo "$UNIQUE_TC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+
+if [ "$TOTAL" -gt 0 ] && [ "$TOTAL" -ne "$UNIQUE" ]; then
+  DUPES=$(echo "$ALL_TC_IDS" | sort | uniq -d)
+  echo "BLOCKING: Duplicate TC-* IDs found across specs:"
+  echo "$DUPES"
+fi
+
+if [ "$TOTAL" -eq 0 ]; then
+  echo "WARNING: No TC-* IDs found in phase specs — test traceability will rely on behavior-level matching only"
+fi
+```
 
 ## Reconciliation Sequence
 

@@ -32,6 +32,7 @@ skill_packs:
   - ".claude/skills/testing/{{TEST_FRAMEWORK}}.md"
   - ".claude/skills/testing/{{MOCK_FRAMEWORK}}.md"
   - ".claude/skills/core/testing-principles.md"
+  - ".claude/skills/testing/test-case-traceability.md"
 ---
 
 # Agent: Unit Test Agent

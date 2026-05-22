@@ -36,6 +36,7 @@ skill_packs:
   - ".claude/skills/testing/{{API_MOCK_TOOL}}.md"
   - ".claude/skills/ui/professional-ui-standards.md"
   - ".claude/skills/frameworks/{{UI_FRAMEWORK}}.md"
+  - ".claude/skills/testing/test-case-traceability.md"
 ---
 
 # Agent: UI Test Agent
@@ -93,11 +94,19 @@ Tests all UI screens and components for the current phase across three tiers: co
 
 ## WORKFLOW
 
+### Phase 0: Extract TC-* ID Inventory (MANDATORY)
+1. Read all spec files in `docs/design/phases/{{PHASE}}/specs/` including any `TEST-SUITE.md`
+2. Extract all TC-* IDs assigned to `tier: component` or `tier: e2e` from the Test Case Inventory tables
+3. Build the complete list of TC-* IDs this agent is responsible for
+4. Log: `"UI test agent responsible for N TC-* IDs"`
+5. **This list is the contract — every ID must have a corresponding test when this agent completes**
+
 ### Phase 1: Identify Test Targets
 1. Read ui_developer manifest for list of implemented screens and components
 2. Read wireframe specs for interaction flows
 3. Read data-contracts.md for API response shapes
-4. Create test plan in `agent_state/phases/{{PHASE}}/reports/ui_test_results.md`
+4. Cross-reference against TC-* ID inventory — every TC-* ID must map to a test target
+5. Create test plan in `agent_state/phases/{{PHASE}}/reports/ui_test_results.md`
 
 ### Phase 2: Write Component Unit Tests (Tier 1)
 For each page and significant component:
@@ -164,8 +173,16 @@ For each page:
 5. Verify keyboard navigation: Tab through all interactive elements
 6. Verify focus management: modals trap focus, closing returns focus to trigger
 
-### Phase 6: Self-Review
+### Phase 6: TC-* ID Completion Self-Check (MANDATORY)
+Before marking the task complete, run the TC-* ID self-check:
+1. Count TC-* IDs this agent was responsible for (from Phase 0 inventory)
+2. Count TC-* IDs annotated in test files this agent wrote
+3. If `IMPLEMENTED < RESPONSIBLE`: **DO NOT mark complete** — continue writing tests
+4. Log: `"TC-* coverage: N/M (X%) — [COMPLETE|INCOMPLETE: N remaining]"`
+
+### Phase 7: Self-Review
 Before marking the task complete, verify:
+- [ ] **All responsible TC-* IDs have corresponding annotated tests**
 - [ ] Every page has at least 1 component test
 - [ ] All 4 states tested for every data-bound component
 - [ ] Mock response shapes match data-contracts.md exactly
@@ -274,6 +291,7 @@ test: displays server-side errors
 
 ## QUALITY GATES
 
+- [ ] **TC-* ID coverage: 100% of responsible IDs annotated in tests**
 - [ ] Every page has at least 1 component unit test
 - [ ] Critical user workflows have e2e tests
 - [ ] Form validation tested (client-side + server error mapping)

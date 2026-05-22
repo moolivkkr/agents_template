@@ -39,6 +39,10 @@ arguments:
     required: false
     default: false
     description: "Generate manual test plan (exploratory test cases for QA team)"
+  - name: traceability
+    required: false
+    default: false
+    description: "Run TC-* ID inventory reconciliation — checks spec TC-* IDs against implemented test annotations"
 ---
 
 # /test — Standalone Test Runner
@@ -143,6 +147,57 @@ Results: `agent_state/reports/system_tests.md`
 Generates a structured manual test plan from BRD personas and FR-* requirements. Output is a human-executable QA checklist, not automated tests.
 
 Output: `agent_state/phases/N/reports/manual_test_plan.md`
+
+---
+
+## Step 3f — TC-* ID Traceability Check (when --traceability flag)
+
+**Agent:** `spec_test_reconciler` (inventory mode only)
+
+Runs the TC-* ID inventory reconciliation without running any tests. Useful for checking test coverage gaps before a full test run.
+
+```bash
+SPEC_DIR="docs/design/phases/${PHASE}/specs"
+SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
+SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+
+if [ "$SPEC_COUNT" -eq 0 ]; then
+  echo "No TC-* IDs found in phase specs — nothing to check"
+  exit 0
+fi
+
+IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
+  --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+MISSING=$(comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS"))
+MISSING_COUNT=$(echo "$MISSING" | grep -c 'TC-' 2>/dev/null || echo 0)
+COVERAGE_PCT=$(( IMPL_COUNT * 100 / SPEC_COUNT ))
+
+echo "TC-* Inventory — Phase ${PHASE}"
+echo "  Spec IDs:        $SPEC_COUNT"
+echo "  Implemented:     $IMPL_COUNT"
+echo "  Missing:         $MISSING_COUNT"
+echo "  Coverage:        ${COVERAGE_PCT}%"
+
+if [ "$MISSING_COUNT" -gt 0 ]; then
+  echo ""
+  echo "  Missing TC-* IDs:"
+  echo "$MISSING" | head -30
+  [ "$MISSING_COUNT" -gt 30 ] && echo "  ... and $((MISSING_COUNT - 30)) more"
+fi
+
+# Per-category breakdown
+echo ""
+echo "  Per-Category:"
+for CAT in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z]+' | sort -u); do
+  CAT_SPEC=$(echo "$SPEC_IDS" | grep -c "TC-${CAT}-")
+  CAT_IMPL=$(echo "$IMPL_IDS" | grep -c "TC-${CAT}-" 2>/dev/null || echo 0)
+  CAT_PCT=$(( CAT_IMPL * 100 / CAT_SPEC ))
+  echo "    ${CAT}: ${CAT_IMPL}/${CAT_SPEC} (${CAT_PCT}%)"
+done
+```
+
+Output: `agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md`
 
 ---
 

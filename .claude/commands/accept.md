@@ -207,6 +207,92 @@ Acceptance criteria:
 
 ---
 
+## Step 3b — Cross-Phase TC-* ID Inventory Reconciliation
+
+**Purpose:** Verify that ALL test case IDs defined across ALL phase specs are implemented in the final codebase. This catches deferred TC-* IDs that were never picked up by later phases.
+
+### Algorithm
+
+```bash
+# 1. Collect ALL TC-* IDs from ALL phase specs
+ALL_SPEC_IDS=""
+for PHASE_DIR in docs/design/phases/*/; do
+  PHASE_NUM=$(basename "$PHASE_DIR")
+  SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$PHASE_DIR/specs/" 2>/dev/null | sort -u)
+  ALL_SPEC_IDS="$ALL_SPEC_IDS\n$SPEC_IDS"
+done
+ALL_SPEC_IDS=$(echo -e "$ALL_SPEC_IDS" | grep 'TC-' | sort -u)
+TOTAL_SPEC=$(echo "$ALL_SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+
+# 2. Collect ALL TC-* IDs from ALL test files
+ALL_IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
+  --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+TOTAL_IMPL=$(echo "$ALL_IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
+
+# 3. Reconcile
+MISSING=$(comm -23 <(echo "$ALL_SPEC_IDS") <(echo "$ALL_IMPL_IDS"))
+MISSING_COUNT=$(echo "$MISSING" | grep -c 'TC-' 2>/dev/null || echo 0)
+COVERAGE_PCT=$(( TOTAL_IMPL * 100 / TOTAL_SPEC ))
+
+echo "Global TC-* Inventory: ${TOTAL_IMPL}/${TOTAL_SPEC} (${COVERAGE_PCT}%)"
+if [ "$MISSING_COUNT" -gt 0 ]; then
+  echo "MISSING: $MISSING_COUNT TC-* IDs never implemented across any phase"
+fi
+```
+
+### Check per-phase deferred IDs
+
+```bash
+# For each phase manifest, check deferred_ids were picked up
+for MANIFEST in agent_state/phases/*/manifest.json; do
+  PHASE=$(python3 -c "import json; print(json.load(open('$MANIFEST')).get('phase','?'))")
+  DEFERRED=$(python3 -c "
+import json
+m = json.load(open('$MANIFEST'))
+inv = m.get('test_case_inventory', {})
+deferred = inv.get('deferred_ids', [])
+if deferred:
+    for d in deferred: print(d)
+" 2>/dev/null)
+  if [ -n "$DEFERRED" ]; then
+    echo "Phase $PHASE deferred TC-* IDs:"
+    for ID in $DEFERRED; do
+      if echo "$ALL_IMPL_IDS" | grep -q "$ID"; then
+        echo "  $ID — RESOLVED (implemented in a later phase)"
+      else
+        echo "  $ID — STILL MISSING (never implemented)"
+      fi
+    done
+  fi
+done
+```
+
+### Output
+
+Add to acceptance report:
+
+```markdown
+## Global TC-* ID Inventory
+| Metric | Value |
+|--------|-------|
+| Total TC-* IDs (all phases) | N |
+| Implemented | N |
+| Missing | N |
+| Coverage | N% |
+
+### Missing TC-* IDs (Global)
+| TC ID | Category | Originally Defined In | Deferred By | Status |
+|-------|----------|----------------------|-------------|--------|
+
+### Per-Phase TC-* Coverage
+| Phase | Spec Count | Implemented | Deferred | Missing | Coverage |
+|-------|-----------|-------------|----------|---------|----------|
+```
+
+**Gate impact:** Missing TC-* IDs appear in the acceptance report as findings. If coverage < 100%, the release readiness verdict is `NOT READY` or `CONDITIONAL` — never `READY`.
+
+---
+
 ## Step 4 — BRD Traceability Validation
 
 After all use cases run, produce a traceability matrix:
