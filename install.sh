@@ -44,8 +44,10 @@ fi
 # ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"
 mkdir -p "$DEST_TEMPLATES"
-cp "$REPO_DIR/.claude/agents/generated/"*.tmpl.md "$DEST_TEMPLATES/"
-TMPL_COUNT=$(ls "$REPO_DIR/.claude/agents/generated/"*.tmpl.md | wc -l | tr -d ' ')
+# Install from both generated/ and templates/ directories
+cp "$REPO_DIR/.claude/agents/generated/"*.tmpl.md "$DEST_TEMPLATES/" 2>/dev/null || true
+cp "$REPO_DIR/.claude/agents/templates/"*.tmpl.md "$DEST_TEMPLATES/" 2>/dev/null || true
+TMPL_COUNT=$(ls "$DEST_TEMPLATES/"*.tmpl.md 2>/dev/null | wc -l | tr -d ' ')
 echo "  ✅ $TMPL_COUNT agent templates installed"
 
 # ── Project templates (CLAUDE.md template for /init) ─────────────────────────
@@ -101,6 +103,29 @@ else
   else
     echo "     Compare: $SETTINGS_SRC vs $SETTINGS_DEST"
   fi
+fi
+
+# ── Verify critical files ─────────────────────────────────────────────────────
+echo "Verifying critical test enforcement files..."
+CRITICAL_FILES=(
+  "$DEST_SKILLS/testing/test-case-traceability.md"
+  "$DEST_SKILLS/testing/test-case-generation.md"
+  "$DEST_AGENTS_CORE/spec_test_reconciler.md"
+  "$DEST_AGENTS_CORE/acceptance_test_agent.md"
+  "$DEST_AGENTS_CORE/e2e_orchestrator.md"
+  "$DEST_COMMANDS/develop-orchestrator.md"
+)
+MISSING=0
+for f in "${CRITICAL_FILES[@]}"; do
+  if [ ! -f "$f" ]; then
+    echo "  ⚠ MISSING: $f"
+    MISSING=$((MISSING + 1))
+  fi
+done
+if [ "$MISSING" -eq 0 ]; then
+  echo "  ✅ All critical test enforcement files present"
+else
+  echo "  ⚠ $MISSING critical file(s) missing — test enforcement may not work correctly"
 fi
 
 echo

@@ -37,6 +37,8 @@ skill_packs:
   - ".claude/skills/ui/component-composition.md"
   - ".claude/skills/ui/accessibility-patterns.md"
   - ".claude/skills/ui/error-handling-patterns.md"
+  - ".claude/skills/testing/test-case-traceability.md"
+  - ".claude/skills/testing/test-case-generation.md"
 ---
 
 # Agent: UX Designer
@@ -184,6 +186,54 @@ For each data-fetching component on the screen, specify:
 - Focus order: [numbered list of focusable elements in tab order]
 - ARIA labels: [icon buttons, expandable sections, live regions]
 - Keyboard shortcuts: Escape closes modals, Enter submits forms
+
+## UI Test Case Inventory (MANDATORY — TC-* IDs)
+
+Enumerate ALL UI test cases for this screen using the per-page, per-form, and per-component matrices from `.claude/skills/testing/test-case-generation.md`. These TC-* IDs are tracked through implementation and gated at phase completion.
+
+### Page-Level Tests
+| TC ID | Test Description | Priority | Tier |
+|-------|-----------------|----------|------|
+| TC-UI-NNN | Renders without crash | HIGH | component |
+| TC-UI-NNN | Loading state — skeleton matches layout | HIGH | component |
+| TC-UI-NNN | Error state — error message + retry button | HIGH | component |
+| TC-UI-NNN | Empty state — illustration + CTA | MEDIUM | component |
+| TC-UI-NNN | Data state — correct items rendered | HIGH | component |
+| TC-UI-NNN | Pagination — next/prev/page works | MEDIUM | component |
+| TC-UI-NNN | Search/filter updates results | MEDIUM | component |
+| TC-UI-NNN | Sort by column header | LOW | component |
+| TC-UI-NNN | Responsive — desktop (1280px) | HIGH | component |
+| TC-UI-NNN | Responsive — mobile (375px) | HIGH | component |
+| TC-UI-NNN | Accessibility — keyboard navigation | HIGH | component |
+| TC-UI-NNN | Accessibility — screen reader | MEDIUM | component |
+| TC-UI-NNN | Navigation — click row → detail page | HIGH | e2e |
+
+### Form Tests (if this screen has forms)
+| TC ID | Test Description | Priority | Tier |
+|-------|-----------------|----------|------|
+| TC-FORM-NNN | All fields render with correct types | HIGH | component |
+| TC-FORM-NNN | Required field validation on empty submit | HIGH | component |
+| TC-FORM-NNN | Field-specific validation (format, length) | HIGH | component |
+| TC-FORM-NNN | Server error mapping to form fields | HIGH | component |
+| TC-FORM-NNN | Successful submit — correct API payload | HIGH | component |
+| TC-FORM-NNN | Dirty state — navigate away → confirm | MEDIUM | component |
+| TC-FORM-NNN | Cancel/reset returns to previous state | MEDIUM | component |
+| TC-FORM-NNN | Disabled submit while API in flight | HIGH | component |
+
+### Component Tests (for reusable components on this screen)
+| TC ID | Component | Test Description | Priority | Tier |
+|-------|-----------|-----------------|----------|------|
+| TC-COMP-NNN | [ComponentName] | Renders with provided props | HIGH | component |
+| TC-COMP-NNN | [ComponentName] | Props variations | MEDIUM | component |
+| TC-COMP-NNN | [ComponentName] | Callback fires correctly | HIGH | component |
+| TC-COMP-NNN | [ComponentName] | Accessibility — ARIA roles | MEDIUM | component |
+
+**Rules:**
+- Assign actual sequential TC-* IDs (not NNN placeholders) — coordinate with spec_writer's ID ranges
+- Every interaction flow in the "Interaction Flows" section must have at least one TC-* ID
+- Every 4-state (loading/error/empty/data) must have a TC-* ID
+- Every form must have validation + submit + error mapping TC-* IDs
+- Mobile and desktop responsive tests are separate TC-* IDs
 ```
 
 ## Rules

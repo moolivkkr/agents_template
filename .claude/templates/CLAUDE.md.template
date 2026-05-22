@@ -86,9 +86,41 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/plan --phase=N` | Plan a phase before implementing |
 | `/develop --phase=N` | Implement a phase end-to-end |
 | `/test --e2e` | Run e2e tests standalone |
+| `/test --traceability` | Check TC-* ID coverage |
 | `/review` | Code review on current changes |
 | `/deploy --target=local` | Deploy locally |
+| `/accept` | Global acceptance after all phases |
 | `/status` | Check project progress |
+
+---
+
+## Test Enforcement (CRITICAL — every agent must follow)
+
+### TC-* Test Case ID System
+Every spec defines explicit test case IDs (TC-* format). Every test file must annotate which TC-* IDs it covers. The phase gate blocks if any HIGH/MEDIUM TC-* ID is missing.
+
+- **Specs generate TC-* IDs** using matrices from `test-case-generation.md`:
+  - Unit: 10+ per spec (edge cases, error paths)
+  - Integration: 10 per endpoint + 6 per entity (auth, validation, IDOR, shapes)
+  - E2E: 5+ per workflow (happy path, validation, errors, permissions, persistence)
+  - UI: 10+ per page + 8 per form (4-states, interactions, responsive, accessibility)
+  - Acceptance: 5+ per persona-FR pair (positive, negative permission boundaries, cross-persona)
+
+- **Test agents** extract their responsible TC-* IDs at Phase 0, annotate every test, and self-check before completing
+- **spec_test_reconciler** blocks the gate if `implemented < specified` for HIGH+MEDIUM priority
+
+### Per-Phase Test Tiers (ALL mandatory, ALL non-zero)
+| Tier | Agent | Gate Check |
+|------|-------|------------|
+| Unit | unit_test_agent | report exists + total > 0 + 80% coverage |
+| Integration | integration_test_agent | report exists + total > 0 |
+| E2E (browser or CLI/pipeline) | ui_test_agent / e2e | report exists + total > 0 |
+| Acceptance (persona-based) | acceptance_test_agent | report exists + total > 0 |
+
+### Cross-Phase Enforcement
+- Step 3a.5: re-run unit + integration + E2E for affected phases
+- Gate: full regression (all tiers, all phases) before gate.passed
+- `/accept`: full regression + global acceptance + TC-* inventory reconciliation
 
 ---
 

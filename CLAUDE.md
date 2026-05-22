@@ -89,9 +89,34 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/plan --phase=N` | Plan a phase before implementing |
 | `/develop --phase=N` | Implement a phase end-to-end |
 | `/test --e2e` | Run e2e tests standalone |
+| `/test --traceability` | Check TC-* ID coverage |
 | `/review` | Code review on current changes |
 | `/deploy --target=local` | Deploy locally |
+| `/accept` | Global acceptance after all phases |
 | `/status` | Check project progress |
+
+---
+
+## Test Enforcement (CRITICAL — every agent must follow)
+
+### TC-* Test Case ID System
+Every spec defines explicit test case IDs (TC-* format). Every test file must annotate which TC-* IDs it covers. The phase gate blocks if any HIGH/MEDIUM TC-* ID is missing. See `.claude/skills/testing/test-case-traceability.md`.
+
+### Test Case Generation (during /plan)
+Specs must exhaustively enumerate TC-* IDs for ALL tiers using matrices from `.claude/skills/testing/test-case-generation.md`:
+- **spec_writer** generates: unit (10+/spec), integration (10/endpoint + 6/entity), E2E (5+/workflow), acceptance (5+/persona-FR pair)
+- **ux_designer** generates: UI component (10+/page + 8/form), accessibility, responsive
+
+### Per-Phase Enforcement (during /develop)
+- Wave 3: separate agents per tier (unit/integration/E2E) — all run in parallel
+- Wave 4: acceptance tests (persona-based, adapts to project type)
+- Wave 5: fixes trigger re-run of ALL tiers (not just failing tier)
+- Wave 6: gate requires all 4 reports with total > 0 + TC-* inventory 100%
+
+### Cross-Phase Enforcement
+- Regression: unit + integration + E2E re-run for affected phases
+- Gate: full all-tier regression before gate.passed
+- `/accept`: full regression + global acceptance + TC-* inventory across all phases
 
 ---
 

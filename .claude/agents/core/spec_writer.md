@@ -27,6 +27,7 @@ skill_packs:
   - ".claude/skills/requirements/requirement-clarity.md"
   - ".claude/skills/core/api-design.md"
   - ".claude/skills/testing/test-case-traceability.md"
+  - ".claude/skills/testing/test-case-generation.md"
 ---
 
 # Agent: Spec Writer
@@ -169,31 +170,48 @@ Every testable behavior in this spec MUST be assigned a unique TC-* ID. These ID
 | TC-XXX-002 | [category] | [what this test verifies] | HIGH/MEDIUM/LOW | unit/integration/e2e/component |
 | ... | ... | ... | ... | ... |
 
-**Minimum TC-* IDs per spec:**
-- Each happy path: 1 TC-* ID
-- Each error path: 1 TC-* ID
-- Each edge case from the table above: 1 TC-* ID
-- Each API endpoint (request validation + response shape): 2+ TC-* IDs
-- Each DB interaction (CRUD round-trip): 1+ TC-* IDs
+**Minimum TC-* IDs per spec (from test-case-generation.md matrices):**
+
+| Tier | What to enumerate | Min TC-* IDs |
+|------|------------------|--------------|
+| Unit | Happy path + error path + edge cases per function | 10+ per spec |
+| Integration | Per-endpoint matrix (11 IDs) + per-entity matrix (6 IDs) | 10/endpoint + 6/entity |
+| E2E | Per-workflow matrix (7 IDs) or per-pipeline matrix (7 IDs) | 5+ per workflow |
+| Acceptance | Per-persona-FR (5 IDs) + permission boundaries + cross-persona | 5+ per persona-FR pair |
 
 **Rules:**
 - Every edge case row in the "Edge Cases" table above MUST have a corresponding TC-* ID
+- Every API endpoint MUST have integration TC-* IDs covering auth, validation, IDOR, response shape
+- Every user workflow MUST have E2E TC-* IDs covering happy path, validation, error recovery, permission boundary
+- Every persona x FR-* combination MUST have acceptance TC-* IDs covering positive and NEGATIVE (what they CANNOT do)
 - TC-* IDs must be unique within the phase (coordinate with other specs via range allocation)
 - Assign contiguous ranges per entity/component for easy bulk tracking
-- Declare the tier (unit/integration/e2e/component) so test agents know ownership
+- Declare the tier (unit/integration/e2e/component/acceptance) so test agents know ownership
 
 ### Unit Tests
 - [ ] Happy path for each public function
 - [ ] Each error path with correct error type returned
 - [ ] Each HIGH-priority edge case from table above
 
-### Integration Tests
-- [ ] Service ↔ DB interactions (write then read)
-- [ ] Service ↔ cache interactions (if applicable)
-- [ ] External service calls (mocked at boundary)
+### Integration Tests (per-endpoint + per-entity matrices from test-case-generation.md)
+- [ ] Per endpoint: happy path, auth (missing/invalid/expired), forbidden, validation, not found, IDOR, response shape, empty state
+- [ ] Per entity: create-read round-trip, update-read, delete-read, list+filter, unique constraint, tenant isolation
+- [ ] Service ↔ cache interactions (miss/hit/expiry/invalidation)
 
-### E2E Trigger
-- Workflow unlocked after this component: [name] | not applicable
+### E2E Tests (per-workflow matrix from test-case-generation.md)
+- [ ] Each user workflow: happy path start-to-finish
+- [ ] Each workflow: form validation error → fix → succeed
+- [ ] Each workflow: duplicate/conflict → user recovers
+- [ ] Each workflow: permission boundary (wrong persona → denied)
+- [ ] Each workflow: error recovery (network failure → retry → success)
+- [ ] Each workflow: data persistence (create → refresh → still there)
+- [ ] CLI/pipeline: valid input → output, invalid input → clear error, flag variations
+
+### Acceptance Tests (persona x capability matrix from test-case-generation.md)
+- [ ] Each persona × each in-scope FR-*: positive test (CAN do)
+- [ ] Each persona × each out-of-scope FR-*: negative test (CANNOT do — permission boundary)
+- [ ] Cross-persona flows: Admin creates → User sees → Analyst reports
+- [ ] Data lifecycle per entity: create → list → view → edit → verify → delete → verify gone
 
 ## Performance Targets
 - p95 latency: Xms — from NFR-* ID: [exact NFR ID from BRD]
