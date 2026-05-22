@@ -514,7 +514,8 @@ my-project/
 │           ├── manifest.json          ← handshake consumed by phase N+1
 │           ├── lessons.md             ← patterns that worked, issues encountered, recommendations
 │           ├── checkpoints/           ← auto-checkpoints (one per wave)
-│           │   └── wave-N.json        ← { ts, phase, wave_completed, git_sha, artifacts }
+│           │   ├── wave-N.json        ← { ts, phase, wave_completed, git_sha, artifacts }
+│           │   └── compact-context.md ← written at 75% context — compact summary for inline resume
 │           ├── audit_report.md
 │           ├── audit_report_ui.md     ← UI phases only
 │           ├── test-data/
@@ -864,9 +865,30 @@ Codebase mappings track a **confidence lifecycle**: `initial` (freshly mapped) �
 | Acceptance | ~10K |
 | Gate | ~5K (report headers only) |
 
-### If the window fills mid-pipeline
+### Auto-compact at 75% context usage
 
-The framework handles this automatically via **auto-checkpoints** — every wave boundary writes a checkpoint to `agent_state/phases/N/checkpoints/`. If context resets, `/resume` detects these and routes you to the right wave without re-running completed work.
+Performance degrades sharply once context exceeds ~80%. The framework enforces a **75% threshold** — at every wave boundary, the orchestrator checks context pressure:
+
+1. **Checkpoint** — wave checkpoint is already written (happens at every boundary)
+2. **Write compact context** — `agent_state/phases/N/checkpoints/compact-context.md` captures completed waves, decisions, current state, and next steps
+3. **Run `/compact`** — Claude Code's built-in context compression clears scrollback
+4. **Resume inline** — reads `compact-context.md` + `phase_context.md` and continues to the next wave without breaking the session
+
+```
+Wave 3 complete → checkpoint written → context at 78%
+⚡ Context at 75% — compacting before Wave 4. Resuming inline.
+→ /compact runs → reads compact-context.md → continues Wave 4
+```
+
+This is automatic and invisible — no manual `/pause` or session restart needed. The 5% gap before 80% is the safety margin.
+
+### If the window fills despite compaction
+
+Auto-checkpoints at every wave boundary mean `/resume` can always reconstruct state:
+
+```
+/startup/resume                           ← checks auto-checkpoints first, then explicit sessions
+```
 
 For explicit saves, use `/startup/pause`:
 
@@ -876,7 +898,7 @@ For explicit saves, use `/startup/pause`:
 
 Then in a new conversation:
 ```
-/startup/resume                           ← checks auto-checkpoints first, then explicit sessions
+/startup/resume                           ← restores from checkpoint or pause snapshot
 ```
 
 Or use the lightweight approach — all state is in `agent_state/phases/N/`:

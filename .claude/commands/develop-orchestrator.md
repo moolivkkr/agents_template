@@ -59,6 +59,63 @@ EOF
 
 ---
 
+## Context Pressure Check — MANDATORY Between Every Wave
+
+**⛔ After writing each wave checkpoint, BEFORE starting the next wave, check context usage.**
+
+Performance degrades sharply at ~80% context utilization. The 75% threshold gives a 5% safety margin.
+
+### Protocol
+
+**At every wave boundary (after checkpoint, before next wave):**
+
+1. **Check context usage** — if at or above 75% of context window capacity:
+
+2. **Write compact context summary:**
+   ```bash
+   cat > "agent_state/phases/${PHASE}/checkpoints/compact-context.md" << EOF
+   # Compact Context — Phase ${PHASE} (post-Wave ${WAVE_NUM})
+   Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+   Reason: context window at 75% — auto-compacted before Wave $((WAVE_NUM + 1))
+
+   ## Phase Goal
+   <1 line from phase_context.md>
+
+   ## Completed Waves
+   <for each completed wave: summary + artifacts from checkpoint JSON>
+
+   ## Key Decisions Made This Session
+   <any architectural decisions, deviations, or patterns noted>
+
+   ## Current State
+   - Last git SHA: $(git rev-parse --short HEAD)
+   - Tests passing: <yes/no/not-yet-run>
+   - Blocking issues: <none or list>
+
+   ## Next Steps
+   - Wave $((WAVE_NUM + 1)): <what needs to happen>
+   - Remaining waves: <list>
+   EOF
+   ```
+
+3. **Add compaction marker to checkpoint:**
+   Update the latest `wave-${WAVE_NUM}.json` to include `"compacted_before_next": true`.
+
+4. **Run `/compact`** — invoke Claude Code's built-in context compression.
+
+5. **After compaction — reload and continue:**
+   - Read `agent_state/phases/${PHASE}/checkpoints/compact-context.md`
+   - Read `docs/design/phases/${PHASE}/phase_context.md`
+   - Continue to Wave $((WAVE_NUM + 1)) — do NOT restart earlier waves.
+
+### Key rules
+- **Never compact mid-wave** — only at wave boundaries after the checkpoint is written
+- **Never skip this check** — the 5% gap before 80% is your safety margin
+- **Compact inline, don't break the session** — compaction is a mid-session refresh, not a reason to stop and `/resume`
+- **If compaction happens, say so:** `"⚡ Context at 75% — compacting before Wave N. Resuming inline."`
+
+---
+
 ## Wave 1: ORIENT + AUDIT
 
 Spawn a single agent:
