@@ -93,6 +93,70 @@ docker compose up -d  # (or equivalent)
 
 ---
 
+## Step 0b — Full E2E + Integration Regression (ALL phases, ALL tiers)
+
+**Before any acceptance testing, run the complete test suite from ALL phases.**
+
+This is the final cross-phase regression gate. Per-phase gates run regression during `/develop`, but `/accept` is the checkpoint that verifies the ENTIRE product works together after all phases have accumulated.
+
+```bash
+echo "Running full cross-phase regression (all tiers, all phases)..."
+
+# Read test commands from IMPLEMENTATION_GUIDELINES
+UNIT_CMD=$(read_from_guidelines "unit_test_command")
+INTEG_CMD=$(read_from_guidelines "integration_test_command")
+E2E_CMD=$(read_from_guidelines "e2e_test_command")
+
+echo "  Tier 1: Unit tests..."
+eval "$UNIT_CMD" 2>&1 | tee agent_state/accept/regression_unit.txt
+UNIT_EXIT=$?
+
+echo "  Tier 2: Integration tests..."
+eval "$INTEG_CMD" 2>&1 | tee agent_state/accept/regression_integration.txt
+INTEG_EXIT=$?
+
+echo "  Tier 3: E2E tests..."
+eval "$E2E_CMD" 2>&1 | tee agent_state/accept/regression_e2e.txt
+E2E_EXIT=$?
+
+echo ""
+echo "Cross-phase regression results:"
+echo "  Unit:        $([ $UNIT_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+echo "  Integration: $([ $INTEG_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+echo "  E2E:         $([ $E2E_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+
+if [ $UNIT_EXIT -ne 0 ] || [ $INTEG_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ]; then
+  echo ""
+  echo "⛔ REGRESSION FAILURES DETECTED — fix before proceeding to acceptance testing"
+  echo "   Acceptance tests run against a product that passes all lower tiers."
+  echo "   Running acceptance on a broken build wastes time and produces unreliable results."
+  # Do NOT block — warn and continue, but record in report
+fi
+```
+
+### Per-Phase Test Accumulation Summary
+
+```bash
+echo ""
+echo "Test Accumulation (all phases):"
+echo "  Phase | Unit | Integration | E2E | Acceptance"
+echo "  ------|------|-------------|-----|----------"
+for MANIFEST in agent_state/phases/*/manifest.json; do
+  PHASE_NUM=$(python3 -c "import json; print(json.load(open('$MANIFEST')).get('phase','?'))")
+  python3 -c "
+import json
+m = json.load(open('$MANIFEST'))
+tr = m.get('test_results', {})
+def tier(t):
+    r = tr.get(t, {})
+    return f\"{r.get('total', 0)}\"
+print(f'  {$PHASE_NUM:>5} | {tier(\"unit\"):>4} | {tier(\"integration\"):>11} | {tier(\"e2e\"):>3} | {tier(\"acceptance\")}')
+" 2>/dev/null
+done
+```
+
+---
+
 ## Step 1 — Build Global Use Case Map
 
 **Agent:** `acceptance_test_agent`

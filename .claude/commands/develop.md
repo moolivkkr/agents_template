@@ -175,27 +175,48 @@ for REPORT in "${TEST_REPORTS[@]}"; do
 done
 
 # ⛔ FULL REGRESSION TEST (not just current phase)
-# Run the ENTIRE test suite — all phases — before writing gate.passed.
+# Run the ENTIRE test suite — ALL tiers, ALL phases — before writing gate.passed.
 # This catches regressions where Phase N changes break Phase 1-N-1 tests.
 # This was added after Phase 4 broke 6 Phase 1/2 E2E tests and gate.passed was written anyway.
+#
+# IMPORTANT: Read test commands from docs/IMPLEMENTATION_GUIDELINES.md — do NOT hardcode
+# framework-specific commands. The commands below are EXAMPLES; adapt to the project's stack.
 
-echo "Running full regression test suite (all phases)..."
-cd frontend && npx vitest run --reporter=verbose 2>&1 | tee /tmp/gate-unit-results.txt
+echo "Running full regression test suite (all phases, all tiers)..."
+
+# Read test commands from IMPLEMENTATION_GUIDELINES (Section: Testing)
+# Fallback to common defaults if not specified
+# These MUST cover: unit tests, integration tests, AND e2e tests
+
+# Tier 1: Unit tests (all phases)
+# Example: npx vitest run / go test ./... / pytest
+UNIT_CMD=$(read_from_guidelines "unit_test_command" || echo "go test ./...")
+eval "$UNIT_CMD" 2>&1 | tee /tmp/gate-unit-results.txt
 UNIT_EXIT=$?
-npx playwright test --reporter=list 2>&1 | tee /tmp/gate-e2e-results.txt
-E2E_EXIT=$?
-cd ../backend && go test ./... 2>&1 | tee /tmp/gate-backend-results.txt
-BACKEND_EXIT=$?
 
-if [ $UNIT_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ] || [ $BACKEND_EXIT -ne 0 ]; then
+# Tier 2: Integration tests (all phases — requires infra running)
+# Example: go test ./tests/integration/... / pytest tests/integration/
+INTEG_CMD=$(read_from_guidelines "integration_test_command" || echo "go test ./tests/integration/...")
+eval "$INTEG_CMD" 2>&1 | tee /tmp/gate-integ-results.txt
+INTEG_EXIT=$?
+
+# Tier 3: E2E tests (all phases — project-type-aware)
+# Web app: npx playwright test
+# CLI tool: go test ./tests/e2e/... or custom E2E runner
+# Library: go test ./tests/e2e/...
+E2E_CMD=$(read_from_guidelines "e2e_test_command" || echo "npx playwright test --reporter=list")
+eval "$E2E_CMD" 2>&1 | tee /tmp/gate-e2e-results.txt
+E2E_EXIT=$?
+
+if [ $UNIT_EXIT -ne 0 ] || [ $INTEG_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ]; then
     echo "⛔ GATE BLOCKED: Full regression test suite has failures"
-    echo "   Unit tests: $([ $UNIT_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
-    echo "   E2E tests:  $([ $E2E_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
-    echo "   Backend:    $([ $BACKEND_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+    echo "   Unit tests:        $([ $UNIT_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+    echo "   Integration tests: $([ $INTEG_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
+    echo "   E2E tests:         $([ $E2E_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
     echo "   Fix regressions before gating. Route failures to Wave 5 feedback loop."
     exit 1
 fi
-echo "✅ Full regression: all tests pass"
+echo "✅ Full regression: all tiers pass (unit + integration + e2e)"
 
 for f in "${REQUIRED_REPORTS[@]}"; do
   if [ ! -f "$f" ]; then
@@ -238,7 +259,11 @@ done
 **Wave 5: COLLECTIVE FEEDBACK → ITERATE**
 - Parent collects ALL findings from Waves 3+4 into single feedback document
 - Categorize: A (code fix) / B (test fix) / C (spec ambiguity) / D (architectural)
-- Fix all A+B+C → re-run ONLY failed checks
+- Fix all A+B+C items
+- **Re-run protocol after fixes:**
+  - If ANY code was changed: re-run ALL test tiers (unit + integration + E2E) — not just the failed tier
+  - If E2E or acceptance failed: re-run E2E AND acceptance after fix (both test the user-facing surface)
+  - If only tests were fixed (B category): re-run only the fixed test tier
 - Max 3 cycles → D items escalate to debate_moderator
 - Output: `agent_state/phases/${PHASE}/reports/collective_feedback.md`
 
@@ -1370,7 +1395,9 @@ This prevents flaky tests from blocking every phase while maintaining visibility
 3. For each affected phase:
    a. Re-run that phase's **unit tests** (from test paths in phase P's manifest)
    b. Re-run that phase's **integration tests** (critical: catches DB schema/query regressions)
-   c. Do NOT re-run e2e tests (too expensive for regression; save for /accept)
+   c. Re-run that phase's **E2E tests** (catches user-facing regressions across phases)
+
+   **Why E2E regression is NOT optional:** E2E tests from Phase 1 verify user-facing workflows. If Phase 3 changes a shared API or DB schema, the E2E workflow may silently break even though unit + integration tests pass (because unit tests mock the changed dependency, integration tests test the new behavior, but E2E tests exercise the OLD workflow). This was proven in dlp_composer where cross-phase changes broke end-to-end flows that were never re-validated.
 
 4. For non-affected phases: SKIP (log: "Phase P: no artifact overlap, skipping regression")
 

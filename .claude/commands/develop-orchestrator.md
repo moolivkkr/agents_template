@@ -362,24 +362,47 @@ test -f agent_state/phases/${PHASE}/reports/acceptance_report.md || echo "⛔ BL
 The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feedback document:
 
 1. Read `unit_tests.md` — any failures?
-2. Read `e2e_results.md` — any failures?
-3. Read `code_quality_review.md` — any HIGH/CRITICAL findings?
-4. Read `acceptance_report.md` — any FAIL/PARTIAL?
+2. Read `integration_tests.md` — any failures?
+3. Read `e2e_results.md` — any failures?
+4. Read `code_quality_review.md` — any HIGH/CRITICAL findings?
+5. Read `acceptance_report.md` — any FAIL/PARTIAL?
 
 Build: `agent_state/phases/${PHASE}/reports/collective_feedback.md`
 
 If fixes needed, spawn fix agent:
 ```
 Agent prompt: "Fix these items from collective feedback: [list items].
-After fixing, re-run: vitest, playwright test, go test.
-Verify all tests pass."
+After fixing, re-run ALL test tiers — not just the failing tier.
+A code fix that passes unit tests may break E2E tests.
+Run: unit tests, integration tests, E2E tests.
+If acceptance tests failed, re-run acceptance after code fixes.
+Verify all tiers pass before reporting completion."
 ```
 
-Max 3 iterations. If architectural issue → invoke debate_moderator.
+### Re-run Protocol (CRITICAL — prevents "fix unit, break E2E")
+
+After ANY code fix in Wave 5:
+1. Re-run unit tests → must pass
+2. Re-run integration tests → must pass
+3. Re-run E2E tests → must pass
+4. If acceptance failed in Wave 4 → re-run acceptance → must pass
+
+**Do NOT re-run only the tier that failed.** Code changes ripple across tiers. A fix to a service method (caught by unit test) may change an API response shape (caught by E2E) or break a user workflow (caught by acceptance).
+
+Max 3 iteration cycles. If architectural issue → invoke debate_moderator.
 
 **Verify:**
 ```bash
 test -f agent_state/phases/${PHASE}/reports/collective_feedback.md || echo "⛔ BLOCKED"
+
+# Verify feedback document records which tiers were re-run
+if ! grep -qiP '(re-run|rerun|re.ran).*(unit|integration|e2e|acceptance)' \
+    agent_state/phases/${PHASE}/reports/collective_feedback.md 2>/dev/null; then
+  if grep -qiP '(fix|fixed|resolved)' \
+      agent_state/phases/${PHASE}/reports/collective_feedback.md 2>/dev/null; then
+    echo "⚠ WARNING: Feedback shows fixes were applied but no test tier re-runs recorded"
+  fi
+fi
 ```
 
 ---
