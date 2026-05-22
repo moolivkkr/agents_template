@@ -16,6 +16,12 @@ input:
   optional:
     - type: prev_manifest
       path: agent_state/phases/{{PHASE-1}}/manifest.json
+    - type: prev_lessons
+      path: agent_state/phases/{{PHASE-1}}/lessons.md
+      description: "Lessons extracted from previous phase — patterns that worked, issues encountered, recommendations"
+    - type: accumulated_patterns
+      path: agent_state/patterns.md
+      description: "Cross-phase accumulated patterns — what works and what doesn't for THIS project"
 output:
   primary: docs/design/phases/{{PHASE}}/PHASE_PLAN.md
   artifacts:
@@ -49,6 +55,8 @@ Reads BRD requirements and IMPLEMENTATION_GUIDELINES component inventory to defi
 1. `docs/BRD.md` — §FR-*, §NFR-*, §Gate checklists (load these sections; skip personas, out-of-scope, open questions)
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — §Technology Stack, §Component Inventory (skip CI/CD, observability, full setup details)
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what is already built (artifacts, api_routes, known_issues)
+4. `agent_state/phases/{{PHASE-1}}/lessons.md` — (if exists) lessons from previous phase: patterns that worked, issues to avoid, recommendations for this phase
+5. `agent_state/patterns.md` — (if exists) accumulated cross-phase patterns. Apply "Patterns That Worked" proactively. Note "Patterns to Avoid" in phase_context.md warnings.
 
 ## Output 1: `docs/design/phases/N/PHASE_PLAN.md`
 

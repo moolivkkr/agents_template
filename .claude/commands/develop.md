@@ -870,6 +870,9 @@ Agents reading `{{PHASE-1}}` in their instructions should resolve this to `PHASE
 | `docs/design/phases/${PHASE}/specs/<own-component>.md` | ~5-10K | Interface contracts, data model, edge cases, test requirements for THIS component only |
 | `docs/design/phases/${PHASE}/specs/data-contracts.md` | ~3-5K | Typed TypeScript interfaces for ALL API endpoints — ARRAY vs OBJECT explicit. Source of truth for response shapes. |
 | `agent_state/phases/$((PHASE-1))/manifest.json` | ~3-5K | Existing routes, schema, services — what NOT to re-implement |
+| `agent_state/codebase/<relevant-focus>.md` | ~5-10K | Persistent codebase knowledge (if `/map` was run). Load focus area matching your role: `tech.md` for stack decisions, `architecture.md` for structure, `quality.md` for patterns, `concerns.md` for known issues. |
+
+**Codebase knowledge loading rule:** If `agent_state/codebase/` exists and contains `.last-mapped`, agents MUST load the focus document relevant to their role. `backend_developer` and `api_developer` load `architecture.md`. `code_reviewer_I` and `code_optimizer` load `quality.md`. `security_reviewer` loads `concerns.md`. `project_planner` and `backend_audit_agent` load ALL focus documents. If the directory does not exist, skip — `/map` is optional but its output is mandatory reading when present.
 
 `phase_context.md` is intentionally complete — it contains the full tech stack, all coding conventions, all security requirements, and all acceptance criteria needed for correct implementation. **It is not a 50-line stub — it is a structured 6-8K extract that replaces the need to load the full BRD and IMPLEMENTATION_GUIDELINES.**
 

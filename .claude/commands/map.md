@@ -77,8 +77,9 @@ HAS_PREVIOUS=$([ -d "$CODEBASE_DIR" ] && [ -f "$CODEBASE_DIR/.last-mapped" ] && 
 
 if [ "$HAS_PREVIOUS" = "true" ]; then
   LAST_MAPPED=$(cat "$CODEBASE_DIR/.last-mapped")
-  LAST_SHA=$(head -1 "$CODEBASE_DIR/.last-mapped" | grep -oP 'sha:\K.*' || echo "unknown")
-  echo "Previous mapping found: $LAST_MAPPED"
+  LAST_SHA=$(grep 'sha:' "$CODEBASE_DIR/.last-mapped" | sed 's/sha://' || echo "unknown")
+  CONFIDENCE=$(grep 'confidence:' "$CODEBASE_DIR/.last-mapped" | sed 's/confidence://' || echo "unknown")
+  echo "Previous mapping found: SHA ${LAST_SHA}, confidence: ${CONFIDENCE}"
 else
   echo "No previous mapping — full scan required"
 fi
@@ -250,7 +251,20 @@ timestamp:{{ISO_8601_TIMESTAMP}}
 focus_areas:{{COMMA_SEPARATED_FOCUS_AREAS}}
 mode:{{full|incremental|phase-scoped}}
 files_analyzed:{{COUNT}}
+confidence:initial
 ```
+
+**Confidence lifecycle** (inspired by agentmemory's knowledge decay):
+- `initial` — freshly mapped, not yet validated by a phase gate
+- `high` — validated by a successful phase gate (gate writes this after passing)
+- `degraded` — a phase gate failed after this mapping was created (codebase diverged from expectations)
+- `stale` — >30 days old OR >50 files changed since mapping (detected by `/health`)
+
+Agents reading codebase knowledge should note the confidence level:
+- `high` → trust findings fully
+- `initial` → trust findings but verify edge cases
+- `degraded` → treat findings as hints, verify against actual code before relying on them
+- `stale` → recommend `/map --incremental` before planning next phase
 
 ### Handle incremental merge
 

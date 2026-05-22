@@ -1,5 +1,15 @@
 # Context Budget Protocol
 
+## Core Principle: Quality Over Token Savings
+
+Optimize agent prompts and context for **output quality**, not token efficiency. A/B testing proved verbose context produces measurably better results (+7.7% on judgment tasks). An agent that makes wrong decisions because it lacked context costs far more to fix than a larger context payload.
+
+**Rules:**
+- Never truncate acceptance criteria, security requirements, or coding conventions to save tokens
+- `phase_context.md` is 6-8K but replaces 30-70K of raw docs — this is the RIGHT trade-off
+- When `agent_state/codebase/` exists, load the relevant focus document — the extra 5-10K prevents avoidable implementation errors
+- More context for judgment steps (review, acceptance, debugging) > less context for speed
+
 ## Agent Result Discipline
 Every agent (subagent or inline) must end with this exact pattern:
 ```

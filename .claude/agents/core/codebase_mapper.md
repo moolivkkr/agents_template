@@ -19,7 +19,8 @@ input:
 output:
   primary: "agent_state/codebase/{{FOCUS}}.md"
 dependencies:
-  downstream: [backend_audit_agent, project_planner, spec_writer]
+  downstream: [backend_audit_agent, project_planner, spec_writer, backend_developer, api_developer, code_reviewer_I, code_optimizer, security_reviewer]
+  consumption: "Mandatory — when agent_state/codebase/.last-mapped exists, downstream agents MUST load the focus document matching their role. See /develop and /plan Agent Context Protocol."
 quality_gates:
   file_references_verified: true
   no_stale_references: true

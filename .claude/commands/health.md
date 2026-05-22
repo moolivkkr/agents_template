@@ -281,6 +281,128 @@ Compare test counts across phases:
 
 ---
 
+## Step 5.5 — Memory Hygiene
+
+Check all persistent memory stores for stale, orphaned, or redundant entries.
+
+### 5.5a. Stale Session Snapshots
+
+```bash
+SESSION_BASE="agent_state/sessions"
+if [ -d "$SESSION_BASE" ]; then
+  NOW=$(date +%s)
+  for thread_dir in "$SESSION_BASE"/*/; do
+    [ -d "$thread_dir" ] || continue
+    THREAD_NAME=$(basename "$thread_dir")
+    LATEST="${thread_dir}LATEST.md"
+    if [ -f "$LATEST" ]; then
+      LATEST_MTIME=$(stat -f %m "$LATEST" 2>/dev/null || stat -c %Y "$LATEST")
+      DAYS_OLD=$(( (NOW - LATEST_MTIME) / 86400 ))
+      if [ "$DAYS_OLD" -gt 30 ]; then
+        echo "WARNING: Session thread '${THREAD_NAME}' is ${DAYS_OLD} days old — likely abandoned"
+      elif [ "$DAYS_OLD" -gt 7 ]; then
+        echo "INFO: Session thread '${THREAD_NAME}' is ${DAYS_OLD} days old"
+      fi
+
+      # Check if paused phase gate has since passed (session is moot)
+      PAUSE_PHASE=$(grep "^\- \*\*Phase:\*\*" "$LATEST" | sed 's/.*\*\* //')
+      if [ -n "$PAUSE_PHASE" ] && [ -f "agent_state/phases/${PAUSE_PHASE}/gate.passed" ]; then
+        echo "INFO: Session '${THREAD_NAME}' paused on Phase ${PAUSE_PHASE}, but that gate has since passed — session is moot"
+      fi
+    fi
+
+    # Count historical snapshots
+    SNAPSHOT_COUNT=$(ls "${thread_dir}"*-pause.md 2>/dev/null | wc -l | tr -d ' ')
+    if [ "$SNAPSHOT_COUNT" -gt 10 ]; then
+      echo "INFO: Session '${THREAD_NAME}' has ${SNAPSHOT_COUNT} pause snapshots — consider pruning old ones"
+    fi
+  done
+fi
+```
+
+### 5.5b. Stale Codebase Knowledge
+
+```bash
+CODEBASE_DIR="agent_state/codebase"
+if [ -d "$CODEBASE_DIR" ] && [ -f "$CODEBASE_DIR/.last-mapped" ]; then
+  MAP_MTIME=$(stat -f %m "$CODEBASE_DIR/.last-mapped" 2>/dev/null || stat -c %Y "$CODEBASE_DIR/.last-mapped")
+  NOW=$(date +%s)
+  DAYS_OLD=$(( (NOW - MAP_MTIME) / 86400 ))
+
+  # Compare against recent git activity
+  COMMITS_SINCE=$(git log --oneline --since="$(date -r $MAP_MTIME '+%Y-%m-%d' 2>/dev/null || date -d @$MAP_MTIME '+%Y-%m-%d')" 2>/dev/null | wc -l | tr -d ' ')
+  FILES_CHANGED=$(git diff --name-only "$(git log --format=%H -1 --before="$(date -r $MAP_MTIME '+%Y-%m-%dT%H:%M:%S' 2>/dev/null || date -d @$MAP_MTIME '+%Y-%m-%dT%H:%M:%S')")" HEAD 2>/dev/null | wc -l | tr -d ' ')
+
+  if [ "$DAYS_OLD" -gt 30 ] || [ "$FILES_CHANGED" -gt 50 ]; then
+    echo "WARNING: Codebase mapping is ${DAYS_OLD} days old with ${FILES_CHANGED} files changed since — run /map --incremental to refresh"
+  elif [ "$DAYS_OLD" -gt 7 ] && [ "$FILES_CHANGED" -gt 20 ]; then
+    echo "INFO: Codebase mapping is ${DAYS_OLD} days old with ${FILES_CHANGED} files changed — consider /map --incremental"
+  fi
+fi
+```
+
+### 5.5c. Stale Execution Logs
+
+```bash
+for phase_dir in agent_state/phases/*/; do
+  [ -d "$phase_dir" ] || continue
+  PHASE_NUM=$(basename "$phase_dir")
+  EXEC_LOG="${phase_dir}execution.jsonl"
+
+  if [ -f "$EXEC_LOG" ] && [ -f "${phase_dir}gate.passed" ]; then
+    LOG_SIZE=$(wc -l < "$EXEC_LOG" | tr -d ' ')
+    if [ "$LOG_SIZE" -gt 500 ]; then
+      echo "INFO: Phase ${PHASE_NUM} execution.jsonl has ${LOG_SIZE} lines — consider archiving (gate already passed)"
+    fi
+  fi
+done
+```
+
+### 5.5d. Orphaned Decision Logs
+
+```bash
+if [ -d "agent_state/debates" ]; then
+  for debate in agent_state/debates/*.json; do
+    [ -f "$debate" ] || continue
+    [[ "$debate" == *-verdict.json ]] && continue
+    [[ "$debate" == *unresolved.json ]] && continue
+    VERDICT="${debate%-*}-verdict.json"
+    DEBATE_MTIME=$(stat -f %m "$debate" 2>/dev/null || stat -c %Y "$debate")
+    DAYS_OLD=$(( ($(date +%s) - DEBATE_MTIME) / 86400 ))
+    if [ ! -f "$VERDICT" ] && [ "$DAYS_OLD" -gt 14 ]; then
+      echo "WARNING: Unresolved debate '$(basename $debate)' is ${DAYS_OLD} days old — resolve or archive"
+    fi
+  done
+fi
+```
+
+### Memory Hygiene `--fix` Repairs
+
+When `--fix` is set, apply these safe memory cleanups:
+
+1. **Archive moot sessions** — sessions whose paused phase gate has passed
+   ```bash
+   mkdir -p "agent_state/sessions/archived-${TIMESTAMP}"
+   mv "${thread_dir}" "agent_state/sessions/archived-${TIMESTAMP}/${THREAD_NAME}"
+   ```
+
+2. **Prune old session snapshots** — keep only the 5 most recent pause snapshots per thread, move older ones to `archived/`
+   ```bash
+   ls -t "${thread_dir}"*-pause.md | tail -n +6 | while read f; do
+     mv "$f" "${thread_dir}archived/"
+   done
+   ```
+
+3. **Archive stale execution logs** — for gated phases with >500 lines, compress the log
+   ```bash
+   gzip -k "${EXEC_LOG}" && mv "${EXEC_LOG}.gz" "${phase_dir}execution.jsonl.archived-${TIMESTAMP}.gz"
+   # Keep original — compressed copy is for storage, original still readable
+   ```
+
+**Never auto-fix:** stale codebase mappings (must re-run `/map`), unresolved debates (require human judgment).
+
+---
+
 ## Step 6 — Report
 
 Compile all findings and write `agent_state/health-report.md`:
@@ -316,6 +438,12 @@ Scope: ${PHASE_ARG || "all phases"}
 - Carried forward: ${CARRIED_COUNT} items across all phases
 - Test progression: ${INCREASING | REGRESSION_DETECTED}
 - Requirement coverage: ${MET_COUNT}/${TOTAL_REQ} FR-* requirements met
+
+## Memory Hygiene
+- Sessions: ${STALE_SESSION_COUNT} stale, ${MOOT_SESSION_COUNT} moot (phase gate passed)
+- Codebase mapping: ${FRESH | STALE (N days, N files changed)}
+- Execution logs: ${LARGE_LOG_COUNT} oversized logs (gated phases)
+- Debates: ${UNRESOLVED_DEBATE_COUNT} unresolved (${OLD_DEBATE_COUNT} older than 14 days)
 
 ## Repair Recommendations
 ${IF_FIX_NOT_SET}
@@ -392,6 +520,28 @@ When `--fix` flag is set, after completing all diagnostic steps, apply repairs:
    >   /review --phase=${PHASE}  (for review reports)
    >   /test --phase=${PHASE}    (for test reports)
    EOF
+   ```
+
+5. **Archive moot sessions** — session threads whose paused phase gate has since passed
+   ```bash
+   mkdir -p "agent_state/sessions/archived-${TIMESTAMP}"
+   # Move entire thread directory to archive
+   mv "${thread_dir}" "agent_state/sessions/archived-${TIMESTAMP}/${THREAD_NAME}"
+   ```
+
+6. **Prune old session snapshots** — keep only 5 most recent pause snapshots per active thread
+   ```bash
+   mkdir -p "${thread_dir}archived"
+   ls -t "${thread_dir}"*-pause.md | tail -n +6 | while read f; do
+     mv "$f" "${thread_dir}archived/"
+   done
+   ```
+
+7. **Archive oversized execution logs** — for gated phases with >500 log lines
+   ```bash
+   gzip -c "${EXEC_LOG}" > "${phase_dir}execution.jsonl.archived-${TIMESTAMP}.gz"
+   # Truncate to last 50 entries (keep recent for quick diagnostics)
+   tail -50 "${EXEC_LOG}" > "${EXEC_LOG}.tmp" && mv "${EXEC_LOG}.tmp" "${EXEC_LOG}"
    ```
 
 ### Unsafe Repairs (NEVER automatic)

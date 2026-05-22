@@ -120,6 +120,31 @@ SESSION_DIR="${SESSION_BASE}/${THREAD}"
 LATEST_FILE="${SESSION_DIR}/LATEST.md"
 
 if [ ! -d "$SESSION_DIR" ]; then
+  # Fallback: check for auto-checkpoints (no explicit /pause was run)
+  # If checkpoints exist for any in-progress phase, offer checkpoint-based resume
+  CHECKPOINT_PHASE=""
+  for dir in agent_state/phases/*/checkpoints; do
+    [ -d "$dir" ] || continue
+    PHASE_NUM=$(echo "$dir" | grep -oE 'phases/[0-9]+' | grep -oE '[0-9]+')
+    if [ ! -f "agent_state/phases/${PHASE_NUM}/gate.passed" ]; then
+      CHECKPOINT_PHASE="$PHASE_NUM"
+      LATEST_WAVE=$(ls "$dir"/wave-*.json 2>/dev/null | sort -V | tail -1)
+    fi
+  done
+
+  if [ -n "$CHECKPOINT_PHASE" ] && [ -n "$LATEST_WAVE" ]; then
+    WAVE_NUM=$(echo "$LATEST_WAVE" | grep -oE 'wave-[0-9]+' | grep -oE '[0-9]+')
+    echo "No explicit /pause session found, but auto-checkpoints detected:"
+    echo ""
+    echo "  Phase:         ${CHECKPOINT_PHASE}"
+    echo "  Last wave:     ${WAVE_NUM}"
+    echo "  Checkpoint:    ${LATEST_WAVE}"
+    echo ""
+    echo "  Resume with: /develop --phase=${CHECKPOINT_PHASE}"
+    echo "  (Will skip Waves 1-${WAVE_NUM} and start at Wave $((WAVE_NUM + 1)))"
+    exit 0
+  fi
+
   echo "⛔ No session found for thread '${THREAD}'"
   echo ""
   echo "  Available threads:"

@@ -15,6 +15,50 @@ The parent reads this script and executes each wave as a separate Agent tool cal
 
 ---
 
+## Auto-Checkpoint Protocol (inspired by agentmemory hook patterns)
+
+Between EVERY wave boundary, the parent session automatically captures a lightweight checkpoint. This eliminates the need for explicit `/pause` — if context resets mid-pipeline, `/resume` can reconstruct state from the last checkpoint.
+
+**Checkpoint format:** `agent_state/phases/${PHASE}/checkpoints/wave-${N}.json`
+
+```json
+{
+  "ts": "<ISO timestamp>",
+  "phase": N,
+  "wave_completed": N,
+  "wave_next": N+1,
+  "git_sha": "<short SHA>",
+  "artifacts_produced": ["<paths written this wave>"],
+  "findings_summary": "<1-2 lines from wave output>",
+  "tests_passing": true|false|null,
+  "blocking_issues": []
+}
+```
+
+**Write checkpoint AFTER each wave verification passes:**
+```bash
+mkdir -p "agent_state/phases/${PHASE}/checkpoints"
+cat > "agent_state/phases/${PHASE}/checkpoints/wave-${WAVE_NUM}.json" << EOF
+{
+  "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "phase": ${PHASE},
+  "wave_completed": ${WAVE_NUM},
+  "wave_next": $((WAVE_NUM + 1)),
+  "git_sha": "$(git rev-parse --short HEAD)",
+  "artifacts_produced": [<list files created this wave>],
+  "findings_summary": "<extract from agent result>",
+  "tests_passing": null,
+  "blocking_issues": []
+}
+EOF
+```
+
+**On `/resume` detection:** If `checkpoints/wave-N.json` exists but `wave-$((N+1)).json` does not, resume from Wave N+1 without re-running earlier waves.
+
+**Key difference from agentmemory:** These are deterministic structural checkpoints (known paths, known schema), not semantic observations. No retrieval search needed — the resume logic reads the latest checkpoint file directly.
+
+---
+
 ## Wave 1: ORIENT + AUDIT
 
 Spawn a single agent:
@@ -31,6 +75,8 @@ Identify gaps, existing code, what needs to be built."
 ```bash
 test -f agent_state/phases/${PHASE}/audit_report.md || echo "⛔ BLOCKED: audit_report.md missing"
 ```
+
+**Auto-checkpoint:** Write `checkpoints/wave-1.json` with `artifacts_produced: ["audit_report.md"]`.
 
 ---
 
@@ -53,6 +99,8 @@ Implement all components. Commit after each logical unit."
 git diff --name-only HEAD~1 | grep -E '\.(ts|tsx|go)$' | head -5
 ```
 
+**Auto-checkpoint:** Write `checkpoints/wave-2.json` with `artifacts_produced: [<new source files>]`.
+
 ---
 
 ## Wave 3: TEST
@@ -74,6 +122,8 @@ Produce: agent_state/phases/${PHASE}/reports/unit_tests.md
 test -f agent_state/phases/${PHASE}/reports/unit_tests.md || echo "⛔ BLOCKED"
 test -f agent_state/phases/${PHASE}/reports/e2e_results.md || echo "⛔ BLOCKED"
 ```
+
+**Auto-checkpoint:** Write `checkpoints/wave-3.json` with `tests_passing: true|false`, `artifacts_produced: ["reports/unit_tests.md", "reports/e2e_results.md"]`.
 
 ### Test Failure Recovery Guardrails
 
@@ -180,3 +230,85 @@ The PARENT session runs the gate check:
 3. If all pass → write gate.passed + manifest.json + git tag
 
 4. If any fail → DO NOT write gate.passed. Route failures back to Wave 5.
+
+**Auto-checkpoint:** Write `checkpoints/wave-6.json` with `tests_passing: true`, `artifacts_produced: ["gate.passed", "manifest.json"]`.
+
+---
+
+## Post-Gate: CONSOLIDATE + LEARN (inspired by agentmemory's consolidation pipeline)
+
+**Runs ONLY after gate.passed is written.** This step extracts reusable knowledge from the phase execution for future phases. It's the equivalent of agentmemory's `consolidate` → `crystallize` → `lessons` pipeline, but deterministic and structural.
+
+The PARENT session (inline, no subagent) reads all phase artifacts and writes `agent_state/phases/${PHASE}/lessons.md`:
+
+### 1. Extract Lessons
+
+Read:
+- `reports/collective_feedback.md` — what bugs were found and how they were fixed
+- `reports/code_quality_review.md` — what patterns were flagged
+- `execution.jsonl` — which agents failed/retried and why
+- `checkpoints/` — how long each wave took
+
+Write `agent_state/phases/${PHASE}/lessons.md`:
+
+```markdown
+# Phase ${PHASE} Lessons Learned
+Generated: <timestamp>
+
+## Patterns That Worked
+- <pattern observed that should be repeated>
+- <e.g., "Repository pattern with interface DI eliminated all mocking issues">
+
+## Issues Encountered
+- <issue>: <root cause> → <fix applied>
+- <e.g., "E2E tests flaky on CI: race condition in DB seeding → added transaction isolation">
+
+## Agent Performance
+- Slowest agent: <name> (<duration>s) — reason: <why>
+- Failed agents: <name> (attempt <N>) — root cause: <why>
+- Retried: <count> total retries across all agents
+
+## Recommendations for Phase ${PHASE+1}
+- <actionable recommendation based on this phase's experience>
+- <e.g., "Add DB seeding helper to test setup — 3 test agents re-implemented the same pattern">
+
+## Patterns to Avoid
+- <anti-pattern observed> — <why it's bad> — <what to do instead>
+```
+
+### 2. Update Cross-Phase Patterns (append-only)
+
+If `agent_state/patterns.md` exists, append new patterns. If not, create it.
+
+```markdown
+# Accumulated Patterns (auto-updated after each phase gate)
+
+## Phase 1 (2026-MM-DD)
+- <patterns extracted>
+
+## Phase 2 (2026-MM-DD)
+- <patterns extracted>
+```
+
+This file is read by `project_planner` when planning Phase N+1 — it provides historical context about what works and what doesn't for THIS specific project.
+
+### 3. Confidence Metadata for Codebase Knowledge
+
+If `agent_state/codebase/` exists, update `.last-mapped` with a confidence indicator:
+
+```bash
+# After gate passes, codebase knowledge confidence increases
+# (the mapping was validated by successful implementation + tests)
+echo "sha:$(git rev-parse --short HEAD)" > agent_state/codebase/.last-mapped
+echo "confidence:high" >> agent_state/codebase/.last-mapped
+echo "validated_by:phase-${PHASE}-gate" >> agent_state/codebase/.last-mapped
+echo "ts:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> agent_state/codebase/.last-mapped
+```
+
+If the gate FAILS, confidence degrades:
+```bash
+echo "confidence:degraded" >> agent_state/codebase/.last-mapped
+echo "reason:phase-${PHASE}-gate-failed" >> agent_state/codebase/.last-mapped
+```
+
+**Key insight from agentmemory:** Memory isn't just stored — it has a lifecycle. Knowledge that was validated by a passing gate is HIGH confidence. Knowledge that predates a failed gate is DEGRADED (the codebase changed in ways the mapping didn't predict). This drives the `/map --incremental` recommendation in `/health`.

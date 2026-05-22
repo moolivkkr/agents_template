@@ -120,6 +120,7 @@ HAS_PLAN_CHECK=$([ -f "agent_state/phases/${PHASE}/plan_check.md" ] && echo true
 - `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, component inventory, design constraints
 - `agent_state/phases/$((PHASE-1))/manifest.json` — what previous phase built (when PHASE > 1)
 - `agent_state/agent_registry.json` — active agents and skill packs for this project
+- `agent_state/codebase/*.md` — persistent codebase knowledge (if `/map` was run and `agent_state/codebase/.last-mapped` exists). `project_planner` loads ALL focus docs. `spec_writer` loads `architecture.md` + `tech.md`. `spec_verifier` loads `quality.md` + `concerns.md`. Skip if directory does not exist.
 
 ---
 
