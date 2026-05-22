@@ -148,12 +148,31 @@ Before writing `gate.passed`, the parent MUST verify these files exist:
 ```bash
 REQUIRED_REPORTS=(
   "agent_state/phases/${PHASE}/reports/unit_tests.md"
+  "agent_state/phases/${PHASE}/reports/integration_tests.md"
   "agent_state/phases/${PHASE}/reports/e2e_results.md"
   "agent_state/phases/${PHASE}/reports/code_quality_review.md"
   "agent_state/phases/${PHASE}/reports/acceptance_report.md"
   "agent_state/phases/${PHASE}/reports/collective_feedback.md"
   "agent_state/phases/${PHASE}/manifest.json"
 )
+
+# Content validation — file existence is necessary but NOT sufficient.
+# A report that says "0 tests" or "SKIPPED" must not pass the gate.
+# This was added after dlp_composer shipped with ZERO E2E, ZERO component,
+# ZERO acceptance, and ZERO pipeline tests despite report files existing.
+TEST_REPORTS=("unit_tests.md" "integration_tests.md" "e2e_results.md" "acceptance_report.md")
+for REPORT in "${TEST_REPORTS[@]}"; do
+  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+  if [ -f "$FILE" ]; then
+    # Check for zero-test reports (file exists but no tests were actually run)
+    if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+(run|found|written|executed)|no tests|SKIPPED.*all|not applicable)' "$FILE" 2>/dev/null; then
+      echo "⛔ GATE BLOCKED: ${REPORT} reports ZERO tests — this tier was skipped"
+      echo "   Every test tier (unit, integration, e2e, acceptance) must produce >= 1 test."
+      echo "   If a tier genuinely doesn't apply (e.g., no browser for a CLI tool),"
+      echo "   the spec must declare this and the E2E report must contain CLI/pipeline tests instead."
+    fi
+  fi
+done
 
 # ⛔ FULL REGRESSION TEST (not just current phase)
 # Run the ENTIRE test suite — all phases — before writing gate.passed.
@@ -258,6 +277,9 @@ Before skipping ANY step, shortcutting ANY gate, or accepting partial results, r
 | "I can combine the review stages to save time" | Review stages are separated for a reason. Spec compliance and code quality are DIFFERENT concerns. |
 | "I've written enough tests — the important ones are covered" | Check the TC-* inventory. If spec defines 153 TC-* IDs and you implemented 34, that's 22% — not "enough". Every TC-* ID must have a test. |
 | "Those TC-* IDs are for a different category, I'll skip them" | Process ALL categories in document order. Part 1 before Part 2. Never cherry-pick the easy tests. |
+| "E2E tests don't apply — this isn't a web app" | EVERY product has an end-to-end flow. CLI tools have CLI E2E. Libraries have API E2E. Compilers have pipeline E2E. Adapt the strategy, don't skip the tier. |
+| "Integration tests aren't needed — unit tests cover the logic" | Unit tests mock dependencies. Integration tests prove the mocks were correct. Without integration tests, you're testing your assumptions about external systems. |
+| "A test tier produced 0 tests and that's fine" | Zero tests in ANY tier = gate blocker. Each tier catches different bugs. If a tier seems inapplicable, the spec or project type classification is wrong — fix that. |
 
 ---
 
@@ -1859,9 +1881,9 @@ Read the output file for each gate item below. Evaluate the specific pass/fail c
 Gate Item                    Source File                                          Pass Condition
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 Spec compliance              agent_state/phases/${PHASE}/reports/spec_compliance_review.md   COMPLIANT — no missing implementations
-Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests
-Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests
-E2E tests (MANDATORY)        agent_state/phases/${PHASE}/reports/e2e_results.md    No FAILED tests (written or generated this phase)
+Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests AND total > 0
+Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests AND total > 0
+E2E tests (MANDATORY)        agent_state/phases/${PHASE}/reports/e2e_results.md    No FAILED tests AND total > 0 (browser OR CLI/pipeline)
 Visual validation (if HTML)  agent_state/phases/${PHASE}/reports/visual_validation.md  Mismatch < 10% (skip if no wireframe.html)
 Reconciliation C (spec↔impl) agent_state/reconciliation/phase-${PHASE}/specs_vs_impl.md   No MISSING implementations AND unspecced items acknowledged (count logged)
 Reconciliation D (spec↔tests)agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md  No HIGH-priority untested behaviors

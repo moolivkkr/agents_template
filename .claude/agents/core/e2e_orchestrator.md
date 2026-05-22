@@ -45,7 +45,31 @@ Runs end-to-end tests for complete user workflows. Only executes workflows decla
 5. Write results
 
 ## What "Complete User Workflow" Means
+
+Depends on the product type (read `docs/IMPLEMENTATION_GUIDELINES.md`):
+
+### Web Application (API + UI)
 A sequence starting from user action (login, register, create) through to a verifiable outcome (data in DB, correct response, navigation to result screen). Multiple API calls + UI interactions + DB state verification.
+
+### CLI Tool / Compiler / Pipeline
+A sequence starting from CLI invocation through to verifiable output:
+- CLI invocation with real input files → processing → output verification
+- Multi-step pipelines (e.g., `compile → validate → deploy`)
+- Error scenarios (malformed input → graceful error → correct exit code)
+- Configuration variations (different flags/modes produce different outputs)
+
+### Library / SDK
+A sequence testing the public API from a consumer's perspective:
+- Import → configure → call → verify return values
+- Error handling (invalid args → typed errors)
+- Concurrent usage (thread safety if applicable)
+
+### WASM / Cross-Runtime
+Same-input-same-output verification across runtimes:
+- Native and WASM produce identical results for the same configuration
+- Runtime-specific edge cases (memory limits, feature parity)
+
+**The E2E test tier is NEVER "not applicable."** Every product has an end-to-end user journey — the test must exercise it regardless of whether the interface is a browser, CLI, API, or library import.
 
 ## Iteration Rules
 - Test failure: diagnose root cause (backend bug vs UI bug vs test issue) → fix → rerun

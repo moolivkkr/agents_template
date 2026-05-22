@@ -47,6 +47,18 @@ Final validation before phase gate. Executes use cases from the BRD at the perso
 
 **Acceptance testing answers:** "Did we build what we said we'd build, as the user would experience it?"
 
+**Project Type Awareness:** Not all projects are web APIs. Acceptance testing adapts to the product type:
+
+| Product Type | How to Test | Example |
+|---|---|---|
+| Web API + UI | HTTP calls as persona, Playwright browser tests | SaaS dashboard |
+| CLI tool | Invoke CLI with real args, verify stdout/stderr/exit codes | dlp_composer CLI |
+| Library/SDK | Import and call public API, verify return values | Go package |
+| Compiler/Transpiler | Feed source files, verify output artifacts | DSL compiler |
+| WASM module | Load in runtime, verify identical behavior to native | WASM parity |
+
+Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the product type. If the product has NO web API, do NOT produce empty results — adapt the test strategy to the product's actual interface.
+
 ---
 
 ## Anti-Rationalization Guard

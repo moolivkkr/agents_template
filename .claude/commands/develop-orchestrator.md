@@ -205,27 +205,100 @@ git diff --name-only HEAD~1 | grep -E '\.(ts|tsx|go)$' | head -5
 
 ---
 
-## Wave 3: TEST
+## Wave 3: TEST (SEPARATE AGENTS PER TIER)
 
-Spawn test agent(s):
+**CRITICAL: Spawn SEPARATE agents for each test tier.** A single agent cannot reliably write unit + integration + E2E tests — it exhausts context on the first tier and silently drops the rest. This was proven in dlp_composer where a single test agent produced unit tests but ZERO integration, ZERO E2E, ZERO component tests.
+
+### Wave 3a — Unit Tests
 
 ```
-Agent prompt: "You are running Wave 3 (Testing) for Phase ${PHASE}.
-Write and run: unit tests, integration tests, Playwright E2E tests.
-E2E tests are MANDATORY — generate if they don't exist.
-Coverage target: 80% per package.
-Run: vitest, playwright test, go test ./...
-Produce: agent_state/phases/${PHASE}/reports/unit_tests.md
-         agent_state/phases/${PHASE}/reports/e2e_results.md"
+Agent prompt: "You are running Wave 3a (Unit Tests) for Phase ${PHASE}.
+Read docs/design/phases/${PHASE}/phase_context.md for context.
+Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: unit.
+Write unit tests for ALL business logic. Annotate each test with its TC-* ID.
+Coverage target: 80% per package. Table-driven tests mandatory.
+Self-check: verify all responsible TC-* IDs are covered before completing.
+Produce: agent_state/phases/${PHASE}/reports/unit_tests.md"
 ```
 
-**Verify before proceeding:**
+### Wave 3b — Integration Tests
+
+```
+Agent prompt: "You are running Wave 3b (Integration Tests) for Phase ${PHASE}.
+Read docs/design/phases/${PHASE}/phase_context.md for context.
+Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: integration.
+Write integration tests against REAL database and cache.
+Test: repository CRUD, cache behavior, API contract shapes, cross-tenant IDOR.
+Self-check: verify all responsible TC-* IDs are covered before completing.
+Produce: agent_state/phases/${PHASE}/reports/integration_tests.md"
+```
+
+### Wave 3c — E2E Tests (project-type-aware)
+
+Determine E2E strategy from `docs/IMPLEMENTATION_GUIDELINES.md`:
+
+**If project has a web UI (frontend.enabled = true):**
+```
+Agent prompt: "You are running Wave 3c (E2E Tests — Browser) for Phase ${PHASE}.
+Read docs/design/phases/${PHASE}/phase_context.md for context.
+Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: e2e or tier: component.
+Write Playwright E2E tests for all in-scope user workflows.
+Write component tests for all implemented UI screens (4-state: loading/error/empty/data).
+Mock API responses must match data-contracts.md shapes exactly.
+Self-check: verify all responsible TC-* IDs are covered before completing.
+Produce: agent_state/phases/${PHASE}/reports/e2e_results.md
+         agent_state/phases/${PHASE}/reports/ui_test_results.md"
+```
+
+**If project is a CLI tool, library, or non-web application:**
+```
+Agent prompt: "You are running Wave 3c (E2E Tests — Pipeline/CLI) for Phase ${PHASE}.
+Read docs/design/phases/${PHASE}/phase_context.md for context.
+Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: e2e.
+Write end-to-end pipeline tests that exercise the FULL product flow:
+  - CLI invocation with real inputs → processing → output verification
+  - Multi-step pipelines (e.g., compile → validate → deploy)
+  - Error scenarios (malformed input → graceful error message)
+  - WASM parity tests if applicable (same config, same output across runtimes)
+These are NOT browser tests — they are process-level integration tests.
+Self-check: verify all responsible TC-* IDs are covered before completing.
+Produce: agent_state/phases/${PHASE}/reports/e2e_results.md"
+```
+
+**Spawn all 3 agents in PARALLEL** (they are independent):
+
+```
+Wave 3 (parallel):
+  ├─ Agent: unit_test_agent     → reports/unit_tests.md
+  ├─ Agent: integration_test_agent → reports/integration_tests.md
+  └─ Agent: ui_test_agent / e2e  → reports/e2e_results.md (+ ui_test_results.md if web)
+```
+
+### Wave 3 Verification (ALL THREE must pass)
+
 ```bash
-test -f agent_state/phases/${PHASE}/reports/unit_tests.md || echo "⛔ BLOCKED"
-test -f agent_state/phases/${PHASE}/reports/e2e_results.md || echo "⛔ BLOCKED"
+# All three report files must exist
+test -f agent_state/phases/${PHASE}/reports/unit_tests.md || echo "⛔ BLOCKED: unit tests missing"
+test -f agent_state/phases/${PHASE}/reports/integration_tests.md || echo "⛔ BLOCKED: integration tests missing"
+test -f agent_state/phases/${PHASE}/reports/e2e_results.md || echo "⛔ BLOCKED: e2e tests missing"
+
+# Content validation — reports must contain actual test results, not just headers
+for REPORT in unit_tests.md integration_tests.md e2e_results.md; do
+  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+  if [ -f "$FILE" ]; then
+    # Check for test count indicators (passed, failed, total, PASS, FAIL)
+    if ! grep -qiP '(pass|fail|total|test.*\d+|\d+\s*(pass|fail|test))' "$FILE"; then
+      echo "⛔ BLOCKED: ${REPORT} exists but contains no test results — likely a stub"
+    fi
+    # Check for zero-test reports
+    if grep -qiP '(total.*:\s*0|0\s+tests?\s+run|no tests|SKIPPED|not applicable)' "$FILE"; then
+      echo "⚠ WARNING: ${REPORT} reports zero tests — verify this is correct for the project type"
+    fi
+  fi
+done
 ```
 
-**Auto-checkpoint:** Write `checkpoints/wave-3.json` with `tests_passing: true|false`, `artifacts_produced: ["reports/unit_tests.md", "reports/e2e_results.md"]`.
+**Auto-checkpoint:** Write `checkpoints/wave-3.json` with `tests_passing: true|false`, `artifacts_produced: ["reports/unit_tests.md", "reports/integration_tests.md", "reports/e2e_results.md"]`.
 
 ### Test Failure Recovery Guardrails
 
@@ -315,13 +388,29 @@ test -f agent_state/phases/${PHASE}/reports/collective_feedback.md || echo "⛔ 
 
 The PARENT session runs the gate check:
 
-1. Verify ALL required files exist:
+1. Verify ALL required files exist AND contain actual test results:
    - audit_report.md ✓
-   - unit_tests.md ✓
-   - e2e_results.md ✓
+   - unit_tests.md ✓ (must contain non-zero test count)
+   - integration_tests.md ✓ (must contain non-zero test count)
+   - e2e_results.md ✓ (must contain non-zero test count)
    - code_quality_review.md ✓
-   - acceptance_report.md ✓
+   - acceptance_report.md ✓ (must contain non-zero use case count)
    - collective_feedback.md ✓
+
+   **Content validation (not just file existence):**
+   ```bash
+   for REPORT in unit_tests.md integration_tests.md e2e_results.md acceptance_report.md; do
+     FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+     if [ -f "$FILE" ]; then
+       if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+run|no tests (run|found|written)|SKIPPED.*all)' "$FILE"; then
+         echo "⛔ GATE BLOCKED: ${REPORT} reports ZERO tests — a test tier was skipped"
+         echo "   This is NOT acceptable. Every tier must produce at least 1 test."
+       fi
+     else
+       echo "⛔ GATE BLOCKED: ${REPORT} missing"
+     fi
+   done
+   ```
 
 2. Run FULL regression test suite (all phases, not just current):
    ```bash
