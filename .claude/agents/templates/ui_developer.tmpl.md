@@ -241,6 +241,48 @@ function ResourceList() {
 | Skip TypeScript types | Type every response matching data-contracts.md |
 | `any` type | Define proper interface or use `unknown` with guards |
 | Hardcoded user-facing strings | i18n keys |
+| Open modal without autofocus | Focus first input via `ref` + `requestAnimationFrame` |
+| Create item then require Edit click | Auto-open editor/detail after inline create |
+| Add list row without focusing it | Focus new row's first input after add |
+| Wizard step without Enter-to-advance | Support Enter key when validation passes |
+
+---
+
+## Form & Interaction UX Conventions (MANDATORY)
+
+Every form, modal, wizard, and list-editor MUST follow these conventions to reduce
+clicks, mouse travel, and keyboard presses.
+
+### 1. Autofocus First Field
+When a modal, dialog, wizard step, or inline editor opens, autofocus the first
+interactive field. Use `ref` + `requestAnimationFrame(() => ref.current?.focus())`.
+- Wizard step changes → focus primary input of new step
+- Modal/dialog opens → focus first input (not close button)
+- Inline editor appears → focus first editable field
+
+### 2. Auto-Open Editor After Create
+When the user creates a new inline item (adds a row, creates an entity), immediately
+open its editor/detail view. Don't force them to find the item and click Edit.
+
+### 3. Focus New Row After Add
+When the user clicks "+ Add" on a list/table, focus the first input of the newly
+added row. Use a `data-*` attribute + `querySelectorAll` + `requestAnimationFrame`.
+
+### 4. Keyboard Advance in Wizards
+Support Enter key to advance to the next wizard step when validation passes.
+Guard against Enter inside `<textarea>`, `<select>`, `<button>`, `<dialog>`.
+
+### 5. Pre-Populate from Context
+When the user reaches a step that can derive defaults from earlier steps, auto-fill.
+Examples: tags from category, ID from name (slug), description from selection.
+
+### 6. Return Focus After Modal Close
+When a modal closes, return focus to the trigger element. Store a ref to the trigger
+button and call `triggerRef.current?.focus()` in `onClose`.
+
+### 7. Tab Order Matches Visual Order
+Ensure tab order follows left-to-right, top-to-bottom layout. Never use positive
+`tabIndex`. Group related controls so Tab flows naturally between them.
 
 ---
 
@@ -274,3 +316,8 @@ function ResourceList() {
 - [ ] No unused props — every accepted prop is used in rendering or logic
 - [ ] Literal Unicode characters in all UI strings (no escape sequences)
 - [ ] All spec deviations documented with code comments explaining rationale
+- [ ] Modals/dialogs autofocus first input on open
+- [ ] Inline create auto-opens editor for new item
+- [ ] List "+ Add" focuses the new row's first input
+- [ ] Wizard supports Enter to advance (guarded for textarea/dialog)
+- [ ] Fields pre-populated from known context where possible
