@@ -460,7 +460,9 @@ test -f agent_state/phases/${PHASE}/reports/acceptance_report.md || echo "⛔ BL
 
 ---
 
-## Wave 5: COLLECTIVE FEEDBACK + ITERATE
+## Wave 5: COLLECTIVE FEEDBACK + ITERATE (with Adaptive Replanning)
+
+> **Skill reference:** `.claude/skills/core/adaptive-replan.md` — full failure classification and minimum re-test scope protocol.
 
 The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feedback document:
 
@@ -472,25 +474,55 @@ The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feed
 
 Build: `agent_state/phases/${PHASE}/reports/collective_feedback.md`
 
-If fixes needed, spawn fix agent:
+### Adaptive Replanning (failure-aware fix routing)
+
+Before spawning the fix agent, **classify each failure** using the adaptive replan protocol:
+
+| Category | Signal | Re-Test Scope |
+|---|---|---|
+| LOGIC | Unit assertion failed | unit + integration |
+| WIRING | Integration 404/500 | integration + E2E |
+| CONTRACT | Shape mismatch, CONTRACT_VIOLATION | E2E + acceptance |
+| SCHEMA | Migration/constraint error | ALL tiers |
+| UI | Component render failure | UI + E2E |
+| CONFIG | Health check fail, connection refused | integration + E2E + acceptance |
+| FLAKY | Passes on retry | failing tier only |
+
+If multiple categories → take the UNION of re-test scopes. If any is SCHEMA/CONFIG → ALL tiers.
+
+Spawn fix agent with classification:
 ```
-Agent prompt: "Fix these items from collective feedback: [list items].
-After fixing, re-run ALL test tiers — not just the failing tier.
-A code fix that passes unit tests may break E2E tests.
-Run: unit tests, integration tests, E2E tests.
-If acceptance tests failed, re-run acceptance after code fixes.
-Verify all tiers pass before reporting completion."
+Agent prompt: "Fix these items from collective feedback:
+
+FAILURE CLASSIFICATION: ${CATEGORY}
+ROOT CAUSE: ${ROOT_CAUSE_DESCRIPTION}
+AFFECTED FILES: ${FILES_FROM_ERROR_OUTPUT}
+
+Items to fix:
+${FAILURE_LIST}
+
+After fixing, re-run these tiers (minimum viable scope per adaptive-replan.md):
+  ${REQUIRED_TIERS}
+
+You may SKIP these tiers (not affected by this fix type):
+  ${SKIPPABLE_TIERS}
+
+IMPORTANT: After applying your fix, check git diff. If you touched files
+outside the predicted scope, EXPAND your re-test to include ALL tiers.
+
+Also check agent_state/patterns.md for known fixes matching this failure category.
+
+Verify all required tiers pass before reporting completion."
 ```
 
-### Re-run Protocol (CRITICAL — prevents "fix unit, break E2E")
+### Re-run Protocol
 
-After ANY code fix in Wave 5:
-1. Re-run unit tests → must pass
-2. Re-run integration tests → must pass
-3. Re-run E2E tests → must pass
-4. If acceptance failed in Wave 4 → re-run acceptance → must pass
+The adaptive replan protocol determines which tiers to re-run. The **safety guarantee** remains:
 
-**Do NOT re-run only the tier that failed.** Code changes ripple across tiers. A fix to a service method (caught by unit test) may change an API response shape (caught by E2E) or break a user workflow (caught by acceptance).
+- **Single-category fix:** Re-run classified tiers + one safety tier above
+- **Multi-category or SCHEMA/CONFIG:** Re-run ALL tiers (no shortcuts)
+- **Git diff expanded beyond predicted scope:** Re-run ALL tiers
+- If acceptance failed in Wave 4 → re-run acceptance after code fixes regardless of category
 
 Max 3 iteration cycles. If architectural issue → invoke debate_moderator.
 
@@ -538,11 +570,28 @@ The PARENT session runs the gate check:
    done
    ```
 
-2. Run FULL regression test suite (all phases, not just current):
+2. Run regression test suite using **change-impact analysis** (see `.claude/skills/core/change-impact-analysis.md`):
+
    ```bash
-   cd frontend && npx vitest run && npx playwright test
-   cd backend && go test ./...
+   # Determine regression scope based on what this phase changed
+   CHANGED_FILES=$(git diff --name-only $(git log --format=%H -1 -- agent_state/phases/$((PHASE-1))/gate.passed 2>/dev/null || echo HEAD~20) HEAD)
+   CHANGED_PACKAGES=$(echo "$CHANGED_FILES" | xargs -I{} dirname {} | sort -u)
+
+   # Check if shared layers changed (schema, auth, middleware, config)
+   SHARED_CHANGED=$(echo "$CHANGED_FILES" | grep -E '(migration|schema|middleware|auth|config|docker)' | head -1)
+
+   if [ -n "$SHARED_CHANGED" ] || [ "$PHASE" -eq 1 ]; then
+     echo "Shared layer changed or Phase 1 — running FULL regression"
+     # Full regression: all tests, all phases
+     # Read commands from IMPLEMENTATION_GUIDELINES
+   else
+     echo "Running change-impact regression (affected packages only)"
+     # Targeted regression: only tests in/importing changed packages
+     # + always run E2E (catches integration issues)
+   fi
    ```
+
+   **Safety rules:** Phase 1, forced gates, and shared-layer changes always trigger full regression. See `change-impact-analysis.md` for the complete algorithm.
 
 3. If all pass → write gate.passed + manifest.json + git tag
 
@@ -566,48 +615,60 @@ Read:
 - `execution.jsonl` — which agents failed/retried and why
 - `checkpoints/` — how long each wave took
 
-Write `agent_state/phases/${PHASE}/lessons.md`:
+Write `agent_state/phases/${PHASE}/lessons.md` using the **structured lessons format** (see `.claude/skills/core/structured-lessons.md`):
 
 ```markdown
 # Phase ${PHASE} Lessons Learned
 Generated: <timestamp>
+Phase goal: <from PHASE_PLAN.md>
 
-## Patterns That Worked
-- <pattern observed that should be repeated>
-- <e.g., "Repository pattern with interface DI eliminated all mocking issues">
+## Entries
 
-## Issues Encountered
-- <issue>: <root cause> → <fix applied>
-- <e.g., "E2E tests flaky on CI: race condition in DB seeding → added transaction isolation">
+### L-${PHASE}-001
+- **Category:** <testing|implementation|security|performance|infrastructure|agent_performance|planning|ux>
+- **Tags:** <language, domain, pattern name — comma-separated>
+- **Type:** <pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation>
+- **Summary:** <one-line description>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** <which report/file proves this>
+- **Reuse:** <actionable instruction for future phases>
 
-## Agent Performance
-- Slowest agent: <name> (<duration>s) — reason: <why>
-- Failed agents: <name> (attempt <N>) — root cause: <why>
-- Retried: <count> total retries across all agents
-
-## Recommendations for Phase ${PHASE+1}
-- <actionable recommendation based on this phase's experience>
-- <e.g., "Add DB seeding helper to test setup — 3 test agents re-implemented the same pattern">
-
-## Patterns to Avoid
-- <anti-pattern observed> — <why it's bad> — <what to do instead>
+(repeat for each lesson extracted from reports)
 ```
 
-### 2. Update Cross-Phase Patterns (append-only)
+Each entry is categorized and tagged so downstream agents can query by domain instead of loading the entire file.
 
-If `agent_state/patterns.md` exists, append new patterns. If not, create it.
+### 2. Update Cross-Phase Patterns (append-only, indexed)
+
+> **Skill reference:** `.claude/skills/core/structured-lessons.md` — full indexed format with confidence levels.
+
+If `agent_state/patterns.md` exists, append new patterns with structured indexing. If not, create it.
 
 ```markdown
 # Accumulated Patterns (auto-updated after each phase gate)
 
-## Phase 1 (2026-MM-DD)
-- <patterns extracted>
+## Index by Category
+- testing: P-001, P-003
+- implementation: P-002
 
-## Phase 2 (2026-MM-DD)
-- <patterns extracted>
+## Index by Tag
+- go: P-001, P-002
+- react: P-003
+
+## Entries
+
+### P-001
+- **Source:** Phase ${PHASE}, L-${PHASE}-001
+- **Category:** <category>
+- **Tags:** <tags>
+- **Pattern:** <what to do>
+- **Evidence:** <which phases validated this>
+- **Confidence:** LOW | MEDIUM | HIGH | DEPRECATED
 ```
 
-This file is read by `project_planner` when planning Phase N+1 — it provides historical context about what works and what doesn't for THIS specific project.
+Confidence upgrades automatically: LOW after 1 phase → MEDIUM if no contradictions → HIGH after validation in 2+ phases. Patterns that cause issues get downgraded to DEPRECATED.
+
+This file is read by `project_planner` when planning Phase N+1 — agents query the index by category/tag instead of loading all entries.
 
 ### 3. Confidence Metadata for Codebase Knowledge
 

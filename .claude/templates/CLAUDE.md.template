@@ -123,6 +123,9 @@ Every spec defines explicit test case IDs (TC-* format). Every test file must an
 - `/accept`: local deploy + health gate + full regression + global acceptance + TC-* inventory reconciliation + pipeline completeness validation
 - Local deploy: `/accept` Step 0a builds, migrates, starts, and health-checks the app before any acceptance testing. Unhealthy deploy caps release readiness at NOT READY.
 - Pipeline completeness: holistic chain audit (requirements -> BRD -> specs -> code -> tests -> acceptance) with scored verdict. Completeness < 80% vetoes release readiness.
+- Adaptive replanning: Wave 5 classifies failures and determines minimum re-test scope (see `adaptive-replan.md`)
+- Change-impact regression: Wave 6 gate runs only tests affected by current phase's changes (see `change-impact-analysis.md`)
+- Model routing: agents with `model: auto` select haiku/sonnet/opus based on complexity (see `model-routing.md`)
 
 ---
 

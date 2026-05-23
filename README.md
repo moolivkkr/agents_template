@@ -421,6 +421,17 @@ Forward gaps = blockers. Reverse gaps (invented/unspecced) = flagged for human r
 
 Point E runs after `/accept` and validates the ENTIRE chain as a connected whole — catching requirements that passed A-D individually but were dropped between links, forced gate blockers never resolved, and cross-phase coverage holes. Produces a scored completeness verdict (COMPLETE/NEAR COMPLETE/INCOMPLETE/FAILING) that can veto release readiness.
 
+### Intelligence protocols (inspired by ruflo analysis)
+
+Four skill packs in `.claude/skills/core/` add intelligence to the pipeline:
+
+| Protocol | Skill Pack | Where it applies |
+|----------|-----------|-----------------|
+| **Adaptive replanning** | `adaptive-replan.md` | Wave 5 — classifies failures (LOGIC/WIRING/CONTRACT/SCHEMA/UI/CONFIG/FLAKY), determines minimum re-test scope instead of re-running all tiers |
+| **Change-impact test selection** | `change-impact-analysis.md` | Wave 6 gate — analyzes `git diff` to run only affected tests for per-phase regression (full regression still at `/accept`) |
+| **Complexity-based model routing** | `model-routing.md` | All agents — `model: auto` selects haiku/sonnet/opus based on task complexity (spec count, LOC changed, FR-* scope) |
+| **Structured lessons** | `structured-lessons.md` | Post-Gate — lessons indexed by category/tag with confidence levels, queryable by downstream agents |
+
 ### Implementation waves
 
 Each phase runs in waves (sequential between waves, parallel within):
