@@ -8,6 +8,15 @@ Complete index of all agents in the SDLC pipeline.
 
 | I need to... | Use this agent | Invoked by |
 |---|---|---|
+| Run full rule pipeline for any plugin | `rule_pipeline_orchestrator` | `/rules-plugin` |
+| Research coverage gaps + vendor rules | `market_research_agent` | `/rules-plugin` Stage 1 |
+| Author rule + entity JSON files | `rule_developer_agent` | `/rules-plugin` Stage 2 |
+| Validate + auto-fix FP patterns in rules | `rule_fp_optimizer_agent` | `/rules-plugin` Stage 3 |
+| Audit corpus coverage + vendor parity | `corpus_completeness_agent` | `/rules-plugin` Stage 4 |
+| Publish rules to DB + Artifactory | `rule_db_publisher_agent` | `/rules-plugin` Stage 5 |
+| Register plugin pages in React UI | `plugin_ui_developer_agent` | `/rules-plugin` Stage 6 |
+| Write + run all test tiers for plugin | `plugin_test_agent` | `/rules-plugin` Stage 7 |
+| Add a new plugin (edr/dlp/certs/siem) | Create `.claude/agents/plugins/<id>.json` | manual then `/rules-plugin` |
 | Create BRD from requirements | `brd_agent` | `/init` |
 | Handle post-init BRD changes | `product_manager` | manual |
 | Confirm/complete tech stack | `impl_guidelines_agent` | `/init` |
@@ -64,6 +73,27 @@ Complete index of all agents in the SDLC pipeline.
 ---
 
 ## Agent Categories
+
+### Plugin Rule Development
+
+All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin_id>.json` for all plugin-specific knowledge (entity types, coverage framework, vendor sources, quality thresholds). Add a new plugin by creating a manifest file; all 7 agents work immediately with `--plugin <id>`.
+
+| Agent | Model | Input | Output | Notes |
+|---|---|---|---|---|
+| `rule_pipeline_orchestrator` | sonnet | plugin manifest, args | pipeline_summary.md | Orchestrates all 7 stages with checkpoints + feedback loop |
+| `market_research_agent` | opus | plugin manifest, scope | `<plugin>_wave_N_research.md` | Coverage gap analysis + 7-source vendor research |
+| `rule_developer_agent` | opus | research doc, plugin manifest | `policies/<plugin>/` JSON files | Framework reference for all condition/entity/operator patterns |
+| `rule_fp_optimizer_agent` | sonnet | plugin manifest, rule files | `<plugin>_wave_N_fp_optimization_report.md` | 10-check validation + auto-fix (not_in/OR bug, impossible AND, dangling refs) |
+| `corpus_completeness_agent` | sonnet | plugin manifest, corpus | `<plugin>_corpus_completeness_<ts>.md` + `wave_next_scope.json` | Coverage % + vendor parity + feedback loop artifact |
+| `rule_db_publisher_agent` | sonnet | plugin manifest, wave tag | `<plugin>_wave_N_publish_report.md` | Manifest rebuild → API push → git tag → Artifactory |
+| `plugin_ui_developer_agent` | sonnet | plugin manifest | `<plugin>_ui_report.md` + React pages | Home + list + detail pages per entity type, routes, nav, RJSF forms, 4-state component tests |
+| `plugin_test_agent` | sonnet | plugin manifest, wave tag | `<plugin>_test_report.md` | Unit + integration + E2E pipeline + UI component + Playwright browser tests |
+
+**Plugin manifests:** `.claude/agents/plugins/`
+- `edr.json` — ATT&CK tactics, MITRE coverage, process/network/user entity types, sensor map
+- `dlp.json` — channels, data categories, regulations, DLP vendor sources
+
+---
 
 ### Requirements & BRD
 
@@ -195,6 +225,18 @@ Complete index of all agents in the SDLC pipeline.
 ## Dependency Graph
 
 ```
+/rules-plugin pipeline (plugin-agnostic, driven by .claude/agents/plugins/<id>.json):
+  rule_pipeline_orchestrator
+    Stage 1: market_research_agent      → <plugin>_wave_N_research.md
+    Stage 2: rule_developer_agent       → policies/<plugin>/**/*.json (committed)
+    Stage 3: rule_fp_optimizer_agent    → fp_optimization_report.md + entity stubs
+    Stage 4: corpus_completeness_agent  → completeness report + wave_next_scope.json
+      ├── coverage < 95%  → feedback loop: wave_next_scope.json → Stage 1 (max 5 loops)
+      └── coverage ≥ 95%  → advance
+    Stage 5: rule_db_publisher_agent    → manifest rebuild → API push → git tag → Artifactory
+    Stage 6: plugin_ui_developer_agent  → React pages + routes + nav + tests (skippable with --no-ui)
+    Stage 7: plugin_test_agent          → unit + integration + E2E + UI component + Playwright tests
+
 /init pipeline:
   brd_agent (brd_analyzer → brd_interviewer → brd_writer)
     ├→ requirements_brd_reconciler
@@ -277,6 +319,7 @@ debate team (on-demand, any pipeline):
 
 | Command | Agents Used (in order) |
 |---|---|
+| `/rules-plugin` | rule_pipeline_orchestrator → market_research_agent → rule_developer_agent → rule_fp_optimizer_agent → corpus_completeness_agent (↺ loop) → rule_db_publisher_agent → plugin_ui_developer_agent → plugin_test_agent |
 | `/research` | 6 parallel research agents -> synthesis -> human review |
 | `/init` | brd_agent -> requirements_brd_reconciler -> impl_guidelines_agent -> agent_factory -> architecture_orchestrator (c4 + sequence + deploy + adr) |
 | `/discuss` | phase_assumptions_analyzer -> decision_researcher (parallel, one per question) |
@@ -302,15 +345,17 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 58 |
-| Generated templates (`.claude/agents/generated/`) | 4 |
-| **Total** | **62** |
+| Core agents (`.claude/agents/`) | 58 |
+| Generated templates (`.claude/agents/generated/`) | 12 |
+| Plugin manifests (`.claude/agents/plugins/`) | 2 |
+| **Total agents** | **70** |
 
 | Category | Count |
 |---|---|
+| Plugin Rule Development | **8** (rule_pipeline_orchestrator, market_research_agent, rule_developer_agent, rule_fp_optimizer_agent, corpus_completeness_agent, rule_db_publisher_agent, plugin_ui_developer_agent, plugin_test_agent) |
 | Requirements | 7 |
-| Product Workflow Intelligence | 5 (product_doc_researcher, product_video_researcher, product_api_researcher, capability_flow_mapper, workflow_synthesizer) |
-| Planning | 6 (phase_assumptions_analyzer, decision_researcher, plan_goal_verifier) |
+| Product Workflow Intelligence | 5 |
+| Planning | 6 |
 | Design | 7 |
 | Implementation (generated) | 4 |
 | Testing | 6 |
@@ -318,11 +363,11 @@ debate team (on-demand, any pipeline):
 | Reconciliation | 6 |
 | Decision Support | 4 |
 | Infrastructure | 3 |
-| Quality & Optimization | 5 (codebase_mapper) |
+| Quality & Optimization | 5 |
 | Documentation & Demo | 4 |
 
 | Model | Count |
 |---|---|
-| opus | 14 (+1: product_doc_researcher, +1: pipeline_completeness_agent) |
-| sonnet | 45 (+4: product_video_researcher, product_api_researcher, capability_flow_mapper, workflow_synthesizer) |
+| opus | 16 (+2: market_research_agent, rule_developer_agent) |
+| sonnet | 51 (+6: rule_pipeline_orchestrator, rule_fp_optimizer_agent, corpus_completeness_agent, rule_db_publisher_agent, plugin_ui_developer_agent, plugin_test_agent) |
 | haiku | 3 |
