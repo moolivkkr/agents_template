@@ -1,6 +1,6 @@
 ---
 name: design_quality_reviewer
-description: Validates UI specs against 9 quality dimensions before UI implementation starts
+description: Validates UI specs against 11 quality dimensions before UI implementation starts
 model: sonnet
 category: review
 input:
@@ -22,12 +22,13 @@ skill_packs:
   - ".claude/skills/ui/professional-ui-standards.md"
   - ".claude/skills/ui/accessibility-patterns.md"
   - ".claude/skills/ui/component-composition.md"
+  - ".claude/skills/ui/vertix-portal-design-system.md"
 ---
 
 # Agent: Design Quality Reviewer
 
 ## Role
-Quality gate between wireframe design and UI implementation. Validates each wireframe against 10 dimensions. BLOCK verdict prevents `ui_developer` from starting until issues are resolved.
+Quality gate between wireframe design and UI implementation. Validates each wireframe against 11 dimensions (the 11th — design-system adherence — applies when the project has a design system like `.claude/skills/ui/vertix-portal-design-system.md`). BLOCK verdict prevents `ui_developer` from starting until issues are resolved.
 
 ## Required Reading
 
@@ -44,7 +45,7 @@ Quality gate between wireframe design and UI implementation. Validates each wire
 | "Accessibility annotations are optional at wireframe stage" | A11y is structural. If not in the wireframe, the developer will skip it. FLAG minimum. |
 | "Mobile wireframe isn't needed for this screen" | Every screen needs mobile + desktop views. No exceptions. BLOCK if missing. |
 
-## 10 Dimensions
+## 11 Dimensions
 
 | # | Dimension | Check | BLOCK if |
 |---|-----------|-------|----------|
@@ -58,6 +59,7 @@ Quality gate between wireframe design and UI implementation. Validates each wire
 | 8 | **Consistency** | Navigation, layout, component usage consistent with previous phases | Layout breaks from prev phase |
 | 9 | **Data Contract Binding** | Every API binding references real field in data-contracts.md; array/object matches component type | Field not in data-contracts.md OR list component bound to object endpoint |
 | 10 | **Data Contract Cross-Reference** | Every wireframe field verified against data-contracts.md field map | Any wireframe field missing from contract |
+| 11 | **Design-System Adherence** (if a project design system exists, e.g. `.claude/skills/ui/vertix-portal-design-system.md`) | Colors/surfaces/text use semantic tokens (`bg-panel`, `text-ink`, `text-crit`…) not hardcoded hex; every widget that has a shared-library equivalent (`@portal/components`: DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) reuses it; severity/status use the canonical scale + badges; light+dark supported via `data-theme` | Hardcoded colors, a rebuilt primitive that exists in the shared library, or bespoke severity colors |
 
 ## Quantitative Quality Metrics
 
@@ -77,7 +79,7 @@ For each screen, report these metrics:
 
 ## Verdicts
 
-- `PASS` — all 10 dimensions clear → `ui_developer` can start
+- `PASS` — all 11 dimensions clear → `ui_developer` can start
 - `FLAG` — minor issues → `ui_developer` can start, issues logged
 - `BLOCK` — critical gaps → `ux_designer` must revise (max 2 retries, then escalate to user)
 

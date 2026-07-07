@@ -290,9 +290,9 @@ Each UI spec contains:
 - Interaction flows with API calls and UI responses
 - Accessibility annotations (heading hierarchy, landmarks, focus order, ARIA labels)
 
-**Design quality gate:** `design_quality_reviewer` validates each UI spec against 9 dimensions:
+**Design quality gate:** `design_quality_reviewer` validates each UI spec against 11 dimensions:
 1. API Coverage — all fields bound, no "TBD"
-2. Component Mapping — all widgets are named shadcn primitives
+2. Component Mapping — all widgets are named component-library primitives
 3. 4-State Coverage — loading skeleton + empty + error + data defined
 4. Interactions — every action has defined outcome
 5. Accessibility — headings, landmarks, ARIA, focus order
@@ -300,6 +300,8 @@ Each UI spec contains:
 7. Touch Targets — ≥44px annotated for mobile
 8. Consistency — matches previous phase screens
 9. Data Contract Binding — every field references real type in data-contracts.md, array/object matches component type
+10. Data Contract Cross-Reference — every wireframe field verified against the contract field map
+11. Design-System Adherence — semantic tokens (not hardcoded colors) + reuse of the shared component library (if a project design system exists, e.g. `.claude/skills/ui/vertix-portal-design-system.md`)
 
 BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked.
 

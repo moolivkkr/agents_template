@@ -29,6 +29,7 @@ dependencies:
   upstream: [spec_writer]
   downstream: [design_quality_reviewer, ui_developer]
 skill_packs:
+  - ".claude/skills/ui/vertix-portal-design-system.md"
   - ".claude/skills/ui/professional-ui-standards.md"
   - ".claude/skills/ui/shadcn.md"
   - ".claude/skills/ui/tailwind.md"
@@ -55,6 +56,7 @@ Produces wireframe specification files for UI screens scoped to the current phas
 4. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — UI framework and component library
 5. `docs/design/phases/{{PHASE}}/specs/` — backend TRDs (interface contracts, data models)
 6. Previous phase UI specs (if any) — maintain consistent navigation and design language
+7. `.claude/skills/ui/vertix-portal-design-system.md` — **project design system (if it exists).** Map every widget in the wireframe to a REAL `@portal/components` primitive (DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) by name, and specify surfaces/text/severity using the house-style semantic tokens — never invent component names or colors. This makes the wireframe directly implementable and passes design-review dimension 11.
 
 **STOP CONDITION:** If `data-contracts.md` does not exist, do NOT proceed. Report: `⛔ Blocked: data-contracts.md missing — run /plan Step 2b first.`
 
