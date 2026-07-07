@@ -9,14 +9,24 @@
 #                      "report":"<relative-path-or-null>","ts":"<iso8601>"}
 #
 # It BLOCKS (exit non-zero) unless ALL of these hold for the phase under test:
-#   (a) roster completeness — every name in roster.required has a status:"completed" line.
-#   (b) report integrity    — every completed line with a non-null "report" points to a file that
+#   (a)  roster completeness — every name in roster.required has a status:"completed" line.
+#   (a2) roster FLOOR        — deterministic, NOT model-authored: if the phase ran any implementation
+#                             agent (backend_developer/api_developer/ui_developer/backend_audit_agent),
+#                             its roster.required MUST also carry the review floor (code_reviewer_I/II,
+#                             security_reviewer, code_quality_verifier). Closes the "thin roster drops
+#                             review" hole where the model picks its own bar.
+#   (b)  report integrity    — every completed line with a non-null "report" points to a file that
 #                             EXISTS and is non-stub: test reports rejected on "total: 0"/"SKIPPED";
 #                             ANY report rejected on an unresolved "BLOCKING" (a BLOCKING line with
 #                             no later matching "BLOCKING ... resolved").
-#   (c) no dangling failure — no "failed" status without a LATER "completed" for the same agent.
-#   (d) gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
+#   (c)  no dangling failure — no "failed" status without a LATER "completed" for the same agent.
+#   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
+#
+# FORCED OVERRIDE: a well-formed gate.forced ({blockers:[...non-empty], user_rationale:"..."}) turns
+#   the FINDING failures (b/c/d) into a loud WARNING and exits 0 (the --force_gate escape hatch). It
+#   does NOT override a structurally incomplete/thin roster (a/a2) — you cannot "force" past agents
+#   that never ran.
 #
 # Missing roster.json or execution.jsonl => BLOCK with an explanatory message (never silently pass).
 #
@@ -180,6 +190,36 @@ else
     fi
   done
   [ "$MISSING" -eq 0 ] && ok "all ${#REQUIRED_AGENTS[@]} required agents completed"
+fi
+
+# ---------------------------------------------------------------------------
+# 3b. Check (a2): mandatory roster FLOOR (deterministic, not model-authored).
+#     The roster's *contents* are written by the model, so the completeness check above only proves
+#     "the model ran what the model listed." This closes the biggest hole: a thin roster that drops
+#     reviewers. Rule — if this phase ran ANY implementation agent, it MUST also carry the review
+#     floor. Derived purely from roster composition, so no external state is needed and a docs-only
+#     / trivial phase (no implementation agent) is unaffected.
+# ---------------------------------------------------------------------------
+echo "── (a2) mandatory roster floor ──"
+in_roster() { printf '%s\n' "${REQUIRED_AGENTS[@]}" | grep -qxF "$1"; }
+IMPL_AGENTS=(backend_developer api_developer ui_developer backend_audit_agent)
+REVIEW_FLOOR=(code_reviewer_I code_reviewer_II security_reviewer code_quality_verifier)
+PHASE_HAS_IMPL="false"
+for a in "${IMPL_AGENTS[@]}"; do in_roster "$a" && PHASE_HAS_IMPL="true" && break; done
+if [ "$PHASE_HAS_IMPL" = "true" ]; then
+  FLOOR_MISSING=0
+  for a in "${REVIEW_FLOOR[@]}"; do
+    if in_roster "$a"; then
+      ok "floor agent present in roster: $a"
+    else
+      fail "roster FLOOR violation — implementation phase omits required reviewer '$a' from roster.required (a thin roster cannot silently drop review)."
+      ROSTER_INCOMPLETE="true"   # a missing floor agent is structural, NOT a forceable finding
+      FLOOR_MISSING=$((FLOOR_MISSING + 1))
+    fi
+  done
+  [ "$FLOOR_MISSING" -eq 0 ] && ok "review floor satisfied (implementation phase)"
+else
+  ok "no implementation agent in roster — review floor not required for this phase"
 fi
 
 # ---------------------------------------------------------------------------

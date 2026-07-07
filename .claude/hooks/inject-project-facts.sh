@@ -12,6 +12,7 @@ DECISIONS_FILE="docs/DECISIONS.md"
 active_facts=""
 if [ -f "$FACTS_FILE" ]; then
   active_facts=$(awk '
+    !c && /<!--/ { c=1 } c { if (/-->/) c=0; next }   # skip commented example blocks (phantom facts)
     /^### F-/ { title=$0; capture=1 }
     capture && /^- status: active/ { print title; capture=0 }
   ' "$FACTS_FILE")
@@ -21,6 +22,7 @@ fi
 active_decisions=""
 if [ -f "$DECISIONS_FILE" ]; then
   active_decisions=$(awk '
+    !c && /<!--/ { c=1 } c { if (/-->/) c=0; next }   # skip commented example blocks
     /^### D-/ { title=$0; capture=1 }
     capture && /^- status: active/ { print title; capture=0 }
   ' "$DECISIONS_FILE")
