@@ -1,6 +1,14 @@
-# Professional UI Standards — Master Reference
+# Professional UI Standards — Generic House Defaults
 
-## Design Token System
+> **⛔ Precedence (see `.claude/skills/ui/README.md`).** If the project has a design system
+> (e.g. `vertix-portal-design-system.md`), **that file OVERRIDES the Colors, Border-Radius, and
+> Shadow sections below** — use its tokens (`bg-panel`, `text-ink`, `text-crit`, `rounded-card`,
+> `shadow-card`) instead of the generic shadcn ones here. This file remains authoritative for the
+> topics a design system typically doesn't restate: **spacing (4px grid), typography scale, z-index,
+> state discipline, density, motion, and anti-patterns.** When there is NO project design system,
+> the token sections below are the authority.
+
+## Design Token System (generic defaults — overridden by a project design system)
 
 ### Colors — Semantic Only (never raw hex/Tailwind colors)
 ```css

@@ -19,10 +19,11 @@ dependencies:
   upstream: [ux_designer]
   downstream: [ui_developer]
 skill_packs:
+  - ".claude/skills/ui/README.md"
+  - ".claude/skills/ui/vertix-portal-design-system.md"
   - ".claude/skills/ui/professional-ui-standards.md"
   - ".claude/skills/ui/accessibility-patterns.md"
   - ".claude/skills/ui/component-composition.md"
-  - ".claude/skills/ui/vertix-portal-design-system.md"
 ---
 
 # Agent: Design Quality Reviewer

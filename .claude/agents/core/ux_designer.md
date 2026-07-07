@@ -29,6 +29,7 @@ dependencies:
   upstream: [spec_writer]
   downstream: [design_quality_reviewer, ui_developer]
 skill_packs:
+  - ".claude/skills/ui/README.md"
   - ".claude/skills/ui/vertix-portal-design-system.md"
   - ".claude/skills/ui/professional-ui-standards.md"
   - ".claude/skills/ui/shadcn.md"

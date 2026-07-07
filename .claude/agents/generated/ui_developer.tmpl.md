@@ -32,8 +32,11 @@ skill_packs:
   - ".claude/skills/frameworks/{{UI_FRAMEWORK}}.md"
   - ".claude/skills/frameworks/{{STATE_MANAGEMENT}}.md"
   - ".claude/skills/ui/{{UI_COMPONENTS}}.md"
-  # PROJECT DESIGN SYSTEM (load if present — Vertix portal modules): house-style tokens, theme, and
-  # the @portal/components library that must be reused instead of rebuilt.
+  # READ FIRST — UI standards index + precedence order (which rule wins on conflict).
+  - ".claude/skills/ui/README.md"
+  # PROJECT DESIGN SYSTEM (tier 2 — load if present, Vertix portal modules): house-style tokens,
+  # theme, and the @portal/components library that must be reused instead of rebuilt. Overrides the
+  # generic standards on colors/tokens/components/card-radius.
   - ".claude/skills/ui/vertix-portal-design-system.md"
   - ".claude/skills/ui/professional-ui-standards.md"
   - ".claude/skills/ui/component-composition.md"
@@ -51,7 +54,8 @@ skill_packs:
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any code:
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
-- **`.claude/skills/ui/vertix-portal-design-system.md` — PROJECT DESIGN SYSTEM (if it exists / building a Vertix portal module). BINDING house style: use the ICC/shadcn semantic tokens (`bg-panel`, `text-ink`, `text-crit`, …) — never hardcode colors — and REUSE `@portal/components` (DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) instead of rebuilding. Support light+dark via `data-theme`.**
+- **`.claude/skills/ui/README.md` — UI STANDARDS INDEX & PRECEDENCE. Read this before the other UI skills** so you know which rule wins on conflict (project design system > generic standards > framework mechanics).
+- **`.claude/skills/ui/vertix-portal-design-system.md` — PROJECT DESIGN SYSTEM (tier 2, if it exists / building a Vertix portal module). BINDING house style that OVERRIDES the generic standards on colors/components/card-radius: use the ICC/shadcn semantic tokens (`bg-panel`, `text-ink`, `text-crit`, …) — never hardcode colors — and REUSE `@portal/components` (DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) instead of rebuilding. Support light+dark via `data-theme`.**
 - `.claude/skills/ui/professional-ui-standards.md` — design tokens, 4-states rule, anti-patterns
 - `.claude/skills/ui/api-integration-patterns.md` — HTTP client, TanStack Query hooks
 - `.claude/skills/ui/error-handling-patterns.md` — error type to UI pattern mapping
