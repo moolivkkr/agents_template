@@ -245,3 +245,25 @@ category: development
 6. If `invoked_by` references an agent, that agent should list this one in `subagents` or `downstream`
 7. `upstream` and `downstream` should be reciprocal (A upstream of B means B downstream of A)
 8. All paths in `input` and `output` should use forward slashes and may contain `{{PHASE}}` or `{{LANG}}` template variables
+
+---
+
+## Body Structure Requirements (MANDATORY sections)
+
+Frontmatter is not enough — the prompt BODY must contain these sections. This is enforced by
+`/health` 5.5e and reviewed by the agent-quality pass. Shared block text lives in
+`.claude/skills/core/agent-common.md` (copy verbatim; don't paraphrase the invariant lines).
+
+| Section | Rule |
+|---|---|
+| `## Role` | One-paragraph mission statement. |
+| `## Required Reading` | MUST use this exact heading and MUST begin with `docs/PROJECT_FACTS.md` (item 0) then `docs/DECISIONS.md` (item 0b) — see agent-common Block 1. Ground truth is read FIRST, always. |
+| `## Output` | If the agent writes a report, MUST include a fenced template showing the report's shape (agent-common Block 5). A prose-only output description is non-conformant. |
+| Severity model | Any agent that emits findings MUST use the Unified Severity Model BLOCKING/WARNING/INFO and end with a `BLOCKING:N WARNING:N INFO:N` count (agent-common Block 4). |
+| `## Definition of Done` | MANDATORY for every agent. Self-verify output path, real (non-stub) content, cited claims, real counts, explicit "nothing found" handling, and the `execution.jsonl` completion line (agent-common Block 2). |
+| Lessons write-back | Agents that can learn something reusable append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md` (agent-common Block 3). Not filler — only when there's a real lesson. |
+
+**Why these are mandatory:** an agent without a Definition-of-Done can silently no-op and still leave
+a present-but-empty report that passes a file-existence gate; an agent that never writes lessons
+starves the Tier 1 memory system; an inconsistent Required-Reading heading breaks the ground-truth
+invariant check. All three were real gaps found in the fleet audit.

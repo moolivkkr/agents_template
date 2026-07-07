@@ -87,6 +87,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 |---------|------------|
 | `/init` | Project setup (run once) |
 | `/remember <fact>` | Record a Tier 0 ground-truth fact (retired/renamed component, hard constraint) — propagates to every session + subagent |
+| `/worklog` | Consolidate all phase artifacts into one human-readable ledger (`docs/WORKLOG.md`) — what was implemented, decided (and why), and pending, across every agent |
 | `/plan --phase=N` | Plan a phase before implementing |
 | `/develop --phase=N` | Implement a phase end-to-end |
 | `/converge --phase=N` | Generate catch-up tasks where code lags the spec (inverse of reconcile) |
@@ -110,13 +111,22 @@ FIRST; it overrides conflicting assumptions in prompts, specs, or training. Add 
 every agent without re-typing). Delivered three ways: agent Required-Reading item 0, the
 orchestrator ground-truth injection line on every spawn, and the SessionStart hook.
 
-Three memory tiers by access pattern (full model: `.claude/skills/core/shared-context-protocol.md`):
+Memory tiers by access pattern (full model: `.claude/skills/core/shared-context-protocol.md`):
 - **Tier 0 — Facts** (`docs/PROJECT_FACTS.md`): tiny, always loaded, bi-temporal (superseding a
   fact closes the old one's validity window via deterministic `(subject,relation)` match, never
-  semantic similarity). Written by `/remember`.
+  semantic similarity). Written by `/remember`. Invariant checked by `/health` 5.5f.
+- **Tier 0.5 — Decisions** (`docs/DECISIONS.md`): durable decision ledger. ADRs and debate verdicts
+  auto-promote a `D-NNN` entry here (so a decision doesn't die in `agent_state/`); the SessionStart
+  hook surfaces active decisions to every new session, and it's Required-Reading item 0b for every
+  subagent. Do not re-litigate an active decision without new evidence.
 - **Tier 1 — Lessons/Patterns** (`agent_state/`): queried on demand by category/tag
-  (`memory-as-tools.md`), never loaded whole. Maintained by `/consolidate`.
+  (`memory-as-tools.md`), never loaded whole. Lessons authored per-phase and aggregated to the root
+  `agent_state/lessons.md` at each gate. Maintained by `/consolidate`.
 - **Tier 2 — Codebase KB** (`agent_state/codebase/`): loaded when relevant; ranked repo map from `/map`.
+
+**Activity ledger.** `/worklog` regenerates `docs/WORKLOG.md` — the single consolidated view of what
+was implemented, decided, and left pending across all agents/phases (rolled up from manifests,
+PHASE_SUMMARY, DECISIONS, and execution logs at each gate).
 
 ---
 
@@ -130,11 +140,17 @@ Specs must exhaustively enumerate TC-* IDs for ALL tiers using matrices from `.c
 - **spec_writer** generates: unit (10+/spec), integration (10/endpoint + 6/entity), E2E (5+/workflow), acceptance (5+/persona-FR pair)
 - **ux_designer** generates: UI component (10+/page + 8/form), accessibility, responsive
 
-### Per-Phase Enforcement (during /develop)
-- Wave 3: separate agents per tier (unit/integration/E2E) — all run in parallel
-- Wave 4: acceptance tests (persona-based, adapts to project type)
-- Wave 5: fixes trigger re-run of ALL tiers (not just failing tier)
-- Wave 6: gate requires all 4 reports with total > 0 + TC-* inventory 100%
+### Per-Phase Enforcement (during /develop — `/develop-orchestrator` is the canonical executor)
+- Wave 0b: parent writes `roster.json` (the agents this phase MUST run) — the execution guarantee.
+- Wave 3: separate agents per tier (unit/integration/E2E) — all run in parallel.
+- Wave 4: **separate NAMED agents** — code_reviewer_I/II, security_reviewer, dependency_scanner,
+  code_quality_verifier, tenant_isolation_verifier, spec_impl_reconciler, spec_test_reconciler,
+  acceptance_test_agent (never one bundled "review" agent — that's how reviews got dropped). Each has
+  a fix→re-review loop.
+- Wave 5: fixes trigger re-run of ALL affected tiers (not just failing tier).
+- Wave 6: gate requires all test + review + reconcile reports (non-stub, total > 0) + TC-* inventory
+  100% + **roster complete** (every required agent has a `completed` entry in `execution.jsonl`) +
+  no pending debate without a verdict + no BLOCKING reconciliation findings.
 
 ### Cross-Phase Enforcement
 - Regression: unit + integration + E2E re-run for affected phases

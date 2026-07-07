@@ -177,6 +177,63 @@ Complexity also drives model routing (`model-routing.md`); this drives *workflow
 allowed mid-run (escalate if a "small" phase turns out to touch a shared layer); never silently
 downgrade. Record the chosen class in the Wave-0 checkpoint.
 
+### Wave 0b — Write the Expected Agent Roster (execution guarantee)
+
+**This is the structural fix for "did every agent actually run?"** The parent computes the roster of
+agents this phase MUST execute (derived from the scale class) and writes it to
+`agent_state/phases/${PHASE}/roster.json`. Wave 6 diffs this roster against what actually completed
+(`execution.jsonl`) and BLOCKS the gate if any `required` agent has no `completed` entry. This turns
+"we hope the reviewers ran" into "we proved they ran."
+
+```bash
+mkdir -p "agent_state/phases/${PHASE}"
+# Base roster for a STANDARD phase. Add/remove per scale class and project shape:
+#  - trivial/small: keep only the agents whose waves you actually run.
+#  - not multi-tenant: mark tenant_isolation_verifier status "not_applicable".
+#  - no web UI: mark ui_test_agent "not_applicable".
+#  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
+cat > "agent_state/phases/${PHASE}/roster.json" << 'EOF'
+{
+  "phase": PHASE_NUM,
+  "scale_class": "SCALE_CLASS",
+  "generated": "TS",
+  "agents": {
+    "wave1_audit":            { "status": "required" },
+    "wave2_implement":        { "status": "required" },
+    "unit_test_agent":        { "status": "required" },
+    "integration_test_agent": { "status": "required" },
+    "e2e_or_ui_test_agent":   { "status": "required" },
+    "code_reviewer_I":        { "status": "required" },
+    "code_reviewer_II":       { "status": "required" },
+    "security_reviewer":      { "status": "required" },
+    "tenant_isolation_verifier": { "status": "required" },
+    "dependency_scanner":     { "status": "required" },
+    "code_quality_verifier":  { "status": "required" },
+    "spec_impl_reconciler":   { "status": "required" },
+    "spec_test_reconciler":   { "status": "required" },
+    "acceptance_test_agent":  { "status": "required" }
+  }
+}
+EOF
+# Substitute the literals (roster must reflect the actual class + project shape):
+sed -i '' "s/PHASE_NUM/${PHASE}/; s/SCALE_CLASS/${SCALE_CLASS}/; s/TS/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" \
+  "agent_state/phases/${PHASE}/roster.json" 2>/dev/null || \
+  sed -i "s/PHASE_NUM/${PHASE}/; s/SCALE_CLASS/${SCALE_CLASS}/; s/TS/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" \
+  "agent_state/phases/${PHASE}/roster.json"
+```
+
+**Every wave that spawns an agent must append a completion line to the execution log** so Wave 6 can
+verify it. After each agent returns successfully:
+```bash
+mkdir -p "agent_state/phases/${PHASE}"
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"agent\":\"${AGENT_NAME}\",\"wave\":${WAVE_NUM},\"status\":\"completed\"}" \
+  >> "agent_state/phases/${PHASE}/execution.jsonl"
+```
+
+If you deliberately skip an agent (e.g. not multi-tenant, trivial phase), set its roster status to
+`not_applicable` or `skipped:<reason>` — an explicit skip is auditable; a silent omission is the bug
+this roster exists to catch.
+
 ---
 
 ## ⛔ MANDATORY — Ground-Truth Injection on EVERY spawn
@@ -185,10 +242,11 @@ Every `Agent prompt:` in this orchestrator MUST begin with the ground-truth inje
 Tier 0 facts reach every subagent (subagents do not inherit the conversation). Prepend verbatim:
 
 ```
-GROUND TRUTH: First read docs/PROJECT_FACTS.md — it lists retired/renamed components, hard
-constraints, and environment facts, and it OVERRIDES any conflicting assumption in this prompt
-or your training. If this task touches anything marked RETIRED/superseded there, stop and flag
-it instead of proceeding.
+GROUND TRUTH: First read docs/PROJECT_FACTS.md (Tier 0 facts) AND docs/DECISIONS.md (Tier 0.5
+settled decisions). They list retired/renamed components, hard constraints, environment facts, and
+prior decisions with rationale, and they OVERRIDE any conflicting assumption in this prompt or your
+training. If this task touches anything marked RETIRED/superseded/reversed there, stop and flag it
+instead of proceeding. Do not re-litigate an active decision without new evidence.
 ```
 
 The wave prompts below omit this line only for brevity — you must add it to each. See
@@ -461,21 +519,68 @@ fi
 
 ---
 
-## Wave 4: REVIEW + ACCEPTANCE (parallel)
+## Wave 4: REVIEW + RECONCILE + ACCEPTANCE (parallel tracks)
 
-Spawn TWO agents in parallel:
+**⛔ CRITICAL — do NOT collapse review into one agent.** A single "code quality review" agent
+exhausts context on the first dimension and silently drops the rest — this is the *exact*
+single-agent failure mode Wave 3 rails against for tests, and it is how security review, both
+reconcilers, and the dependency scan get dropped from a run. Spawn each reviewer/reconciler as a
+SEPARATE, NAMED agent. Every agent below maps 1:1 to an entry in the Wave-0 roster and every one
+must produce its named report; Wave 6 blocks if any is missing.
 
-**Agent A — Code Quality Review:**
+Spawn Track A (reviewers, parallel), Track C (reconcilers, parallel with A), and Track B
+(acceptance) — all concurrently where independent.
+
+### Track A — Code Review (SEPARATE agents per dimension, parallel)
+
 ```
-Agent prompt: "You are running Wave 4 Track A (Code Quality Review) for Phase ${PHASE}.
-Review ALL source code against IMPLEMENTATION_GUIDELINES.
-Check: style, architecture, security, quality gates, spec reconciliation.
-Produce: agent_state/phases/${PHASE}/reports/code_quality_review.md"
+Wave 4 Track A (parallel):
+  ├─ Agent: code_reviewer_I          → reports/code_review_I.md        (style, idioms, naming)
+  ├─ Agent: code_reviewer_II         → reports/code_review_II.md       (architecture, layer boundaries)
+  ├─ Agent: security_reviewer        → reports/security_review.md      (OWASP + project constraints)
+  ├─ Agent: tenant_isolation_verifier → reports/tenant_isolation.md    (only if multi-tenant; see IMPL_GUIDELINES)
+  ├─ Agent: dependency_scanner       → reports/dependency_scan.md      (CVEs, licenses, outdated)
+  └─ Agent: code_quality_verifier    → reports/quality_gate.md         (TODOs, stubs, secrets, dead code)
 ```
 
-**Agent B — Acceptance Tests:**
+Each spawn prompt (prepend the GROUND TRUTH line):
 ```
-Agent prompt: "You are running Wave 4 Track B (Acceptance Tests) for Phase ${PHASE}.
+Agent prompt: "[GROUND TRUTH] You are <agent_name> running Wave 4 Track A for Phase ${PHASE}.
+Review ALL source changed/added in this phase against IMPLEMENTATION_GUIDELINES and the phase specs.
+Use the Unified Severity Model (.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
+Every finding MUST cite file:line. Produce your named report at the exact path above.
+Definition of Done: report written, every BLOCKING finding has file:line + a fix recommendation,
+and the report ends with a one-line COUNT summary: 'BLOCKING:N WARNING:N INFO:N'."
+```
+
+> `tenant_isolation_verifier` runs only when the project is multi-tenant (SaaS tenancy model in
+> IMPLEMENTATION_GUIDELINES). If not applicable, record it as `skipped:not_applicable` in the roster
+> — that is an explicit skip, not a silent drop.
+
+### Track C — Reconciliation (SEPARATE agents, parallel with Track A)
+
+These were previously omitted from the orchestrator entirely (they lived only in develop.md and so
+never ran under wave execution). They are now mandatory Wave-4 agents.
+
+```
+Wave 4 Track C (parallel):
+  ├─ Agent: spec_impl_reconciler  → reports/specs_vs_impl.md      (spec ↔ code: MISSING / EXTRA / DRIFT)
+  └─ Agent: spec_test_reconciler  → reports/spec_test_coverage.md (spec ↔ tests: TC-* coverage %, deferred IDs)
+```
+
+Each spawn prompt (prepend GROUND TRUTH):
+```
+Agent prompt: "[GROUND TRUTH] You are <reconciler> running Wave 4 Track C for Phase ${PHASE}.
+Perform bidirectional reconciliation. Report every MISSING (spec item with no code/test) and every
+EXTRA (code/test with no spec). Classify each: BLOCKING (in-scope FR-* unbuilt/untested) vs
+DEFERRED (explicitly out-of-scope, list the ID). Produce your named report.
+Definition of Done: coverage % computed, BLOCKING list explicit, deferred IDs enumerated."
+```
+
+### Track B — Acceptance Tests
+
+```
+Agent prompt: "[GROUND TRUTH] You are running Wave 4 Track B (Acceptance Tests) for Phase ${PHASE}.
 PREREQUISITE: Wave 3.5 deployed the app locally. Verify it is running before testing:
   - For web apps: curl -sf http://localhost:PORT/health must return 200
   - For CLI tools: the built binary must exist and respond to --version or --help
@@ -486,13 +591,47 @@ Test per persona. Verify OTEL traces, API contracts, accessibility.
 Produce: agent_state/phases/${PHASE}/reports/acceptance_report.md"
 ```
 
-**Verify BOTH before proceeding:**
+### Wave 4 Verification — every named report must exist AND carry a verdict
+
 ```bash
-test -f agent_state/phases/${PHASE}/reports/code_quality_review.md || echo "⛔ BLOCKED: review missing"
-test -f agent_state/phases/${PHASE}/reports/acceptance_report.md || echo "⛔ BLOCKED: acceptance missing"
+WAVE4_BLOCKED=false
+# Reviewers + reconcilers + acceptance. Skip tenant_isolation if roster marked it not_applicable.
+REQUIRED_W4="code_review_I.md code_review_II.md security_review.md dependency_scan.md \
+             quality_gate.md specs_vs_impl.md spec_test_coverage.md acceptance_report.md"
+if grep -q '"tenant_isolation_verifier"[^}]*"status": *"required"' \
+     "agent_state/phases/${PHASE}/roster.json" 2>/dev/null; then
+  REQUIRED_W4="$REQUIRED_W4 tenant_isolation.md"
+fi
+for R in $REQUIRED_W4; do
+  F="agent_state/phases/${PHASE}/reports/${R}"
+  if [ ! -f "$F" ]; then
+    echo "⛔ BLOCKED: Wave 4 report ${R} missing — its agent was not spawned or did not complete"
+    WAVE4_BLOCKED=true
+  elif [ ! -s "$F" ] || [ "$(wc -l < "$F")" -lt 3 ]; then
+    echo "⛔ BLOCKED: ${R} is empty/stub — the review did not actually run"
+    WAVE4_BLOCKED=true
+  fi
+done
+[ "$WAVE4_BLOCKED" = true ] && echo "⛔ DO NOT PROCEED — re-spawn the missing Wave-4 agents."
 ```
 
-**⛔ DO NOT PROCEED TO WAVE 5 WITHOUT BOTH FILES.**
+### Track A/C Fix → Re-Review Loop (do NOT defer all fixes to Wave 5)
+
+BLOCKING findings from a reviewer/reconciler must be fixed and **re-verified by re-running only that
+same agent** — not merely re-tested. This is the closed loop from `review.md`; without it a reviewer
+finding is "addressed" without proof.
+
+```
+For each report with BLOCKING findings:
+  1. Spawn a scoped fix agent for that report's findings.
+  2. Re-spawn ONLY the reviewer/reconciler that raised them.
+  3. Repeat max 2 rounds per report. If still BLOCKING after 2 rounds → carry to Wave 5 as a
+     classified failure, or escalate to debate_moderator if architectural.
+Anti-rationalization: "the fix looks right, no need to re-run" is WRONG — always re-run the agent.
+```
+
+**⛔ DO NOT PROCEED TO WAVE 5 until every required Wave-4 report exists and its BLOCKING count is
+0 (or the item is explicitly carried forward with a reason).**
 
 ---
 
@@ -593,29 +732,94 @@ sufficient. The parent MUST also run Layer 1 (independent file:line re-verificat
 trust the subagent's report), Layer 2 (numeric `gate_score ≥ 0.90`), and Layer 3 (cross-model
 refutation of high-stakes claims) before writing `gate.passed`.
 
-**Order:** Layer 0 (below) → Layer 1 re-verification → Layer 2 score → Layer 3 for security/
-tenant-isolation/"fixed" claims → write `gate_score.md` → only then `gate.passed`.
+**Order:** Layer 0 (below) → Layer 0b roster + debate dispatch → Layer 1 re-verification → Layer 2
+score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_score.md` → only then
+`gate.passed`.
 
-1. Verify ALL required files exist AND contain actual test results:
+0b. **Agent-roster completeness (execution guarantee) — run FIRST.** Diff the Wave-0 roster against
+    what actually completed. Any `required` agent with no `completed` entry BLOCKS the gate. This is
+    the single check that prevents a reviewer/reconciler being silently skipped.
+    ```bash
+    ROSTER="agent_state/phases/${PHASE}/roster.json"
+    EXEC="agent_state/phases/${PHASE}/execution.jsonl"
+    python3 - "$ROSTER" "$EXEC" << 'PY'
+    import json, sys, os
+    roster_p, exec_p = sys.argv[1], sys.argv[2]
+    roster = json.load(open(roster_p))
+    completed = set()
+    if os.path.exists(exec_p):
+        for line in open(exec_p):
+            line = line.strip()
+            if not line: continue
+            try:
+                e = json.loads(line)
+                if e.get("status") == "completed": completed.add(e.get("agent"))
+            except Exception: pass
+    missing = [a for a, m in roster["agents"].items()
+               if m.get("status") == "required" and a not in completed]
+    if missing:
+        print("⛔ GATE BLOCKED — required agents never completed:", ", ".join(missing))
+        print("   Re-spawn them before the gate can pass. (roster.json vs execution.jsonl)")
+        sys.exit(1)
+    print("✓ Roster complete — every required agent has a completed execution entry.")
+    PY
+    ```
+
+0c. **Debate dispatcher — no orphaned escalations.** Any escalation request written by a pipeline
+    agent must have a verdict before the gate. Force-spawn `debate_moderator` for any request lacking
+    a matching verdict; under `--auto`, record auto-resolved debates as `known_issues`.
+    ```bash
+    for REQ in agent_state/debates/*-request.json; do
+      [ -e "$REQ" ] || continue
+      VERDICT="${REQ%-request.json}-verdict.json"
+      if [ ! -f "$VERDICT" ]; then
+        echo "⚠ Pending debate with no verdict: $REQ → spawn debate_moderator now (do not gate without it)"
+      fi
+    done
+    ```
+
+1. Verify ALL required files exist AND contain real content (tests, reviews, reconciliation,
+   acceptance). This list is the hard `REQUIRED_REPORTS` set — it now includes the review and
+   reconciliation reports that were previously omitted (and therefore skippable):
    - audit_report.md ✓
-   - unit_tests.md ✓ (must contain non-zero test count)
-   - integration_tests.md ✓ (must contain non-zero test count)
-   - e2e_results.md ✓ (must contain non-zero test count)
-   - code_quality_review.md ✓
-   - acceptance_report.md ✓ (must contain non-zero use case count)
+   - unit_tests.md ✓ (non-zero test count)
+   - integration_tests.md ✓ (non-zero test count)
+   - e2e_results.md ✓ (non-zero test count)
+   - code_review_I.md ✓ · code_review_II.md ✓ · security_review.md ✓
+   - dependency_scan.md ✓ · quality_gate.md ✓
+   - specs_vs_impl.md ✓ · spec_test_coverage.md ✓  (reconciliation — BLOCKING findings must be 0)
+   - tenant_isolation.md ✓ (unless roster marks it not_applicable)
+   - acceptance_report.md ✓ (non-zero use case count)
    - collective_feedback.md ✓
 
    **Content validation (not just file existence):**
    ```bash
+   # Test reports: must not report zero tests.
    for REPORT in unit_tests.md integration_tests.md e2e_results.md acceptance_report.md; do
      FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
      if [ -f "$FILE" ]; then
        if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+run|no tests (run|found|written)|SKIPPED.*all)' "$FILE"; then
          echo "⛔ GATE BLOCKED: ${REPORT} reports ZERO tests — a test tier was skipped"
-         echo "   This is NOT acceptable. Every tier must produce at least 1 test."
        fi
      else
        echo "⛔ GATE BLOCKED: ${REPORT} missing"
+     fi
+   done
+   # Review + reconciliation reports: must exist and be non-stub.
+   for REPORT in code_review_I.md code_review_II.md security_review.md dependency_scan.md \
+                 quality_gate.md specs_vs_impl.md spec_test_coverage.md; do
+     FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+     if [ ! -f "$FILE" ]; then
+       echo "⛔ GATE BLOCKED: ${REPORT} missing — a review/reconcile agent was skipped"
+     elif [ "$(wc -l < "$FILE")" -lt 3 ]; then
+       echo "⛔ GATE BLOCKED: ${REPORT} is a stub — the agent did not actually run"
+     fi
+   done
+   # Reconciliation must have no unresolved BLOCKING findings.
+   for REPORT in specs_vs_impl.md spec_test_coverage.md; do
+     FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+     if [ -f "$FILE" ] && grep -qiP 'BLOCKING' "$FILE"; then
+       echo "⛔ GATE BLOCKED: ${REPORT} has BLOCKING reconciliation findings — resolve or carry forward with reason"
      fi
    done
    ```
@@ -646,8 +850,10 @@ tenant-isolation/"fixed" claims → write `gate_score.md` → only then `gate.pa
 3. Run Gate Verification Layers 1–3 (`gate-verification.md`). Write
    `agent_state/phases/${PHASE}/reports/gate_score.md` with the evidence table + numeric score.
 
-4. Gate passes ONLY when: Layer 0 clean AND Layer 1 has zero unproven items AND
-   `gate_score ≥ 0.90` AND no Layer 3 claim was refuted → write gate.passed + manifest.json + git tag.
+4. Gate passes ONLY when: Layer 0 clean AND **roster complete (0b passed)** AND **no pending debate
+   without a verdict (0c)** AND **no BLOCKING reconciliation findings** AND Layer 1 has zero unproven
+   items AND `gate_score ≥ 0.90` AND no Layer 3 claim was refuted → write gate.passed + manifest.json
+   + git tag. Also write the phase decision + worklog rollup (see Post-Gate).
 
 5. If any layer fails → DO NOT write gate.passed. Route failures back to Wave 5 with the specific
    unproven items / low-scoring dimensions named.
@@ -692,6 +898,28 @@ Phase goal: <from PHASE_PLAN.md>
 ```
 
 Each entry is categorized and tagged so downstream agents can query by domain instead of loading the entire file.
+
+**⛔ Then aggregate into the root lessons index — this closes a broken loop.** The retrieval recipes
+in `memory-as-tools.md` read `agent_state/lessons.md` (repo root), but lessons are WRITTEN per-phase
+to `agent_state/phases/N/lessons.md`. Without this step `memory_search` finds nothing. After writing
+the per-phase file, append its entries to the root index so future phases actually see them:
+
+```bash
+ROOT="agent_state/lessons.md"
+PHASE_LESSONS="agent_state/phases/${PHASE}/lessons.md"
+if [ -f "$PHASE_LESSONS" ]; then
+  if [ ! -f "$ROOT" ]; then
+    printf '# Lessons (cross-phase index — appended after each phase gate)\n\n' > "$ROOT"
+  fi
+  {
+    printf '\n<!-- ==== Phase %s (gated %s) ==== -->\n' "${PHASE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # Copy the ### L-* entries from the phase file into the root index (skip the phase header).
+    awk '/^### L-/{p=1} p{print}' "$PHASE_LESSONS"
+  } >> "$ROOT"
+fi
+```
+`/consolidate` later dedups/compresses this root index (off the hot path). Keep the per-phase file as
+the source; the root index is the queryable aggregate.
 
 ### 2. Update Cross-Phase Patterns (append-only, indexed)
 
@@ -745,3 +973,45 @@ echo "reason:phase-${PHASE}-gate-failed" >> agent_state/codebase/.last-mapped
 ```
 
 **Key insight from agentmemory:** Memory isn't just stored — it has a lifecycle. Knowledge that was validated by a passing gate is HIGH confidence. Knowledge that predates a failed gate is DEGRADED (the codebase changed in ways the mapping didn't predict). This drives the `/map --incremental` recommendation in `/health`.
+
+### 4. Phase Summary + Worklog Rollup (activity consolidation)
+
+Individual reports answer "what did agent X find"; nobody assembles "what happened this phase." Write
+a per-phase narrative that rolls up every wave, then regenerate the consolidated project ledger so a
+human or a NEW session has one place to read.
+
+**4a. Write `agent_state/phases/${PHASE}/PHASE_SUMMARY.md`** — a wave-by-wave narrative assembled
+from the reports each wave already produced (not new analysis, just consolidation):
+
+```markdown
+# Phase ${PHASE} Summary — <goal>
+Gate: PASSED (score <N>) · <date> · <NN> agents · <duration>
+
+## What was built (Wave 2)
+- <components/routes/migrations from manifest.artifacts>
+
+## Tests (Wave 3)
+- unit <N> / integration <N> / e2e <N> — all passing; TC-* coverage <N>%
+
+## Review + Reconcile (Wave 4)
+- code_review_I/II: <blocking resolved>; security: <findings>; deps: <CVEs>
+- spec↔impl: <MISSING/EXTRA resolved>; spec↔test: <coverage>
+
+## Decisions made
+- <ADR-NNN / debate verdicts — link to docs/DECISIONS.md D-NNN entries>
+
+## Fixed this phase (Wave 5)
+- <bugs found → fixed, with the failure classification>
+
+## Deferred / carried forward
+- <known_issues + carried_forward + deferred TC IDs, with severity>
+```
+
+**4b. Regenerate the consolidated ledger:** run `/worklog` (it reads manifest + PHASE_SUMMARY +
+DECISIONS + execution.jsonl and rewrites `docs/WORKLOG.md`). Commit `docs/WORKLOG.md` and
+`docs/DECISIONS.md` with the gate.
+
+**4c. Promote phase decisions:** ensure every decision captured in
+`agent_state/phases/${PHASE}/decision-log.md` that has lasting scope has a `D-NNN` entry in
+`docs/DECISIONS.md` (debate/ADR agents do this automatically; sweep here for dev/reconciler
+deviations that weren't promoted). This is what makes decisions survive into the next session.

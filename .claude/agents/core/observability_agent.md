@@ -49,4 +49,34 @@ Ensures the application has consistent structured logging, metrics, and distribu
 - Span attributes include relevant context (user_id, resource_id, etc.)
 
 ## Output
-Produces `observability_report.md` listing: missing instrumentation, incorrect log levels, and recommended metric additions. Creates instrumentation code where gaps are found.
+
+Produces `observability_report.md`. Creates instrumentation code where gaps are found. Use the
+Unified Severity Model (`.claude/skills/core/agent-common.md` Block 4).
+
+```markdown
+# Observability Report — Phase {{PHASE}}
+Verdict: PASS | GAPS FOUND
+
+## Logging      — <structured? levels correct? no secrets logged?>   findings: [...]
+## Metrics      — <request/latency/error/DB/cache/business metrics present?>  findings: [...]
+## Tracing      — <spans on external calls, correct parent-child, attributes?> findings: [...]
+
+## Findings (each: severity · file:line · fix)
+- BLOCKING — <e.g. no error-rate metric on any endpoint> — <where> — <fix>
+- WARNING  — ...
+- INFO     — ...
+
+BLOCKING:N WARNING:N INFO:N
+```
+
+**Gate coupling:** any BLOCKING observability gap (no metrics/traces on a new service) is a
+deploy-readiness blocker for staging/prod targets; WARNING/INFO are advisory.
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] `observability_report.md` written to the frontmatter output path with the template above.
+- [ ] Every finding cites file:line and a concrete fix; the BLOCKING/WARNING/INFO count line present.
+- [ ] If instrumentation libraries are absent from the stack, I flagged that explicitly rather than
+      reporting a false "all clear."
+- [ ] If I found no gaps, I said so with evidence — not an empty report.
+- [ ] Appended a lesson to `agent_state/phases/{{PHASE}}/lessons.md` if a reusable instrumentation
+      pattern or recurring gap was found (agent-common Block 3).

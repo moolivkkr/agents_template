@@ -14,6 +14,7 @@ output:
   primary: agent_state/debates/{topic}-verdict.json
   artifacts:
     - agent_state/debates/{topic}-verdict-detailed.md
+    - docs/DECISIONS.md  # appends a D-NNN ledger entry per verdict
 skill_packs:
   - ".claude/skills/core/debate-protocol.md"
 ---
@@ -144,6 +145,28 @@ Confidence: [HIGH/MEDIUM/LOW]
 - Mitigation: [concrete strategy]
 - Monitoring: [how to detect if the risk materializes]
 ```
+
+### 6. Promote the verdict to the Decision Ledger (durable memory)
+
+**A verdict that lives only in `agent_state/debates/` dies with the run — a new session never sees
+it and re-litigates the call.** After writing the verdict JSON, append a one-line entry to
+`docs/DECISIONS.md` so the decision becomes durable Tier 0.5 memory surfaced to every future session
+and subagent:
+
+```
+### D-NNN — <topic, as a decision statement>
+- status: active
+- scope: phase-<N>   # or global / component:<name>
+- date: <YYYY-MM-DD>
+- source: debate
+- reverses: —        # set to D-MMM if this overturns a prior decision (and set that one's reversed_by)
+- reversed_by: —
+- link: agent_state/debates/<topic>-verdict.json
+- decision: > <verdict_label — what was chosen>
+- rationale: > <decisive_factor + why the runner-up was rejected>
+```
+Use the next free `D-NNN`. For LOW-confidence verdicts, still record the entry but note
+`(confidence: LOW — revisit if <reconsider_if>)` in the rationale so future sessions know it's soft.
 
 ## Rules
 

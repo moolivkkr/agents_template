@@ -50,3 +50,9 @@ For each scene in the demo script:
 ```
 
 On issues: notify immediately — do not wait until demo time.
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Every walkthrough step was actually executed end-to-end (not read/assumed).
+- [ ] The READY | NOT READY verdict follows a clear threshold: ANY failed step in a critical scene → NOT READY.
+- [ ] Every failed step lists exact error + the fix needed.
+- [ ] If a step could not be validated at all, that is NOT READY with the reason — not a pass by omission.

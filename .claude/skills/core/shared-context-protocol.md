@@ -13,16 +13,29 @@ they change** — with zero new infrastructure (plain files + git).
 
 ---
 
-## The three memory tiers
+## The memory tiers
 
-The framework keeps memory in three tiers by **access pattern**, not by topic. Loading the
+The framework keeps memory in tiers by **access pattern**, not by topic. Loading the
 right tier at the right time is what keeps agents both correct and context-efficient.
 
 | Tier | File(s) | Size | Load policy | Purpose |
 |------|---------|------|-------------|---------|
 | **Tier 0 — FACTS** | `docs/PROJECT_FACTS.md` | Tiny (< 2KB) | **ALWAYS** — every session + every subagent | Ground-truth invariants: retired/renamed components, hard constraints, environment gotchas, off-limits zones |
-| **Tier 1 — LESSONS** | `agent_state/lessons.md`, `agent_state/patterns.md` | Medium, grows | **On demand** — query by category/tag | Reusable patterns and issues learned per phase (see `structured-lessons.md`) |
+| **Tier 0.5 — DECISIONS** | `docs/DECISIONS.md` | Small | **ALWAYS** — surfaced to every session + subagent (item 0b) | Durable decision ledger: ADRs + debate verdicts auto-promote a `D-NNN` here so a settled call reaches new work instead of dying in `agent_state/` |
+| **Tier 1 — LESSONS** | `agent_state/lessons.md` (root index, aggregated at each gate), `agent_state/patterns.md`, `agent_state/phases/*/lessons.md` (per-phase source) | Medium, grows | **On demand** — query by category/tag | Reusable patterns and issues learned per phase (see `structured-lessons.md`) |
 | **Tier 2 — CODEBASE KB** | `agent_state/codebase/` | Large | **When relevant** — load the focused doc | Deep structural knowledge from `/map` |
+
+> **Tier 0.5 vs Tier 0.** A *fact* is an inviolable invariant ("graph DB is NebulaGraph"). A
+> *decision* is a settled contextual choice with rationale ("phase 2 uses Redis for the session
+> cache because…") that a new session should honor but could be reversed with new evidence. Promote a
+> decision to Tier 0 (via `/remember`) only when it hardens into an invariant. Decisions are written
+> automatically by `adr_agent` and `debate_arbitrator`; `/health` 5.5f checks every verdict has a
+> ledger entry.
+>
+> **Tier 1 path note.** Lessons are AUTHORED per-phase (`agent_state/phases/N/lessons.md`) and
+> AGGREGATED into the root `agent_state/lessons.md` at each phase gate (develop-orchestrator
+> Post-Gate). Retrieval recipes (`memory-as-tools.md`) read the root index first and fall back to the
+> per-phase files, so `memory_search` works either way. `patterns.md` is written directly at root.
 
 **Rule of thumb:** Tier 0 is small enough to always carry. Tier 1 and Tier 2 are large, so
 agents **retrieve** from them (query by category/tag/focus) rather than loading them whole.

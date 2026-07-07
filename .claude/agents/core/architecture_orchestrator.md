@@ -15,7 +15,7 @@ output:
     - path: docs/architecture/c4-diagram.md
     - path: docs/architecture/sequence-diagrams.md
     - path: docs/architecture/deployment-diagram.md
-    - path: docs/architecture/adrs/
+    - path: docs/adr/
 dependencies:
   upstream: [impl_guidelines_agent, brd_agent]
   downstream: [project_planner]
@@ -52,7 +52,7 @@ All five subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEM
 | `c4_diagram_agent` | `docs/architecture/c4-diagram.md` | System context + container diagrams (Mermaid) |
 | `sequence_diagram_agent` | `docs/architecture/sequence-diagrams.md` | Key flow sequence diagrams (Mermaid) |
 | `deployment_diagram_agent` | `docs/architecture/deployment-diagram.md` | Infrastructure topology |
-| `adr_agent` | `docs/architecture/adrs/ADR-001.md` etc. | Key tech decisions with rationale |
+| `adr_agent` | `docs/adr/ADR-001.md` etc. | Key tech decisions with rationale (also promotes each to `docs/DECISIONS.md`) |
 | `eagle_diagram_agent` | `docs/architecture/eagle-overview.md` | 10,000-foot strategic architecture overview |
 
 ## Completion

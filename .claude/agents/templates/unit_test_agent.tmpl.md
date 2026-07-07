@@ -55,6 +55,8 @@ Writes comprehensive unit tests for all business logic using **{{TEST_FRAMEWORK}
 
 ## Required Reading
 
+0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read FIRST, before any other file.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
+0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — test file naming, mock patterns, assertion libraries
 2. `docs/design/phases/{{PHASE}}/specs/` — TRDs defining expected behavior to test
 3. Source files written by `backend_developer` and `api_developer` this phase

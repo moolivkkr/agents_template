@@ -62,3 +62,11 @@ Jobs:
 - Pin action versions (`actions/checkout@v4` not `@main`)
 - Cache hit rate > 80% — use correct cache key with lock file hash
 - Fail fast: lint before test, test before build
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] The generated workflow files (`ci.yml`/`cd.yml`) are written and reference REAL project commands
+      (build/test/lint) read from IMPLEMENTATION_GUIDELINES — not placeholder `echo` steps.
+- [ ] Each YAML parses (valid syntax) and each job's steps are runnable, not stubs.
+- [ ] No secret is hardcoded; all action versions are pinned.
+- [ ] The deploy job includes the health/smoke-test gate and the prod manual-approval gate.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.

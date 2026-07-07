@@ -14,6 +14,15 @@ input:
       load: sections_only
       sections: ["Technology Stack", "Component Inventory", "Local Development Setup", "Coding Conventions"]
   optional:
+    - type: discussion
+      path: docs/design/phases/{{PHASE}}/DISCUSSION.md
+      description: "Pre-planning discussion report from /discuss — resolved decisions, risks, open questions"
+    - type: assumptions
+      path: docs/design/phases/{{PHASE}}/assumptions.md
+      description: "Structured assumptions surfaced by phase_assumptions_analyzer, with evidence"
+    - type: decisions
+      path: docs/DECISIONS.md
+      description: "Durable decision ledger (Tier 0.5) — settled decisions that constrain scope/waves"
     - type: prev_manifest
       path: agent_state/phases/{{PHASE-1}}/manifest.json
     - type: prev_lessons
@@ -58,6 +67,12 @@ Reads BRD requirements and IMPLEMENTATION_GUIDELINES component inventory to defi
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what is already built (artifacts, api_routes, known_issues)
 4. `agent_state/phases/{{PHASE-1}}/lessons.md` — (if exists) lessons from previous phase: patterns that worked, issues to avoid, recommendations for this phase
 5. `agent_state/patterns.md` — (if exists) accumulated cross-phase patterns. Apply "Patterns That Worked" proactively. Note "Patterns to Avoid" in phase_context.md warnings.
+6. `docs/design/phases/{{PHASE}}/DISCUSSION.md` + `assumptions.md` — (if `/discuss` ran) the resolved
+   decisions, risks, and validated/invalidated assumptions for this phase. **These are binding
+   inputs, not background reading:** a resolved decision constrains scope and wave structure; an open
+   question must appear in PHASE_PLAN.md "Open Items"; a HIGH-risk assumption must be reflected in the
+   exit criteria or flagged. Do not silently re-decide something `/discuss` already settled.
+7. `docs/DECISIONS.md` — settled Tier 0.5 decisions. Respect active decisions when scoping.
 
 ## Output 1: `docs/design/phases/N/PHASE_PLAN.md`
 

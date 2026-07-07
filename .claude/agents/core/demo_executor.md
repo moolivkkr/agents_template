@@ -49,3 +49,10 @@ Demo environment ready — Phase N
 ```
 
 On failure: print exact error and recovery steps.
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Every service health check ACTUALLY returned healthy (real curl/probe), not assumed.
+- [ ] Test data was actually seeded and the reported record count is real.
+- [ ] The demo URL responds; credentials work.
+- [ ] If anything failed, I distinguished a flaky/transient failure from a real one before declaring
+      the environment ready — and never reported "ready" over a dead service.

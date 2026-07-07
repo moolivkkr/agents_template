@@ -54,3 +54,11 @@ For each exit criterion in PHASE_PLAN.md:
 PASS — all exit criteria met
 FAIL — N criteria not met (list)
 ```
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to the frontmatter output path with the template above.
+- [ ] Every exit criterion maps to a BRD requirement AND cites concrete evidence (not "looks fine").
+- [ ] Cross-phase data-flow was actually exercised end-to-end — a `Total: 0`/no-scenarios result is a
+      FAIL to investigate, never a silent PASS.
+- [ ] Every failing criterion is listed with what broke and where.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.

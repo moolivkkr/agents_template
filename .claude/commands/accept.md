@@ -12,6 +12,10 @@ arguments:
     required: false
     default: false
     description: "Force re-seed even if seed data exists from per-phase runs"
+  - name: force_accept
+    required: false
+    default: false
+    description: "Proceed past a failing cross-phase regression with a logged NOT-READY waiver (sets FORCE_ACCEPT=true). Never produces a READY verdict — it records an explicit override. Use only with a documented reason."
 ---
 
 # /accept — Global Acceptance Testing
@@ -230,10 +234,21 @@ echo "  E2E:         $([ $E2E_EXIT -eq 0 ] && echo 'PASS' || echo 'FAIL')"
 
 if [ $UNIT_EXIT -ne 0 ] || [ $INTEG_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ]; then
   echo ""
-  echo "⛔ REGRESSION FAILURES DETECTED — fix before proceeding to acceptance testing"
+  echo "⛔ REGRESSION FAILURES DETECTED at the FINAL acceptance gate."
   echo "   Acceptance tests run against a product that passes all lower tiers."
-  echo "   Running acceptance on a broken build wastes time and produces unreliable results."
-  # Do NOT block — warn and continue, but record in report
+  # ⛔ /accept is the capstone gate before release — a red regression here MUST NOT ship.
+  # Cap release readiness at NOT READY and do not emit a "READY" acceptance verdict.
+  echo "   Release readiness → NOT READY (regression must be green to release)."
+  mkdir -p agent_state/accept
+  echo "{\"release_readiness\":\"NOT READY\",\"reason\":\"cross-phase regression failing\",\"unit\":$UNIT_EXIT,\"integration\":$INTEG_EXIT,\"e2e\":$E2E_EXIT}" \
+    > agent_state/accept/release-readiness.json
+  # Escalation path: fix the regression, or the human explicitly overrides with a documented waiver.
+  # Only an explicit --force-accept (with a logged reason) may proceed past this — never a silent continue.
+  if [ "${FORCE_ACCEPT:-false}" != "true" ]; then
+    echo "   Blocking acceptance. Re-run after the regression is green, or pass --force-accept with a reason."
+    exit 1
+  fi
+  echo "   ⚠ --force-accept set — proceeding with NOT READY recorded. This is a logged waiver, not a pass."
 fi
 ```
 

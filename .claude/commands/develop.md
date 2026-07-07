@@ -128,10 +128,14 @@ PARENT SESSION executes this sequence (not delegated):
    Verify: agent_state/phases/${PHASE}/reports/unit_tests.md exists
    Verify: agent_state/phases/${PHASE}/reports/e2e_results.md exists
 
-4. Spawn Agent(s) → Wave 4: REVIEW + ACCEPTANCE → wait for completion
-   Verify: agent_state/phases/${PHASE}/reports/code_quality_review.md exists
-   Verify: agent_state/phases/${PHASE}/reports/acceptance_report.md exists
-   ⛔ DO NOT PROCEED WITHOUT THESE FILES
+4. Spawn Agent(s) → Wave 4: REVIEW + RECONCILE + ACCEPTANCE → wait for completion
+   Spawn SEPARATE named agents (never one bundled "code quality" agent):
+     code_reviewer_I, code_reviewer_II, security_reviewer, dependency_scanner,
+     code_quality_verifier, tenant_isolation_verifier (if multi-tenant),
+     spec_impl_reconciler, spec_test_reconciler, acceptance_test_agent
+   Verify: reports/{code_review_I,code_review_II,security_review,dependency_scan,quality_gate,
+           specs_vs_impl,spec_test_coverage,acceptance_report}.md all exist
+   ⛔ DO NOT PROCEED WITHOUT THESE FILES — a missing one means an agent was dropped
 
 5. PARENT reads all Wave 3+4 reports → builds collective feedback → Wave 5: ITERATE
    Verify: agent_state/phases/${PHASE}/reports/collective_feedback.md exists
@@ -150,11 +154,53 @@ REQUIRED_REPORTS=(
   "agent_state/phases/${PHASE}/reports/unit_tests.md"
   "agent_state/phases/${PHASE}/reports/integration_tests.md"
   "agent_state/phases/${PHASE}/reports/e2e_results.md"
-  "agent_state/phases/${PHASE}/reports/code_quality_review.md"
+  # Review dimensions — each a SEPARATE named agent (never bundled). Previously only a single
+  # code_quality_review.md was required, which let security review + both reconcilers be skipped.
+  "agent_state/phases/${PHASE}/reports/code_review_I.md"
+  "agent_state/phases/${PHASE}/reports/code_review_II.md"
+  "agent_state/phases/${PHASE}/reports/security_review.md"
+  "agent_state/phases/${PHASE}/reports/dependency_scan.md"
+  "agent_state/phases/${PHASE}/reports/quality_gate.md"
+  # Reconciliation — spec↔impl and spec↔test. BLOCKING findings must be 0 to gate.
+  "agent_state/phases/${PHASE}/reports/specs_vs_impl.md"
+  "agent_state/phases/${PHASE}/reports/spec_test_coverage.md"
   "agent_state/phases/${PHASE}/reports/acceptance_report.md"
   "agent_state/phases/${PHASE}/reports/collective_feedback.md"
   "agent_state/phases/${PHASE}/manifest.json"
 )
+# tenant_isolation.md is required too, UNLESS the project is single-tenant (roster marks it
+# not_applicable). Add it conditionally:
+if grep -q '"tenant_isolation_verifier"[^}]*"status": *"required"' \
+     "agent_state/phases/${PHASE}/roster.json" 2>/dev/null; then
+  REQUIRED_REPORTS+=("agent_state/phases/${PHASE}/reports/tenant_isolation.md")
+fi
+
+# ⛔ AGENT-ROSTER COMPLETENESS — the execution guarantee (see develop-orchestrator Wave 0b/6).
+# A missing report catches a dropped agent only if we remembered to list the report. The roster
+# check is the backstop: it proves every REQUIRED agent has a "completed" entry in execution.jsonl.
+ROSTER="agent_state/phases/${PHASE}/roster.json"
+EXEC="agent_state/phases/${PHASE}/execution.jsonl"
+if [ -f "$ROSTER" ]; then
+  python3 - "$ROSTER" "$EXEC" << 'PY' || exit 1
+import json, sys, os
+roster = json.load(open(sys.argv[1]))
+completed = set()
+if os.path.exists(sys.argv[2]):
+    for line in open(sys.argv[2]):
+        line = line.strip()
+        if not line: continue
+        try:
+            e = json.loads(line)
+            if e.get("status") == "completed": completed.add(e.get("agent"))
+        except Exception: pass
+missing = [a for a, m in roster.get("agents", {}).items()
+           if m.get("status") == "required" and a not in completed]
+if missing:
+    print("⛔ GATE BLOCKED — required agents never completed:", ", ".join(missing))
+    sys.exit(1)
+print("✓ Roster complete — every required agent ran.")
+PY
+fi
 
 # Content validation — file existence is necessary but NOT sufficient.
 # A report that says "0 tests" or "SKIPPED" must not pass the gate.
@@ -221,8 +267,27 @@ echo "✅ Full regression: all tiers pass (unit + integration + e2e)"
 for f in "${REQUIRED_REPORTS[@]}"; do
   if [ ! -f "$f" ]; then
     echo "⛔ GATE BLOCKED: Missing required report: $f"
-    echo "   Wave 4 (review + acceptance) was likely skipped."
+    echo "   Wave 4 (review + reconcile + acceptance) was likely skipped."
     echo "   Re-run the missing wave before gating."
+    exit 1
+  fi
+done
+
+# Review/reconcile reports must be real, not stubs.
+for REPORT in code_review_I.md code_review_II.md security_review.md dependency_scan.md \
+              quality_gate.md specs_vs_impl.md spec_test_coverage.md; do
+  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+  if [ -f "$FILE" ] && [ "$(wc -l < "$FILE")" -lt 3 ]; then
+    echo "⛔ GATE BLOCKED: ${REPORT} is a stub — its agent did not actually run"
+    exit 1
+  fi
+done
+
+# Reconciliation must have zero unresolved BLOCKING findings.
+for REPORT in specs_vs_impl.md spec_test_coverage.md; do
+  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+  if [ -f "$FILE" ] && grep -qiP '\bBLOCKING\b' "$FILE"; then
+    echo "⛔ GATE BLOCKED: ${REPORT} has BLOCKING reconciliation findings — resolve or carry forward with a documented reason"
     exit 1
   fi
 done
@@ -1927,6 +1992,69 @@ Migration safety              agent_state/phases/${PHASE}/reports/migration_safe
 ```
 
 **E2E gate is ALWAYS active.** Every phase must have E2E tests — generated during Step 3c.1 if they don't exist. Visual validation gate is active only when `*.wireframe.html` files exist for this phase.
+
+### Gate Item Enforcement (EXECUTABLE — do not eyeball the table)
+
+**⛔ The table above states pass conditions; this block ENFORCES them.** The per-phase gate was
+historically honor-system — the parent read a report and judged "looks like it passed." A subagent
+report claiming "42 passing, 0 failed" was accepted without re-derivation. Parse the numbers and
+block on them (mirrors the counting used in `/accept` and `gate-verification.md` Layer 1):
+
+```bash
+GATE_BLOCKED=false
+REPORTS_DIR="agent_state/phases/${PHASE}/reports"
+
+# 1. Test tiers — parse totals; block on FAILED>0 or total==0.
+python3 - "$REPORTS_DIR" << 'PY' || GATE_BLOCKED=true
+import re, sys, os, glob
+d = sys.argv[1]
+tiers = {"unit_tests.md":"unit","integration_tests.md":"integration",
+         "e2e_results.md":"e2e","acceptance_report.md":"acceptance"}
+bad = False
+for fn, name in tiers.items():
+    p = os.path.join(d, fn)
+    if not os.path.exists(p):
+        print(f"⛔ {name}: report missing"); bad = True; continue
+    txt = open(p, encoding="utf-8", errors="ignore").read().lower()
+    failed = sum(int(m) for m in re.findall(r'failed[:\s]+(\d+)', txt))
+    totals = [int(m) for m in re.findall(r'total[:\s]+(\d+)', txt)]
+    total = max(totals) if totals else None
+    if failed > 0:
+        print(f"⛔ {name}: {failed} FAILED test(s) — gate blocked"); bad = True
+    if total == 0:
+        print(f"⛔ {name}: total=0 — tier was skipped"); bad = True
+if not bad:
+    print("✓ All test tiers: 0 failed, non-zero totals")
+sys.exit(1 if bad else 0)
+PY
+
+# 2. TC-* coverage — HIGH+MEDIUM must be 100% (from spec_test_coverage.md / test_case_inventory).
+COV=$(ls "$REPORTS_DIR/spec_test_coverage.md" agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md 2>/dev/null | head -1)
+if [ -n "$COV" ] && grep -qiP 'coverage' "$COV"; then
+  if grep -qiP '(HIGH|MEDIUM)[^\n]*(UNCOVERED|MISSING|0%|not covered)' "$COV"; then
+    echo "⛔ GATE BLOCKED: HIGH/MEDIUM TC-* IDs are uncovered ($COV)"; GATE_BLOCKED=true
+  fi
+fi
+
+# 3. Review dimensions — block on any BLOCKING / HIGH / CRITICAL that isn't marked resolved.
+for R in code_review_I code_review_II security_review; do
+  F="$REPORTS_DIR/${R}.md"
+  [ -f "$F" ] || continue
+  if grep -qiP '\b(BLOCKING|CRITICAL)\b' "$F" && ! grep -qiP '(BLOCKING|CRITICAL)[^\n]*(resolved|fixed|✓)' "$F"; then
+    echo "⛔ GATE BLOCKED: ${R} has unresolved BLOCKING/CRITICAL findings"; GATE_BLOCKED=true
+  fi
+done
+
+if [ "$GATE_BLOCKED" = true ]; then
+  echo "⛔ Phase gate NOT passed — route the blockers above to the Wave 5 feedback loop."
+  exit 1
+fi
+echo "✅ Gate item enforcement passed — proceeding to write gate.passed"
+```
+
+> **Canonical enforcement lives in `/develop-orchestrator`** (Wave 0b roster + Wave 6 Layers 0–3 +
+> `gate-verification.md`). This block is the equivalent executable check for anyone running
+> `/develop` directly. If the two ever diverge, the orchestrator wins — reconcile back to it.
 
 ### Bug Severity Classification
 

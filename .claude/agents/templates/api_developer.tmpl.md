@@ -53,6 +53,8 @@ Implements the API layer for a given phase. Responsible for route definitions, r
 
 ## Required Reading
 
+0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read FIRST, before any other file.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
+0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — API design section, error handling, auth middleware
 2. `docs/design/phases/{{PHASE}}/specs/` — TRDs defining API endpoints
 3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — request/response shapes, status codes

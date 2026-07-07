@@ -224,6 +224,24 @@ After successful deployment, verify the application actually works beyond the ba
    - Recommend: `/rollback` or targeted fix + redeploy
    - Do NOT auto-rollback (user decides)
    - Write failure details to health report for debugging
+   - **Write a durable status marker so the DEGRADED verdict propagates:**
+     ```bash
+     mkdir -p agent_state/deploy
+     echo "{\"target\":\"${TARGET}\",\"status\":\"DEGRADED\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"failing\":\"<endpoints>\"}" \
+       > agent_state/deploy/last-deploy-status.json
+     ```
+
+### ⛔ Health is a GATE, not just a signal
+
+An unhealthy deploy must not silently be treated as "done." Enforce by target:
+
+- **`--target=staging` or `--target=production`:** an unhealthy deploy is a HARD STOP.
+  `exit 1` after writing the DEGRADED marker and rollback recommendation. Do NOT report the deploy
+  as successful. A degraded prod deploy is an incident, not a warning.
+- **`--target=local`:** surface DEGRADED and write the marker, but you may proceed (local iteration).
+  The marker is what makes it non-silent: `/accept` reads `last-deploy-status.json` and caps release
+  readiness at NOT READY when status is DEGRADED (accept.md Step 0a), and `/status` surfaces it under
+  OPEN ISSUES. So "proceed locally" never becomes "shipped unnoticed."
 
 Output: `agent_state/deploy/health-report.md`
 

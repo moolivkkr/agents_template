@@ -39,6 +39,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any tests:
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/core/testing-principles.md` — test philosophy, coverage strategy, anti-patterns
 - `.claude/skills/core/code-quality.md` — naming, readability, self-review
 - `.claude/skills/core/verification-protocol.md` — assignment-delivery checklist
@@ -54,6 +55,8 @@ Writes comprehensive unit tests for all business logic using **{{TEST_FRAMEWORK}
 
 ## Required Reading
 
+0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read FIRST, before any other file.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
+0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — test file naming, mock patterns, assertion libraries
 2. `docs/design/phases/{{PHASE}}/specs/` — TRDs defining expected behavior to test
 3. Source files written by `backend_developer` and `api_developer` this phase
@@ -63,19 +66,11 @@ Writes comprehensive unit tests for all business logic using **{{TEST_FRAMEWORK}
 
 ## WORKFLOW
 
-### Phase 0: Extract TC-* ID Inventory (MANDATORY)
-1. Read all spec files in `docs/design/phases/{{PHASE}}/specs/` including any `TEST-SUITE.md`
-2. Extract all TC-* IDs assigned to `tier: unit` from the Test Case Inventory tables
-3. Build the complete list of TC-* IDs this agent is responsible for
-4. Log: `"Unit test agent responsible for N TC-* IDs: TC-XXX-001 to TC-XXX-NNN"`
-5. **This list is the contract — every ID must have a corresponding test when this agent completes**
-
 ### Phase 1: Identify Test Targets
 1. Read all source files implemented in the current phase
 2. Identify every public function in services, domain, and handlers
 3. Categorize: business logic (must test), infrastructure glue (skip), trivial getters (skip)
-4. Cross-reference against TC-* ID inventory — every TC-* ID must map to a test target
-5. Create test plan in `agent_state/phases/{{PHASE}}/reports/unit_tests.md`
+4. Create test plan in `agent_state/phases/{{PHASE}}/reports/unit_tests.md`
 
 ### Phase 2: Generate Test Cases
 For each testable function, design cases covering:
@@ -91,26 +86,14 @@ For each testable function, design cases covering:
 3. Create test fixtures/factories for building test entities
 4. Write one test file per service/component: `<service_name>_test.{{EXT}}`
 5. Follow AAA pattern: Arrange → Act → Assert (clearly separated)
-6. **Annotate every test with its TC-* ID** — in a comment above the test function or in the test case `name`/`tcID` field
-7. Process TC-* IDs **in document order** — do not skip ahead or cherry-pick
 
 ### Phase 4: Verify Coverage
 1. Run test suite with coverage enabled
 2. If coverage < 80%: identify uncovered branches and add targeted tests
 3. Maximum 3 coverage improvement iterations before escalation
 
-### Phase 5: TC-* ID Completion Self-Check (MANDATORY)
-Before marking the task complete, run the TC-* ID self-check:
-1. Count TC-* IDs this agent was responsible for (from Phase 0 inventory)
-2. Count TC-* IDs annotated in test files this agent wrote
-3. Compare: `RESPONSIBLE_COUNT` vs `IMPLEMENTED_COUNT`
-4. If `IMPLEMENTED_COUNT < RESPONSIBLE_COUNT`: **DO NOT mark complete** — continue writing tests
-5. List any missing TC-* IDs in the test report
-6. Log: `"TC-* coverage: N/M (X%) — [COMPLETE|INCOMPLETE: N remaining]"`
-
-### Phase 6: Self-Review
+### Phase 5: Self-Review
 Before marking the task complete, verify:
-- [ ] **All responsible TC-* IDs have corresponding annotated tests**
 - [ ] Every public function has at least one test
 - [ ] Happy path, error path, and edge case covered for each function
 - [ ] All tests use table-driven patterns (where applicable)
@@ -247,7 +230,6 @@ If coverage < 80%:
 
 ## QUALITY GATES
 
-- [ ] **TC-* ID coverage: 100% of responsible IDs annotated in tests**
 - [ ] 80% line coverage achieved PER PACKAGE (not just overall average)
 - [ ] All public functions have at least one test
 - [ ] All error paths tested (not just happy path)

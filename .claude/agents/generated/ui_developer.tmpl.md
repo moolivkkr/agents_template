@@ -47,6 +47,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any code:
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/ui/professional-ui-standards.md` — design tokens, 4-states rule, anti-patterns
 - `.claude/skills/ui/api-integration-patterns.md` — HTTP client, TanStack Query hooks
 - `.claude/skills/ui/error-handling-patterns.md` — error type to UI pattern mapping
@@ -70,7 +71,9 @@ Implements professional-quality UI screens from wireframe specs using **{{UI_FRA
 
 ## Required Reading
 
-1. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — **READ FIRST** — exact response shapes
+0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read this FIRST of all.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
+0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
+1. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — **the API contract to read before writing any component** — exact response shapes
 2. `docs/design/phases/{{PHASE}}/specs/` — wireframes, API bindings, interaction flows
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — UI stack, component library, state management decisions
 4. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing screens and routes

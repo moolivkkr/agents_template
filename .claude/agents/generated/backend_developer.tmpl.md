@@ -33,6 +33,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any code:
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/core/code-quality.md` — function size, naming, KISS, self-review
 - `.claude/skills/core/software-architecture.md` — SOLID, patterns, layer boundaries
 - `.claude/skills/core/resiliency-patterns.md` — circuit breakers, retries, timeouts
@@ -54,6 +55,8 @@ Implements backend services for a given phase. Reads the phase TRD and data cont
 
 ## Required Reading
 
+0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read FIRST, before any other file.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
+0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, coding standards, architecture patterns
 2. `docs/design/phases/{{PHASE}}/specs/` — TRDs defining what to build
 3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — API contracts, request/response shapes

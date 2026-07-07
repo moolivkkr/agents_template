@@ -52,7 +52,7 @@ components depend on, it is PLATFORM. Schema/migration changes are never below S
 | **TRIVIAL** | None (skip TRD). Record intent as a one-line note in the phase manifest. | Skip full waves. Scoped **implement + scoped test** only (touch-only tests + lint). | Reviewer runs style/security on the diff only. |
 | **SMALL** | Light spec — a short bullet TRD, no wireframe unless UI. TC-* enumerated only for the changed surface. | **Waves 2, 3, 6** (implement → test → gate). Skip Wave 1 audit and Wave 4 acceptance unless a persona-facing FR is touched. | Change-impact test selection (`change-impact-analysis.md`). |
 | **STANDARD** | Full spec per `/plan` (TRD + UI spec + data contracts + full TC-* matrices). | **Full Waves 1-6.** | Normal review + tenant-isolation + full per-phase regression. |
-| **PLATFORM** | Full spec **plus an ADR** (architecture decision record) in `docs/design/adr/`. Component inventory updated. | Full Waves 1-6 **plus a pre-Wave-1 architecture wave** (software-architecture.md review) and a post-gate `/map` refresh. | Full regression (no change-impact shortcut), security review mandatory, ADR reviewed by architecture reviewer. |
+| **PLATFORM** | Full spec **plus an ADR** (architecture decision record) in `docs/adr/`. Component inventory updated. | Full Waves 1-6 **plus a pre-Wave-1 architecture wave** (software-architecture.md review) and a post-gate `/map` refresh. | Full regression (no change-impact shortcut), security review mandatory, ADR reviewed by architecture reviewer. |
 
 **Never downgrade below the gate.** TRIVIAL is the only class that skips the wave gate, and it is
 restricted to **zero-FR, zero-shared-layer** changes (typos, copy, doc, config-value tweaks). If a

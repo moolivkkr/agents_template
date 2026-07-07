@@ -63,3 +63,14 @@ Total: X | Passed: X | Failed: X
 Overall: X%
 By component: [if available]
 ```
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] I actually EXECUTED the test commands (from IMPLEMENTATION_GUIDELINES) and captured real output
+      — I did not summarize expected results.
+- [ ] Reported Total/Passed/Failed are the REAL parsed numbers. **A `Total: 0` is a RED FLAG** — it
+      means no tests ran (wrong command, build failure, empty suite); investigate and report it as a
+      failure, never as "PASS".
+- [ ] Every failure lists the test name + error + file:line.
+- [ ] On fix-triggered re-runs, I re-ran ALL affected tiers per the change-impact scope, not just the
+      one that failed (CLAUDE.md "fixes trigger re-run of ALL tiers").
+- [ ] Logged a completion line to `agent_state/phases/${PHASE}/execution.jsonl`.

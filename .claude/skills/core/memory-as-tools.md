@@ -26,15 +26,25 @@ a Tier 1/Tier 2 file uses these instead.
 Index-backed lookup that returns **entry IDs**, not full text. Backed by the `Index by Category` /
 `Index by Tag` sections that `structured-lessons.md` already maintains.
 
+**Source files.** `agent_state/patterns.md` and `agent_state/lessons.md` are the repo-root indices.
+Lessons are authored per-phase (`agent_state/phases/N/lessons.md`) and aggregated into the root
+`lessons.md` at each phase gate (develop-orchestrator Post-Gate). Recipes below read the root index
+first and fall back to the per-phase files, so retrieval works even if aggregation hasn't run yet.
+
 ```bash
+# Lesson/pattern sources: root indices + per-phase lesson files (fallback).
+_mem_sources() {
+  ls agent_state/patterns.md agent_state/lessons.md agent_state/phases/*/lessons.md 2>/dev/null
+}
+
 # 1. Resolve IDs from the index (cheap — index is small)
 memory_search() {
   local q="$1"
   # Try the category/tag index first (exact section lines)
-  grep -iE "^- (${q}):" agent_state/patterns.md agent_state/lessons.md 2>/dev/null
+  grep -iE "^- (${q}):" $(_mem_sources) 2>/dev/null
   # Fall back to a keyword scan over entry summaries only
   grep -inE "^\s*-\s*\*\*(Summary|Pattern|Tags)\:\*\*.*${q}" \
-       agent_state/patterns.md agent_state/lessons.md 2>/dev/null
+       $(_mem_sources) 2>/dev/null
 }
 ```
 
@@ -53,7 +63,7 @@ memory_get() {
     $0 ~ "^"id"([^0-9]|$)" {p=1}
     p && /^### / && $0 !~ "^"id"([^0-9]|$)" && NR>1 {exit}
     p {print}
-  ' agent_state/lessons.md agent_state/patterns.md 2>/dev/null
+  ' agent_state/lessons.md agent_state/patterns.md agent_state/phases/*/lessons.md 2>/dev/null
 }
 ```
 

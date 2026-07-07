@@ -1,31 +1,51 @@
 #!/usr/bin/env bash
-# SessionStart hook — surfaces Tier 0 ground-truth facts into every new session.
-# Part of the Shared Context Protocol (.claude/skills/core/shared-context-protocol.md).
-# Safe by design: no-ops silently if the facts file is absent or has no active facts.
+# SessionStart hook — surfaces Tier 0 ground-truth facts AND Tier 0.5 active decisions into every
+# new session. Part of the Shared Context Protocol (.claude/skills/core/shared-context-protocol.md).
+# Safe by design: no-ops silently if the source files are absent or have no active entries.
 
 set -euo pipefail
 
 FACTS_FILE="docs/PROJECT_FACTS.md"
+DECISIONS_FILE="docs/DECISIONS.md"
 
-# Nothing to inject if the project has no facts file yet.
-[ -f "$FACTS_FILE" ] || exit 0
+# Extract ACTIVE fact headings (a fact heading followed by "status: active").
+active_facts=""
+if [ -f "$FACTS_FILE" ]; then
+  active_facts=$(awk '
+    /^### F-/ { title=$0; capture=1 }
+    capture && /^- status: active/ { print title; capture=0 }
+  ' "$FACTS_FILE")
+fi
 
-# Extract only ACTIVE fact blocks (a fact heading followed within a few lines by
-# "status: active"). We print the heading line + the one-line summary of each active fact.
-active=$(awk '
-  /^### F-/ { title=$0; buf=""; capture=1 }
-  capture && /^- status: active/ { print title }
-' "$FACTS_FILE")
+# Extract ACTIVE decision headings (a decision heading followed by "status: active").
+active_decisions=""
+if [ -f "$DECISIONS_FILE" ]; then
+  active_decisions=$(awk '
+    /^### D-/ { title=$0; capture=1 }
+    capture && /^- status: active/ { print title; capture=0 }
+  ' "$DECISIONS_FILE")
+fi
 
-[ -n "$active" ] || exit 0
+# Nothing to inject if both are empty.
+[ -n "$active_facts" ] || [ -n "$active_decisions" ] || exit 0
 
 # Emit as additionalContext for the session (stdout is injected by Claude Code SessionStart).
-cat <<EOF
-GROUND TRUTH (docs/PROJECT_FACTS.md) — active facts every action must honor. These override
-any conflicting assumption. Read the file for full details; if a task touches anything RETIRED
-or superseded here, stop and flag it.
+echo "GROUND TRUTH — active facts + settled decisions every action must honor. These override any"
+echo "conflicting assumption. Read the source files for detail; if a task touches anything RETIRED,"
+echo "superseded, or reversed here, stop and flag it."
+echo ""
 
-$active
+if [ -n "$active_facts" ]; then
+  echo "## Facts (docs/PROJECT_FACTS.md) — Tier 0, immutable ground truth"
+  echo "$active_facts"
+  echo ""
+fi
 
-(Add or change facts with /remember — they propagate to every session and subagent.)
-EOF
+if [ -n "$active_decisions" ]; then
+  echo "## Decisions (docs/DECISIONS.md) — Tier 0.5, settled calls with rationale"
+  echo "$active_decisions"
+  echo ""
+fi
+
+echo "(Add/change facts with /remember; decisions are appended by ADR/debate/reconcile agents or"
+echo " directly. Both propagate to every session and subagent.)"

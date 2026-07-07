@@ -72,10 +72,18 @@ Assign each requirement a unique ID and type:
 
 | Type | ID Prefix | Description |
 |------|-----------|-------------|
-| Functional | FR-NNN | What the system must do |
-| Non-Functional | NFR-NNN | How well it must do it |
+| Functional | FR-NNN | What the system must do (e.g. FR-001) |
+| Non-Functional | NFR-{CAT}-NNN | How well it must do it — **subcategorized**: NFR-PERF-*, NFR-SEC-*, NFR-OBS-*, NFR-MAINT-*, NFR-SCALE-*, NFR-AVAIL-* (e.g. NFR-PERF-001) |
 | Business Objective | OBJ-NNN | Why it must be done |
 | Constraint | CON-NNN | Boundaries and limits |
+
+> **⛔ NFR IDs MUST use the subcategory form `NFR-{CAT}-NNN`, not flat `NFR-NNN`.** Downstream
+> agents match on it: `spec_verifier` checks that performance targets reference `NFR-PERF-*`,
+> `project_planner`/`plan_goal_verifier` group NFRs by category, and gate checks look for
+> `NFR-SEC-*`. A flat `NFR-001` silently matches none of these and the requirement is dropped from
+> coverage. Use `NFR-PERF-*` for latency/throughput, `NFR-SEC-*` for security, `NFR-OBS-*` for
+> observability, `NFR-AVAIL-*` for availability, `NFR-SCALE-*` for scalability, `NFR-MAINT-*` for
+> maintainability.
 
 ### Phase 3: Gap Analysis
 Check for coverage across all critical dimensions:

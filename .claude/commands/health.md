@@ -376,6 +376,81 @@ if [ -d "agent_state/debates" ]; then
 fi
 ```
 
+### 5.5e. Ground-Truth Reading Invariant (agent definitions)
+
+Every agent definition MUST reference `docs/PROJECT_FACTS.md` (ground-truth item 0) so spawned
+subagents load Tier 0 before acting. A regression here silently blinds agents to retired/renamed
+components.
+
+```bash
+MISSING_GT=0
+for f in $(find .claude/agents -name '*.md' -not -name 'INVENTORY*' -not -name 'AGENT_SCHEMA*'); do
+  if ! grep -q "PROJECT_FACTS.md" "$f"; then
+    echo "CRITICAL: agent def missing ground-truth reading: $f"
+    MISSING_GT=$((MISSING_GT+1))
+  fi
+done
+[ "$MISSING_GT" -eq 0 ] && echo "✓ All agent definitions reference PROJECT_FACTS.md"
+# Also verify generated/ copies aren't stale vs templates/ (they ship the ground-truth item):
+for t in .claude/agents/templates/*.tmpl.md; do
+  g=".claude/agents/generated/$(basename "$t")"
+  if [ -f "$g" ] && ! diff -q "$t" "$g" >/dev/null 2>&1; then
+    echo "WARNING: generated/$(basename "$g") differs from templates/ — re-sync (/init regenerates it)"
+  fi
+done
+```
+
+### 5.5f. Tier 0 / Tier 0.5 Invariants (facts + decisions)
+
+**Deterministic supersession check** — the framework claims no two `active` facts share a
+`(subject, relation)` key. Verify it (this is the mechanized backstop for the "deterministic"
+claim in the shared-context protocol):
+
+```bash
+FACTS="docs/PROJECT_FACTS.md"
+if [ -f "$FACTS" ]; then
+  python3 - "$FACTS" << 'PY'
+import re, sys
+txt = open(sys.argv[1]).read()
+# Split into fact blocks by "### F-" headings.
+blocks = re.split(r'(?=^### F-)', txt, flags=re.M)
+seen = {}
+dupes = []
+for b in blocks:
+    if not b.startswith("### F-"): continue
+    if not re.search(r'^- status:\s*active', b, re.M): continue
+    subj = (re.search(r'^- subject:\s*(.+)$', b, re.M) or [None,None])[1]
+    rel  = (re.search(r'^- relation:\s*(.+)$', b, re.M) or [None,None])[1]
+    if subj and rel:
+        key = (subj.strip(), rel.strip())
+        if key in seen: dupes.append(key)
+        seen[key] = True
+if dupes:
+    print("CRITICAL: two active facts share (subject,relation):", dupes,
+          "— supersede one via /remember (deterministic invariant violated)")
+else:
+    print("✓ Tier 0 supersession invariant holds (no duplicate active subject+relation)")
+PY
+fi
+```
+
+**Decision-ledger aggregation check** — every debate verdict / ADR should have a `D-NNN` entry in
+`docs/DECISIONS.md`; a verdict with no ledger entry means the promotion step was skipped and the
+decision won't reach new sessions.
+
+```bash
+DEC="docs/DECISIONS.md"
+if [ -d "agent_state/debates" ] && [ -f "$DEC" ]; then
+  for v in agent_state/debates/*-verdict.json; do
+    [ -f "$v" ] || continue
+    base=$(basename "$v" -verdict.json)
+    if ! grep -qi "$base" "$DEC"; then
+      echo "WARNING: debate verdict '$base' has no D-NNN entry in docs/DECISIONS.md — not promoted to durable memory"
+    fi
+  done
+fi
+```
+
 ### Memory Hygiene `--fix` Repairs
 
 When `--fix` is set, apply these safe memory cleanups:

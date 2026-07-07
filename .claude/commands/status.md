@@ -59,10 +59,18 @@ CURRENT PHASE: <N>
   Status: <In progress / Planned / Not started>
   <If in progress: last step completed>
 
-OPEN ISSUES
+OPEN ISSUES  (full pending set — not just carried_forward)
 ━━━━━━━━━━━
-  <issues from carried_forward[] across all manifests>
+  <carried_forward[] across all manifests>            — deferred work
+  <known_issues[] across all manifests>               — known defects (with severity)
+  <test_case_inventory.deferred_ids[]>                — deferred TC-* IDs
+  <FORCED gates: any gate.forced marker + reason>     — accepted-with-failures
+  <agent_state/debates/unresolved.json>               — auto-resolved decisions needing review
+  <agent_state/accept/unresolved_gaps.md>             — global acceptance gaps
   (none if clean)
+
+  ▶ For the consolidated ledger of implemented / decided / pending, see docs/WORKLOG.md
+    (regenerate with /worklog). Settled decisions with rationale: docs/DECISIONS.md.
 
 BRD COVERAGE
 ━━━━━━━━━━━━
