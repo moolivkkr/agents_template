@@ -220,3 +220,35 @@ Write `agent_state/impl_guidelines/decisions.yaml` with all answers and their so
 - [ ] No technology is described only as "TBD" — deferred items in Open Decisions table with owner
 - [ ] Guidelines are consistent with BRD constraints (no conflicts)
 - [ ] `docs/IMPLEMENTATION_GUIDELINES.md` passes human readability check: a new engineer could use it as an onboarding guide
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `docs/IMPLEMENTATION_GUIDELINES.md` (not a draft in `requirements/`), plus `agent_state/impl_guidelines/decisions.yaml` recording every decision and its source (user-provided vs. defaulted).
+- [ ] EVERY category in the decision table names a concrete, actionable technology — no "TBD", no "SQL database"; unresolved items are in the Open Decisions table with an owner, not silently omitted.
+- [ ] Local dev setup has at least one executable command sequence, and the guidelines contain no conflicts with BRD constraints.
+- [ ] In `--auto` mode, each auto-decided choice followed the research ladder and is logged to `agent_state/autonomous/decisions.md` with the level it was decided at.
+- [ ] If a decision genuinely could not be made (missing input, unresolvable conflict), I recorded it as an explicit Open Decision with best-guess + flag — I do NOT emit a guidelines doc that reads confirmed while a blocker is unresolved.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When finalizing guidelines surfaces something a FUTURE phase should know — a stack choice that later constrained implementation, a defaulted decision that proved risky, a recurring gap in draft guidelines — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** guidelines
+- **Tags:** tech-stack, <component>, <decision>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/IMPLEMENTATION_GUIDELINES.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"impl_guidelines_agent","phase":{{PHASE}},"status":"completed","report":"docs/IMPLEMENTATION_GUIDELINES.md","ts":"<iso8601>"}
+```

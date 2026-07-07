@@ -71,6 +71,7 @@ Designs the data persistence layer for **{{PROJECT_NAME}}**: schema, indexes, qu
 ## Required Reading Sequence
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — extract every entity, attribute, and relationship
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — naming conventions, ORM patterns, environment config
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing schema; only add/evolve, never drop without migration
@@ -111,4 +112,36 @@ On completion, write `agent_state/phases/{{PHASE}}/database_agent/manifest.json`
   "indexes": ["<list of index names>"],
   "design_doc": "docs/design/database.md"
 }
+```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `docs/design/database.md` (plus `docs/design/database_diagram.md` and the design report/manifest under `agent_state/phases/{{PHASE}}/`).
+- [ ] EVERY entity from the BRD/specs is modeled with fields, types, constraints, and relationships; every documented access pattern has a supporting index (no missing index, no over-indexing).
+- [ ] Uniqueness/non-null/referential constraints are defined, audit fields (`created_at`, `updated_at`) exist on mutable entities, and connection-pool settings are specified for {{DB_TECH}}.
+- [ ] The design only ADDS/EVOLVES the existing schema from the previous manifest — it never silently drops a table/column without a migration path — and the migration sequence for `migration_agent` is ordered and complete.
+- [ ] If required inputs (entities/specs) were missing such that the schema cannot be fully designed, I say so explicitly and mark the gap rather than emitting an empty-but-present design that reads as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When schema design surfaces something a FUTURE phase should know — an indexing pattern that fit {{DB_TECH}} well, an N+1 risk in a common access pattern, a normalization/embedding tradeoff that recurred — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** database
+- **Tags:** {{DB_TECH}}, {{ORM}}, schema
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/design/database.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"database_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"docs/design/database.md","ts":"<iso8601>"}
 ```

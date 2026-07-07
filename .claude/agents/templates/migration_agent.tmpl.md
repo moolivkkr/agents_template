@@ -77,6 +77,7 @@ Creates and manages versioned database migrations for **{{PROJECT_NAME}}** using
 ## Required Reading Sequence
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/design/database.md` — the authoritative schema to implement
 2. `agent_state/phases/{{PHASE-1}}/manifest.json` — find `migrations_applied` list; never re-create those
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — {{MIGRATION_TOOL}} specific conventions, env var names for DB connection
@@ -229,4 +230,36 @@ On completion, write `agent_state/phases/{{PHASE}}/migration_agent/manifest.json
     "down_coverage": "100%"
   }
 }
+```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written under the EXACT path `migrations/` (versioned files + `migrations/registry.yaml`), plus the migration + safety reports under `agent_state/phases/{{PHASE}}/reports/`.
+- [ ] EVERY migration has BOTH a non-empty UP and a real DOWN that reverses it; UP statements are idempotent (`IF NOT EXISTS`/`CREATE OR REPLACE`); IDs are sequential with no gaps or reuse.
+- [ ] Migration safety validation ran: destructive ops (DROP/TRUNCATE/DELETE-without-WHERE/type-narrowing) are detected and flagged, irreversible migrations are called out, and the safety report reflects REAL counts.
+- [ ] I never edited an already-applied migration — schema mismatches got a NEW corrective migration — and I never mixed a data backfill into a schema migration.
+- [ ] Destructive operations were NOT applied without the required confirmation/flag; if a needed input (database.md schema) was missing, I say so explicitly rather than emitting empty-but-present migration files.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When migration authoring surfaces something a FUTURE phase should know — a {{MIGRATION_TOOL}} gotcha, a safe pattern for an irreversible change, a rollback hazard that recurred — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** migration
+- **Tags:** {{DB_TECH}}, {{MIGRATION_TOOL}}, schema-evolution
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** migrations/registry.yaml
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"migration_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"migrations/","ts":"<iso8601>"}
 ```

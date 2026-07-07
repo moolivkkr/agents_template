@@ -48,6 +48,7 @@ Runs after spec verification and BRD reconciliation. Catches architectural gaps,
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -273,3 +274,36 @@ The most dangerous plans are the ones where every spec looks perfect in isolatio
 - Performance NFRs are mentioned but no spec defines caching, indexing, or pagination to achieve them
 
 This agent catches those systemic gaps that per-spec verification misses.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `agent_state/phases/{{PHASE}}/plan_check.md` using the output format above.
+- [ ] A verdict (PASS / WARN / BLOCK) is rendered and matches the documented thresholds — I did not soften a BLOCK to WARN to avoid friction.
+- [ ] The goal-backward analysis is complete: every exit criterion, component, integration point, NFR, and E2E workflow is classified with its real status, not a blanket "COVERED".
+- [ ] Every gap names a specific missing artifact and a routed fix (which agent, which spec, what to add) — no vague "needs more work".
+- [ ] I restated the phase goal in one sentence without referencing any spec before analyzing coverage.
+- [ ] If specs or the phase plan were missing/unreadable such that verification could not run, I say so explicitly with the reason instead of emitting a hollow PASS.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When goal-backward verification surfaces something a FUTURE phase should know — a recurring class of systemic gap (e.g., UI workflows needing undefined endpoints), an NFR category the plans keep leaving uncovered — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning
+- **Tags:** goal-backward, spec-gap, <pattern>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/plan_check.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"plan_goal_verifier","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/plan_check.md","ts":"<iso8601>"}
+```

@@ -38,6 +38,7 @@ Researches a single open question or gray area decision identified by the `phase
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -244,3 +245,36 @@ Write to `agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md`:
 - **One question, one report.** Don't scope-creep into adjacent questions. If research surfaces a NEW question, mention it in a "Related Questions" section at the end — don't try to answer it.
 - **Effort estimates are relative.** "3 days for a team familiar with Go" is more useful than "3 days." State the assumption behind the estimate.
 - **Never fabricate sources.** If you can't find evidence for a claim, say so. "No benchmark data found for this specific combination" is acceptable. A fake URL is not.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md` using the output format above.
+- [ ] At least 2 genuine options evaluated (no strawmen — each has ≥2 real pros AND ≥2 real cons); if only one was viable, flagged with `"single_option_research": true`.
+- [ ] Every evidence claim cites a real source (file path or URL) — no fabricated URLs; the comparison table has a brief justification in every scored cell, not bare numbers.
+- [ ] The recommendation is explicit (names the option, states why, acknowledges the runner-up tradeoff) and states a confidence level justified by evidence quality, not preference.
+- [ ] BRD-alignment references real FR-*/NFR-* IDs, and the decision-record JSON is valid and complete.
+- [ ] If evidence was thin, I said so honestly (e.g., "limited benchmark data for this combination") rather than emitting an inflated-confidence recommendation.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (as a parallel sub-agent, this line may be written by or routed through the parent `/discuss` run — keep it so the roster/health grep counts this agent).
+
+## Lessons Write-Back (see agent-common Block 3)
+When research surfaces something a FUTURE phase should know — a technology whose ecosystem is declining, a decision pattern that recurs across questions, a research approach that saved time — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** research
+- **Tags:** decision, tech-choice, <domain>
+- **Type:** pattern_that_worked|issue_encountered|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path). As an internal sub-agent, the parent may write this line on my behalf — the line must still exist so the roster/health grep counts it:
+
+```json
+{"agent":"decision_researcher","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md","ts":"<iso8601>"}
+```

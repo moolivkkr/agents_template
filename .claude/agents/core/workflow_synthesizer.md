@@ -57,6 +57,7 @@ You are the final assembly agent. You read ALL research outputs — documentatio
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -716,3 +717,36 @@ Aggregated from all capabilities, ordered by estimated impact:
 - **Artifact Index must be complete and accurate.** Every output file is listed with its correct relative path. Missing or wrong paths break the navigation experience for consumers of the intelligence.
 - **Flag what is missing, not just what is present.** The most valuable synthesis finding is often "Capability X has no API coverage, no video demos, and only one Grade B source — confidence is LOW." Absences are findings.
 - **Contradictions are escalated, not resolved.** If video intelligence contradicts doc corpus, both versions appear in the synthesis with a FLAG. The synthesizer does not have the authority to determine which is correct — that requires human judgment or version-specific testing.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `docs/product-workflows/{{PRODUCT_SLUG}}/OVERVIEW.md`, plus the dependency-graph, personas, and reference/ artifacts listed in frontmatter.
+- [ ] Every claim in OVERVIEW.md traces to an upstream artifact — no gap-filling with assumptions, no invented personas or prerequisite edges.
+- [ ] The "At a Glance" metrics are REAL counts from upstream data (e.g., "8 of 12 mapped", not "12"); API-coverage percentages are exact, not rounded.
+- [ ] The dependency graph is a validated DAG (no cycles, no orphans, every Layer-5 node reachable from Layer 1); machine-readable YAML files are structurally valid.
+- [ ] Absences are reported as findings (e.g., "capability X has no API coverage and one Grade-B source — confidence LOW"); contradictions are flagged, not silently resolved.
+- [ ] If upstream artifacts were missing such that synthesis is incomplete, I say so explicitly and mark the affected sections rather than emitting an inflated-but-present OVERVIEW.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When synthesis surfaces something a FUTURE product-workflow run should know — a systemic upstream gap, a persona/capability pattern that recurs, a source-quality issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** requirements
+- **Tags:** product-workflow, {{PRODUCT_SLUG}}, synthesis
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/product-workflows/{{PRODUCT_SLUG}}/OVERVIEW.md
+- **Reuse:** <actionable instruction for a future run/phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"workflow_synthesizer","phase":{{PHASE}},"status":"completed","report":"docs/product-workflows/{{PRODUCT_SLUG}}/OVERVIEW.md","ts":"<iso8601>"}
+```

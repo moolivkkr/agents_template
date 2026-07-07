@@ -32,6 +32,7 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -124,4 +125,37 @@ For each verification failure: flag the specific spec, describe the gap, allow t
 
 ## Auto-fix Attempts
 [list of what was retried and outcome]
+```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `docs/design/phases/{{PHASE}}/VERIFICATION_REPORT.md` using the template above.
+- [ ] The BRD Coverage table has a row for EVERY FR-* assigned to this phase in PHASE_PLAN.md — no requirement skipped — and all cited FR-*/NFR-*/OBJ-* IDs were confirmed to exist verbatim in the BRD (no invented IDs).
+- [ ] Wireframe↔endpoint data-type matches (array vs object) were checked for every binding; mismatches and duplicate TC-* IDs are marked BLOCKING, not downgraded.
+- [ ] The summary line reports a REAL issue count I derived — a `PASS` with zero specs actually inspected is a FAIL to investigate, never a silent PASS.
+- [ ] Each verification failure names the specific spec, the gap, and routes it to the originating agent for fix.
+- [ ] If specs were missing or unreadable such that verification could not run, I say so explicitly with the reason instead of emitting a hollow PASS.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When verification surfaces something a FUTURE phase should know — a spec defect class that recurs (e.g., array/object binding mismatches), a data-contract gap the planner keeps producing — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** spec
+- **Tags:** spec-verification, data-contract, <defect-class>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/design/phases/{{PHASE}}/VERIFICATION_REPORT.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"spec_verifier","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/VERIFICATION_REPORT.md","ts":"<iso8601>"}
 ```

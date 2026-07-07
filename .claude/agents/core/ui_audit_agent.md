@@ -34,6 +34,7 @@ Audits the current state of the UI codebase at the start of a UI phase. Runs alo
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — user personas, FR-* for UI-facing flows in scope
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory — UI components, state management, build tool
 3. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — which screens/flows are in scope
@@ -115,3 +116,36 @@ Surface any `carried_forward[]` items from the previous phase manifest that are 
 - Severity for wireframe drift: HIGH (wrong behavior), MEDIUM (layout deviation), LOW (cosmetic)
 - Every gap item needs a specific wireframe file reference
 - Carried-forward issues must be listed first, before new gaps
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `agent_state/phases/{{PHASE}}/audit_report_ui.md` using the template above.
+- [ ] Every wireframe in `specs/*.wireframe.md` was checked for existence, layout match, and API-binding correctness — no wireframe skipped — and every gap item cites a specific wireframe file.
+- [ ] Carried-forward UI issues from the previous manifest are listed FIRST, before new gaps.
+- [ ] State-handling (loading/error/empty), accessibility, and component-library checks were each run; wireframe-drift severity is assigned (HIGH/MEDIUM/LOW) per finding.
+- [ ] I did NOT modify any code — this was a read-only audit — and any gap counts I report are REAL, derived from the codebase.
+- [ ] If `frontend.enabled` is false I skipped silently; otherwise, if the codebase or wireframes were missing such that the audit could not run, I say so explicitly rather than emitting an empty-but-present PASS report.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When the audit surfaces something a FUTURE UI phase should know — a wireframe-drift pattern that recurs, a state or accessibility gap the UI dev keeps missing, a component-library violation class — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** ux
+- **Tags:** ui-audit, wireframe-drift, <pattern>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/audit_report_ui.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"ui_audit_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/audit_report_ui.md","ts":"<iso8601>"}
+```

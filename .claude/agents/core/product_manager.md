@@ -49,6 +49,7 @@ Owns the product requirements lifecycle after the initial BRD is created. Transl
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -221,3 +222,35 @@ Present impact report to user. Do NOT modify BRD until user confirms:
 - [ ] All acceptance criteria are testable (no subjective language)
 - [ ] MoSCoW priority assigned to every FR-*
 - [ ] Changelog entry created for every BRD update
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `docs/BRD.md` (the living BRD), plus user stories under `docs/user-stories/` and a `agent_state/product_manager/changelog.md` entry for every change.
+- [ ] Every new/changed FR-* has ≥1 user story with ≥2 testable acceptance-criteria scenarios (happy path + error path) and a MoSCoW priority — no subjective language.
+- [ ] For any BRD amendment, a change-impact analysis was produced (`agent_state/change-requests/CR-<N>-impact.md`) and the user decision gate (PROCEED/DEFER/MODIFY_SCOPE) was honored — I did NOT modify the BRD before the user confirmed.
+- [ ] Every story traces back to a real FR-*/NFR-*/OBJ-* ID that exists verbatim in the BRD — no invented requirement IDs.
+- [ ] If a change request was out of scope or lacked BRD backing, I rejected/deferred it explicitly with a reason rather than silently expanding scope or emitting an empty-but-present amendment.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When handling requirements or change requests surfaces something a FUTURE phase should know — a change that had a wide blast radius, a requirement class that repeatedly needs clarification, a scope-creep pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** requirements
+- **Tags:** brd, change-request, <pattern>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/BRD.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"product_manager","phase":{{PHASE}},"status":"completed","report":"docs/BRD.md","ts":"<iso8601>"}
+```

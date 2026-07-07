@@ -651,3 +651,35 @@ capability_flow_mapper ({{CAPABILITY_SLUG}}) — partial
 16. **This agent is read-only** — it reads research corpus and produces documentation. It never modifies source research files.
 17. **No hallucinated screens** — if a screen is mentioned in docs but you cannot determine its fields, document the screen with `INCOMPLETE — fields require additional research` rather than guessing
 18. **Integration touchpoints are bidirectional** — if capability A references capability B, note it in A's workflow.md AND flag it for B's mapper instance
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `docs/product-workflows/{{PRODUCT_SLUG}}/capabilities/{{CAPABILITY_SLUG}}/workflow.md`, plus all four artifacts (quickstart.md, advanced.md, prerequisites.md, gotchas.md) — no capability ships with fewer than 5 files.
+- [ ] Every field, screen, decision point, and gotcha carries an evidence grade (A–E) with a real citation — no ungraded claims, no invented screens.
+- [ ] The prerequisite chain is a validated DAG (no cycles), and the complexity score is derived from actual field/screen/dependency counts, not a subjective feel.
+- [ ] Any count I report (screens, fields, gotchas, prerequisites) is a REAL number I derived from the corpus, not an estimate.
+- [ ] If evidence was insufficient for a screen/section, I marked it `INCOMPLETE — requires: [what]` rather than guessing or emitting an empty-but-present file that reads as complete. If I could not map the capability at all, I say so explicitly with the reason.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When mapping surfaces something a FUTURE capability-mapping or planning phase should know — a recurring documentation gap, a product config pattern that repeats across capabilities, a source that consistently contradicts official docs — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** requirements
+- **Tags:** product-workflow, {{PRODUCT_SLUG}}, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/product-workflows/{{PRODUCT_SLUG}}/capabilities/{{CAPABILITY_SLUG}}/workflow.md
+- **Reuse:** <actionable instruction for a future capability/phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"capability_flow_mapper","phase":{{PHASE}},"status":"completed","report":"docs/product-workflows/{{PRODUCT_SLUG}}/capabilities/{{CAPABILITY_SLUG}}/workflow.md","ts":"<iso8601>"}
+```

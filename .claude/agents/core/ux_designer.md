@@ -51,6 +51,7 @@ Produces wireframe specification files for UI screens scoped to the current phas
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — **READ FIRST** — typed response shapes for ALL endpoints. This is the source of truth for data bindings.
 2. `.claude/skills/ui/archetypes/` — page archetypes (list-page, detail-page, form-page, dashboard-page, settings-page). **Always start from an archetype.**
 3. `docs/BRD.md` §FR-UI-* — screen requirements and acceptance criteria
@@ -254,3 +255,35 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 - **Use literal Unicode characters** in HTML content: ÷ × − ±, NOT escape sequences
 - **CSS values in the HTML wireframe ARE the spec** — ui_developer must match them exactly
 - If visual spec research (08d) exists, HTML wireframe must use those exact values
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written under the EXACT path `docs/design/phases/{{PHASE}}/specs/` — for every in-scope screen BOTH a self-contained `.wireframe.html` (inline CSS, no build step) AND a `.wireframe.md` spec.
+- [ ] Every API binding maps to a REAL field path in `data-contracts.md` with the correct response type (list→ARRAY endpoint, detail/form→OBJECT endpoint) — no "TBD" bindings, no invented field names.
+- [ ] All 4 states (loading/empty/error/populated), both breakpoints (375px + 1280px), and the error-boundary spec are present for every data-fetching screen.
+- [ ] A UI Test Case Inventory with real sequential TC-* IDs (page/form/component) is enumerated — no `NNN` placeholders left.
+- [ ] If `data-contracts.md` is missing I STOPPED and reported the block (`⛔ Blocked: data-contracts.md missing`) rather than emitting wireframes with guessed bindings that read as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When wireframing surfaces something a FUTURE UI phase should know — a component the design system lacks, a state-handling pattern that recurs, a data-contract mismatch that bit the design — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** ux
+- **Tags:** wireframe, design-system, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/design/phases/{{PHASE}}/specs/
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"ux_designer","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/specs/","ts":"<iso8601>"}
+```

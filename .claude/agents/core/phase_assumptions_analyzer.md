@@ -72,6 +72,9 @@ Read these in order. Each reading builds context for the next.
 ### 0. Project Facts — GROUND TRUTH
 - `docs/PROJECT_FACTS.md` — **Read before anything else.** It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 
+### 0b. Settled Decisions — Tier 0.5
+- `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
+
 ### 1. BRD Requirements (load sections only)
 - `docs/BRD.md` §Functional Requirements — FR-* rows for this phase
 - `docs/BRD.md` §Non-Functional Requirements — NFR-* rows (especially NFR-SEC-*, NFR-PERF-*)
@@ -311,3 +314,36 @@ Before writing output:
 - **Previous phase is not current state.** The manifest says what was BUILT, not what currently EXISTS. Files may have been modified, deleted, or refactored since the manifest was written. Verify with codebase scan.
 - **BRD ambiguity is an assumption.** If an FR-* acceptance criterion can be interpreted two ways, that's a HYPOTHESIZED assumption about which interpretation is correct. Flag it.
 - **Security assumptions are always HIGH impact.** Auth, authorization, data isolation, input validation — if any of these are HYPOTHESIZED, they're automatically blocking open questions.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Primary output written to the EXACT path `agent_state/phases/{{PHASE}}/assumptions.md`, plus `agent_state/phases/{{PHASE}}/open_questions.md`.
+- [ ] EVERY assumption carries an evidence level (CONFIRMED/DEDUCED/HYPOTHESIZED); every CONFIRMED has a real file:line I actually read, every DEDUCED shows a ≥2-input chain, every HYPOTHESIZED states both confirmation and refutation paths.
+- [ ] Contradictions and Coverage Gaps sections are present (explicitly "none found" if empty), and every HIGH-impact HYPOTHESIZED assumption is flagged as a blocking open question.
+- [ ] Every open question traces back to an assumption or gap (Origin populated), and the codebase state summary includes the git commit hash.
+- [ ] No phantom evidence — I never cited a file:line I did not read; when uncertain I downgraded to the more conservative grade.
+- [ ] If the codebase or requirements were too sparse to analyze a scope area, I recorded it as a Coverage Gap rather than emitting an empty-but-present assumptions file that reads as thorough.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When analysis surfaces something a FUTURE phase should know — a codebase pattern that keeps being assumed wrong, a recurring class of coverage gap, a requirement that is consistently ambiguous — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning
+- **Tags:** assumptions, codebase, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/assumptions.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"phase_assumptions_analyzer","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/assumptions.md","ts":"<iso8601>"}
+```
