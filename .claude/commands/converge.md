@@ -13,6 +13,9 @@ arguments:
 
 # /converge — Generate the Spec→Code Catch-Up Delta
 
+> **Alias of `/recon --fix=code`** (spec-wins). `/recon` is the canonical two-way entry point; this
+> command remains as a direct alias and holds the detailed spec-wins procedure below.
+
 > **Read Tier 0 first.** Load `docs/PROJECT_FACTS.md` (ground-truth invariants) before assessing.
 > A retired/renamed fact means the spec item it references is *not* a missing feature — it is a
 > retired one; do not generate catch-up work for retired components.

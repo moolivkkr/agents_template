@@ -90,7 +90,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/worklog` | Consolidate all phase artifacts into one human-readable ledger (`docs/WORKLOG.md`) — what was implemented, decided (and why), and pending, across every agent |
 | `/plan --phase=N` | Plan a phase before implementing |
 | `/develop --phase=N` | Implement a phase end-to-end |
-| `/converge --phase=N` | Generate catch-up tasks where code lags the spec (inverse of reconcile) |
+| `/recon` | Two-way reconcile requirements↔BRD↔TRD↔code↔tests. Bare = report drift only; `--fix=code` = specs win (code catch-up, alias `/converge`); `--fix=docs` = as-built wins (update docs, alias `/reconcile`) |
 | `/test --e2e` | Run e2e tests standalone |
 | `/test --traceability` | Check TC-* ID coverage |
 | `/review` | Code review on current changes |
