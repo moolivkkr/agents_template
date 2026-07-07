@@ -53,7 +53,9 @@ fi
 # 1. Resolve the phase (arg wins; else latest numeric phase dir).
 # ---------------------------------------------------------------------------
 PHASE="${1:-}"
+AUTODETECT="false"
 if [ -z "$PHASE" ]; then
+  AUTODETECT="true"
   if [ ! -d "$PHASES_ROOT" ]; then
     # No phases at all — nothing to gate. This is not a violation (e.g. pre-/develop repo).
     echo "verify-gate: no $PHASES_ROOT directory yet — nothing to verify (PASS by vacuity)."
@@ -70,6 +72,22 @@ PHASE_DIR="$PHASES_ROOT/$PHASE"
 ROSTER="$PHASE_DIR/roster.json"
 EXEC="$PHASE_DIR/execution.jsonl"
 MANIFEST="$PHASE_DIR/manifest.json"
+
+# ---------------------------------------------------------------------------
+# 1b. Passive Stop-hook sweep (no explicit phase arg): only SPEAK when a gate is
+#     actually being CLAIMED. An absent / in-progress / stale phase has nothing to
+#     certify yet, so stay completely silent and let the STRICT paths do the
+#     blocking: the orchestrator's Wave 6 (verify-gate.sh <N>) and the PostToolUse
+#     hook on a manifest.json write both pass an explicit phase. This keeps turn-end
+#     quiet in any repo (including the framework repo itself, which never runs a real
+#     phase) while STILL catching a forged gate.passed the moment it appears.
+if [ "$AUTODETECT" = "true" ]; then
+  _claimed="false"
+  if [ -f "$MANIFEST" ] && jq -e . "$MANIFEST" >/dev/null 2>&1; then
+    _claimed="$(jq -r 'try (.gate.passed) catch false | if . == true then "true" else "false" end' "$MANIFEST" 2>/dev/null || echo false)"
+  fi
+  [ "$_claimed" != "true" ] && exit 0   # nothing claimed → nothing to verify → silent PASS
+fi
 
 echo "════════════════════════════════════════════════════════════════"
 echo "verify-gate — Phase $PHASE  ($PHASE_DIR)"
