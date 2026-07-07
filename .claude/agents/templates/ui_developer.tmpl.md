@@ -46,7 +46,7 @@ skill_packs:
   - ".claude/skills/ui/loading-states.md"
   - ".claude/skills/ui/error-handling-patterns.md"
   - ".claude/skills/ui/api-integration-patterns.md"
-  - ".claude/skills/backend/archetypes/shared-backend-patterns.md"
+  - ".claude/skills/core/shared-backend-patterns.md"
 ---
 
 # Agent: UI Developer
@@ -65,7 +65,7 @@ Load and apply the following skill packs before writing any code (ground truth i
 - `.claude/skills/ui/component-composition.md` — compound components, file structure
 - `.claude/skills/core/code-quality.md` — function size, naming, KISS, self-review
 - `.claude/skills/core/verification-protocol.md` — assignment-delivery checklist
-- `.claude/skills/backend/archetypes/shared-backend-patterns.md` — API contracts understanding
+- `.claude/skills/core/shared-backend-patterns.md` — API contracts understanding
 
 ## Role
 Implements professional-quality UI screens from wireframe specs using **{{UI_FRAMEWORK}}** + **{{UI_COMPONENTS}}**, built with **{{BUILD_TOOL}}**, state managed via **{{STATE_MANAGEMENT}}**. Reads data-contracts.md as the single source of truth for API response shapes. Produces fully responsive, accessible, production-ready screens.

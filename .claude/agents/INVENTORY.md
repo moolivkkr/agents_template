@@ -136,6 +136,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `c4_diagram_agent` | sonnet | BRD, guidelines | docs/architecture/c4-diagram.md | Subagent of architecture_orchestrator |
 | `sequence_diagram_agent` | sonnet | BRD, guidelines | docs/architecture/sequence-diagrams.md | Subagent of architecture_orchestrator |
 | `deployment_diagram_agent` | sonnet | guidelines | docs/architecture/deployment-diagram.md | Subagent of architecture_orchestrator |
+| `eagle_diagram_agent` | sonnet | BRD, guidelines | docs/architecture/eagle-view.md | 10,000-ft strategic overview: pattern classification, domain boundaries, evolution recs |
 | `adr_agent` | sonnet | guidelines | docs/architecture/adrs/ | Subagent of architecture_orchestrator; also invoked by /plan |
 | `ux_designer` | opus | BRD, guidelines | docs/design/phases/N/specs/*.wireframe.md | UI wireframe specifications |
 | `wireframe_generator` | sonnet | BRD | wireframe scaffolding | Subagent of ux_designer |
@@ -169,6 +170,8 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `code_reviewer_II` | opus | guidelines, code_review_I.md | code_review_II.md | Architecture compliance (pass 2 of 2) |
 | `security_reviewer` | opus | guidelines, OWASP skill pack | security_review.md | OWASP Top 10, IDOR chains |
 | `tenant_isolation_verifier` | opus | handler + service files | isolation_report.md | tenantID trace through every route |
+| `breaking_change_reviewer` | opus | current diff, prior-phase contracts | breaking_change_report.md | Cross-phase contract breakage (API sig, response shape, event schema, shared types, config keys, DB columns) |
+| `migration_safety_reviewer` | opus | migration files | migration_safety.md | Destructive/irreversible ops, backfill safety, lock risk, rollback correctness |
 | `code_quality_verifier` | sonnet | guidelines, manifest | quality_gate_verification.md | TODO/stub/secret/import checks |
 | `design_quality_reviewer` | sonnet | wireframes, guidelines | design quality report | UI spec quality validation |
 | `dependency_scanner` | haiku | guidelines | dependency scan results | CVE detection, license compliance |
@@ -192,6 +195,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `debate_researcher` | sonnet | assigned option | research evidence | Subagent: one per option |
 | `debate_advocate` | opus | assigned option + all research | argument | Subagent: argues FOR an option |
 | `debate_arbitrator` | opus | all arguments | verdict + scores | Subagent: final decision-maker |
+| `solution_selector` | opus | N candidate impls + cross_test_matrix.md | reports/candidate_selection.md | Picks winning implementation via rubric + model-test voting; emits graft list (candidate-selection mode) |
 
 ### Infrastructure & Deployment
 
@@ -345,10 +349,10 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/`) | 58 |
-| Generated templates (`.claude/agents/generated/`) | 12 |
-| Plugin manifests (`.claude/agents/plugins/`) | 2 |
-| **Total agents** | **70** |
+| Core agents (`.claude/agents/core/`) | 63 |
+| Generation templates (`.claude/agents/templates/`) | 8 |
+| Generated agents (`.claude/agents/generated/`) | 0 in repo — populated at `/init` by `agent_factory` (gitignored) |
+| **Total agents (repo)** | **71** |
 
 | Category | Count |
 |---|---|
@@ -356,12 +360,12 @@ debate team (on-demand, any pipeline):
 | Requirements | 7 |
 | Product Workflow Intelligence | 5 |
 | Planning | 6 |
-| Design | 7 |
+| Design | 8 (incl. `eagle_diagram_agent` — 10,000-ft strategic overview) |
 | Implementation (generated) | 4 |
 | Testing | 6 |
-| Review & Security | 6 |
+| Review & Security | 8 (incl. `breaking_change_reviewer`, `migration_safety_reviewer`) |
 | Reconciliation | 6 |
-| Decision Support | 4 |
+| Decision Support | 5 (incl. `solution_selector` — candidate-selection winner) |
 | Infrastructure | 3 |
 | Quality & Optimization | 5 |
 | Documentation & Demo | 4 |

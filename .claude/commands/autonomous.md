@@ -226,6 +226,14 @@ After approval:
 
 Fully autonomous — no more human prompts.
 
+> **⛔ MANDATORY execution path:** each `/develop --auto --phase=N` in this command MUST be run via
+> the `/develop-orchestrator` wave-by-wave pattern (parent spawns a separate agent per wave with
+> verification between each). Do NOT delegate a whole phase to a single agent — that is the exact
+> "reviews/acceptance get dropped" failure the orchestrator exists to prevent (see the HARD RULE at
+> the top of `develop.md`). Autonomous mode makes this MORE important, not less: there is no human
+> checking that Wave 4 actually ran, so the roster/`verify-gate.sh` execution guarantee is the only
+> backstop, and it only works if every wave is spawned as its own logged agent.
+
 ### Auto-mode behaviors:
 - **Escalations:** `continueWithDefault: true` for architecture/feature decisions — proceed with recommendation, log for review
 - **⛔ Security escalations:** NEVER auto-resolve with permissive defaults. Use the **hardened default** (most restrictive option). If no clear hardened default exists → PAUSE and surface to user even in auto mode. Security domains: auth patterns, token storage/caching, IDOR mitigation, encryption, PII handling, CORS/CSRF, rate limiting.
@@ -310,8 +318,8 @@ For each phase N (2, 3, ... max_phases):
   2a. /design --phase=N --source=stitch --auto (if frontend phase detected; BLOCKING design gate, auto-falls back to pure-agent if Stitch MCP absent)
   3. /plan --auto --phase=N
   4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3)
-  5. /develop --auto --phase=N
-  6. phase_verifier: goal-level verification (VERIFICATION.md)
+  5. /develop --auto --phase=N   (via /develop-orchestrator wave pattern — see Step 4 MANDATORY note)
+  6. plan_goal_verifier: goal-level verification (VERIFICATION.md)
   7. Checkpoint
 ```
 

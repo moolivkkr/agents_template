@@ -72,6 +72,7 @@ PHASE_DIR="$PHASES_ROOT/$PHASE"
 ROSTER="$PHASE_DIR/roster.json"
 EXEC="$PHASE_DIR/execution.jsonl"
 MANIFEST="$PHASE_DIR/manifest.json"
+FORCED="$PHASE_DIR/gate.forced"   # user-approved override (see /develop --force_gate)
 
 # ---------------------------------------------------------------------------
 # 1b. Passive Stop-hook sweep (no explicit phase arg): only SPEAK when a gate is
@@ -93,7 +94,8 @@ echo "════════════════════════�
 echo "verify-gate — Phase $PHASE  ($PHASE_DIR)"
 echo "════════════════════════════════════════════════════════════════"
 
-FAILURES=()          # human-readable block reasons
+FAILURES=()             # human-readable block reasons
+ROSTER_INCOMPLETE="false"   # set true iff a required agent never completed (check a)
 fail() { FAILURES+=("$1"); echo "  ✗ $1"; }
 ok()   { echo "  ✓ $1"; }
 
@@ -173,6 +175,7 @@ else
       ok "required agent completed: $agent"
     else
       fail "required agent NEVER completed: $agent (in roster.required, no status:\"completed\" line)"
+      ROSTER_INCOMPLETE="true"
       MISSING=$((MISSING + 1))
     fi
   done
@@ -293,11 +296,33 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 6b. Forced-gate override (user-approved). A well-formed gate.forced downgrades FINDING failures
+#     (unresolved BLOCKINGs, dangling failures, gate.passed honesty) to a loud WARNING and lets the
+#     turn proceed — this is the deliberate "--force_gate" escape hatch. It does NOT override a
+#     STRUCTURALLY INCOMPLETE roster: you cannot "force" past a required agent that never ran (that
+#     is missing evidence, not an accepted blocker). Validity = valid JSON with a non-empty
+#     blockers[] and a non-empty user_rationale (so an empty file can't silently disarm the gate).
+# ---------------------------------------------------------------------------
+FORCED_VALID="false"
+if [ -f "$FORCED" ] && jq -e '(.blockers | type=="array" and length>0) and (.user_rationale // "" | length>0)' "$FORCED" >/dev/null 2>&1; then
+  FORCED_VALID="true"
+fi
+
+# ---------------------------------------------------------------------------
 # 7. Verdict.
 # ---------------------------------------------------------------------------
 echo "────────────────────────────────────────────────────────────────"
 if [ "${#FAILURES[@]}" -eq 0 ]; then
   echo "RESULT: ✅ PASS — Phase $PHASE gate evidence is complete and honest."
+  exit 0
+elif [ "$FORCED_VALID" = "true" ] && [ "$ROSTER_INCOMPLETE" = "false" ]; then
+  echo "RESULT: ⚠️  FORCED PASS — Phase $PHASE has ${#FAILURES[@]} unresolved blocker(s), OVERRIDDEN"
+  echo "        by an explicit user-approved gate.forced ($FORCED)."
+  i=1
+  for f in "${FAILURES[@]}"; do echo "   $i. (overridden) $f"; i=$((i + 1)); done
+  echo ""
+  echo "   Rationale: $(jq -r '.user_rationale' "$FORCED" 2>/dev/null)"
+  echo "   These blockers MUST be carried forward and resolved (see Forced Gate Carry-Forward)."
   exit 0
 else
   echo "RESULT: ❌ BLOCK — Phase $PHASE (${#FAILURES[@]} check(s) failed):"
@@ -307,6 +332,12 @@ else
     i=$((i + 1))
   done
   echo ""
-  echo "The phase gate is NOT satisfied. Do not mark gate.passed until every item above is fixed."
+  if [ "$FORCED_VALID" = "true" ] && [ "$ROSTER_INCOMPLETE" = "true" ]; then
+    echo "A gate.forced is present but the roster is INCOMPLETE — a required agent never ran."
+    echo "--force_gate overrides findings, not missing agents. Run the missing agent(s), then force."
+  else
+    echo "The phase gate is NOT satisfied. Do not mark gate.passed until every item above is fixed."
+    echo "(To override known blockers with explicit approval, write a valid gate.forced — see /develop --force_gate.)"
+  fi
   exit 2
 fi

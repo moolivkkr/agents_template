@@ -21,7 +21,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/candidate_selection.md
 dependencies:
   upstream: [backend_developer, api_developer]
-  downstream: [unit_test_agent, integration_test_agent, e2e_test_agent]
+  downstream: [unit_test_agent, integration_test_agent, e2e_orchestrator]
 skill_packs:
   - ".claude/skills/core/candidate-selection.md"
   - ".claude/skills/core/code-quality.md"

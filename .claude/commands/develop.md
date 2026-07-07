@@ -176,8 +176,10 @@ REQUIRED_REPORTS=(
 )
 # tenant_isolation.md is required too, UNLESS the project is single-tenant (roster marks it
 # not_applicable). Add it conditionally:
-if grep -q '"tenant_isolation_verifier"[^}]*"status": *"required"' \
-     "agent_state/phases/${PHASE}/roster.json" 2>/dev/null; then
+# Roster is a FLAT array of agent names; tenant_isolation_verifier is present iff multi-tenant.
+# Use membership, not a "status" object grep (the old grep never matched the flat schema).
+if jq -e '.required | index("tenant_isolation_verifier")' \
+     "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; then
   REQUIRED_REPORTS+=("agent_state/phases/${PHASE}/reports/tenant_isolation.md")
 fi
 

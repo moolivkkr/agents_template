@@ -79,6 +79,7 @@ restricted to **zero-FR, zero-shared-layer** changes (typos, copy, doc, config-v
 ```json
 {
   "complexity_class": "small",
+  "raw_score": 8,
   "signals": {
     "components_in_scope": 1,
     "shared_layer_touched": false,
@@ -92,7 +93,10 @@ restricted to **zero-FR, zero-shared-layer** changes (typos, copy, doc, config-v
 }
 ```
 
-Written to `agent_state/phases/${PHASE}/complexity.json`. If a task is reclassified upward mid-run
+Written to `agent_state/phases/${PHASE}/complexity.json`. `raw_score` is the numeric model-routing
+complexity score (formula in `model-routing.md`) — persist it here so the candidate-selection
+trigger in `/develop-orchestrator` Wave 2 can read it deterministically (it reads `.raw_score`,
+never an unset shell var). If a task is reclassified upward mid-run
 (e.g. a "small" change turned out to touch the shared layer), record `reclassified_reason` and
 re-enter the deeper depth — **upgrades are always allowed, downgrades never are** once a wave finds
 scope the classifier missed.

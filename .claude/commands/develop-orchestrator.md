@@ -206,7 +206,7 @@ mkdir -p "agent_state/phases/${PHASE}"
 # Tailor per scale class + project shape:
 #  - trivial/small: keep only the agents whose waves you actually run.
 #  - not multi-tenant: DROP tenant_isolation_verifier from the array (record the skip in the manifest).
-#  - no web UI: use e2e_test_agent (not ui_test_agent); DROP ui_developer/ui_test_agent/design_quality_reviewer.
+#  - no web UI: use e2e_orchestrator (not ui_test_agent); DROP ui_developer/ui_test_agent/design_quality_reviewer.
 #  - web UI: ADD ui_developer, ui_test_agent (and design_quality_reviewer if used) to the array.
 #  - has DB migrations: ADD migration_agent AND migration_safety_reviewer (adversarial migration review).
 #  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
@@ -215,7 +215,7 @@ mkdir -p "agent_state/phases/${PHASE}"
 #    prev-failure / --candidates=N): ADD solution_selector. It is a REQUIRED agent whenever N>=2, so
 #    its completed line + candidate_selection.md report are proven by the Wave-6 roster check. When
 #    N==1 (single implementation), OMIT it (record candidate_selection:skipped in the manifest).
-REQUIRED='["backend_audit_agent","backend_developer","api_developer","unit_test_agent","integration_test_agent","e2e_test_agent","code_reviewer_I","code_reviewer_II","security_reviewer","dependency_scanner","code_quality_verifier","spec_impl_reconciler","spec_test_reconciler","acceptance_test_agent","tenant_isolation_verifier"]'
+REQUIRED='["backend_audit_agent","backend_developer","api_developer","unit_test_agent","integration_test_agent","e2e_orchestrator","code_reviewer_I","code_reviewer_II","security_reviewer","dependency_scanner","code_quality_verifier","spec_impl_reconciler","spec_test_reconciler","acceptance_test_agent","tenant_isolation_verifier"]'
 python3 - "$REQUIRED" "${PHASE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "agent_state/phases/${PHASE}/roster.json" << 'PY'
 import json, sys
 required = json.loads(sys.argv[1])
@@ -295,6 +295,10 @@ not the default (see `.claude/skills/core/candidate-selection.md` §When it trig
 # N = 1 means "single implementation" (default). N in [2,3] turns on candidate-selection.
 N=1; TRIGGER=""
 CLASS=$(python3 -c "import json;print(json.load(open('agent_state/phases/${PHASE}/complexity.json')).get('complexity_class',''))" 2>/dev/null || echo "")
+# raw_score is the model-routing complexity score (see model-routing.md). It is PERSISTED into
+# complexity.json by Wave 0 / scale-adaptive-depth; read it from there (default 0 if absent) — do
+# NOT reference an unset shell var (the old `${RAW_SCORE:-0}` was always 0, so this trigger was dead).
+RAW_SCORE=$(python3 -c "import json;print(int(json.load(open('agent_state/phases/${PHASE}/complexity.json')).get('raw_score',0)))" 2>/dev/null || echo 0)
 PREV_FB="agent_state/phases/$((PHASE-1))/reports/collective_feedback.md"
 
 if [ -n "${ARG_CANDIDATES:-}" ]; then                     # explicit --candidates=N (clamped 2..3)
@@ -465,13 +469,15 @@ Self-check: verify all responsible TC-* IDs are covered before completing.
 Produce: agent_state/phases/${PHASE}/reports/e2e_results.md"
 ```
 
-**Spawn all 3 agents in PARALLEL** (they are independent):
+**Spawn all 3 agents in PARALLEL** (they are independent). The E2E agent is `e2e_orchestrator`
+(web) — log its completion line with `AGENT_NAME=e2e_orchestrator` so it matches `roster.required`
+(non-web projects that add a `ui_test_agent` for browser tests still log e2e as `e2e_orchestrator`):
 
 ```
 Wave 3 (parallel):
-  ├─ Agent: unit_test_agent     → reports/unit_tests.md
-  ├─ Agent: integration_test_agent → reports/integration_tests.md
-  └─ Agent: ui_test_agent / e2e  → reports/e2e_results.md (+ ui_test_results.md if web)
+  ├─ Agent: unit_test_agent        → reports/unit_tests.md       (log AGENT_NAME=unit_test_agent)
+  ├─ Agent: integration_test_agent → reports/integration_tests.md (log AGENT_NAME=integration_test_agent)
+  └─ Agent: e2e_orchestrator       → reports/e2e_results.md       (log AGENT_NAME=e2e_orchestrator; + ui_test_results.md if web)
 ```
 
 ### Wave 3 Verification (ALL THREE must pass)
@@ -704,8 +710,11 @@ WAVE4_BLOCKED=false
 # Reviewers + reconcilers + acceptance. Skip tenant_isolation if roster marked it not_applicable.
 REQUIRED_W4="code_review_I.md code_review_II.md security_review.md dependency_scan.md \
              quality_gate.md specs_vs_impl.md spec_test_coverage.md acceptance_report.md"
-if grep -q '"tenant_isolation_verifier"[^}]*"status": *"required"' \
-     "agent_state/phases/${PHASE}/roster.json" 2>/dev/null; then
+# Roster is a FLAT array of real agent names ({"required":[...]}). tenant_isolation_verifier is
+# present iff the phase is multi-tenant (single-tenant phases OMIT it — see Wave 0b). Membership,
+# not a "status" object grep (the old grep never matched the flat schema → report silently dropped).
+if jq -e '.required | index("tenant_isolation_verifier")' \
+     "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; then
   REQUIRED_W4="$REQUIRED_W4 tenant_isolation.md"
 fi
 for R in $REQUIRED_W4; do
