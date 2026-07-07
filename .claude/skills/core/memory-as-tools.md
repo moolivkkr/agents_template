@@ -1,3 +1,15 @@
+---
+skill: memory-as-tools
+description: Retrieval discipline for Tier 1/Tier 2 memory — query lessons/codebase KB on demand by category/tag rather than loading whole files
+version: "1.0"
+tags:
+  - memory
+  - retrieval
+  - lessons
+  - knowledge-base
+  - core
+---
+
 # Memory-as-Tools — Retrieval Discipline for Tier 1 / Tier 2
 
 > **Read Tier 0 first.** `docs/PROJECT_FACTS.md` (ground-truth invariants) is ALWAYS loaded whole —

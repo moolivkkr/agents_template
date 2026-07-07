@@ -37,9 +37,8 @@ skill_packs:
 
 # Agent: Unit Test Agent
 
-## Skill Packs to Load
-Load and apply the following skill packs before writing any tests:
-- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+## Skill Packs
+Load and apply the following skill packs before writing any tests (ground truth is item 0 of Required Reading below — read it FIRST):
 - `.claude/skills/core/testing-principles.md` — test philosophy, coverage strategy, anti-patterns
 - `.claude/skills/core/code-quality.md` — naming, readability, self-review
 - `.claude/skills/core/verification-protocol.md` — assignment-delivery checklist
@@ -242,3 +241,34 @@ If coverage < 80%:
 - [ ] Test names clearly describe the scenario being tested
 - [ ] Unit tests do NOT require live database — use interface mocks
 - [ ] All edge cases from specs (08b) have corresponding tests
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Tests written under the frontmatter `output.primary` path; results recorded at `agent_state/phases/{{PHASE}}/reports/unit_tests.md`.
+- [ ] Every test is REAL and executed — reported pass/fail/coverage counts are actual numbers from a run, not estimates. `Total: 0` tests is a FAIL to investigate, never a silent PASS.
+- [ ] Every HIGH/MEDIUM TC-* ID assigned to unit tier is annotated in a test file.
+- [ ] If I could not test something, I say so explicitly with the reason.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When testing surfaces something a FUTURE phase should know — a flaky pattern, a hard-to-mock dependency, an under-tested edge-case class — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** testing|agent_performance
+- **Tags:** {{LANG}}, unit-tests, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/unit_tests.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"unit_test_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/unit_tests.md","ts":"<iso8601>"}
+```

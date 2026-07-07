@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: Migration Pattern Archetype.** The language-neutral version at [migration-pattern.md](migration-pattern.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: migration-pattern
 description: PostgreSQL migration archetype — table creation, indexes, soft delete, RLS, seed data, data migrations, naming conventions, rollback safety

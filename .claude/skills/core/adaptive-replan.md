@@ -1,3 +1,15 @@
+---
+skill: adaptive-replan
+description: Failure classification and minimum re-test scope — how an agent re-plans after a failed step without redoing the whole phase
+version: "1.0"
+tags:
+  - replanning
+  - failure-handling
+  - testing
+  - intelligence
+  - core
+---
+
 # Adaptive Replanning Protocol
 
 When Wave 5 (Collective Feedback + Iterate) identifies failures, this protocol determines the **minimum viable fix path** instead of blindly re-running all tiers.

@@ -31,6 +31,7 @@ Reviews code against language conventions, project naming standards, and style r
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `.claude/skills/languages/{{LANG}}.md` — language idioms and anti-patterns
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design Constraints — naming conventions, patterns
 3. `agent_state/agent_registry.json` — which language skill pack is active
@@ -168,3 +169,35 @@ Files with no issues: [list]
 
 ## Iteration
 After implementation agent fixes BLOCKING issues: re-review once. Max 2 rounds. Unresolved after round 2 → escalate to user.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/code_review_I.md` (exact frontmatter path) using the template above.
+- [ ] Every finding cites `file:line` and a concrete pattern — not "looks off" prose.
+- [ ] Security-adjacent idiom checks (A–D) were run FIRST and their results are in the report, even when the result is "none found".
+- [ ] The severity count line (`BLOCKING:N WARNING:N INFO:N`) is REAL — derived from findings, not estimated. A `PASS` on a phase with zero files reviewed is a FAIL to investigate, never a silent PASS.
+- [ ] If I could not review (no code produced this phase), I say so explicitly with the reason — I do NOT emit an empty-but-present report that reads as success.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When a review surfaces something a FUTURE phase should know — a recurring idiom defect, an anti-pattern the codebase keeps reintroducing, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** implementation|security|agent_performance
+- **Tags:** {{LANG}}, code-review, <pattern>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/code_review_I.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"code_reviewer_I","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/code_review_I.md","ts":"<iso8601>"}
+```

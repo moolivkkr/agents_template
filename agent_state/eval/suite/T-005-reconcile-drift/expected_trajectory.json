@@ -1,0 +1,15 @@
+{
+  "task": "T-005-reconcile-drift",
+  "mode": "TRAJECTORY",
+  "expected_trajectory": [
+    { "step": "spec_impl_reconciler",    "must": true,  "desc": "compares TRD enum vs code enum" },
+    { "step": "requirements_brd_reconciler", "must": true, "desc": "traces the drift to FR-012" },
+    { "step": "brd_spec_reconciler",     "must": false, "desc": "runs only if BRD↔TRD also disagree" }
+  ],
+  "forbidden": [
+    { "pattern": "any spec/source file written during the BARE run",
+      "desc": "bare /recon is report-only; writing on a bare run is a violation" },
+    { "pattern": "draft value deleted from code during --fix=docs",
+      "desc": "--fix=docs is as-built-wins; it updates docs, never erases implemented behavior" }
+  ]
+}

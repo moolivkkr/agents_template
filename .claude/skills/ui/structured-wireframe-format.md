@@ -1,3 +1,15 @@
+---
+skill: structured-wireframe-format
+description: Optional YAML-based wireframe format — typed data-source references, explicit UI states, validated against data-contracts.md
+version: "1.0"
+tags:
+  - wireframe
+  - yaml
+  - specs
+  - data-contracts
+  - ui
+---
+
 # Structured Wireframe Format — YAML-Based UI Specifications
 
 ## Purpose

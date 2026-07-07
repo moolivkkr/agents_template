@@ -33,9 +33,10 @@ skill_packs:
 
 # Agent: Implementation Guidelines Agent
 
-## Skill Packs to Load
-Load and apply the following skill packs:
+## Required Reading
+Load and apply the following, ground truth FIRST:
 - `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 - `.claude/skills/core/implementation-guidelines-template.md` — 24-section template for generating comprehensive guidelines
 - `.claude/skills/core/code-quality.md` — code quality standards to embed in guidelines
 - `.claude/skills/core/software-architecture.md` — architecture patterns to reference

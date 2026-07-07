@@ -1,0 +1,9 @@
+{
+  "task": "T-003-hotfix-idor",
+  "artifacts": [
+    { "path": "internal/repository/widget_repository.go",
+      "assert": ["grep:tenant_id"] },
+    { "path": "internal/repository/widget_repository_test.go",
+      "assert": ["grep:TC-R-003", "cmd_passes:go test ./internal/repository/..."] }
+  ]
+}

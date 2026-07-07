@@ -1,0 +1,27 @@
+{
+  "task": "T-001-crud-endpoint",
+  "mode": "OUTCOME",
+  "rubric": [
+    { "id": "R1", "weight": 0.25, "check": "artifact_exists",
+      "path": "internal/handler/widget_handler.go",
+      "desc": "handler implemented" },
+    { "id": "R2", "weight": 0.20, "check": "grep_present",
+      "pattern": "tenantID", "path": "internal/handler/widget_handler.go",
+      "desc": "tenant scoping threaded through the handler (not IDOR)" },
+    { "id": "R3", "weight": 0.20, "check": "command_passes",
+      "cmd": "go test ./internal/handler/...",
+      "desc": "handler unit + integration tests green" },
+    { "id": "R4", "weight": 0.15, "check": "grep_present",
+      "pattern": "TC-I-001",
+      "path": "internal/handler/widget_handler_integration_test.go",
+      "desc": "cross-tenant 404 integration test annotated TC-I-001" },
+    { "id": "R5", "weight": 0.10, "check": "grep_present",
+      "pattern": "404",
+      "path": "internal/handler/widget_handler_integration_test.go",
+      "desc": "test asserts 404 (not 403, not the row) on cross-tenant read" },
+    { "id": "R6", "weight": 0.10, "check": "grep_absent",
+      "pattern": "(TODO|t\\.Skip|@ts-ignore)",
+      "path": "internal/handler/",
+      "desc": "no stubs / suppression introduced" }
+  ]
+}

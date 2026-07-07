@@ -1,0 +1,20 @@
+{
+  "task": "T-005-reconcile-drift",
+  "mode": "OUTCOME",
+  "rubric": [
+    { "id": "R1", "weight": 0.25, "check": "grep_present",
+      "pattern": "draft", "path": "agent_state/recon/drift_report.md",
+      "desc": "bare run detects and names the extra 'draft' enum value" },
+    { "id": "R2", "weight": 0.20, "check": "grep_present",
+      "pattern": "FR-012", "path": "agent_state/recon/drift_report.md",
+      "desc": "drift is traced to the governing requirement FR-012" },
+    { "id": "R3", "weight": 0.25, "check": "no_source_change_on_bare_run",
+      "desc": "bare /recon modified zero spec/source files (read-only invariant)" },
+    { "id": "R4", "weight": 0.20, "check": "grep_present",
+      "pattern": "draft", "path": "docs/design/phases/${EVAL_PHASE}/specs/data-contracts.md",
+      "desc": "--fix=docs updated the TRD enum to include the as-built 'draft' value" },
+    { "id": "R5", "weight": 0.10, "check": "grep_present",
+      "pattern": "draft", "path": "internal/model/widget.go",
+      "desc": "code enum still contains 'draft' (as-built wins; behavior not erased)" }
+  ]
+}

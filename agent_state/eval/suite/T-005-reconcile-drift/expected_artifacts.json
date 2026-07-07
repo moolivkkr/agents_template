@@ -1,0 +1,13 @@
+{
+  "task": "T-005-reconcile-drift",
+  "artifacts": [
+    { "path": "agent_state/recon/drift_report.md",
+      "assert": ["grep:draft", "grep:FR-012"] },
+    { "path": "docs/design/phases/${EVAL_PHASE}/specs/data-contracts.md",
+      "assert": ["grep:draft"],
+      "phase": "after --fix=docs only" },
+    { "path": "internal/model/widget.go",
+      "assert": ["grep:draft"],
+      "note": "unchanged — as-built behavior must survive reconciliation" }
+  ]
+}

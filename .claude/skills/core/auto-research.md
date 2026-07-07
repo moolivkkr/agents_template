@@ -1,3 +1,15 @@
+---
+skill: auto-research
+description: Self-answering protocol — resolve open questions via research (web + code) instead of pausing for human input, with a confidence threshold
+version: "1.0"
+tags:
+  - research
+  - autonomy
+  - decisions
+  - web
+  - core
+---
+
 # Auto-Research Protocol — Self-Answering Questions Without Human Input
 
 ## When This Protocol Applies

@@ -1,3 +1,15 @@
+---
+skill: dual-ledger-replan
+description: Dual-ledger replanning — track intended vs actual work across two ledgers to re-plan safely and preserve durable decisions
+version: "1.0"
+tags:
+  - replanning
+  - ledger
+  - decisions
+  - state
+  - core
+---
+
 # Dual-Ledger Replanning Protocol
 
 `adaptive-replan.md` answers **what to re-run** once you've decided to replan. It does not

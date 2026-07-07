@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: CRUD Service Test Archetype.** The language-neutral version at [crud-service-test.md](crud-service-test.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: crud-service-test
 description: Go unit test archetype for the service layer — mocked dependencies, table-driven tests, testify suite, cache/audit/metrics verification, tenant isolation, edge cases

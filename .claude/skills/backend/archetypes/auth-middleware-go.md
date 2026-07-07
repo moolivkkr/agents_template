@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: Auth Middleware Archetype.** The language-neutral version at [auth-middleware.md](auth-middleware.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: auth-middleware
 description: Go auth middleware archetype — JWT validation, RBAC, tenant context, rate limiting, CORS, API key auth, request ID, structured logging

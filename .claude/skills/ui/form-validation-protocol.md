@@ -1,3 +1,15 @@
+---
+skill: form-validation-protocol
+description: Protocol — derive Zod validation schemas from data-contracts.md request types so client validation matches the API contract
+version: "1.0"
+tags:
+  - forms
+  - zod
+  - validation
+  - data-contracts
+  - ui
+---
+
 # Form Validation Protocol — Zod Schema Generation
 
 ## Rule: Zod schemas MUST derive from data-contracts.md

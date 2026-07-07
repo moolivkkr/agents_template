@@ -1,3 +1,15 @@
+---
+skill: repo-map
+description: Ranked repo map — Personalized-PageRank over a tree-sitter symbol graph to surface the most relevant files for a task
+version: "1.0"
+tags:
+  - repo-map
+  - ranking
+  - tree-sitter
+  - codebase
+  - core
+---
+
 # Ranked Repo Map Protocol (Personalized-PageRank + Tree-sitter)
 
 Downstream agents currently locate code by re-reading directories or dumping whole files into context.

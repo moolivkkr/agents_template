@@ -52,6 +52,7 @@ Before downgrading ANY finding's severity or skipping ANY check, review this tab
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `.claude/skills/core/security-owasp.md` — OWASP Top 10 patterns and mitigations
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design Constraints — project security requirements
 3. `docs/BRD.md` §NFR-SEC-* — specific security requirements with IDs
@@ -335,4 +336,37 @@ PASS | N HIGH (BLOCKING) / N MEDIUM / N LOW
 
 ## NFR-SEC-* Coverage
 | NFR ID | Requirement | Status |
+```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/security_review.md` (exact frontmatter path) using the template above.
+- [ ] IDOR chain-trace table populated for EVERY route with an ID parameter — no route skipped.
+- [ ] Every finding cites `file:line` and the exploitable property; every HIGH escalates immediately.
+- [ ] Dynamic checks either ran (app up) or are explicitly marked SKIPPED with the reason — never silently omitted.
+- [ ] The count line (`BLOCKING:N WARNING:N INFO:N`) is REAL — derived from findings. A `PASS` with zero routes traced is a FAIL to investigate, never a silent PASS.
+- [ ] If I could not review (no code produced this phase), I say so explicitly with the reason.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When a review surfaces something a FUTURE phase should know — a recurring vuln class, a project-specific security anti-pattern, an OWASP category the codebase keeps missing — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** security
+- **Tags:** {{LANG}}, owasp, <vuln-class>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/security_review.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"security_reviewer","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/security_review.md","ts":"<iso8601>"}
 ```

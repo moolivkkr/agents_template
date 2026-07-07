@@ -1,3 +1,15 @@
+---
+skill: change-impact-analysis
+description: Git-diff-based test selection — map changed files to the minimal set of tests/phases to re-run for per-phase regression
+version: "1.0"
+tags:
+  - regression
+  - test-selection
+  - git
+  - impact-analysis
+  - core
+---
+
 # Change-Impact Test Selection Protocol
 
 Per-phase regression currently runs ALL tests across ALL phases before writing gate.passed.

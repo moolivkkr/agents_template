@@ -1,3 +1,15 @@
+---
+skill: shared-backend-patterns
+description: Language-agnostic backend contracts — the shared patterns that per-language files (go/python/typescript/java/rust) extend
+version: "1.0"
+tags:
+  - backend
+  - contracts
+  - language-agnostic
+  - architecture
+  - core
+---
+
 # Shared Backend Patterns — Language-Agnostic Contracts
 
 > **Single source of truth** for cross-cutting backend concerns.

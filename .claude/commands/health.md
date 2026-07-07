@@ -156,7 +156,7 @@ If `gate.passed` exists, verify ALL required reports exist:
 REQUIRED_REPORTS=(
   "agent_state/phases/${PHASE}/reports/unit_tests.md"
   "agent_state/phases/${PHASE}/reports/e2e_results.md"
-  "agent_state/phases/${PHASE}/reports/code_quality_review.md"
+  "agent_state/phases/${PHASE}/reports/quality_gate.md"
   "agent_state/phases/${PHASE}/reports/acceptance_report.md"
   "agent_state/phases/${PHASE}/reports/collective_feedback.md"
 )
@@ -450,6 +450,145 @@ if [ -d "agent_state/debates" ] && [ -f "$DEC" ]; then
   done
 fi
 ```
+
+---
+
+## Step 5.6 — Enforcement Integrity (the mechanized backstop)
+
+The framework's guarantees are only real if they are enforced in CODE, not prose an agent is asked
+to obey. These invariants verify that the enforcement machinery itself is intact — a regression here
+silently turns a hard gate back into a suggestion.
+
+### 5.6a. Agent-common blocks present in every agent definition
+
+Every agent under `.claude/agents/{core,templates}/` MUST carry three self-enforcing blocks:
+1. a **Definition of Done** self-check block (the agent verifies its own output before returning),
+2. a **lessons write-back** line (appends a lesson to `agent_state/**/lessons*`), and
+3. an **execution-log append** line (writes a `completed` line to `execution.jsonl`).
+
+Without these, a spawned subagent can silently skip its DoD or never record completion — which is
+exactly how reviews got dropped and rosters went unsatisfied. This grep is the mechanized backstop
+that was previously missing (only prose asked agents to do it).
+
+```bash
+DOD=0; LES=0; EXE=0; TOTAL=0
+MISS_DOD=(); MISS_LES=(); MISS_EXE=()
+for f in .claude/agents/core/*.md .claude/agents/templates/*.md; do
+  [ -f "$f" ] || continue
+  case "$f" in *INVENTORY*|*AGENT_SCHEMA*) continue;; esac
+  TOTAL=$((TOTAL+1))
+  # (1) Definition of Done self-check block
+  if grep -qiE 'definition of done' "$f"; then DOD=$((DOD+1)); else MISS_DOD+=("$(basename "$f")"); fi
+  # (2) lessons write-back (append a lesson to an agent_state lessons file)
+  if grep -qiE 'agent_state/.*lessons|lessons\.(md|json)' "$f"; then LES=$((LES+1)); else MISS_LES+=("$(basename "$f")"); fi
+  # (3) execution.jsonl append (records completion into the execution guarantee log)
+  if grep -qE 'execution\.jsonl' "$f"; then EXE=$((EXE+1)); else MISS_EXE+=("$(basename "$f")"); fi
+done
+echo "Agent-common block coverage (of ${TOTAL} agent defs):"
+echo "  Definition of Done : ${DOD}/${TOTAL}"
+echo "  lessons write-back : ${LES}/${TOTAL}"
+echo "  execution.jsonl    : ${EXE}/${TOTAL}"
+[ ${#MISS_DOD[@]} -gt 0 ] && echo "  FAIL DoD missing        : ${MISS_DOD[*]}"
+[ ${#MISS_LES[@]} -gt 0 ] && echo "  FAIL lessons missing    : ${MISS_LES[*]}"
+[ ${#MISS_EXE[@]} -gt 0 ] && echo "  FAIL exec-log missing   : ${MISS_EXE[*]}"
+if [ "$DOD" -eq "$TOTAL" ] && [ "$LES" -eq "$TOTAL" ] && [ "$EXE" -eq "$TOTAL" ]; then
+  echo "✓ Every agent def carries all three agent-common blocks"
+else
+  echo "WARNING: some agent defs are missing an agent-common block (see per-agent FAIL lists above) —"
+  echo "         these agents can silently skip DoD / lessons / completion-logging."
+fi
+```
+
+Report per-agent PASS/FAIL and the coverage counts (e.g. `DoD: 12/68`). Treat any agent missing the
+execution-log block as a **WARNING** at minimum — it undermines the roster-completeness gate.
+
+### 5.6b. Hooks referenced by settings.json actually exist and are executable
+
+A renamed, deleted, or non-executable hook silently disables enforcement (e.g. verify-gate.sh
+un-wired → the phase gate becomes prose again). Assert every hook command in `settings.json` points
+at a real, executable file.
+
+```bash
+SETTINGS=".claude/settings.json"
+if [ -f "$SETTINGS" ]; then
+  # Extract the leading script path from every hook command (first token ending in .sh).
+  jq -r '.. | objects | select(has("command")) | .command' "$SETTINGS" 2>/dev/null \
+    | grep -oE '\.claude/hooks/[A-Za-z0-9_./-]+\.sh' | sort -u | while read -r h; do
+      if [ ! -f "$h" ]; then
+        echo "CRITICAL: settings.json references hook that does not exist: $h"
+      elif [ ! -x "$h" ]; then
+        echo "CRITICAL: hook exists but is NOT executable (chmod +x): $h"
+      else
+        echo "✓ hook present + executable: $h"
+      fi
+    done
+  # The gate hook is load-bearing — assert it specifically is wired.
+  if ! grep -q 'verify-gate.sh' "$SETTINGS"; then
+    echo "CRITICAL: verify-gate.sh is not wired in settings.json — the phase gate is UN-enforced (prose only)."
+  fi
+fi
+```
+
+### 5.6c. Roster / execution-log agent names ⊆ known agent names
+
+`roster.json` keys and every `execution.jsonl` agent must be REAL agent names (from
+`.claude/agents/{core,templates}/`, template `.tmpl.md` names normalized). A name/slot mismatch
+means the roster-completeness gate compares against phantom names and can never be satisfied (or is
+trivially satisfied) — the key/name mismatch bug class.
+
+```bash
+# Build the set of known agent names (core basenames + template basenames minus .tmpl).
+KNOWN=$(
+  { ls .claude/agents/core/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//'
+    ls .claude/agents/templates/*.tmpl.md 2>/dev/null | xargs -n1 basename | sed 's/\.tmpl\.md$//'
+    ls .claude/agents/generated/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//'
+  } | sort -u
+)
+is_known() { printf '%s\n' "$KNOWN" | grep -qxF "$1"; }
+
+for phase_dir in agent_state/phases/*/; do
+  [ -d "$phase_dir" ] || continue
+  PN=$(basename "$phase_dir")
+  ROSTER="${phase_dir}roster.json"
+  EXEC="${phase_dir}execution.jsonl"
+  if [ -f "$ROSTER" ]; then
+    jq -r '.required[]?' "$ROSTER" 2>/dev/null | while read -r a; do
+      [ -z "$a" ] && continue
+      is_known "$a" || echo "CRITICAL: Phase ${PN} roster.required has unknown agent name: '$a' (not in .claude/agents/) — key/name mismatch"
+    done
+  fi
+  if [ -f "$EXEC" ]; then
+    jq -r 'select(type=="object") | .agent' "$EXEC" 2>/dev/null | sort -u | while read -r a; do
+      [ -z "$a" ] && continue
+      is_known "$a" || echo "WARNING: Phase ${PN} execution.jsonl logs unknown agent name: '$a' (not in .claude/agents/)"
+    done
+  fi
+done
+echo "✓ roster/exec agent-name check complete"
+```
+
+### 5.6d. Re-run the real gate for gated phases
+
+For every phase that claims `gate.passed`, invoke the deterministic gate hook and surface a mismatch
+between the CLAIM and the EVIDENCE (the "gate.passed without reports" bug — now caught in code).
+
+```bash
+for phase_dir in agent_state/phases/*/; do
+  [ -d "$phase_dir" ] || continue
+  PN=$(basename "$phase_dir")
+  MAN="${phase_dir}manifest.json"
+  [ -f "$MAN" ] || continue
+  CLAIMS=$(jq -r 'try (.gate.passed) catch false | if . == true then "true" else "false" end' "$MAN" 2>/dev/null)
+  [ "$CLAIMS" = "true" ] || continue
+  if .claude/hooks/verify-gate.sh "$PN" >/tmp/vg-${PN}.out 2>&1; then
+    echo "✓ Phase ${PN}: gate.passed claim is backed by evidence (verify-gate PASS)"
+  else
+    echo "CRITICAL: Phase ${PN} claims gate.passed but verify-gate.sh BLOCKS it — see /tmp/vg-${PN}.out"
+  fi
+done
+```
+
+---
 
 ### Memory Hygiene `--fix` Repairs
 

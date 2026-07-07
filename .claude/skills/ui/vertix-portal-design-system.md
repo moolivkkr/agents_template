@@ -1,3 +1,15 @@
+---
+skill: vertix-portal-design-system
+description: Vertix portal house style — tokens, component library, theme, severity scale, card radius/shadow; tier-2 override of generic UI standards
+version: "1.0"
+tags:
+  - design-system
+  - vertix
+  - tokens
+  - theme
+  - ui
+---
+
 # Vertix Portal Design System — house style for all module UIs
 
 > **Precedence (see `.claude/skills/ui/README.md`).** For Vertix portal modules this file is **tier 2

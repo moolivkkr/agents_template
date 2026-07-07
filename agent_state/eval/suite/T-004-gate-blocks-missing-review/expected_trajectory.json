@@ -1,0 +1,14 @@
+{
+  "task": "T-004-gate-blocks-missing-review",
+  "mode": "TRAJECTORY",
+  "negative_path": true,
+  "expected_trajectory": [
+    { "step": "verify-gate.sh", "must": true, "desc": "the deterministic gate hook runs and returns BLOCK" }
+  ],
+  "forbidden": [
+    { "pattern": "gate.passed written while roster incomplete",
+      "desc": "the whole point — the gate must NOT pass with a missing required agent" },
+    { "pattern": "verify-gate.sh not invoked",
+      "desc": "if the gate hook never runs, enforcement is prose again" }
+  ]
+}

@@ -1,3 +1,15 @@
+---
+skill: agent-common
+description: Shared blocks every agent inherits — required reading, definition of done, no-intrinsic-self-correction, lessons write-back, severity model, output template
+version: "1.0"
+tags:
+  - agent-protocol
+  - dod
+  - verification
+  - memory
+  - core
+---
+
 # Agent Common Protocol — shared blocks every agent inherits
 
 > **Purpose.** Three things were missing or inconsistent across the agent fleet: (1) the ground-truth
@@ -47,6 +59,35 @@ Copy this block, specialized to the agent's output:
 
 **Anti-rationalization:** "the output looks about right, no need to re-check" is how stubs ship.
 Run the checklist.
+
+**Definition of Done is a checklist, NOT a self-correction loop.** Running it either passes (report
+done) or surfaces a concrete miss (a required path is empty, a count is fake) — fix *that named
+thing*. It is not a license to re-read your own work and "improve" it on a hunch. See Block 2b.
+
+---
+
+## Block 2b — No intrinsic self-correction (external error signal required)
+
+An agent may NOT enter a fix→re-check / rewrite loop driven by its own reflection. Correction needs an
+**external error signal** that names something concrete to fix. Evidence: reflection with no external
+signal *lowers* accuracy — a model cannot reliably tell its own right answers from wrong ones, so it
+flips as many right→wrong as wrong→right (Huang et al., ICLR 2024). Correction helps only when a
+verifier points at the actual error (CRITIC, ICLR 2024).
+
+**Prohibited:** "review your own work and improve it," "reflect, self-critique, then revise,"
+reflection-only polish passes. **Allowed** — a fix loop ONLY when triggered by:
+
+```
+[ ] A failing test (unit / integration / E2E) with a concrete assertion
+[ ] A compiler / type-checker / build error (file:line)
+[ ] A linter / static-analysis / security-scanner finding (rule + location)
+[ ] A SEPARATE reviewer agent that names the error and its location (never self-grading)
+[ ] A runtime failure from actually executing the code (500, panic, wrong output)
+```
+
+If none fired, there is nothing to correct — stop and report done. This is exactly why the framework
+runs review/reconciliation as separate named agents (Wave 4) instead of asking the author to
+self-review: the error signal must originate outside the agent that produced the work.
 
 ---
 

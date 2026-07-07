@@ -36,6 +36,7 @@ Single-purpose mechanical verifier. Does NOT ask "does the code look secure?" �
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -145,3 +146,34 @@ PASS | N CRITICAL findings
 ```
 
 CRITICAL findings block the phase gate immediately. Do not continue to subsequent review steps until all CRITICAL findings are resolved.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/tenant_isolation.md` (exact frontmatter path) using the template above.
+- [ ] Every ID-bearing route and every multi-tenant store was traced — the audit tables are populated, not summarized. Routes with no ID parameter are listed under "Routes Cleared".
+- [ ] Every finding cites `file:line`; CRITICAL findings escalate immediately.
+- [ ] A `PASS` with zero routes traced is a FAIL to investigate, never a silent PASS. If no code produced this phase, say so explicitly with the reason.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When a trace surfaces something a FUTURE phase should know — a recurring tenant-scoping gap, an in-memory store the codebase keeps leaving unscoped — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** security
+- **Tags:** {{LANG}}, tenant-isolation, idor
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/tenant_isolation.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"tenant_isolation_verifier","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/tenant_isolation.md","ts":"<iso8601>"}
+```

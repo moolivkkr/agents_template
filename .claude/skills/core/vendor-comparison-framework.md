@@ -1,3 +1,15 @@
+---
+skill: vendor-comparison-framework
+description: Framework for comparing vendors/open-source options — research-first, criteria matrix, evidence-cited, no unverified claims
+version: "1.0"
+tags:
+  - vendors
+  - comparison
+  - research
+  - evaluation
+  - core
+---
+
 # Vendor & Open-Source Comparison Framework
 
 ## Purpose

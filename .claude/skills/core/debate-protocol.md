@@ -1,3 +1,15 @@
+---
+skill: debate-protocol
+description: Multi-specialist debate — research, debate, collaborate, decide; produces a durable verdict promoted to the decisions ledger
+version: "1.0"
+tags:
+  - debate
+  - decisions
+  - multi-agent
+  - consensus
+  - core
+---
+
 # Debate Protocol — Research, Debate, Collaborate, Decide
 
 ## Purpose

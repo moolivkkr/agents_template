@@ -1,5 +1,17 @@
 > **Foundation:** This file extends [shared-backend-patterns.md](../core/shared-backend-patterns.md) with language-specific implementations. Read the shared patterns first for language-agnostic contracts.
 
+---
+skill: java
+description: Java patterns for Spring Boot — layered architecture, dependency injection, JPA/Hibernate, records, streams, JUnit 5 testing
+version: "1.0"
+tags:
+  - java
+  - spring-boot
+  - jpa
+  - patterns
+  - testing
+---
+
 # Java patterns and conventions for Spring Boot applications.
 
 ## Project Structure

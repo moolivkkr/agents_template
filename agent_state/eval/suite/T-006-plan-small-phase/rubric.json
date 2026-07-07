@@ -1,0 +1,25 @@
+{
+  "task": "T-006-plan-small-phase",
+  "mode": "OUTCOME",
+  "rubric": [
+    { "id": "R1", "weight": 0.20, "check": "artifact_exists",
+      "path": "docs/design/phases/${EVAL_PHASE}/specs/TRD.md",
+      "desc": "TRD produced for the phase" },
+    { "id": "R2", "weight": 0.15, "check": "grep_present",
+      "pattern": "FR-020", "path": "docs/design/phases/${EVAL_PHASE}/specs/TRD.md",
+      "desc": "TRD cites the governing requirement FR-020" },
+    { "id": "R3", "weight": 0.20, "check": "count_at_least",
+      "pattern": "TC-U-", "path": "docs/design/phases/${EVAL_PHASE}/specs/", "min": 8,
+      "desc": ">= 8 unit TC-* IDs enumerated (exhaustive, not a sample)" },
+    { "id": "R4", "weight": 0.20, "check": "count_at_least",
+      "pattern": "TC-I-", "path": "docs/design/phases/${EVAL_PHASE}/specs/", "min": 6,
+      "desc": ">= 6 integration TC-* IDs enumerated" },
+    { "id": "R5", "weight": 0.10, "check": "count_at_least",
+      "pattern": "TC-E2E-", "path": "docs/design/phases/${EVAL_PHASE}/specs/", "min": 3,
+      "desc": ">= 3 E2E TC-* IDs enumerated" },
+    { "id": "R6", "weight": 0.15, "check": "grep_present",
+      "pattern": "(assumption|open question|risk)",
+      "path": "docs/design/phases/${EVAL_PHASE}/specs/",
+      "desc": "spec surfaces an assumption/risk rather than silently guessing" }
+  ]
+}

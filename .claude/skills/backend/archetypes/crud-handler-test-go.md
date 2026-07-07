@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: CRUD Handler Test Archetype.** The language-neutral version at [crud-handler-test.md](crud-handler-test.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: crud-handler-test
 description: Go HTTP handler test archetype — httptest, chi router, JSON request/response validation, auth tests, error mapping, pagination, response envelope assertions

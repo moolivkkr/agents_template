@@ -1,3 +1,15 @@
+---
+skill: accessibility-patterns
+description: WCAG 2.2 AA implementation reference — semantic elements, ARIA, keyboard nav, focus management, contrast, screen-reader patterns
+version: "1.0"
+tags:
+  - accessibility
+  - a11y
+  - wcag
+  - aria
+  - ui
+---
+
 # Accessibility Patterns — WCAG 2.2 AA Implementation Reference
 
 ## Semantic HTML Rules — Decision Table

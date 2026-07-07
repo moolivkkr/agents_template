@@ -243,3 +243,34 @@ On completion, write `agent_state/phases/{{PHASE}}/integration_test_agent/manife
   "bugs_found": []
 }
 ```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Integration tests written under the frontmatter `output.primary` path; results recorded at `agent_state/phases/{{PHASE}}/reports/integration_tests.md`.
+- [ ] Every test actually ran against real dependencies — reported pass/fail counts are actual numbers, not estimates. `Total: 0` is a FAIL to investigate, never a silent PASS.
+- [ ] Cross-tenant IDOR probes ran for every ID-bearing endpoint; every HIGH/MEDIUM TC-* ID for the integration tier is annotated.
+- [ ] If a dependency was unavailable, I say so explicitly with the reason — I do NOT report success on skipped tests.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When testing surfaces something a FUTURE phase should know — a fixture/teardown pattern, a real IDOR bug class, a flaky integration point — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** testing|security|agent_performance
+- **Tags:** {{LANG}}, integration-tests, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/integration_tests.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"integration_test_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/integration_tests.md","ts":"<iso8601>"}
+```

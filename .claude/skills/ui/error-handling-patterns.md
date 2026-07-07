@@ -1,3 +1,15 @@
+---
+skill: error-handling-patterns
+description: UI error handling — HTTP-status-to-UI mapping, error boundaries, toast/inline patterns, retry, and user-facing messages
+version: "1.0"
+tags:
+  - errors
+  - error-boundary
+  - ux
+  - resilience
+  - ui
+---
+
 # Error Handling Patterns — UI Reference
 
 ## Error Type → UI Pattern Lookup Table

@@ -1,3 +1,15 @@
+---
+skill: edit-validation
+description: Reject malformed edits before writing — validate structure/syntax of an edit against the target file to prevent corrupt writes
+version: "1.0"
+tags:
+  - editing
+  - validation
+  - safety
+  - tooling
+  - core
+---
+
 # Edit-Validation Protocol — Reject Malformed Edits Before Writing
 
 > **Read Tier 0 first.** `docs/PROJECT_FACTS.md` (ground-truth invariants) is loaded whole before any

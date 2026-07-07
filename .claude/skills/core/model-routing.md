@@ -1,3 +1,15 @@
+---
+skill: model-routing
+description: Complexity-based model routing — pick haiku/sonnet/opus per task complexity to balance cost and quality
+version: "1.0"
+tags:
+  - model-routing
+  - cost
+  - complexity
+  - intelligence
+  - core
+---
+
 # Complexity-Based Model Routing Protocol
 
 Agents currently use a hardcoded model per role (e.g., spec_impl_reconciler always uses opus).

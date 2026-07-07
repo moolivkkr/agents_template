@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: CRUD Repository Archetype.** The language-neutral version at [crud-repository.md](crud-repository.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: crud-repository
 description: Go pgx repository archetype — parameterized queries, cursor pagination, soft delete, multi-level caching, tenant isolation, batch operations, optimistic locking

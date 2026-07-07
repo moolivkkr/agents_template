@@ -1,3 +1,15 @@
+---
+skill: responsive-patterns
+description: Mobile-first responsive design — breakpoints, fluid layouts, container queries, and progressive enhancement at larger sizes
+version: "1.0"
+tags:
+  - responsive
+  - mobile-first
+  - breakpoints
+  - layout
+  - ui
+---
+
 # Responsive Design Patterns — Mobile-First Reference
 
 ## Breakpoint Strategy (Mobile-First)

@@ -1,0 +1,16 @@
+{
+  "task": "T-006-plan-small-phase",
+  "mode": "TRAJECTORY",
+  "expected_trajectory": [
+    { "step": "phase_assumptions_analyzer", "must": true,  "desc": "surface assumptions/risks before specs" },
+    { "step": "spec_writer",                "must": true,  "produces": "specs/TRD.md" },
+    { "step": "spec_verifier",              "must": true,  "order_after": "spec_writer" },
+    { "step": "plan_goal_verifier",         "must": true,  "desc": "spec covers the phase goal / FR-020" }
+  ],
+  "forbidden": [
+    { "pattern": "spec_writer emitted without TC-* enumeration",
+      "desc": "a spec without exhaustive TC-* IDs fails the plan's own contract" },
+    { "pattern": "spec_verifier skipped",
+      "desc": "an unverified spec can under-enumerate silently" }
+  ]
+}

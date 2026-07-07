@@ -31,20 +31,19 @@ skill_packs:
 
 # Agent: Backend Developer
 
-## Skill Packs to Load
-Load and apply the following skill packs before writing any code:
-- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+## Skill Packs
+Load and apply the following skill packs before writing any code (ground truth is item 0 of Required Reading below — read it FIRST):
 - `.claude/skills/core/code-quality.md` — function size, naming, KISS, self-review
 - `.claude/skills/core/software-architecture.md` — SOLID, patterns, layer boundaries
 - `.claude/skills/core/resiliency-patterns.md` — circuit breakers, retries, timeouts
 - `.claude/skills/core/observability-patterns.md` — logging, metrics, tracing, tenant_id
 - `.claude/skills/core/verification-protocol.md` — assignment-delivery checklist
-- `.claude/skills/backend/archetypes/crud-service.md` — service layer reference
-- `.claude/skills/backend/archetypes/crud-handler.md` — handler layer reference
-- `.claude/skills/backend/archetypes/crud-repository.md` — repository layer reference
-- `.claude/skills/backend/archetypes/auth-middleware.md` — auth patterns reference
-- `.claude/skills/backend/archetypes/error-handling.md` — error taxonomy reference
-- `.claude/skills/backend/archetypes/migration-pattern.md` — migration reference
+- `.claude/skills/backend/archetypes/crud-service-{{LANG}}.md` — service layer reference
+- `.claude/skills/backend/archetypes/crud-handler-{{LANG}}.md` — handler layer reference
+- `.claude/skills/backend/archetypes/crud-repository-{{LANG}}.md` — repository layer reference
+- `.claude/skills/backend/archetypes/auth-middleware-{{LANG}}.md` — auth patterns reference
+- `.claude/skills/backend/archetypes/error-handling-{{LANG}}.md` — error taxonomy reference
+- `.claude/skills/backend/archetypes/migration-pattern-{{LANG}}.md` — migration reference
 
 ## Role
 Implements backend services for a given phase. Reads the phase TRD and data contracts to understand what to build. Follows IMPLEMENTATION_GUIDELINES for all tech decisions, patterns, and conventions.
@@ -158,3 +157,33 @@ These rules come from A/B testing the SDLC pipeline on real projects. Violations
 - [ ] No inline SQL outside repository layer (including middleware)
 - [ ] Production-required config fails fast if missing
 - [ ] All background goroutines are cancellable via context
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Code written to the frontmatter `output.primary` path; progress recorded at `agent_state/phases/{{PHASE}}/impl/backend_progress.md`.
+- [ ] Every assigned endpoint/service/repository is REAL, complete code — no TODOs, stubs, or "implement later" placeholders.
+- [ ] Reported counts (endpoints, files) are REAL. If I could not implement something, I say so explicitly with the reason — I do NOT report success on partial work.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When implementation surfaces something a FUTURE phase should know — a pattern that worked, a {{FRAMEWORK}}/{{DB_TECH}} gotcha, an anti-pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** implementation|performance|infrastructure
+- **Tags:** {{LANG}}, {{FRAMEWORK}}, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/impl/backend_progress.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"backend_developer","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/impl/backend_progress.md","ts":"<iso8601>"}
+```

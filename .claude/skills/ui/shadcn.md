@@ -1,3 +1,15 @@
+---
+skill: shadcn
+description: shadcn/ui patterns for composable, accessible React components — install, theming, and component usage conventions
+version: "1.0"
+tags:
+  - shadcn
+  - components
+  - react
+  - tailwind
+  - ui
+---
+
 # shadcn/ui patterns for composable, accessible React components.
 
 ## Install and Add Components

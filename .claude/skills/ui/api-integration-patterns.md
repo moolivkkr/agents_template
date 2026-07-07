@@ -1,3 +1,15 @@
+---
+skill: api-integration-patterns
+description: UI data-fetching layer — TanStack Query hooks, HTTP client setup, request/response typing; bans direct fetch in components
+version: "1.0"
+tags:
+  - api
+  - tanstack-query
+  - http
+  - data-fetching
+  - ui
+---
+
 # API Integration Patterns — HTTP Client + TanStack Query
 
 ## CRITICAL RULE: No Raw Data Fetching in Components

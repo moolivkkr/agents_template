@@ -1,0 +1,21 @@
+{
+  "task": "T-004-gate-blocks-missing-review",
+  "mode": "OUTCOME",
+  "negative_path": true,
+  "rubric": [
+    { "id": "R1", "weight": 0.35, "check": "command_fails",
+      "cmd": ".claude/hooks/verify-gate.sh ${EVAL_PHASE}",
+      "desc": "verify-gate.sh exits non-zero (BLOCK) for the incomplete-roster phase" },
+    { "id": "R2", "weight": 0.25, "check": "command_output_contains",
+      "cmd": ".claude/hooks/verify-gate.sh ${EVAL_PHASE}",
+      "pattern": "security_reviewer",
+      "desc": "the block reason names the missing required agent" },
+    { "id": "R3", "weight": 0.20, "check": "command_output_contains",
+      "cmd": ".claude/hooks/verify-gate.sh ${EVAL_PHASE}",
+      "pattern": "BLOCK",
+      "desc": "verdict is BLOCK, not PASS" },
+    { "id": "R4", "weight": 0.20, "check": "manifest_gate_not_passed",
+      "path": "agent_state/phases/${EVAL_PHASE}/manifest.json",
+      "desc": "manifest does NOT claim gate.passed==true while roster is incomplete" }
+  ]
+}

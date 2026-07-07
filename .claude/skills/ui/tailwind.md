@@ -1,3 +1,15 @@
+---
+skill: tailwind
+description: Tailwind CSS utility patterns for layout, spacing, flex/grid, and responsive design
+version: "1.0"
+tags:
+  - tailwind
+  - css
+  - layout
+  - responsive
+  - ui
+---
+
 # Tailwind CSS utility patterns for layout, spacing, and responsive design.
 
 ## Layout: Flexbox

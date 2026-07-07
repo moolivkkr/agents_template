@@ -1,0 +1,16 @@
+{
+  "task": "T-004-gate-blocks-missing-review",
+  "note": "Negative-path task — the 'artifact' under test is the gate VERDICT, not produced code. The eval driver seeds a scratch phase dir with roster.json (requires security_reviewer) and an execution.jsonl that omits security_reviewer's completed line, then asserts verify-gate.sh blocks.",
+  "seed_fixtures": [
+    { "path": "roster.json",
+      "content": {"phase": "${EVAL_PHASE}", "required": ["backend_developer", "unit_test_agent", "security_reviewer"]} },
+    { "path": "execution.jsonl",
+      "lines": [
+        {"agent": "backend_developer", "phase": "${EVAL_PHASE}", "status": "completed", "report": null, "ts": "2026-07-07T01:00:00Z"},
+        {"agent": "unit_test_agent", "phase": "${EVAL_PHASE}", "status": "completed", "report": "reports/unit_tests.md", "ts": "2026-07-07T01:05:00Z"}
+      ] },
+    { "path": "reports/unit_tests.md", "content": "# Unit Tests\ntotal: 12\npassed: 12\nfailed: 0\n" }
+  ],
+  "expected_verdict": "BLOCK",
+  "artifacts": []
+}

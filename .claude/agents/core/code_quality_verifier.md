@@ -45,6 +45,7 @@ Validates quality gate checklist items with concrete evidence. Every gate item g
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -491,6 +492,37 @@ Also write machine-readable evidence to `agent_state/phases/{{PHASE}}/reports/qu
 - Structured logger calls are NOT debug statements — do not flag `slog.Info`, `logger.Info`, `zap.Info`, etc.
 - Run in parallel with other reviewers — do not wait for code_reviewer_I or code_reviewer_II
 - If no implementation files are found in scope, report PASS with a note that no files were scanned
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/code_quality.md` (exact frontmatter path) plus `quality_gate_evidence.json`.
+- [ ] Every gate item has a REAL PASS/FAIL derived from an actual grep/scan, each FAIL citing `file:line` — not an estimate.
+- [ ] "No files scanned" is stated explicitly with the reason when it happens — I do NOT emit an empty-but-present PASS that reads as success.
+- [ ] The count line (`BLOCKING:N WARNING:N INFO:N`) matches the findings tables.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When a scan surfaces something a FUTURE phase should know — a recurring stub/placeholder pattern, a debug-statement leak the codebase keeps reintroducing — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** implementation|agent_performance
+- **Tags:** {{LANG}}, code-quality, <pattern>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/code_quality.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"code_quality_verifier","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/code_quality.md","ts":"<iso8601>"}
+```
 
 ---
 

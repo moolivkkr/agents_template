@@ -1,3 +1,15 @@
+---
+skill: type-generation-protocol
+description: Protocol — generate types/api.ts from data-contracts.md so UI code shares one type source with the API response schemas
+version: "1.0"
+tags:
+  - types
+  - codegen
+  - data-contracts
+  - type-safety
+  - ui
+---
+
 # Type Generation Protocol — data-contracts.md → types/api.ts
 
 ## Rule: All API response types MUST be auto-generated from data-contracts.md

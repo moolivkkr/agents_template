@@ -45,9 +45,11 @@ This file is append-only. Agents write entries during the pipeline; the file is 
 {"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"started"}
 ```
 
-**On agent completion:**
+**On agent completion:** (`agent` MUST be the REAL agent name, matching a `roster.required` entry;
+`report` MUST be the relative path to the agent's primary output, or `null` if it produces none —
+`.claude/hooks/verify-gate.sh` checks that this file exists and is non-stub)
 ```json
-{"ts":"<ISO>","agent":"<agent_name>","phase":N,"step":"<step_id>","status":"completed","duration_s":<N>,"findings":{"blocking":<N>,"warning":<N>},"output":"<primary_output_path>"}
+{"agent":"<agent_name>","phase":N,"status":"completed","report":"<relative-path-or-null>","ts":"<ISO>","step":"<step_id>","duration_s":<N>,"findings":{"blocking":<N>,"warning":<N>}}
 ```
 
 **On agent failure:**
@@ -178,12 +180,24 @@ fi
 # ⛔ AGENT-ROSTER COMPLETENESS — the execution guarantee (see develop-orchestrator Wave 0b/6).
 # A missing report catches a dropped agent only if we remembered to list the report. The roster
 # check is the backstop: it proves every REQUIRED agent has a "completed" entry in execution.jsonl.
-ROSTER="agent_state/phases/${PHASE}/roster.json"
-EXEC="agent_state/phases/${PHASE}/execution.jsonl"
-if [ -f "$ROSTER" ]; then
-  python3 - "$ROSTER" "$EXEC" << 'PY' || exit 1
+# The single source of truth is .claude/hooks/verify-gate.sh — defer to it (it also checks that each
+# completed line's report exists and is non-stub, and that no "failed" lacks a later "completed").
+if [ -f ".claude/hooks/verify-gate.sh" ]; then
+  bash .claude/hooks/verify-gate.sh "${PHASE}" || {
+    echo "⛔ GATE BLOCKED by verify-gate.sh (roster.required vs execution.jsonl)."
+    echo "   Re-spawn any missing/failed agents before gating."
+    exit 1
+  }
+else
+  # Fallback membership check (hook is authoritative — roster uses a flat "required" array of REAL
+  # agent names, matching the "agent" field each writes to execution.jsonl).
+  ROSTER="agent_state/phases/${PHASE}/roster.json"
+  EXEC="agent_state/phases/${PHASE}/execution.jsonl"
+  if [ -f "$ROSTER" ]; then
+    python3 - "$ROSTER" "$EXEC" << 'PY' || exit 1
 import json, sys, os
 roster = json.load(open(sys.argv[1]))
+required = roster.get("required", [])
 completed = set()
 if os.path.exists(sys.argv[2]):
     for line in open(sys.argv[2]):
@@ -193,13 +207,13 @@ if os.path.exists(sys.argv[2]):
             e = json.loads(line)
             if e.get("status") == "completed": completed.add(e.get("agent"))
         except Exception: pass
-missing = [a for a, m in roster.get("agents", {}).items()
-           if m.get("status") == "required" and a not in completed]
+missing = [a for a in required if a not in completed]
 if missing:
     print("⛔ GATE BLOCKED — required agents never completed:", ", ".join(missing))
     sys.exit(1)
 print("✓ Roster complete — every required agent ran.")
 PY
+  fi
 fi
 
 # Content validation — file existence is necessary but NOT sufficient.
@@ -230,27 +244,46 @@ done
 
 echo "Running full regression test suite (all phases, all tiers)..."
 
-# Read test commands from IMPLEMENTATION_GUIDELINES (Section: Testing)
-# Fallback to common defaults if not specified
-# These MUST cover: unit tests, integration tests, AND e2e tests
+# ⛔ NO SILENT LANGUAGE DEFAULT. The test commands are read from the project's
+# docs/IMPLEMENTATION_GUIDELINES.md ("## Common Tasks" table or a "Testing" section). If a command
+# cannot be found there, the gate FAILS LOUDLY — it does NOT fall back to `go test ./...` (a Python /
+# Node / Rust project would then "pass" by running a Go command that finds nothing). This was a real
+# latent footgun: the old `read_from_guidelines "..." || echo "go test ./..."` fallback made the
+# whole regression gate green on any non-Go project.
+#
+# read_cmd_from_guidelines <label-regex> — greps the guidelines for a labelled command and echoes it.
+# Prints nothing (and returns non-zero) if not found. It invents NO default.
+read_cmd_from_guidelines() {
+  local label="$1" file="docs/IMPLEMENTATION_GUIDELINES.md"
+  [ -f "$file" ] || return 1
+  # Accept either a table row  | Run unit tests | `<cmd>` |  or a line  unit_test_command: <cmd>
+  # Extract the first backtick-quoted command on a line matching the label.
+  grep -iE "$label" "$file" | grep -oE '`[^`]+`' | head -1 | tr -d '`'
+}
+
+MISSING_CMDS=()
+UNIT_CMD=$(read_cmd_from_guidelines 'unit[ _-]?test');           [ -z "$UNIT_CMD" ]  && MISSING_CMDS+=("unit")
+INTEG_CMD=$(read_cmd_from_guidelines 'integration[ _-]?test');   [ -z "$INTEG_CMD" ] && MISSING_CMDS+=("integration")
+E2E_CMD=$(read_cmd_from_guidelines 'e2e|end[ _-]?to[ _-]?end');  [ -z "$E2E_CMD" ]   && MISSING_CMDS+=("e2e")
+
+if [ ${#MISSING_CMDS[@]} -gt 0 ]; then
+  echo "⛔ GATE BLOCKED: could not determine the ${MISSING_CMDS[*]} test command(s) from"
+  echo "   docs/IMPLEMENTATION_GUIDELINES.md. Add them under '## Common Tasks' (as \`backtick\` commands)"
+  echo "   e.g.  | Run unit tests | \`pytest\` |  /  | Run e2e tests | \`npx playwright test\` |"
+  echo "   Refusing to run a silent default — a wrong-language default would pass the gate by testing"
+  echo "   nothing. Fix the guidelines, then re-run the gate."
+  exit 1
+fi
 
 # Tier 1: Unit tests (all phases)
-# Example: npx vitest run / go test ./... / pytest
-UNIT_CMD=$(read_from_guidelines "unit_test_command" || echo "go test ./...")
 eval "$UNIT_CMD" 2>&1 | tee /tmp/gate-unit-results.txt
 UNIT_EXIT=$?
 
 # Tier 2: Integration tests (all phases — requires infra running)
-# Example: go test ./tests/integration/... / pytest tests/integration/
-INTEG_CMD=$(read_from_guidelines "integration_test_command" || echo "go test ./tests/integration/...")
 eval "$INTEG_CMD" 2>&1 | tee /tmp/gate-integ-results.txt
 INTEG_EXIT=$?
 
-# Tier 3: E2E tests (all phases — project-type-aware)
-# Web app: npx playwright test
-# CLI tool: go test ./tests/e2e/... or custom E2E runner
-# Library: go test ./tests/e2e/...
-E2E_CMD=$(read_from_guidelines "e2e_test_command" || echo "npx playwright test --reporter=list")
+# Tier 3: E2E tests (all phases — project-type-aware: browser for web, CLI/pipeline for CLI/libs)
 eval "$E2E_CMD" 2>&1 | tee /tmp/gate-e2e-results.txt
 E2E_EXIT=$?
 
@@ -1080,26 +1113,33 @@ If `--audit_only` flag: stop here and print the report.
 
 ---
 
-## Step 2 — Implementation (Wave-based Parallel Execution)
+## Step 2 — Implementation (Build-step Parallel Execution)
+
+> **⛔ Vocabulary note:** "Wave 1–6" is RESERVED for the six-wave macro model (Orient/Audit,
+> Implement, Test, Review, Iterate, Gate) used throughout this file and `/develop-orchestrator`.
+> Step 2's internal build order below uses a SEPARATE, non-colliding label — **Build-step B\*** — so
+> no "Wave N" ever means two different things. This entire Step 2 tree is the internal decomposition
+> of macro Wave 2 (IMPLEMENT).
 
 **Agents:** Generated agents from `.claude/agents/generated/` per component type
 
-Run implementation in the waves defined in `PHASE_PLAN.md`. Each wave runs in parallel; waves are sequential.
+Run implementation in the build-steps defined in `PHASE_PLAN.md`. Each build-step runs its agents in
+parallel; build-steps are sequential.
 
-**Typical wave structure:**
+**Typical build-step structure:**
 ```
-Wave 1 (parallel):
+Build-step B1 (parallel):
   ├─ database_agent     → schema design + docs/design/database.md
   └─ migration_agent    → migration files (up + down)
 
-Wave 1.5 (sequential gate — validates migrations before applying):
+Build-step B1-gate (sequential gate — validates migrations before applying):
   └─ Migration Validation → dry-run migrations against test DB
       Checks:
       1. Migration files parse without syntax errors
       2. UP migration applies cleanly to empty test DB
       3. DOWN migration reverses the UP cleanly
       4. UP re-applies after DOWN (idempotency)
-      If validation fails → block Wave 2, surface error to migration_agent for fix (max 1 retry)
+      If validation fails → block Build-step B2a, surface error to migration_agent for fix (max 1 retry)
 
 ### Migration Failure Auto-Recovery
 
@@ -1114,7 +1154,7 @@ If DOWN rollback also fails:
 - STOP immediately — schema is now in an unknown state
 - Surface: `⛔ CRITICAL: Migration UP failed AND DOWN rollback failed. Manual intervention required.`
 - Write to agent_state/phases/${PHASE}/migration_failure.json with full error details
-- Do NOT proceed to Wave 2
+- Do NOT proceed to Build-step B2a
 
 This prevents the common failure where Phase N migration adds a table, fails partway through,
 and Phase N re-development tries to add the same table again.
@@ -1125,17 +1165,17 @@ and Phase N re-development tries to add the same table again.
 - Irreversible migrations explicitly acknowledged in migration metadata
 - If any CRITICAL finding: STOP — do not apply migration until resolved
 
-Wave 2a (sequential — api_developer depends on backend service interfaces):
+Build-step B2a (sequential — api_developer depends on backend service interfaces):
   └─ backend_developer  → domain models, services, repositories
        ↓ writes manifest with service method return types (list/single/none)
 
-Wave 2a.5 (COMPILE/TYPECHECK GATE — BLOCKING):
+Build-step B2a-check (COMPILE/TYPECHECK GATE — BLOCKING):
   └─ Build verification: compile/typecheck the codebase
-       See "Wave 2a.5 — Compile/Typecheck Gate" section below
+       See "Build-step B2a-check — Compile/Typecheck Gate" section below
        If FAILS → route back to backend_developer for fix (max 2 attempts)
-       Do NOT proceed to Wave 2b on broken code
+       Do NOT proceed to Build-step B2b on broken code
 
-### Wave 2a.5 — Compile/Typecheck Gate (BLOCKING)
+### Build-step B2a-check — Compile/Typecheck Gate (BLOCKING)
 
 **Purpose:** Catch compilation errors before downstream agents build on broken code. This is cheap (seconds to run) but prevents expensive downstream failures where api_developer builds on code that doesn't compile.
 
@@ -1166,22 +1206,22 @@ Wave 2a.5 (COMPILE/TYPECHECK GATE — BLOCKING):
 2. Route back to `backend_developer` with the error output as context
 3. Max 2 fix attempts — backend_developer reads compiler errors, fixes, then re-runs compile check
 4. If still failing after 2 attempts: **STOP** — surface compiler errors to user
-5. Do **NOT** proceed to Wave 2b (api_developer) on broken code — api_developer will build on a broken foundation
+5. Do **NOT** proceed to Build-step B2b (api_developer) on broken code — api_developer will build on a broken foundation
 
 **On success:**
 ```
-✅ Wave 2a.5 — Compile/Typecheck Gate PASSED
+✅ Build-step B2a-check — Compile/Typecheck Gate PASSED
    Language: <detected language>
    Command: <command run>
-   → Proceeding to Wave 2b (api_developer)
+   → Proceeding to Build-step B2b (api_developer)
 ```
 
 **Log to execution.jsonl:**
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"2a.5\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2a-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
 
-### Agent Handoff Protocol (Wave 2a → Wave 2b)
+### Agent Handoff Protocol (Build-step B2a → B2b)
 
 After backend_developer completes — **atomic write + verified ready signal:**
 1. Write manifest to `.tmp` first: `agent_state/phases/${PHASE}/backend_developer/manifest.json.tmp`
@@ -1208,67 +1248,67 @@ Before api_developer starts:
 
 This pattern applies to ALL wave transitions where one agent depends on another's output. The **atomic write + verified ready signal** prevents race conditions where a downstream agent reads a partial or corrupt manifest.
 
-Wave 2b (depends on 2a passing build + backend_developer ready signal):
+Build-step B2b (depends on B2a passing build + backend_developer ready signal):
   └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
        ↓ reads data-contracts.md from /plan as MANDATORY source of truth for response shapes
        ↓ api-contracts.md is DERIVED from data-contracts.md (validates, doesn't reinvent)
        ↓ if api-contracts.md shapes differ from data-contracts.md → BLOCKER
        ↓ reads backend_developer manifest to pick respondList/respondOne/respondError
 
-Wave 2b.5 (API LAYER COMPILE CHECK — BLOCKING):
+Build-step B2b-check (API LAYER COMPILE CHECK — BLOCKING):
   └─ Build verification: compile/typecheck after api_developer's changes
-       Same compile/typecheck command as Wave 2a.5
+       Same compile/typecheck command as Build-step B2a-check
        Verifies api_developer's changes compile cleanly WITH backend_developer's code
        If FAILS → route back to api_developer for fix (max 2 attempts), then STOP
 
-### Wave 2b.5 — API Layer Compile Check (BLOCKING)
+### Build-step B2b-check — API Layer Compile Check (BLOCKING)
 
 **Purpose:** Verify that api_developer's changes compile cleanly alongside backend_developer's code. API handlers frequently reference service interfaces, DTOs, and error types — type mismatches between layers are the most common inter-agent failure mode.
 
-**Command:** Same language-specific compile/typecheck command as Wave 2a.5 (see table above).
+**Command:** Same language-specific compile/typecheck command as Build-step B2a-check (see table above).
 
 **On failure:**
 1. Capture compiler error output (first 50 lines)
 2. Route back to `api_developer` with the error output as context
 3. Max 2 fix attempts — api_developer reads compiler errors, fixes, then re-runs compile check
 4. If still failing after 2 attempts: **STOP** — surface compiler errors to user
-5. Do **NOT** proceed to Wave 2.5/2.75/3 on broken code
+5. Do **NOT** proceed to Build-step B2-contract/B2-smoke/B3 on broken code
 
 **On success:**
 ```
-✅ Wave 2b.5 — API Layer Compile Check PASSED
+✅ Build-step B2b-check — API Layer Compile Check PASSED
    Language: <detected language>
    Command: <command run>
-   → Proceeding to Wave 2.5/2.75 (contract validation / smoke test)
+   → Proceeding to Build-step B2-contract/B2-smoke (contract validation / smoke test)
 ```
 
 **Log to execution.jsonl:**
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"2b.5\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2b-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
 
-Wave 2.5 (sequential gate, UI phases only):
+Build-step B2-contract (sequential gate, UI phases only):
   └─ Contract Validation → verify api-contracts.md exists, all endpoints documented, shapes are unambiguous
 
-Wave 2.75 (SMOKE TEST — before expensive UI implementation):
+Build-step B2-smoke (SMOKE TEST — before expensive UI implementation):
   └─ Quick smoke test: does the app start? Does GET /health respond?
        docker compose up -d && curl -sf http://localhost:PORT/health
        If FAILS → route back to api_developer for fix (max 1 retry)
        This catches catastrophic failures before spending tokens on UI + test agents
 
-Wave 3 (parallel, UI phases only — BLOCKED until Wave 2.75 passes):
+Build-step B3 (parallel, UI phases only — BLOCKED until Build-step B2-smoke passes):
   └─ ui_developer       → screen implementation from UI specs + api-contracts.md + data-contracts.md
 
-Wave 3.5 (FRONTEND BUILD CHECK — BLOCKING, UI phases only):
+Build-step B3-check (FRONTEND BUILD CHECK — BLOCKING, UI phases only):
   └─ Build verification: full frontend build after ui_developer's changes
-       See "Wave 3.5 — Frontend Build Check" section below
+       See "Build-step B3-check — Frontend Build Check" section below
        If FAILS → route back to ui_developer for fix (max 2 attempts), then STOP
 
-### Wave 3.5 — Frontend Build Check (BLOCKING, if UI phase)
+### Build-step B3-check — Frontend Build Check (BLOCKING, if UI phase)
 
 **Purpose:** Catch frontend build failures before expensive test agents run. UI code frequently has TypeScript errors, missing imports, or JSX/TSX issues that are invisible until a full build runs.
 
-**Skip if:** `frontend.enabled = false` or this phase has no UI components (no Wave 3).
+**Skip if:** `frontend.enabled = false` or this phase has no UI components (no Build-step B3).
 
 **Commands:**
 | Framework | Command | Pass Condition |
@@ -1306,27 +1346,31 @@ Wave 3.5 (FRONTEND BUILD CHECK — BLOCKING, UI phases only):
 2. Route back to `ui_developer` with the error output as context
 3. Max 2 fix attempts — ui_developer reads build errors, fixes, then re-runs build check
 4. If still failing after 2 attempts: **STOP** — surface build errors to user
-5. Do **NOT** proceed to Wave 4 (test agents) on broken frontend code
+5. Do **NOT** proceed to Build-step B4 (test agents) on broken frontend code
 
 **On success:**
 ```
-✅ Wave 3.5 — Frontend Build Check PASSED
+✅ Build-step B3-check — Frontend Build Check PASSED
    Framework: <detected framework>
    Build command: <command run>
    TypeScript check: PASSED | SKIPPED (no tsconfig)
    ESLint check: PASSED | SKIPPED (no eslint config)
-   → Proceeding to Wave 4 (test agents)
+   → Proceeding to Build-step B4 (test agents)
 ```
 
 **Log to execution.jsonl:**
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"frontend_build_check\",\"step\":\"3.5\",\"status\":\"passed|failed\",\"framework\":\"<framework>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"frontend_build_check\",\"step\":\"B3-check\",\"status\":\"passed|failed\",\"framework\":\"<framework>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
 ```
 
-Wave 4 (parallel — test agents read BOTH specs AND implementation code):
+Build-step B4 (parallel — test agents read BOTH specs AND implementation code):
   ├─ unit_test_agent     → unit tests for all new code (reads actual functions, not just specs)
   └─ integration_test_agent → integration tests for service↔infra + contract shape tests
 ```
+
+> **Note:** Build-step B4 above is the initial unit/integration test authoring that runs INSIDE macro
+> Wave 2's implement loop. It does not replace macro **Wave 3 (TEST)**, which spawns the separate
+> per-tier test agents (unit / integration / e2e) under `/develop-orchestrator`.
 
 Each agent:
 1. Reads ALL Step 0 context + its specific spec files
@@ -1339,8 +1383,8 @@ Each agent:
 ## Step 2.5 — API Contract Validation (UI phases only)
 
 **When:** `frontend.enabled = true` in IMPLEMENTATION_GUIDELINES AND this phase includes UI screens
-**Runs after:** Wave 2 (backend_developer + api_developer complete)
-**Blocks:** Wave 3 (ui_developer will NOT start until this passes)
+**Runs after:** Build-step B2b (backend_developer + api_developer complete) — this IS Build-step B2-contract
+**Blocks:** Build-step B3 (ui_developer will NOT start until this passes)
 
 Validate that `api_developer` produced a complete, unambiguous contract artifact:
 
@@ -1369,7 +1413,7 @@ CONTRACT_FILE="docs/design/phases/${PHASE}/specs/api-contracts.md"
 **If validation fails:**
 - Surface specific mismatches: `⚠ Wireframe <screen>.wireframe.md binds <Component> to GET /api/v1/items expecting array, but api-contracts.md shows data as object`
 - Route back to `api_developer` for contract fix (max 1 retry)
-- After fix: re-validate → then proceed to Wave 3
+- After fix: re-validate → then proceed to Build-step B3
 
 **If validation passes:**
 ```
@@ -1377,7 +1421,7 @@ CONTRACT_FILE="docs/design/phases/${PHASE}/specs/api-contracts.md"
    Endpoints documented: N/N
    Shape checks: all unambiguous
    Wireframe cross-refs: all matched
-   → Proceeding to Wave 3 (ui_developer)
+   → Proceeding to Build-step B3 (ui_developer)
 ```
 
 ---
@@ -1813,7 +1857,11 @@ Review runs as three sequential stages. Each stage catches a different class of 
 - If mismatch persists after 2 rounds: log as `spec_deviation` with details → becomes gate blocker
 - Log all deviations (fixed and unresolved) in report
 
-**Output:** `agent_state/phases/${PHASE}/reports/spec_compliance_review.md`
+**Output:** `agent_state/phases/${PHASE}/reports/specs_vs_impl.md` — the spec↔impl reconciliation
+report. Stage 4a IS the spec-compliance dimension of that reconciliation; write findings here (as
+MISSING / DEVIATION entries) rather than to a separate `spec_compliance_review.md`, so the gate reads
+one canonical source. (Under `/develop-orchestrator` this is the `spec_impl_reconciler` agent's
+report; the two are the same file.)
 
 ```markdown
 # Spec Compliance Review — Phase N
@@ -1862,36 +1910,60 @@ On issues found from any reviewer:
   - BLOCKING/CRITICAL findings from dynamic checks have same gate impact as static findings
 - `dependency_scanner`: CRITICAL/HIGH with available fixes must apply. Auto-applies non-breaking fixes (`npm audit fix` etc.). Breaking fixes flagged for user decision.
 
-Reports written to `agent_state/phases/${PHASE}/reports/`:
-- `spec_compliance_review.md` (Stage 4a)
+Reports written to `agent_state/phases/${PHASE}/reports/` (canonical names — same set the gate and
+`/develop-orchestrator` require; spec-compliance findings are folded into the spec↔impl reconciliation
+report, `specs_vs_impl.md`, rather than a separate `spec_compliance_review.md`):
 - `code_review_I.md` (Stage 4b)
 - `code_review_II.md` (Stage 4b)
 - `security_review.md` (Stage 4b)
 - `dependency_scan.md` (Stage 4b)
-- `sast_scan.md` (Stage 4c)
+- `quality_gate.md` (code_quality_verifier)
+- `specs_vs_impl.md` · `spec_test_coverage.md` (reconcilers)
+- `sast_scan.md` (Stage 4c — CONDITIONAL: only when a SAST command is configured; else a recorded skip)
 
 ### Stage 4c — Static Application Security Testing (parallel with review)
 
 Run SAST scan on all code changed in this phase:
 
 ```bash
-# Language-specific SAST (from IMPLEMENTATION_GUIDELINES)
-# Go: govulncheck ./...
-# Python: bandit -r src/ -f json
-# TypeScript/JavaScript: semgrep --config auto src/
-# Java: spotbugs or semgrep
-# Rust: cargo audit
+# Language-specific SAST command comes from docs/IMPLEMENTATION_GUIDELINES.md — there is NO silent
+# language default (a hardcoded Go govulncheck on a Python project is worse than skipping). Read the
+# labelled command; if none is configured, SKIP explicitly (recorded, not silently passed).
+# Reference examples (what a guideline might list):
+#   Go: govulncheck ./...   Python: bandit -r src/ -f json   TS/JS: semgrep --config auto src/
+#   Java: semgrep / spotbugs   Rust: cargo audit
 
-SAST_CMD=$(detect_sast_command)  # from IMPLEMENTATION_GUIDELINES
-$SAST_CMD > agent_state/phases/${PHASE}/reports/sast_scan.md
+# Same helper as the Step-6 regression gate — reads a backtick-quoted command from the guidelines,
+# invents no default, returns empty when not found. (Redefined here because shell state does not
+# persist across steps.)
+read_cmd_from_guidelines() {
+  local label="$1" file="docs/IMPLEMENTATION_GUIDELINES.md"
+  [ -f "$file" ] || return 1
+  grep -iE "$label" "$file" | grep -oE '`[^`]+`' | head -1 | tr -d '`'
+}
+SAST_CMD=$(read_cmd_from_guidelines 'sast|govulncheck|bandit|semgrep|cargo audit')
+if [ -z "$SAST_CMD" ]; then
+  echo "⚠ SAST SKIPPED — no SAST command found in docs/IMPLEMENTATION_GUIDELINES.md." \
+    > agent_state/phases/${PHASE}/reports/sast_scan.md
+  echo "  Add one under '## Common Tasks' (e.g. \`govulncheck ./...\`, \`semgrep --config auto src/\`)" \
+    >> agent_state/phases/${PHASE}/reports/sast_scan.md
+  echo "  to enable static security scanning. This is an explicit, recorded skip — not a pass." \
+    >> agent_state/phases/${PHASE}/reports/sast_scan.md
+else
+  eval "$SAST_CMD" > agent_state/phases/${PHASE}/reports/sast_scan.md 2>&1
+fi
 ```
+
+`read_cmd_from_guidelines` is defined in the Step-6 regression block above; it invents no default and
+returns empty when nothing matches.
 
 Severity mapping:
 - CRITICAL/HIGH → BLOCKING (must fix before gate)
 - MEDIUM → WARNING (logged in known_issues)
 - LOW → INFO (logged but not blocking)
 
-If no SAST tool is configured in IMPLEMENTATION_GUIDELINES: skip with warning log.
+If no SAST tool is configured in IMPLEMENTATION_GUIDELINES: the scan is SKIPPED with the explicit
+warning written to sast_scan.md above (recorded, never a silent green).
 
 ---
 
@@ -1967,31 +2039,56 @@ Cycle 3: Final acceptance
 
 ## Step 6 — Phase Gate
 
-Read the output file for each gate item below. Evaluate the specific pass/fail criterion. If the condition is NOT met, record it as a blocker — **do not write gate.passed**.
+**⛔ SINGLE SOURCE OF TRUTH.** The canonical gate is `/develop-orchestrator` Wave 6, which itself
+defers to the shared hook `.claude/hooks/verify-gate.sh` for the execution-guarantee check (roster
+completeness + every completed agent's report exists and is non-stub + no unresolved `failed`). This
+Step 6 is the equivalent check for anyone running `/develop` directly; **if the required-report set
+here ever diverges from the orchestrator's, the orchestrator wins — reconcile back to it.** The two
+now share ONE required set (below), with the same report paths (`reports/…`, not a separate
+`agent_state/reconciliation/…` path).
+
+**Always-required reports** (a missing/stub one BLOCKS the gate — same list as the orchestrator's
+`REQUIRED_REPORTS` and the precondition check in the "Gate File Precondition Check" block above):
 
 ```
 Gate Item                    Source File                                          Pass Condition
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-Spec compliance              agent_state/phases/${PHASE}/reports/spec_compliance_review.md   COMPLIANT — no missing implementations
 Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests AND total > 0
 Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests AND total > 0
 E2E tests (MANDATORY)        agent_state/phases/${PHASE}/reports/e2e_results.md    No FAILED tests AND total > 0 (browser OR CLI/pipeline)
-Visual validation (if HTML)  agent_state/phases/${PHASE}/reports/visual_validation.md  Mismatch < 10% (skip if no wireframe.html)
-Reconciliation C (spec↔impl) agent_state/reconciliation/phase-${PHASE}/specs_vs_impl.md   No MISSING implementations AND unspecced items acknowledged (count logged)
-Reconciliation D (spec↔tests)agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md  No HIGH-priority untested behaviors
+Reconciliation (spec↔impl)   agent_state/phases/${PHASE}/reports/specs_vs_impl.md   No BLOCKING findings (MISSING resolved, unspecced acknowledged)
+Reconciliation (spec↔tests)  agent_state/phases/${PHASE}/reports/spec_test_coverage.md  No BLOCKING findings; no HIGH-priority untested behaviors
 TC-* ID inventory (if specs) agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md  100% coverage for HIGH+MEDIUM TC-* IDs (skip if no TC-* IDs in specs)
-Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     Post-optimization tests: PASS (CLEAN or PARTIAL accepted)
-UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimization.md  Post-optimization tests: PASS (if frontend.enabled; skip otherwise)
 Code review I                agent_state/phases/${PHASE}/reports/code_review_I.md   No BLOCKING issues
 Code review II               agent_state/phases/${PHASE}/reports/code_review_II.md  No architecture violations
 Security review              agent_state/phases/${PHASE}/reports/security_review.md  No HIGH severity findings
-SAST scan                    agent_state/phases/${PHASE}/reports/sast_scan.md        No CRITICAL or HIGH findings
+Dependency scan              agent_state/phases/${PHASE}/reports/dependency_scan.md  No CRITICAL/HIGH CVE without an applied fix
+Code quality                 agent_state/phases/${PHASE}/reports/quality_gate.md    No BLOCKING (TODOs/stubs/secrets/dead code)
 Acceptance tests             agent_state/phases/${PHASE}/reports/acceptance_report.md   All in-scope use cases: PASS
 Cross-phase regression       manifest.json → cross_phase_regression                    All affected phases PASSED (skip if PHASE == 1)
-Migration safety              agent_state/phases/${PHASE}/reports/migration_safety.md   Zero CRITICAL findings, DOWN coverage ≥ 90%
 ```
 
-**E2E gate is ALWAYS active.** Every phase must have E2E tests — generated during Step 3c.1 if they don't exist. Visual validation gate is active only when `*.wireframe.html` files exist for this phase.
+**Conditional reports** — required ONLY when the phase has the relevant surface; otherwise the item is
+recorded as `not_applicable` (an explicit, auditable skip — never a silent pass). The condition is
+determined from the phase's own code/specs, not guessed:
+
+```
+Gate Item (CONDITIONAL)      Source File                                          Required WHEN … / else
+─────────────────────────────────────────────────────────────────────────────────────────────────
+Security SAST scan           agent_state/phases/${PHASE}/reports/sast_scan.md        WHEN phase has security-relevant code AND a SAST command is configured in IMPLEMENTATION_GUIDELINES → No CRITICAL/HIGH. Else: recorded skip (see Stage 4c).
+Migration safety             agent_state/phases/${PHASE}/reports/migration_safety.md   WHEN phase adds/changes DB migrations → Zero CRITICAL findings, DOWN coverage ≥ 90%. Else: not_applicable.
+Visual validation            agent_state/phases/${PHASE}/reports/visual_validation.md  WHEN *.wireframe.html files exist for this phase → Mismatch < 10%. Else: not_applicable.
+Tenant isolation             agent_state/phases/${PHASE}/reports/tenant_isolation.md   WHEN project is multi-tenant (roster marks tenant_isolation_verifier required) → No cross-tenant leak. Else: not_applicable.
+UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimization.md  WHEN frontend.enabled → post-optimization tests PASS. Else: not_applicable.
+Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     Always → post-optimization tests PASS (CLEAN or PARTIAL accepted).
+```
+
+> **Spec compliance** is covered by the spec↔impl reconciliation report (`specs_vs_impl.md`) above —
+> there is no separate `spec_compliance_review.md` gate item (that was a divergent report name that
+> the orchestrator never required). If a phase produces a distinct spec-compliance report, fold its
+> findings into `specs_vs_impl.md` so there is one reconciliation source.
+
+**E2E gate is ALWAYS active.** Every phase must have E2E tests — generated during Step 3c.1 if they don't exist. The conditional gates above activate only when their surface is present; each inactive one must be logged `not_applicable`, never omitted silently.
 
 ### Gate Item Enforcement (EXECUTABLE — do not eyeball the table)
 
@@ -2117,7 +2214,30 @@ When the gate fails, DO NOT delete any phase files. Follow this sequence:
 
 ### --force-gate Override
 
-If `--force_gate` flag is set AND the gate has failures:
+**⛔ HARD PRECONDITION — a breaking change can NEVER be force-gated.** The prose in "Breaking Change
+Detection" asserts "Hard blocks CANNOT be force-gated"; this is where that claim is ENFORCED, not just
+stated. Before writing any forced-gate files, re-read `schema_evolution.md` and REFUSE the override if
+any unresolved `⛔ BREAKING` remains:
+
+```bash
+SCHEMA_EVO="agent_state/phases/${PHASE}/reports/schema_evolution.md"
+if [ -f "$SCHEMA_EVO" ]; then
+  # An unresolved breaking change is a ⛔ BREAKING line NOT marked resolved/restored/versioned on the
+  # same line. Count them; any >0 hard-blocks the force-gate.
+  UNRESOLVED_BREAKING=$(grep '⛔ BREAKING' "$SCHEMA_EVO" 2>/dev/null \
+    | grep -viE '(resolved|restored|versioned|deprecated alias|migration path)' | wc -l | tr -d ' ')
+  if [ "${UNRESOLVED_BREAKING:-0}" -gt 0 ]; then
+    echo "⛔ FORCE-GATE REFUSED: ${UNRESOLVED_BREAKING} unresolved BREAKING change(s) in $SCHEMA_EVO."
+    echo "   Breaking changes cannot be force-gated (they silently break earlier phases' consumers)."
+    echo "   Resolve each: restore the field, version the endpoint, or provide a deprecated-alias"
+    echo "   migration path — then re-run. --force_gate does NOT override this."
+    exit 1
+  fi
+fi
+```
+
+If `--force_gate` flag is set AND the gate has failures (and the breaking-change precondition above
+passed):
 1. Write `gate.passed` with a warning header:
    ```
    ⚠ FORCED GATE — ${N} blockers overridden by user at ${TIMESTAMP}

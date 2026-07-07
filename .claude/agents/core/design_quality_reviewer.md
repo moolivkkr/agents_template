@@ -34,6 +34,7 @@ Quality gate between wireframe design and UI implementation. Validates each wire
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -152,3 +153,34 @@ Output per spec:
 | data[].avatar | GET /api/v1/users | — | MISSING |
 
 If ANY field is MISSING: BLOCK the spec → route back to ux_designer for fix.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `docs/design/phases/{{PHASE}}/DESIGN_REVIEW.md` (exact frontmatter path).
+- [ ] Every wireframe field is traced to a real API contract field — the binding table is populated, and every MISSING blocks the spec.
+- [ ] Each finding cites the specific wireframe/spec artifact; the verdict (APPROVE / BLOCK) is derived from real checks, not impression.
+- [ ] An APPROVE with zero wireframes reviewed is a FAIL to investigate, never a silent PASS. If no design specs were produced this phase, say so explicitly with the reason.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When a review surfaces something a FUTURE phase should know — a recurring wireframe/contract mismatch, a design anti-pattern the UX keeps reintroducing — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** ux
+- **Tags:** design-review, wireframe, contract-binding
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/design/phases/{{PHASE}}/DESIGN_REVIEW.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"design_quality_reviewer","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/DESIGN_REVIEW.md","ts":"<iso8601>"}
+```

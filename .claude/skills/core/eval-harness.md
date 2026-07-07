@@ -1,3 +1,15 @@
+---
+skill: eval-harness
+description: Measure the framework's own output quality — score tasks on outcome and trajectory, compare against a baseline to detect improvement/regression
+version: "1.0"
+tags:
+  - eval
+  - quality
+  - benchmark
+  - trajectory
+  - core
+---
+
 # Eval Harness Protocol — Measure the Framework's Own Output Quality
 
 The framework changes waves, prompts, and skills to improve output — but it currently changes

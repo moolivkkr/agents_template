@@ -1,5 +1,17 @@
 > **Foundation:** This file extends [shared-backend-patterns.md](../core/shared-backend-patterns.md) with language-specific implementations. Read the shared patterns first for language-agnostic contracts.
 
+---
+skill: typescript
+description: TypeScript patterns — strict compiler config, discriminated unions, generics, type-safe API contracts, error handling, testing
+version: "1.0"
+tags:
+  - typescript
+  - types
+  - generics
+  - patterns
+  - testing
+---
+
 # TypeScript patterns and conventions for type-safe, maintainable applications.
 
 ## Compiler Config

@@ -1,3 +1,15 @@
+---
+skill: shared-context-protocol
+description: Ground truth for every session and subagent — the memory-tier model (facts/decisions/lessons/KB) and how context propagates
+version: "1.0"
+tags:
+  - memory
+  - context
+  - ground-truth
+  - tiers
+  - core
+---
+
 # Shared Context Protocol — Ground Truth for Every Session and Subagent
 
 ## The problem this solves

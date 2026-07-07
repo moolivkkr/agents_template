@@ -1,3 +1,15 @@
+---
+skill: component-composition
+description: Component composition patterns — building from shadcn/ui primitives, compound components, slots, and React composition over configuration
+version: "1.0"
+tags:
+  - components
+  - shadcn
+  - composition
+  - react
+  - ui
+---
+
 # Component Composition Patterns — shadcn/ui + React
 
 ## Component Hierarchy (Atomic Design for shadcn)

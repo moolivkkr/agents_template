@@ -1,5 +1,17 @@
 > **Foundation:** This file extends [shared-backend-patterns.md](../core/shared-backend-patterns.md) with language-specific implementations. Read the shared patterns first for language-agnostic contracts.
 
+---
+skill: rust
+description: Rust patterns — ownership, Result/Option error handling, traits, async with tokio, cargo layout, testing conventions
+version: "1.0"
+tags:
+  - rust
+  - ownership
+  - async
+  - traits
+  - testing
+---
+
 # Rust patterns and conventions for safe, performant applications.
 
 ## Project Structure

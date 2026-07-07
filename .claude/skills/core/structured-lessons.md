@@ -1,3 +1,15 @@
+---
+skill: structured-lessons
+description: Tagged, indexed lessons with confidence levels — the schema and write/read discipline for Tier 1 lessons
+version: "1.0"
+tags:
+  - lessons
+  - memory
+  - tagging
+  - confidence
+  - core
+---
+
 # Structured Lessons Protocol
 
 Lessons from each phase are currently stored as flat markdown (lessons.md + patterns.md).

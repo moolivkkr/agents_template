@@ -1,0 +1,18 @@
+{
+  "task": "T-002-ui-form",
+  "mode": "TRAJECTORY",
+  "expected_trajectory": [
+    { "step": "ux_designer",             "must": true,  "produces": "specs/widget-form.wireframe.md" },
+    { "step": "design_quality_reviewer", "must": true,  "order_after": "ux_designer" },
+    { "step": "ui_developer",            "must": true,  "order_after": "design_quality_reviewer" },
+    { "step": "ui_test_agent",           "must": true },
+    { "step": "code_reviewer_I",         "must": true },
+    { "step": "gate_verification",       "must": true }
+  ],
+  "forbidden": [
+    { "pattern": "ui_developer ran before design_quality_reviewer approved the spec",
+      "desc": "UI must not be built ahead of the gated design spec" },
+    { "pattern": "ui_test_agent skipped",
+      "desc": "a form without component/a11y tests is not done" }
+  ]
+}

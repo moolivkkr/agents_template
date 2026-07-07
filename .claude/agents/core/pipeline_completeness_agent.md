@@ -66,6 +66,7 @@ Holistic end-to-end validation of the SDLC pipeline. Runs AFTER `/accept` (globa
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -469,15 +470,15 @@ Pipeline Completeness Score: N% — VERDICT
 
 ---
 
-## Reconciliation Sequence
+## Reconciliation Chain (canonical — same in all 5 reconcilers)
 
-This agent is the CAPSTONE of the reconciliation pipeline:
-1. **requirements_brd_reconciler** — requirements -> BRD (runs during /init)
-2. **brd_spec_reconciler** — BRD -> specs (runs during /plan, per phase)
-3. **spec_impl_reconciler** — specs -> code (runs during /develop, per phase)
-4. **spec_test_reconciler** — specs -> tests (runs during /develop, per phase)
-5. **acceptance_test_agent** — FR-* -> live behavior (runs during /develop + /accept)
-6. **pipeline_completeness_agent** (this) — validates the ENTIRE chain end-to-end (runs after /accept)
+This agent is the CAPSTONE — **link 6 of 6** in the reconciliation chain:
+1. **requirements_brd_reconciler** — requirements → BRD (runs during `/init`)
+2. **brd_spec_reconciler** — BRD → spec (runs during `/plan`, per phase)
+3. **spec_impl_reconciler** — spec → code (runs during `/develop`, per phase)
+4. **spec_test_reconciler** — spec → tests (runs during `/develop`, per phase)
+5. **acceptance_test_agent** — FR-* → live behavior (runs during `/develop` + `/accept`)
+6. **pipeline_completeness_agent** (this) — validates the ENTIRE chain end-to-end (capstone, runs after `/accept`)
 
 ---
 
@@ -493,3 +494,34 @@ This agent is the CAPSTONE of the reconciliation pipeline:
 - Forced gate blockers are not automatically bad — but they MUST be tracked to resolution or explicit acceptance
 - Auto-resolved security decisions always appear in the report regardless of confidence level
 - A COMPLETE verdict requires 95%+ — this is intentionally strict because the pipeline promises full traceability
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/accept/pipeline_completeness_report.md` (exact frontmatter path).
+- [ ] Every FR-*/NFR-* is traced across ALL links (requirement→BRD→spec→code→test→live) — no "probably covered". Each broken link cites the exact artifact.
+- [ ] The completeness % is a REAL count of fully-traced requirements over total, not an estimate; a COMPLETE verdict genuinely meets the 95%+ bar.
+- [ ] A COMPLETE verdict with zero requirements traced is a FAIL to investigate, never a silent PASS.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (accept-time runs use the final phase number, or `0` if no phase context).
+
+## Lessons Write-Back (see agent-common Block 3)
+When the whole-chain audit surfaces something a FUTURE project should know — a systemic link that keeps breaking (e.g. specs consistently missing tests), a chain-wide traceability anti-pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning|agent_performance
+- **Tags:** reconciliation, traceability, pipeline-completeness
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/accept/pipeline_completeness_report.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"pipeline_completeness_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/accept/pipeline_completeness_report.md","ts":"<iso8601>"}
+```

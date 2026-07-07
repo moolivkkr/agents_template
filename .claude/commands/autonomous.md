@@ -28,7 +28,7 @@ Phase 0:  Environment pre-flight
 Phase 1:  /init --auto (research all decisions)
 Phase 1b: /map (persistent codebase knowledge base)
 Phase 2:  /discuss --auto --phase=1 (surface assumptions)
-Phase 2a: /design --phase=1 --source=stitch (UI design contract, if frontend phase)
+Phase 2a: /design --phase=1 --source=stitch --auto (UI design contract + design gate, if frontend phase; auto-falls back to pure-agent if Stitch MCP absent)
 Phase 2b: /plan --auto --phase=1
 Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions + UI designs)
 Phase 4:  /develop --auto --phase=1 (includes Wave 3.5: local deploy + health check)
@@ -135,16 +135,18 @@ HAS_UI=$?
 
 **If frontend phase detected (`HAS_UI == 0`):**
 
-1. Run `/design --phase=N --source=stitch` to generate professional UI designs via Google Stitch MCP
-2. `ui_researcher` generates UI-SPEC.md (design contract)
-3. `stitch_designer` creates screens in Google Stitch, fetches rendered designs
-4. `stitch_design_importer` validates design system compliance, auto-fixes
-5. `ui_checker` validates 6 quality dimensions (BLOCKING gate)
-6. `design_quality_reviewer` runs final quality gate on wireframes
+Run `/design --phase=N --source=stitch --auto` to produce the UI design contract BEFORE `/plan`. The command:
 
-**In `--auto` mode:** If Stitch MCP is not available, fall back to `ux_designer` + `wireframe_generator` (ASCII wireframes). Log fallback to auto-resolved decisions.
+1. `wireframe_generator` maps each screen to a page archetype (`specs/archetype-mapping.md`)
+2. `ux_designer` produces the per-screen wireframe contract — `<screen>.wireframe.html` (self-contained visual reference, both themes + breakpoints, all 4 states) + `<screen>.wireframe.md` (component/API bindings against `data-contracts.md`, design tokens, accessibility, `TC-UI-*` inventory)
+3. **`--source=stitch` (enrichment):** when the Stitch MCP is available, the command drives it directly (`create_project` → optional `create_design_system_from_design_md` → `generate_screen_from_text` → `get_screen`) and `ux_designer` normalizes each Stitch render back into the SAME two-file wireframe contract — so `ui_developer` consumes one format regardless of source
+4. **`design_quality_reviewer` runs the BLOCKING 11-dimension design gate** (`DESIGN_REVIEW.md`) — `ui_developer` must not start until this is PASS/FLAG
 
-**Checkpoint:** Write checkpoint with UI-SPEC status and Stitch artifact count.
+**Fallback (no Stitch):** `/design` probes the Stitch MCP only because `--source=stitch` was passed. If the MCP is unavailable, times out, or errors, `/design` auto-falls back to the pure-agent path (`ux_designer` + `wireframe_generator`, HTML wireframes) — it never blocks on the external MCP. The fallback is logged to `agent_state/autonomous/auto-resolved.jsonl` (`"category":"ux"`).
+
+**`--auto` design gate:** in auto mode, a BLOCK verdict triggers `/design`'s own auto-fix loop (route gaps to `ux_designer`, max 2 cycles). If still BLOCK, `/design` downgrades to WARN, logs it, and surfaces it at the Step 3 HUMAN CHECKPOINT — the pipeline does not halt here.
+
+**Checkpoint:** Write checkpoint with wireframe count, design-gate verdict, design source (agent vs stitch), and any Stitch fallback.
 
 ### Step 2b — Plan Phase 1 (`/plan --auto --phase=1`)
 
@@ -305,7 +307,7 @@ Log failure report → continue to next phase if independent, or STOP if blockin
 For each phase N (2, 3, ... max_phases):
   1. /map --incremental (update codebase knowledge with changes from previous phase)
   2. /discuss --auto --phase=N (surface assumptions for THIS phase)
-  2a. /design --phase=N --source=stitch (if frontend phase detected)
+  2a. /design --phase=N --source=stitch --auto (if frontend phase detected; BLOCKING design gate, auto-falls back to pure-agent if Stitch MCP absent)
   3. /plan --auto --phase=N
   4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3)
   5. /develop --auto --phase=N

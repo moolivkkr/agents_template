@@ -463,6 +463,78 @@ func OrderLinks(orderID string, status string) Links {
 - Clients follow links instead of constructing URLs — decouples client from URL structure
 - Use relative paths — let the client prepend the base URL
 
+## URL & Resource Naming
+
+```
+GET    /api/v1/users              # list
+GET    /api/v1/users/{id}         # single resource
+POST   /api/v1/users              # create
+PUT    /api/v1/users/{id}         # full replace
+PATCH  /api/v1/users/{id}         # partial update
+DELETE /api/v1/users/{id}         # delete
+GET    /api/v1/users/{id}/orders  # nested sub-resource
+POST   /api/v1/users/search       # complex search (body payload)
+```
+
+- Use nouns, not verbs (`/users`, not `/getUsers`)
+- Use plural for collections (`/orders`, not `/order`)
+- Use `kebab-case` for multi-word resources (`/payment-methods`)
+
+## HTTP Status Codes
+
+Domain error codes (above) are what clients switch on; these are the transport-level status codes each
+code maps to. See `backend/archetypes/error-handling-go.md` for the canonical error taxonomy.
+
+| Scenario | Code |
+|----------|------|
+| GET / PATCH success | 200 |
+| POST created | 201 + `Location` header |
+| DELETE / async accepted | 202 or 204 |
+| Bad request / invalid body | 400 |
+| Unauthenticated | 401 |
+| Authenticated but forbidden | 403 |
+| Resource not found | 404 |
+| Method not allowed | 405 |
+| Conflict (duplicate) | 409 |
+| Validation error | 422 |
+| Rate limited | 429 |
+| Server error | 500 |
+| Downstream unavailable | 502 / 503 |
+
+## Rate Limiting
+
+- Return `429 Too Many Requests` with a `Retry-After` header
+- Include rate-limit headers on every response:
+  ```
+  X-RateLimit-Limit: 1000
+  X-RateLimit-Remaining: 847
+  X-RateLimit-Reset: 1700000000
+  ```
+- Use a token bucket or sliding window algorithm
+- Rate limit by API key first, then by IP as a fallback
+
+## GraphQL Conventions
+
+- Single endpoint: `POST /graphql`
+- Use persisted queries in production to prevent abuse
+- Enforce a query depth limit (max 7) and complexity scoring
+- Return errors in the `errors[]` array alongside any partial `data`
+- Use the `DataLoader` pattern to batch N+1 queries
+
+## gRPC Conventions
+
+- Define `.proto` files in a shared `proto/` directory; version packages: `package myservice.v1;`
+- Use `google.rpc.Status` for error details
+- Set deadlines on every client call (`ctx` with timeout)
+- Use server-side streaming for large datasets, not repeated unary calls
+
+## OpenAPI Documentation Delivery
+
+- Maintain `openapi.yaml` at the repo root (see OpenAPI-First above — it is the contract)
+- Every endpoint documents: summary, request body schema, response schemas, and error codes
+- Use `$ref` for shared schemas — never inline duplicate definitions
+- Publish rendered docs at `/api/docs` (Swagger UI or Redoc), with an example request/response per operation
+
 ## Critical Rules
 
 - Spec first, code second — OpenAPI is the contract, not an afterthought

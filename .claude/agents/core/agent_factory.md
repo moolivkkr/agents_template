@@ -37,6 +37,8 @@ Reads `docs/IMPLEMENTATION_GUIDELINES.md` after it has been confirmed and evalua
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
+- **`.claude/skills/core/agent-common.md` — the shared-block contract** every generated agent must carry (Required Reading item 0/0b, Definition of Done, lessons write-back, execution.jsonl completion log). Step 2.5 below injects these.
 
 ---
 
@@ -94,6 +96,49 @@ For each template in `.claude/agents/templates/`, determine if it applies to thi
 For each applicable template, replace ALL `{{PLACEHOLDER}}` occurrences with extracted values. Generate the output file name by replacing `{{PROJECT_NAME}}` with the actual project name (snake_case) and removing `.tmpl` from the extension.
 
 Example: `backend_developer.tmpl.md` → `go_backend_developer_myproject.md`
+
+## Step 2.5 — Inject Shared Blocks (agent-common contract) — MANDATORY
+
+The templates carry these blocks already, but this step is the SAFETY NET: every generated agent — including any agent you create beyond the templates (e.g. an extra domain agent inferred from the BRD) — MUST end with the three shared blocks from `.claude/skills/core/agent-common.md`. Without them, generated agents silently PASS (Block 2), feed the memory system nothing (Block 3), and never satisfy the roster gate (execution.jsonl). After populating each agent, VERIFY (and add if absent):
+
+1. **Required Reading item 0 + 0b** — the `## Required Reading` section (never `## Skill Packs to Load`) begins with `docs/PROJECT_FACTS.md` (item 0) then `docs/DECISIONS.md` (item 0b), before any project file. Ground truth is stated ONCE — do not duplicate it under a second heading.
+
+2. **Block 2 — Definition of Done** (self-verify before returning), specialized to the agent's output path:
+```
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Output written to the EXACT frontmatter `output.primary` path (not a nearby path).
+- [ ] Output is real content, not a stub/placeholder/"TODO" — it would satisfy a skeptical reviewer.
+- [ ] Every claim/finding cites file:line (or the specific artifact it derives from); reported counts are REAL, not estimates.
+- [ ] If I found nothing / could not proceed, I say so explicitly with the reason — I do NOT emit an empty-but-present report that reads as success.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+```
+
+3. **Block 3 — Lessons write-back**, specialized with the agent's category/tags and report path:
+```
+## Lessons Write-Back (see agent-common Block 3)
+When I hit something a FUTURE phase should know, append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+### L-{{PHASE}}-<seq>
+- **Category:** <testing|implementation|security|performance|infrastructure|agent_performance|planning|ux>
+- **Tags:** {{LANG}}, <domain>, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** <this agent's report path>
+- **Reuse:** <actionable instruction for a future phase>
+
+Only write a lesson when there IS one — zero lessons is valid for a clean run.
+```
+
+4. **Completion Log line** (roster check) — the agent's REAL generated name (matching its `name:` frontmatter / filename) and its report path:
+```
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl`:
+
+{"agent":"<this agent's real name>","phase":{{PHASE}},"status":"completed","report":"<this agent's output.primary path>","ts":"<iso8601>"}
+```
+
+The `agent` value MUST equal the generated agent's real name (the `name:` in its frontmatter), because the develop-orchestrator roster gate checks `roster.required ⊆ {agents with completed lines}` by real name. A mismatch = a false gate failure.
 
 ## Step 3 — Activate Skill Packs
 

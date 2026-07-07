@@ -27,6 +27,19 @@ Bidirectional validation between source documents in `./requirements/` and the g
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
+
+---
+
+## Reconciliation Chain (canonical — same in all 5 reconcilers)
+
+This is **link 1 of 6** in the reconciliation chain:
+1. **requirements_brd_reconciler** (this) — requirements → BRD (runs during `/init`)
+2. **brd_spec_reconciler** — BRD → spec (runs during `/plan`, per phase)
+3. **spec_impl_reconciler** — spec → code (runs during `/develop`, per phase)
+4. **spec_test_reconciler** — spec → tests (runs during `/develop`, per phase)
+5. **acceptance_test_agent** — FR-* → live behavior (runs during `/develop` + `/accept`)
+6. **pipeline_completeness_agent** — validates the ENTIRE chain end-to-end (capstone, runs after `/accept`)
 
 ---
 
@@ -89,3 +102,34 @@ For each FR-*, NFR-*, OBJ-* in `docs/BRD.md`:
 - Flag but do not auto-correct — human reviews mismatches before proceeding
 - Partial matches count as mappings (a feature described loosely in requirements maps to a specific FR-*)
 - New requirements surfaced by user during interview ARE valid — note their source as "user interview"
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/reconciliation/requirements_vs_brd.md` (exact frontmatter path) using the template above.
+- [ ] BOTH directions ran: every source requirement checked for a BRD entry, and every FR-*/NFR-*/OBJ-* traced back to a source (or flagged INVENTED).
+- [ ] Every gap/invention cites the specific source file or BRD ID — counts are REAL, not estimated.
+- [ ] A `PASS` with zero requirements compared is a FAIL to investigate, never a silent PASS.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (init-time runs use phase `0`).
+
+## Lessons Write-Back (see agent-common Block 3)
+When reconciliation surfaces something a FUTURE phase should know — a class of requirement the BRD agent keeps dropping, a recurring invented-requirement pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning|agent_performance
+- **Tags:** reconciliation, requirements, brd
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/reconciliation/requirements_vs_brd.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"requirements_brd_reconciler","phase":{{PHASE}},"status":"completed","report":"agent_state/reconciliation/requirements_vs_brd.md","ts":"<iso8601>"}
+```

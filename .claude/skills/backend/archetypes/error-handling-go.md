@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: Error Handling Archetype.** The language-neutral version at [error-handling.md](error-handling.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: error-handling
 description: Go error handling archetype — domain error taxonomy, error types, HTTP mapping, error middleware, sentinel errors, wrapping guidelines

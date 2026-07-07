@@ -1,0 +1,22 @@
+{
+  "$comment": "SEED baseline recorded when the eval suite was first created. Scores are null because /eval has not yet executed the suite — the first real `/eval --baseline` run overwrites this with measured outcome/trajectory scores. It exists so `/eval --compare` has a target and the suite shape is version-pinned from day one. suite_sha is set to 'seed' until the first measured run stamps the real git SHA.",
+  "date": "2026-07-07",
+  "git_sha": "seed",
+  "suite_sha": "seed",
+  "suite_size": 6,
+  "measured": false,
+  "tasks": [
+    { "id": "T-001-crud-endpoint",            "outcome_score": null, "trajectory_score": null, "pass_at_1": null, "gate_score": null, "cost_proxy": { "wall_s": null, "agents": null } },
+    { "id": "T-002-ui-form",                  "outcome_score": null, "trajectory_score": null, "pass_at_1": null, "gate_score": null, "cost_proxy": { "wall_s": null, "agents": null } },
+    { "id": "T-003-hotfix-idor",              "outcome_score": null, "trajectory_score": null, "pass_at_1": null, "gate_score": null, "cost_proxy": { "wall_s": null, "agents": null } },
+    { "id": "T-004-gate-blocks-missing-review", "outcome_score": null, "trajectory_score": null, "pass_at_1": null, "gate_score": null, "cost_proxy": { "wall_s": null, "agents": null } },
+    { "id": "T-005-reconcile-drift",          "outcome_score": null, "trajectory_score": null, "pass_at_1": null, "gate_score": null, "cost_proxy": { "wall_s": null, "agents": null } },
+    { "id": "T-006-plan-small-phase",         "outcome_score": null, "trajectory_score": null, "pass_at_1": null, "gate_score": null, "cost_proxy": { "wall_s": null, "agents": null } }
+  ],
+  "suite": {
+    "outcome_mean": null,
+    "trajectory_mean": null,
+    "pass_at_1_rate": null,
+    "cost_proxy_total": { "wall_s": null, "agents": null }
+  }
+}

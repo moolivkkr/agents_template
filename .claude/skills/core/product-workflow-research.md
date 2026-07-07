@@ -1,3 +1,15 @@
+---
+skill: product-workflow-research
+description: Skill pack — research a product's configuration workflows from docs/videos/community into screen-by-screen guides and config schemas
+version: "1.0"
+tags:
+  - research
+  - workflows
+  - product
+  - config
+  - core
+---
+
 # Product Workflow Research — Skill Pack
 
 Domain knowledge for agents that research enterprise product workflows, extract configuration hierarchies, and produce structured documentation from vendor sources.

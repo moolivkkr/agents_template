@@ -1,0 +1,19 @@
+{
+  "task": "T-003-hotfix-idor",
+  "mode": "TRAJECTORY",
+  "expected_trajectory": [
+    { "step": "diagnose",          "must": true,  "desc": "root-cause the dropped tenant filter" },
+    { "step": "reproduction_test", "must": true,  "order_after": "diagnose",
+      "desc": "write the red-first regression test (TC-R-003) BEFORE the fix" },
+    { "step": "backend_developer", "must": true,  "order_after": "reproduction_test",
+      "desc": "apply the scoped fix" },
+    { "step": "test_runner",       "must": true,  "order_after": "backend_developer" },
+    { "step": "security_reviewer", "must": true,  "desc": "an IDOR fix is security-sensitive" }
+  ],
+  "forbidden": [
+    { "pattern": "fix applied before reproduction_test exists",
+      "desc": "hotfix discipline requires a red-first regression test" },
+    { "pattern": "security_reviewer skipped on a security fix",
+      "desc": "a fast-track fix must not drop the security review for an IDOR" }
+  ]
+}

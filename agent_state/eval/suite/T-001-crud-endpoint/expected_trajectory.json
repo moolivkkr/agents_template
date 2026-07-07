@@ -1,0 +1,20 @@
+{
+  "task": "T-001-crud-endpoint",
+  "mode": "TRAJECTORY",
+  "expected_trajectory": [
+    { "step": "spec_writer",            "must": true,  "produces": "specs/widget.md" },
+    { "step": "backend_developer",      "must": true },
+    { "step": "unit_test_agent",        "must": true },
+    { "step": "integration_test_agent", "must": true },
+    { "step": "code_reviewer_I",        "must": true },
+    { "step": "security_reviewer",      "must": true },
+    { "step": "spec_test_reconciler",   "must": true },
+    { "step": "gate_verification",      "must": true, "order_after": "security_reviewer" }
+  ],
+  "forbidden": [
+    { "pattern": "gate.passed written before security_reviewer ran",
+      "desc": "the gate must not pass ahead of the security review" },
+    { "pattern": "integration_test_agent skipped",
+      "desc": "an endpoint without integration tests is not done" }
+  ]
+}

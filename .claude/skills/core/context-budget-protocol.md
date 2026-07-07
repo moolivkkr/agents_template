@@ -1,3 +1,15 @@
+---
+skill: context-budget-protocol
+description: Context budget discipline — selective loading, summarization, and INDEX/frontmatter-driven skill retrieval to stay within the window
+version: "1.0"
+tags:
+  - context
+  - tokens
+  - selective-loading
+  - efficiency
+  - core
+---
+
 # Context Budget Protocol
 
 ## Core Principle: Quality Over Token Savings

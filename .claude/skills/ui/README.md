@@ -1,3 +1,15 @@
+---
+skill: ui-standards-index
+description: Index and strict precedence order for all UI skills — resolves conflicts by giving each UI skill one non-overlapping scope; UI agents read this first
+version: "1.0"
+tags:
+  - ui-standards
+  - precedence
+  - index
+  - navigation
+  - ui
+---
+
 # UI Standards — Index & Precedence (READ THIS FIRST)
 
 > **Single source of truth for "which UI rule wins."** There are many UI skills; without a stated

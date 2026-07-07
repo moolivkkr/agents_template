@@ -180,59 +180,59 @@ downgrade. Record the chosen class in the Wave-0 checkpoint.
 ### Wave 0b — Write the Expected Agent Roster (execution guarantee)
 
 **This is the structural fix for "did every agent actually run?"** The parent computes the roster of
-agents this phase MUST execute (derived from the scale class) and writes it to
-`agent_state/phases/${PHASE}/roster.json`. Wave 6 diffs this roster against what actually completed
-(`execution.jsonl`) and BLOCKS the gate if any `required` agent has no `completed` entry. This turns
-"we hope the reviewers ran" into "we proved they ran."
+agents this phase MUST execute (derived from the scale class + project shape) and writes it to
+`agent_state/phases/${PHASE}/roster.json`. Wave 6 (and the `verify-gate.sh` hook) diffs this roster
+against what actually completed (`execution.jsonl`) and BLOCKS the gate if any `required` agent has no
+`completed` entry. This turns "we hope the reviewers ran" into "we proved they ran."
 
-```bash
-mkdir -p "agent_state/phases/${PHASE}"
-# Base roster for a STANDARD phase. Add/remove per scale class and project shape:
-#  - trivial/small: keep only the agents whose waves you actually run.
-#  - not multi-tenant: mark tenant_isolation_verifier status "not_applicable".
-#  - no web UI: mark ui_test_agent "not_applicable".
-#  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
-cat > "agent_state/phases/${PHASE}/roster.json" << 'EOF'
-{
-  "phase": PHASE_NUM,
-  "scale_class": "SCALE_CLASS",
-  "generated": "TS",
-  "agents": {
-    "wave1_audit":            { "status": "required" },
-    "wave2_implement":        { "status": "required" },
-    "unit_test_agent":        { "status": "required" },
-    "integration_test_agent": { "status": "required" },
-    "e2e_or_ui_test_agent":   { "status": "required" },
-    "code_reviewer_I":        { "status": "required" },
-    "code_reviewer_II":       { "status": "required" },
-    "security_reviewer":      { "status": "required" },
-    "tenant_isolation_verifier": { "status": "required" },
-    "dependency_scanner":     { "status": "required" },
-    "code_quality_verifier":  { "status": "required" },
-    "spec_impl_reconciler":   { "status": "required" },
-    "spec_test_reconciler":   { "status": "required" },
-    "acceptance_test_agent":  { "status": "required" }
-  }
-}
-EOF
-# Substitute the literals (roster must reflect the actual class + project shape):
-sed -i '' "s/PHASE_NUM/${PHASE}/; s/SCALE_CLASS/${SCALE_CLASS}/; s/TS/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" \
-  "agent_state/phases/${PHASE}/roster.json" 2>/dev/null || \
-  sed -i "s/PHASE_NUM/${PHASE}/; s/SCALE_CLASS/${SCALE_CLASS}/; s/TS/$(date -u +%Y-%m-%dT%H:%M:%SZ)/" \
-  "agent_state/phases/${PHASE}/roster.json"
+**⛔ CONTRACT — `roster.required` MUST use the REAL agent names, verbatim, exactly as each agent logs
+itself into `execution.jsonl` (the `"agent"` field).** Never use generic slot labels like
+`wave1_audit` or `e2e_or_ui_test_agent` — the completeness diff is a straight set-membership check
+(`roster.required ⊆ {agents with a completed line}`), and slot labels live in a different namespace
+than the logged agent names, so they would false-block or silently pass. The roster schema is a flat
+`required` array of names, aligned with `.claude/hooks/verify-gate.sh`:
+
+```json
+{"phase": N, "required": ["<agent-name>", ...]}
 ```
 
-**Every wave that spawns an agent must append a completion line to the execution log** so Wave 6 can
-verify it. After each agent returns successfully:
+**Derive the roster from the set of agents this phase will actually spawn** (so `required` ⊇ the
+gate's required-report set — no drift). Base list for a STANDARD phase, using the real names each
+Wave spawns:
+
 ```bash
 mkdir -p "agent_state/phases/${PHASE}"
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"agent\":\"${AGENT_NAME}\",\"wave\":${WAVE_NUM},\"status\":\"completed\"}" \
+# Base STANDARD roster — REAL agent names (must match the "agent" field each writes to execution.jsonl).
+# Tailor per scale class + project shape:
+#  - trivial/small: keep only the agents whose waves you actually run.
+#  - not multi-tenant: DROP tenant_isolation_verifier from the array (record the skip in the manifest).
+#  - no web UI: use e2e_test_agent (not ui_test_agent); DROP ui_developer/ui_test_agent/design_quality_reviewer.
+#  - web UI: ADD ui_developer, ui_test_agent (and design_quality_reviewer if used) to the array.
+#  - has DB migrations: ADD migration_agent AND migration_safety_reviewer (adversarial migration review).
+#  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
+#  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
+REQUIRED='["backend_audit_agent","backend_developer","api_developer","unit_test_agent","integration_test_agent","e2e_test_agent","code_reviewer_I","code_reviewer_II","security_reviewer","dependency_scanner","code_quality_verifier","spec_impl_reconciler","spec_test_reconciler","acceptance_test_agent","tenant_isolation_verifier"]'
+python3 - "$REQUIRED" "${PHASE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "agent_state/phases/${PHASE}/roster.json" << 'PY'
+import json, sys
+required = json.loads(sys.argv[1])
+print(json.dumps({"phase": int(sys.argv[2]), "generated": sys.argv[3], "required": required}, indent=2))
+PY
+```
+
+**Every wave that spawns an agent must append a completion line to the execution log** so Wave 6 (and
+`verify-gate.sh`) can verify it. `${AGENT_NAME}` MUST be the same real name that appears in
+`roster.required`, and `report` MUST be the relative path to that agent's primary output (or `null`
+if it produces none). After each agent returns successfully:
+```bash
+mkdir -p "agent_state/phases/${PHASE}"
+echo "{\"agent\":\"${AGENT_NAME}\",\"phase\":${PHASE},\"status\":\"completed\",\"report\":\"${REPORT_PATH:-null}\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
   >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
-If you deliberately skip an agent (e.g. not multi-tenant, trivial phase), set its roster status to
-`not_applicable` or `skipped:<reason>` — an explicit skip is auditable; a silent omission is the bug
-this roster exists to catch.
+If you deliberately skip an agent (e.g. not multi-tenant, trivial phase), **omit it from
+`roster.required`** and record the skip + reason in the phase manifest (`skipped_agents[]`) — an
+explicit, documented omission is auditable; leaving it `required` and never running it is the exact
+bug this roster exists to catch.
 
 ---
 
@@ -650,7 +650,8 @@ The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feed
 1. Read `unit_tests.md` — any failures?
 2. Read `integration_tests.md` — any failures?
 3. Read `e2e_results.md` — any failures?
-4. Read `code_quality_review.md` — any HIGH/CRITICAL findings?
+4. Read the review reports — `code_review_I.md`, `code_review_II.md`, `security_review.md`,
+   `dependency_scan.md`, `quality_gate.md` — any BLOCKING/HIGH/CRITICAL findings?
 5. Read `acceptance_report.md` — any FAIL/PARTIAL?
 
 Build: `agent_state/phases/${PHASE}/reports/collective_feedback.md`
@@ -736,30 +737,41 @@ refutation of high-stakes claims) before writing `gate.passed`.
 score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_score.md` → only then
 `gate.passed`.
 
-0b. **Agent-roster completeness (execution guarantee) — run FIRST.** Diff the Wave-0 roster against
-    what actually completed. Any `required` agent with no `completed` entry BLOCKS the gate. This is
-    the single check that prevents a reviewer/reconciler being silently skipped.
+0b. **Agent-roster completeness (execution guarantee) — run FIRST, via the shared hook.** The single
+    source of truth for this check is `.claude/hooks/verify-gate.sh`. It passes iff (1) every
+    `roster.required` name has a `status:"completed"` line, (2) every completed line's non-null
+    `report` file exists and is non-stub (no `total: 0` / `SKIPPED` in test reports; no unresolved
+    `BLOCKING`), and (3) no `failed` line lacks a later `completed`. Run it and honor its exit code —
+    do NOT re-implement a divergent copy here:
+    ```bash
+    bash .claude/hooks/verify-gate.sh "${PHASE}" || {
+      echo "⛔ GATE BLOCKED by verify-gate.sh — see output above."
+      echo "   Re-spawn any missing/failed agents (roster.required vs execution.jsonl) before gating."
+      exit 1
+    }
+    ```
+    If the hook is somehow unavailable, fall back to this equivalent membership check (the hook is
+    authoritative — reconcile back to it if they ever diverge):
     ```bash
     ROSTER="agent_state/phases/${PHASE}/roster.json"
     EXEC="agent_state/phases/${PHASE}/execution.jsonl"
     python3 - "$ROSTER" "$EXEC" << 'PY'
     import json, sys, os
-    roster_p, exec_p = sys.argv[1], sys.argv[2]
-    roster = json.load(open(roster_p))
+    roster = json.load(open(sys.argv[1]))
+    required = roster.get("required", [])
     completed = set()
-    if os.path.exists(exec_p):
-        for line in open(exec_p):
+    if os.path.exists(sys.argv[2]):
+        for line in open(sys.argv[2]):
             line = line.strip()
             if not line: continue
             try:
                 e = json.loads(line)
                 if e.get("status") == "completed": completed.add(e.get("agent"))
             except Exception: pass
-    missing = [a for a, m in roster["agents"].items()
-               if m.get("status") == "required" and a not in completed]
+    missing = [a for a in required if a not in completed]
     if missing:
         print("⛔ GATE BLOCKED — required agents never completed:", ", ".join(missing))
-        print("   Re-spawn them before the gate can pass. (roster.json vs execution.jsonl)")
+        print("   Re-spawn them before the gate can pass. (roster.required vs execution.jsonl)")
         sys.exit(1)
     print("✓ Roster complete — every required agent has a completed execution entry.")
     PY
@@ -788,9 +800,18 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    - code_review_I.md ✓ · code_review_II.md ✓ · security_review.md ✓
    - dependency_scan.md ✓ · quality_gate.md ✓
    - specs_vs_impl.md ✓ · spec_test_coverage.md ✓  (reconciliation — BLOCKING findings must be 0)
-   - tenant_isolation.md ✓ (unless roster marks it not_applicable)
+   - tenant_isolation.md ✓ (CONDITIONAL — required only when multi-tenant; else roster omits
+     tenant_isolation_verifier and the manifest records the skip)
    - acceptance_report.md ✓ (non-zero use case count)
    - collective_feedback.md ✓
+
+   **Conditional reports (required only when the phase has the relevant surface — otherwise recorded
+   `not_applicable` in the manifest, never silently omitted; this matches `/develop` Step 6):**
+   - sast_scan.md — when a SAST command is configured in IMPLEMENTATION_GUIDELINES (security-relevant code)
+   - migration_safety.md — when the phase adds/changes DB migrations (migration_safety_reviewer)
+   - breaking_change_review.md — when the phase changes a contract an earlier phase consumes (breaking_change_reviewer)
+   - visual_validation.md — when `*.wireframe.html` files exist for this phase
+   - ui_test_results.md / ui_code_optimization.md — when `frontend.enabled = true`
 
    **Content validation (not just file existence):**
    ```bash
@@ -872,7 +893,7 @@ The PARENT session (inline, no subagent) reads all phase artifacts and writes `a
 
 Read:
 - `reports/collective_feedback.md` — what bugs were found and how they were fixed
-- `reports/code_quality_review.md` — what patterns were flagged
+- `reports/quality_gate.md` (+ `code_review_I.md`, `code_review_II.md`) — what patterns were flagged
 - `execution.jsonl` — which agents failed/retried and why
 - `checkpoints/` — how long each wave took
 

@@ -1,3 +1,15 @@
+---
+skill: deep-research
+description: Ultra-deep product and market research protocol — vendor/capability/persona analysis feeding /init and /research
+version: "1.0"
+tags:
+  - research
+  - market
+  - vendors
+  - personas
+  - core
+---
+
 # Deep Research Protocol — Ultra-Deep Product & Market Research
 
 ## Purpose

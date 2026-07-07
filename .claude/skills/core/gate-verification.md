@@ -1,3 +1,15 @@
+---
+skill: gate-verification
+description: Evidence-based, graded, cross-checked phase gate — the checklist and proof requirements that let a phase pass
+version: "1.0"
+tags:
+  - gate
+  - verification
+  - evidence
+  - quality
+  - core
+---
+
 # Gate Verification Protocol — Evidence-Based, Graded, Cross-Checked
 
 Phase gates historically checked "does the report file exist and mention a non-zero test

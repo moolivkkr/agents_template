@@ -65,6 +65,55 @@
         "slowest_agent": { "type": "string" },
         "slowest_duration_s": { "type": "integer" }
       }
+    },
+    "complexity_class": {
+      "description": "Model-routing complexity bucket chosen for this phase (see model-routing.md). Lets /health confirm a gated phase recorded the routing decision it ran under.",
+      "enum": ["trivial", "simple", "moderate", "complex", "critical"]
+    },
+    "gate_score": {
+      "description": "Graded truth-score for the phase gate (gate-verification.md), between 0 and 1. A gated phase must carry its score so /eval and /health can read it mechanically.",
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "gate": {
+      "description": "The phase-gate verdict plus its execution-guarantee evidence. verify-gate.sh (the Stop / PostToolUse hook) re-derives 'passed' from the roster+execution+report evidence; the manifest must NOT claim passed==true unless that evidence holds.",
+      "type": "object",
+      "required": ["passed"],
+      "properties": {
+        "passed": { "type": "boolean" },
+        "forced": {
+          "description": "True only if a human overrode a BLOCK. Requires 'forced_reason'.",
+          "type": "boolean"
+        },
+        "forced_reason": { "type": "string" },
+        "verified_at": { "type": "string", "format": "date-time" },
+        "verified_by": {
+          "description": "Which mechanism certified the gate — 'verify-gate.sh' for the deterministic hook.",
+          "type": "string"
+        },
+        "gate_score": {
+          "description": "Convenience mirror of the top-level gate_score for this verdict.",
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "roster_status": {
+          "description": "Roster-completeness rollup: which required agents completed. Mirrors roster.json + execution.jsonl so /health can validate without re-parsing the whole log.",
+          "type": "object",
+          "required": ["required", "completed", "complete"],
+          "properties": {
+            "required": { "type": "array", "items": { "type": "string" } },
+            "completed": { "type": "array", "items": { "type": "string" } },
+            "missing": { "type": "array", "items": { "type": "string" } },
+            "complete": { "type": "boolean" }
+          }
+        }
+      }
+    },
+    "test_case_inventory_ref": {
+      "description": "Pointer to the TC-* inventory report backing this phase's traceability gate (the file test_case_inventory.report also names). Kept as a first-class field so /health's jq validation can mechanically confirm a gated phase carries its TC-* evidence.",
+      "type": "string"
     }
   },
   "$defs": {

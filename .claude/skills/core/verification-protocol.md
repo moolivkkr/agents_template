@@ -454,9 +454,39 @@ After completing verification, produce this summary:
 ### Verdict: PASS / FAIL (with reasons)
 ```
 
+## No Intrinsic Self-Correction (External Error Signal Required)
+
+An agent may **not** enter a fix→re-check loop on the basis of its own reflection alone. Correction
+requires an **external error signal** that names something concrete to fix.
+
+**Prohibited:** "review your own work and improve it," "reflect and self-critique, then revise,"
+reflection-only rewrite passes with no failing check driving them. Evidence is clear that this
+*lowers* accuracy: with no external signal, a model has no reliable way to tell a correct answer from
+an incorrect one, so reflection nudges as many right answers wrong as wrong answers right (Huang et
+al., *Large Language Models Cannot Self-Correct Reasoning Yet*, ICLR 2024). Correction only helps when
+grounded in an external verifier that points at the actual error (CRITIC, ICLR 2024).
+
+**A fix→re-check loop is allowed ONLY when triggered by one of these external signals:**
+
+```
+[ ] A failing test (unit / integration / E2E) — the assertion names the expected vs actual
+[ ] A compiler / type-checker / build error — with file:line
+[ ] A linter / static-analysis / security-scanner finding — with rule + location
+[ ] A SEPARATE reviewer agent (code_reviewer, security_reviewer, a reconciler, etc.) that names
+    the error and its location — never the same agent grading itself
+[ ] A runtime failure observed by executing the code (curl 500, panic, stack trace, wrong output)
+```
+
+If none of these fired, there is nothing to correct — stop and report done. Do not "polish" by
+re-reading and guessing. This is why the framework runs review and reconciliation as *separate named
+agents* (Wave 4) rather than asking the implementer to self-review: the error signal must come from
+outside the agent that wrote the code.
+
 ## Critical Rules
 
 - Never mark a task done without running through the full checklist
+- No intrinsic self-correction: only loop on a failing test, compiler/linter error, or a separate
+  reviewer agent's named finding — reflection-only "improve your own work" passes are prohibited
 - All four verification levels must pass — Level 1 alone is not enough
 - Actually execute the checks — don't just read the code and assume
 - Produce evidence (test output, curl responses, screenshots) for each claim

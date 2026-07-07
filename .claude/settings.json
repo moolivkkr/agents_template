@@ -1,5 +1,5 @@
 {
-  "$comment": "Claude Code harness settings for the SDLC framework. Framework CONFIG (models, gates, paths) lives in sdlc-config.json — this file is only for harness behavior like hooks. Shipped/committed so every project gets ground-truth injection.",
+  "$comment": "Claude Code harness settings for the SDLC framework. Framework CONFIG (models, gates, paths) lives in sdlc-config.json — this file is only for harness behavior like hooks. Shipped/committed so every project gets ground-truth injection. verify-gate.sh runs on Stop and on writes to a phase manifest.json: it re-verifies the execution-guarantee contract (roster.json completeness + report integrity + no dangling failures + gate.passed honesty) in CODE, not prose — this is what makes the phase gate UN-BYPASSABLE by an agent that merely claims it passed. Its non-zero exit blocks the turn from ending / the manifest write from being trusted. The Stop hook takes no phase arg, so verify-gate.sh auto-detects the latest agent_state/phases/<N> dir.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,6 +7,27 @@
           {
             "type": "command",
             "command": ".claude/hooks/inject-project-facts.sh"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": ".claude/hooks/verify-gate.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in */agent_state/phases/*/manifest.json) p=$(printf '%s' \"$f\" | sed -E 's#.*/agent_state/phases/([0-9]+)/manifest.json#\\1#'); .claude/hooks/verify-gate.sh \"$p\" ;; *) exit 0 ;; esac"
           }
         ]
       }

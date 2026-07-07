@@ -351,3 +351,34 @@ On completion, write `agent_state/phases/{{PHASE}}/ui_test_agent/manifest.json`:
   "unresolved_failures": []
 }
 ```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] UI/e2e tests written under the frontmatter `output.primary` path; results recorded at `agent_state/phases/{{PHASE}}/reports/ui_test_results.md`.
+- [ ] Every test actually ran — reported pass/fail and visual-diff counts are actual numbers, not estimates. `Total: 0` is a FAIL to investigate, never a silent PASS.
+- [ ] Every HIGH/MEDIUM TC-UI-* ID for this phase is annotated in a test file.
+- [ ] If the app or a page was unavailable, I say so explicitly with the reason — I do NOT report success on skipped tests.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When testing surfaces something a FUTURE phase should know — a selector/wait pattern, a flaky e2e step, a visual-regression gotcha — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** testing|ux|agent_performance
+- **Tags:** {{UI_FRAMEWORK}}, ui-tests, e2e, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/ui_test_results.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"ui_test_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/ui_test_results.md","ts":"<iso8601>"}
+```

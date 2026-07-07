@@ -27,6 +27,7 @@ Bidirectional validation between `docs/BRD.md` requirements and the phase specs 
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -87,14 +88,17 @@ For each interface contract, behavior, or constraint defined in the specs:
 [APPROVE — proceed to /develop] or [FIX — update specs/BRD before proceeding]
 ```
 
-## Reconciliation Sequence
+## Reconciliation Chain (canonical — same in all 5 reconcilers)
 
-This agent is step 2 of 5 in the reconciliation pipeline:
-1. **spec_verifier** -- validates specs are complete and internally consistent (runs after /plan)
-2. **brd_spec_reconciler** (this) -- validates BRD<->specs alignment (runs after spec_verifier)
-3. **spec_impl_reconciler** -- validates specs<->code alignment (runs during /develop Step 5)
-4. **spec_test_reconciler** -- validates specs<->tests coverage (runs during /develop Step 5)
-5. **pipeline_completeness_agent** -- validates the ENTIRE chain end-to-end (runs after /accept)
+This is **link 2 of 6** in the reconciliation chain:
+1. **requirements_brd_reconciler** — requirements → BRD (runs during `/init`)
+2. **brd_spec_reconciler** (this) — BRD → spec (runs during `/plan`, per phase; after `spec_verifier` confirms specs are internally complete)
+3. **spec_impl_reconciler** — spec → code (runs during `/develop`, per phase)
+4. **spec_test_reconciler** — spec → tests (runs during `/develop`, per phase)
+5. **acceptance_test_agent** — FR-* → live behavior (runs during `/develop` + `/accept`)
+6. **pipeline_completeness_agent** — validates the ENTIRE chain end-to-end (capstone, runs after `/accept`)
+
+(`spec_verifier` is a precondition to link 2, not a chain link — it validates each spec is complete and internally consistent before BRD↔spec reconciliation runs.)
 
 ---
 
@@ -106,3 +110,34 @@ This agent is step 2 of 5 in the reconciliation pipeline:
 - INVENTED behaviors are not automatically wrong — they may be necessary technical decisions. Flag for human review.
 - Design constraints from IMPLEMENTATION_GUIDELINES ARE valid sources (e.g. "repository pattern required" is a valid basis for a spec behavior even if not in BRD)
 - Misalignments always require human decision — do not auto-resolve
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/reconciliation/phase-{{PHASE}}/brd_vs_specs.md` (exact frontmatter path) using the template above.
+- [ ] BOTH directions ran: every phase FR-*/NFR-*/OBJ-* checked for spec coverage, and every spec behavior traced back to a BRD item or a valid design constraint.
+- [ ] Every MISSING/INVENTED cites the specific BRD ID or spec file — counts are REAL, not estimated.
+- [ ] A `PASS` with zero requirements compared is a FAIL to investigate, never a silent PASS.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When reconciliation surfaces something a FUTURE phase should know — a requirement class the spec_writer keeps under-covering, a recurring invented-behavior pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning|agent_performance
+- **Tags:** reconciliation, brd, spec
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/reconciliation/phase-{{PHASE}}/brd_vs_specs.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"brd_spec_reconciler","phase":{{PHASE}},"status":"completed","report":"agent_state/reconciliation/phase-{{PHASE}}/brd_vs_specs.md","ts":"<iso8601>"}
+```

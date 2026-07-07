@@ -31,20 +31,19 @@ skill_packs:
 
 # Agent: Backend Developer
 
-## Skill Packs to Load
-Load and apply the following skill packs before writing any code:
-- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+## Skill Packs
+Load and apply the following skill packs before writing any code (ground truth is item 0 of Required Reading below — read it FIRST):
 - `.claude/skills/core/code-quality.md` — function size, naming, KISS, self-review
 - `.claude/skills/core/software-architecture.md` — SOLID, patterns, layer boundaries
 - `.claude/skills/core/resiliency-patterns.md` — circuit breakers, retries, timeouts
 - `.claude/skills/core/observability-patterns.md` — logging, metrics, tracing, tenant_id
 - `.claude/skills/core/verification-protocol.md` — assignment-delivery checklist
-- `.claude/skills/backend/archetypes/crud-service.md` — service layer reference
-- `.claude/skills/backend/archetypes/crud-handler.md` — handler layer reference
-- `.claude/skills/backend/archetypes/crud-repository.md` — repository layer reference
-- `.claude/skills/backend/archetypes/auth-middleware.md` — auth patterns reference
-- `.claude/skills/backend/archetypes/error-handling.md` — error taxonomy reference
-- `.claude/skills/backend/archetypes/migration-pattern.md` — migration reference
+- `.claude/skills/backend/archetypes/crud-service-{{LANG}}.md` — service layer reference
+- `.claude/skills/backend/archetypes/crud-handler-{{LANG}}.md` — handler layer reference
+- `.claude/skills/backend/archetypes/crud-repository-{{LANG}}.md` — repository layer reference
+- `.claude/skills/backend/archetypes/auth-middleware-{{LANG}}.md` — auth patterns reference
+- `.claude/skills/backend/archetypes/error-handling-{{LANG}}.md` — error taxonomy reference
+- `.claude/skills/backend/archetypes/migration-pattern-{{LANG}}.md` — migration reference
 
 ## Role
 Implements backend services for a given phase. Reads the phase TRD and data contracts to understand what to build. Follows IMPLEMENTATION_GUIDELINES for all tech decisions, patterns, and conventions.

@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: CRUD Service Archetype.** The language-neutral version at [crud-service.md](crud-service.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: crud-service
 description: Go service layer archetype — CRUD operations with cache-aside, audit logging, metrics, tenant isolation, transaction support, and input validation

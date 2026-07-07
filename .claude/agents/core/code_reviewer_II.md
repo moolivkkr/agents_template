@@ -31,6 +31,7 @@ Second pass in the review pipeline. Validates that the implementation respects t
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Architecture Overview, §Component Inventory, §Design Constraints
 2. `agent_state/phases/{{PHASE}}/reports/code_review_I.md` — skip anything already flagged
 3. `docs/design/phases/{{PHASE}}/specs/` — interface contracts defined in TRDs
@@ -207,4 +208,36 @@ Component boundaries: PASS / FAIL
 Dependency direction: PASS / FAIL
 Interface contracts: PASS / FAIL
 Authorization chains: PASS / FAIL (N violations)
+```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/code_review_II.md` (exact frontmatter path) using the template above.
+- [ ] The authorization-chain audit table and in-memory-store audit table are populated for EVERY ID-based service method and store — not summarized as "looks fine".
+- [ ] Every VIOLATION/DRIFT cites `file:line` and the expected pattern.
+- [ ] The count line (`VIOLATIONS:N DRIFT:N SUGGESTIONS:N`) is REAL — derived from findings. A `PASS` on a phase with zero methods audited is a FAIL to investigate, never a silent PASS.
+- [ ] If I could not review (no code produced this phase), I say so explicitly with the reason — I do NOT emit an empty-but-present report that reads as success.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When a review surfaces something a FUTURE phase should know — a recurring architecture violation, a layer-boundary anti-pattern, an authorization-chain gap the codebase keeps reintroducing — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** implementation|security|agent_performance
+- **Tags:** {{LANG}}, architecture, <pattern>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/code_review_II.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"code_reviewer_II","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/code_review_II.md","ts":"<iso8601>"}
 ```

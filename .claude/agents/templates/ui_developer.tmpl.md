@@ -51,9 +51,8 @@ skill_packs:
 
 # Agent: UI Developer
 
-## Skill Packs to Load
-Load and apply the following skill packs before writing any code:
-- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+## Skill Packs
+Load and apply the following skill packs before writing any code (ground truth is item 0 of Required Reading below — read it FIRST):
 - **`.claude/skills/ui/README.md` — UI STANDARDS INDEX & PRECEDENCE. Read this before the other UI skills** so you know which rule wins on conflict (project design system > generic standards > framework mechanics).
 - **`.claude/skills/ui/vertix-portal-design-system.md` — PROJECT DESIGN SYSTEM (tier 2, if it exists / building a Vertix portal module). BINDING house style that OVERRIDES the generic standards on colors/components/card-radius: use the ICC/shadcn semantic tokens (`bg-panel`, `text-ink`, `text-crit`, …) — never hardcode colors — and REUSE `@portal/components` (DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) instead of rebuilding. Support light+dark via `data-theme`.**
 - `.claude/skills/ui/professional-ui-standards.md` — design tokens, 4-states rule, anti-patterns
@@ -357,3 +356,33 @@ When the project includes an AI service (e.g., `composer-ai-service/` with LangG
 - [ ] List "+ Add" focuses the new row's first input
 - [ ] Wizard supports Enter to advance (guarded for textarea/dialog)
 - [ ] Fields pre-populated from known context where possible
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] UI code written to the frontmatter `output.primary` path; progress recorded at `agent_state/phases/{{PHASE}}/impl/ui_progress.md`.
+- [ ] Every assigned screen is REAL, complete code with all 4 states (loading/error/empty/data); API bindings match data-contracts.md.
+- [ ] Reported counts (screens/components) are REAL. If blocked (e.g. data-contracts.md missing), I say so explicitly — I do NOT report success on partial work.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When implementation surfaces something a FUTURE phase should know — a {{UI_FRAMEWORK}}/{{UI_COMPONENTS}} pattern that worked, a state/accessibility gotcha, an anti-pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** ux|implementation
+- **Tags:** {{UI_FRAMEWORK}}, ui, <pattern>
+- **Type:** pattern_that_worked|issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/impl/ui_progress.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"ui_developer","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/impl/ui_progress.md","ts":"<iso8601>"}
+```

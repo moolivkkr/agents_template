@@ -1,5 +1,17 @@
 > **Foundation:** This file extends [shared-backend-patterns.md](../core/shared-backend-patterns.md) with language-specific implementations. Read the shared patterns first for language-agnostic contracts.
 
+---
+skill: python
+description: Python patterns — type hints, dataclasses/pydantic, async, dependency injection, pytest, project layout and packaging
+version: "1.0"
+tags:
+  - python
+  - async
+  - pydantic
+  - patterns
+  - testing
+---
+
 # Python patterns and conventions for building reliable, maintainable applications.
 
 ## Project Structure

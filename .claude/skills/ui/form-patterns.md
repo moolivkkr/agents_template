@@ -1,3 +1,15 @@
+---
+skill: form-patterns
+description: Form patterns — React Hook Form + Zod + shadcn/ui, validation, field arrays, submission states, and accessible error display
+version: "1.0"
+tags:
+  - forms
+  - react-hook-form
+  - zod
+  - validation
+  - ui
+---
+
 # Form Patterns — React Hook Form + Zod + shadcn/ui
 
 ## Canonical Form Setup

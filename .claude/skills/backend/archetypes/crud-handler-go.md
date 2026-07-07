@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: CRUD Handler Archetype.** The language-neutral version at [crud-handler.md](crud-handler.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: crud-handler
 description: Go HTTP handler archetype — chi router, JSON request/response, cursor pagination, error mapping, OpenTelemetry, structured logging

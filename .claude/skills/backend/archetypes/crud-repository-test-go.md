@@ -1,5 +1,3 @@
-> **This file contains Go-specific patterns for: CRUD Repository Test Archetype.** The language-neutral version at [crud-repository-test.md](crud-repository-test.md) contains the same Go patterns and serves as the canonical reference. This file exists for consistent `{{LANG}}` placeholder resolution by `agent_factory`.
-
 ---
 skill: crud-repository-test
 description: Go integration test archetype for repository layer — testcontainers PostgreSQL, transaction-per-test isolation, real DB queries, pagination, tenant isolation, optimistic locking, error mapping

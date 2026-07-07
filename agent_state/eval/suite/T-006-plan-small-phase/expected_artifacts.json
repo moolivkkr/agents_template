@@ -1,0 +1,11 @@
+{
+  "task": "T-006-plan-small-phase",
+  "artifacts": [
+    { "path": "docs/design/phases/${EVAL_PHASE}/specs/TRD.md",
+      "assert": ["grep:FR-020"] },
+    { "path": "docs/design/phases/${EVAL_PHASE}/specs/data-contracts.md",
+      "assert": ["grep:404", "grep:400"] },
+    { "path": "docs/design/phases/${EVAL_PHASE}/specs/test-cases.md",
+      "assert": ["count_at_least:TC-U-:8", "count_at_least:TC-I-:6", "count_at_least:TC-E2E-:3"] }
+  ]
+}

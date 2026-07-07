@@ -1,3 +1,15 @@
+---
+skill: professional-ui-standards
+description: Generic house UI defaults — 4px spacing grid, typography scale, z-index, state discipline, density, motion, anti-patterns (overridden by a project design system)
+version: "1.0"
+tags:
+  - ui-standards
+  - spacing
+  - typography
+  - design-system
+  - ui
+---
+
 # Professional UI Standards — Generic House Defaults
 
 > **⛔ Precedence (see `.claude/skills/ui/README.md`).** If the project has a design system

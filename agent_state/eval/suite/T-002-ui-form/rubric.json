@@ -1,0 +1,24 @@
+{
+  "task": "T-002-ui-form",
+  "mode": "OUTCOME",
+  "rubric": [
+    { "id": "R1", "weight": 0.25, "check": "artifact_exists",
+      "path": "src/components/WidgetForm.tsx",
+      "desc": "form component implemented" },
+    { "id": "R2", "weight": 0.20, "check": "grep_present",
+      "pattern": "(htmlFor|aria-label)", "path": "src/components/WidgetForm.tsx",
+      "desc": "inputs have associated labels (accessibility)" },
+    { "id": "R3", "weight": 0.20, "check": "command_passes",
+      "cmd": "npm test -- WidgetForm",
+      "desc": "component tests green" },
+    { "id": "R4", "weight": 0.15, "check": "grep_present",
+      "pattern": "TC-UI-001", "path": "src/components/WidgetForm.test.tsx",
+      "desc": "required-field test annotated TC-UI-001" },
+    { "id": "R5", "weight": 0.10, "check": "grep_present",
+      "pattern": "TC-A11Y-001", "path": "src/components/WidgetForm.test.tsx",
+      "desc": "accessibility test annotated TC-A11Y-001" },
+    { "id": "R6", "weight": 0.10, "check": "grep_absent",
+      "pattern": "(TODO|@ts-ignore|\\.only\\(|\\.skip\\()", "path": "src/components/WidgetForm.test.tsx",
+      "desc": "no stubs / focused / skipped tests left in" }
+  ]
+}

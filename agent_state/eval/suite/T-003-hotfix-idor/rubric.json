@@ -1,0 +1,21 @@
+{
+  "task": "T-003-hotfix-idor",
+  "mode": "OUTCOME",
+  "rubric": [
+    { "id": "R1", "weight": 0.30, "check": "grep_present",
+      "pattern": "tenant_id", "path": "internal/repository/widget_repository.go",
+      "desc": "tenant scoping restored in the repository query (fix applied)" },
+    { "id": "R2", "weight": 0.25, "check": "grep_present",
+      "pattern": "TC-R-003", "path": "internal/repository/widget_repository_test.go",
+      "desc": "reproduction regression test present and annotated TC-R-003" },
+    { "id": "R3", "weight": 0.25, "check": "command_passes",
+      "cmd": "go test ./internal/repository/...",
+      "desc": "regression test + repository suite green after fix" },
+    { "id": "R4", "weight": 0.10, "check": "grep_present",
+      "pattern": "404", "path": "internal/repository/widget_repository_test.go",
+      "desc": "test asserts the not-found path (no existence oracle)" },
+    { "id": "R5", "weight": 0.10, "check": "grep_absent",
+      "pattern": "(t\\.Skip|TODO)", "path": "internal/repository/",
+      "desc": "no skipped test or leftover TODO in the fix" }
+  ]
+}

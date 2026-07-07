@@ -1,3 +1,15 @@
+---
+skill: scale-adaptive-depth
+description: Scale-adaptive workflow depth — match pipeline rigor (waves, reviews) to project size and risk instead of one fixed depth
+version: "1.0"
+tags:
+  - workflow
+  - scaling
+  - depth
+  - adaptivity
+  - core
+---
+
 # Scale-Adaptive Workflow Depth Protocol
 
 > **Read Tier 0 first.** Before applying this protocol, load `docs/PROJECT_FACTS.md` (ground-truth

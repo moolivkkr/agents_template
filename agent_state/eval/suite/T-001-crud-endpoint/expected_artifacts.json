@@ -1,0 +1,13 @@
+{
+  "task": "T-001-crud-endpoint",
+  "artifacts": [
+    { "path": "internal/handler/widget_handler.go",
+      "assert": ["grep:tenantID", "grep_absent:TODO"] },
+    { "path": "internal/service/widget_service.go",
+      "assert": ["grep:tenantID"] },
+    { "path": "internal/handler/widget_handler_test.go",
+      "assert": ["grep:TC-U-001"] },
+    { "path": "internal/handler/widget_handler_integration_test.go",
+      "assert": ["grep:TC-I-001", "grep:404", "cmd_passes:go test ./internal/handler/..."] }
+  ]
+}

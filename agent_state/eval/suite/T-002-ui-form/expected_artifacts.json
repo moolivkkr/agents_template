@@ -1,0 +1,10 @@
+{
+  "task": "T-002-ui-form",
+  "artifacts": [
+    { "path": "src/components/WidgetForm.tsx",
+      "assert": ["grep:htmlFor", "grep_absent:@ts-ignore"] },
+    { "path": "src/components/WidgetForm.test.tsx",
+      "assert": ["grep:TC-UI-001", "grep:TC-UI-002", "grep:TC-A11Y-001",
+                 "cmd_passes:npm test -- WidgetForm"] }
+  ]
+}

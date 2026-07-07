@@ -1,3 +1,15 @@
+---
+skill: advanced-state-patterns
+description: Complex UI state — optimistic updates, WebSocket integration, offline-first, URL state, cross-tab sync with TanStack Query + React
+version: "1.0"
+tags:
+  - state
+  - tanstack-query
+  - websocket
+  - optimistic
+  - ui
+---
+
 # Advanced State Patterns — Complex UI State Management
 
 Reference patterns for optimistic updates, WebSocket integration, offline-first, URL state, and cross-tab sync. All patterns use TanStack Query + React.

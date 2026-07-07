@@ -1,3 +1,15 @@
+---
+skill: loading-states
+description: Loading patterns — skeleton screens, Suspense, progressive loading, and layout-shift prevention
+version: "1.0"
+tags:
+  - loading
+  - skeleton
+  - suspense
+  - ux
+  - ui
+---
+
 # Loading State Patterns — Skeletons, Suspense, Progressive Loading
 
 ## Primary Rule: Skeleton Screens (NOT Spinners)
