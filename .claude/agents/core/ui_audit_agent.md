@@ -33,6 +33,7 @@ Audits the current state of the UI codebase at the start of a UI phase. Runs alo
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/BRD.md` — user personas, FR-* for UI-facing flows in scope
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory — UI components, state management, build tool
 3. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — which screens/flows are in scope

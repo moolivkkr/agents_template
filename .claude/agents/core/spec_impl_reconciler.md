@@ -23,6 +23,12 @@ dependencies:
 ## Role
 Bidirectional validation between phase specs and the implemented system. Runs after implementation, before acceptance tests. Catches implementation that diverges from specs in either direction.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Anti-Rationalization Guard
 
 Before accepting ANY alignment claim, review this table. If your internal reasoning matches the left column, follow the right column.

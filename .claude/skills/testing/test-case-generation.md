@@ -8,6 +8,44 @@ This skill defines enumeration patterns that spec_writer and ux_designer use to 
 
 ---
 
+## Tier 0: EARS-Derived Test Cases (spec_writer generates FIRST)
+
+Before applying the per-tier matrices below, walk every EARS clause in the spec's requirements and acceptance criteria. Each EARS clause deterministically yields **exactly one TC-***. See [../requirements/ears-notation.md](../requirements/ears-notation.md).
+
+### The Deterministic Split
+
+```
+WHEN <trigger>  THE SYSTEM SHALL <response>
+     └─ precondition ─┘         └─ assertion ─┘
+
+→ TC-<CAT>-NNN
+    Precondition: <trigger>   (the WHEN / WHILE / IF / WHERE part)
+    Assertion:    <response>  (the SHALL part)
+```
+
+For Ubiquitous clauses (no trigger) the precondition is the default/steady state.
+
+### Worked Example
+
+```
+FR-007:  WHEN an Admin submits the invite form with a valid email
+         THE SYSTEM SHALL create a pending member and send an invite email within 5s.
+FR-007b: IF the invite email is already registered
+         THEN THE SYSTEM SHALL reject with 409 CONFLICT.
+
+→ TC-API-014: Given Admin POSTs valid invite → assert 201 + pending row + email < 5s
+→ TC-API-015: Given invite email already registered → assert 409 CONFLICT
+```
+
+### Rules
+
+- **One EARS clause → one TC-*.** Reviewers verify by counting: clause count must equal Tier-0 TC-* count.
+- The Tier-0 TC-* carries the FR-*/NFR-* ID it derives from, so BRD traceability is direct.
+- Tier 0 is the **floor**, not the ceiling — the per-tier matrices below (unit/integration/E2E/UI/acceptance) still add the auth/validation/IDOR/shape/state variations that a single EARS clause does not spell out. A Tier-0 TC often maps onto an integration or E2E TC-* in the matrices; when it does, reuse the ID rather than duplicating.
+- Compound requirements must be split into one EARS clause each BEFORE mapping (see ears-notation.md) — never map a multi-SHALL sentence to one TC-*.
+
+---
+
 ## Tier 1: Unit Test Cases (spec_writer generates)
 
 Already covered by the edge-case-taxonomy. Minimum 10 edge cases per spec, each mapped to a TC-* ID.

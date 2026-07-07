@@ -32,6 +32,7 @@ Keeps project documentation accurate and up to date. Generates API documentation
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/BRD.md` — project purpose and feature overview
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, local dev setup, architecture
 3. `agent_state/phases/{{PHASE}}/manifest.json` — API routes and components built this phase

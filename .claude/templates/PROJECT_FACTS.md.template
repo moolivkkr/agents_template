@@ -1,0 +1,43 @@
+# PROJECT_FACTS — Ground Truth for {{PROJECT_NAME}}
+
+> **Tier 0 memory.** Every session and every subagent reads this file FIRST and treats it as
+> ground truth. It overrides conflicting assumptions in prompts, specs, or model training.
+> Protocol: `.claude/skills/core/shared-context-protocol.md`. Add facts with `/remember`.
+>
+> Keep this file TINY and high-signal (< ~20 active facts). Requirements go in the BRD, tech
+> conventions in IMPLEMENTATION_GUIDELINES, phase lessons in `agent_state/lessons.md`.
+
+## How to read this file
+- Act ONLY on facts with `status: active`.
+- `superseded` facts are kept for history/audit — ignore them for decisions.
+- If a task references anything marked RETIRED/superseded here, STOP and flag it.
+
+---
+
+## Active Facts
+
+<!-- Example (delete once real facts exist):
+
+### F-001 — vertix-gateway is RETIRED
+- status: active
+- subject: vertix-gateway
+- relation: lifecycle
+- valid_from: 2026-03-15
+- invalid_at: —
+- superseded_by: —
+- source: human:/remember
+- confidence: confirmed
+- fact: >
+    vertix-gateway is retired. Do NOT reference, deploy, route to, or write specs/tests
+    against it. Traffic moved to edge-router. Any task, spec, or code naming vertix-gateway
+    is STALE — stop and flag it instead of acting.
+
+-->
+
+_No facts recorded yet. Add the first with `/remember <fact>`._
+
+---
+
+## Superseded Facts (history — do not act on these)
+
+_None yet._

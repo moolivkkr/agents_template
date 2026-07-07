@@ -64,6 +64,12 @@ Interactive agent that presents focused questions to fill gaps identified by `br
 
 **Key Principle:** Ask smart questions. Accept the user's answers exactly as given — never assume, invent, or editorialize.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Automatic Spawning
 Spawned by `brd_analyzer` when gaps are found. On completion, auto-spawns `brd_writer` once all critical questions are answered.
 

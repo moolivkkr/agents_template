@@ -32,6 +32,7 @@ Runs end-to-end tests for complete user workflows. Only executes workflows decla
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. All `agent_state/phases/*/manifest.json` files — find all `e2e_workflows_unlocked` entries
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — e2e tool (Playwright, Cypress, etc.)
 3. Phase specs for workflow step definitions

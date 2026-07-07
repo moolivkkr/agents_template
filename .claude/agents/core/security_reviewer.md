@@ -51,6 +51,7 @@ Before downgrading ANY finding's severity or skipping ANY check, review this tab
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `.claude/skills/core/security-owasp.md` — OWASP Top 10 patterns and mitigations
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design Constraints — project security requirements
 3. `docs/BRD.md` §NFR-SEC-* — specific security requirements with IDs

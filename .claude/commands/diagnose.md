@@ -27,6 +27,8 @@ Systematic investigation that traces a symptom to its root cause by comparing sp
 
 ## Step 0 — Parse Symptom and Identify Scope
 
+**Ground truth first:** read `docs/PROJECT_FACTS.md` and honor any retired/renamed facts (a symptom that names a retired component or old route is diagnosing a ghost — reconcile before proceeding).
+
 ```bash
 SYMPTOM="${ARG_SYMPTOM}"
 PHASE="${ARG_PHASE}"
@@ -213,26 +215,41 @@ To confirm the fix works:
 
 ## Step 6 — Auto-Fix (if `--fix` flag)
 
-If `--fix` was provided:
+If `--fix` was provided, apply the **reproduction-test-first self-repair loop** — do NOT edit
+production code before you have a failing test. Follow `.claude/skills/testing/reproduction-first.md`:
 
-1. **Apply fix** — use the appropriate implementation agent for the component's language/framework
-2. **Scoped test** — run only tests for the affected component
-3. **Verify** — re-run the reproduction command from the diagnosis report
+1. **Reproduce (RED)** — from the root cause and Verification Test in the diagnosis report, write the
+   minimal repro test that FAILS on the actual symptom. If you cannot make it fail, the root cause is
+   wrong — stop and re-diagnose.
+2. **Confirm the reason** — the test must fail because of the bug, not an unrelated error.
+3. **Fix loop** — use the appropriate implementation agent for the component's language/framework:
+   edit → re-run the repro test → repeat. **Max 3 attempts** (`test_retry_max`), then escalate.
+4. **Gate** — accept only when the repro test flips **fail→pass** AND the pre-existing scoped suite
+   stays green (**pass-to-pass**, no regressions). Record the fail→pass transition as evidence.
+5. **Keep the repro test** — it is permanent; annotate it with a `TC-*` ID
+   (`.claude/skills/testing/test-case-traceability.md`) so this bug can never silently return.
+
+Guardrails are the framework's standard ones (see the skill): never delete/skip/weaken a test or add
+`//nolint`/`@ts-ignore` to force green — fix the bug, not the test.
 
 ```bash
-# Run the verification test
-<reproduction-command>
-# Expected: <expected output>
-# Actual: <observed output>
+# Repro test — must be RED before any fix
+<test-runner> <repro-test>   # Step 1: expect FAIL on <actual symptom>
+
+# ...apply fix, re-run (max 3)...
+
+<test-runner> <repro-test>   # Step 4: now PASS (fail→pass)
+<test-runner> <component-suite>   # pass-to-pass: no regressions
 ```
 
 If fix succeeds:
 ```
 ✅ Auto-fix applied and verified
 
-  Fix:     ${FIX_SUMMARY}
-  Tests:   N/N passed
-  Verify:  Symptom resolved
+  Fix:      ${FIX_SUMMARY}
+  Repro:    ${REPRO_TEST} (TC-${CAT}-${NNN}) — FAIL→PASS
+  Regress:  N/N pre-existing tests still pass (pass-to-pass)
+  Verify:   Symptom resolved
 
   Changes are uncommitted. Next steps:
     /hotfix --phase=${PHASE} --component=${COMPONENT} --description="${DESCRIPTION}"

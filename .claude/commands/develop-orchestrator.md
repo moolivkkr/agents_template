@@ -161,16 +161,52 @@ Claude Code does NOT expose a `context_percentage` variable. Use these **concret
 
 ---
 
-## Wave 1: ORIENT + AUDIT
+## Wave 0: SCALE THE WORKFLOW DEPTH
 
-Spawn a single agent:
+Before Wave 1, classify phase complexity and scale how many waves run — do not pay full
+six-wave ceremony for a typo fix. See `.claude/skills/core/scale-adaptive-depth.md`.
+
+| Class | Signals | Waves to run |
+|-------|---------|--------------|
+| **trivial** | 1 file, no shared layer, copy/typo | scoped edit + test only (skip audit/TRD/review waves) |
+| **small** | ≤2 components, no shared layer | Waves 2, 3, 6 (light) |
+| **standard** | multi-component or brownfield | full Waves 1–6 (default) |
+| **platform** | shared layer, new subsystem, many FR-* | full 1–6 + architecture/ADR pass |
+
+Complexity also drives model routing (`model-routing.md`); this drives *workflow depth*. Upgrades
+allowed mid-run (escalate if a "small" phase turns out to touch a shared layer); never silently
+downgrade. Record the chosen class in the Wave-0 checkpoint.
+
+---
+
+## ⛔ MANDATORY — Ground-Truth Injection on EVERY spawn
+
+Every `Agent prompt:` in this orchestrator MUST begin with the ground-truth injection line so
+Tier 0 facts reach every subagent (subagents do not inherit the conversation). Prepend verbatim:
 
 ```
-Agent prompt: "You are running Wave 1 (Orient + Audit) for Phase ${PHASE}.
+GROUND TRUTH: First read docs/PROJECT_FACTS.md — it lists retired/renamed components, hard
+constraints, and environment facts, and it OVERRIDES any conflicting assumption in this prompt
+or your training. If this task touches anything marked RETIRED/superseded there, stop and flag
+it instead of proceeding.
+```
+
+The wave prompts below omit this line only for brevity — you must add it to each. See
+`.claude/skills/core/shared-context-protocol.md`.
+
+---
+
+## Wave 1: ORIENT + AUDIT
+
+Spawn a single agent (remember to prepend the GROUND TRUTH line):
+
+```
+Agent prompt: "[GROUND TRUTH line] You are running Wave 1 (Orient + Audit) for Phase ${PHASE}.
 WORKING DIRECTORY: ${PROJECT_DIR}
-Read: docs/design/phases/${PHASE}/phase_context.md, IMPLEMENTATION_GUIDELINES.md
+Read: docs/PROJECT_FACTS.md (ground truth), docs/design/phases/${PHASE}/phase_context.md, IMPLEMENTATION_GUIDELINES.md
 Produce: agent_state/phases/${PHASE}/audit_report.md
-Identify gaps, existing code, what needs to be built."
+Identify gaps, existing code, what needs to be built.
+If the audit finds a component that is dead/retired, propose a /remember fact (confidence: reported)."
 ```
 
 **Verify before proceeding:**
@@ -462,7 +498,13 @@ test -f agent_state/phases/${PHASE}/reports/acceptance_report.md || echo "⛔ BL
 
 ## Wave 5: COLLECTIVE FEEDBACK + ITERATE (with Adaptive Replanning)
 
-> **Skill reference:** `.claude/skills/core/adaptive-replan.md` — full failure classification and minimum re-test scope protocol.
+> **Skill references:** `.claude/skills/core/adaptive-replan.md` (failure classification → minimum re-test SCOPE) and `.claude/skills/core/dual-ledger-replan.md` (Task/Progress ledgers → WHEN to replan vs keep iterating vs escalate). They compose: the ledger decides *whether* to keep going; the classification decides *what* to re-run.
+
+**Maintain the dual ledgers across iterations.** The PARENT keeps `agent_state/phases/${PHASE}/ledger.md`:
+- **Task Ledger** — `facts[]` (verified only), `assumptions[]` (guesses, kept explicitly separate — never present a guess as a fact), `plan[]`.
+- **Progress Ledger** (per iteration) — step, assignee, done?, new-fact-this-cycle?, loop_count.
+
+**Stall rule:** if `loop_count > 2` with no new fact (or the same failing action repeats without progress) → STALL → REPLAN: write the failure mode, evict the falsified assumption, rewrite `plan[]` (usually re-classify), and escalate after the tier's retry cap (`sdlc-config.json`) to `debate_moderator` or the human. A verified, broadly-true assumption may be promoted to a Tier 0 fact via `/remember`.
 
 The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feedback document:
 
@@ -544,7 +586,15 @@ fi
 
 ## Wave 6: GATE
 
-The PARENT session runs the gate check:
+The PARENT session runs the gate check using the **Gate Verification Protocol**
+(`.claude/skills/core/gate-verification.md`) — evidence-based, graded, cross-checked. The
+binary "file exists + non-zero count" check below is only Layer 0; it is necessary but NOT
+sufficient. The parent MUST also run Layer 1 (independent file:line re-verification — never
+trust the subagent's report), Layer 2 (numeric `gate_score ≥ 0.90`), and Layer 3 (cross-model
+refutation of high-stakes claims) before writing `gate.passed`.
+
+**Order:** Layer 0 (below) → Layer 1 re-verification → Layer 2 score → Layer 3 for security/
+tenant-isolation/"fixed" claims → write `gate_score.md` → only then `gate.passed`.
 
 1. Verify ALL required files exist AND contain actual test results:
    - audit_report.md ✓
@@ -593,11 +643,16 @@ The PARENT session runs the gate check:
 
    **Safety rules:** Phase 1, forced gates, and shared-layer changes always trigger full regression. See `change-impact-analysis.md` for the complete algorithm.
 
-3. If all pass → write gate.passed + manifest.json + git tag
+3. Run Gate Verification Layers 1–3 (`gate-verification.md`). Write
+   `agent_state/phases/${PHASE}/reports/gate_score.md` with the evidence table + numeric score.
 
-4. If any fail → DO NOT write gate.passed. Route failures back to Wave 5.
+4. Gate passes ONLY when: Layer 0 clean AND Layer 1 has zero unproven items AND
+   `gate_score ≥ 0.90` AND no Layer 3 claim was refuted → write gate.passed + manifest.json + git tag.
 
-**Auto-checkpoint:** Write `checkpoints/wave-6.json` with `tests_passing: true`, `artifacts_produced: ["gate.passed", "manifest.json"]`.
+5. If any layer fails → DO NOT write gate.passed. Route failures back to Wave 5 with the specific
+   unproven items / low-scoring dimensions named.
+
+**Auto-checkpoint:** Write `checkpoints/wave-6.json` with `tests_passing: true`, `gate_score: <score>`, `artifacts_produced: ["gate.passed", "manifest.json", "reports/gate_score.md"]`.
 
 ---
 

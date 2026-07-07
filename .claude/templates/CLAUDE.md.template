@@ -5,6 +5,21 @@
 
 ---
 
+## ⛔ GROUND TRUTH — read FIRST, every session, every agent
+
+**[docs/PROJECT_FACTS.md](docs/PROJECT_FACTS.md) is Tier 0 memory.** It lists retired/renamed
+components, hard constraints, and environment facts, and it **overrides any conflicting
+assumption** in prompts, specs, or model training. If a task references anything marked
+`RETIRED`/`superseded` there, STOP and flag it.
+
+- Add or change a fact with **`/remember <fact>`** — it propagates to every future session and
+  every subagent automatically (no more re-typing "X is retired" into each session).
+- Memory model + supersession rules: `.claude/skills/core/shared-context-protocol.md`.
+- **Every agent-spawn prompt MUST prepend the ground-truth injection line** (see the protocol
+  skill, Layer 2). Orchestrators do this automatically.
+
+---
+
 ## What We're Building
 
 {{PROJECT_SUMMARY}}
@@ -83,13 +98,18 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | Command | When to use |
 |---------|------------|
 | `/init` | Project setup (run once) |
+| `/remember <fact>` | Record a Tier 0 ground-truth fact (retired/renamed component, constraint) — propagates to every session + subagent |
 | `/plan --phase=N` | Plan a phase before implementing |
 | `/develop --phase=N` | Implement a phase end-to-end |
+| `/converge --phase=N` | Generate catch-up tasks where code lags the spec (as-spec-wins; inverse of reconcile) |
 | `/test --e2e` | Run e2e tests standalone |
 | `/test --traceability` | Check TC-* ID coverage |
 | `/review` | Code review on current changes |
+| `/diagnose` / `/hotfix` | Bug investigation / fast-track fix — both use reproduction-test-first |
 | `/deploy --target=local` | Deploy locally |
 | `/accept` | Global acceptance after all phases |
+| `/consolidate` | Off-path memory maintenance — dedup/compress lessons, audit Tier 0 facts |
+| `/eval --compare` | Measure whether a framework change improved/regressed output quality |
 | `/status` | Check project progress |
 
 ---
@@ -126,6 +146,21 @@ Every spec defines explicit test case IDs (TC-* format). Every test file must an
 - Adaptive replanning: Wave 5 classifies failures and determines minimum re-test scope (see `adaptive-replan.md`)
 - Change-impact regression: Wave 6 gate runs only tests affected by current phase's changes (see `change-impact-analysis.md`)
 - Model routing: agents with `model: auto` select haiku/sonnet/opus based on complexity (see `model-routing.md`)
+
+---
+
+## Memory Model (three tiers — see `.claude/skills/core/shared-context-protocol.md`)
+
+| Tier | Where | Load policy | Add via |
+|------|-------|-------------|---------|
+| **0 — Facts** | [docs/PROJECT_FACTS.md](docs/PROJECT_FACTS.md) | ALWAYS (every session + subagent) | `/remember` |
+| **1 — Lessons/Patterns** | `agent_state/lessons.md`, `agent_state/patterns.md` | On demand — query by category/tag (`memory-as-tools.md`) | auto after each gate |
+| **2 — Codebase KB** | `agent_state/codebase/` | When relevant — load the focused doc | `/map` |
+
+- Tier 0 facts are **bi-temporal**: a superseding fact closes the old one's validity window
+  (deterministic `(subject, relation)` match — never semantic similarity). History is preserved.
+- Never load a whole Tier 1/2 file for a narrow question — retrieve by tag. Run `/consolidate`
+  periodically to dedup and keep memory lean.
 
 ---
 

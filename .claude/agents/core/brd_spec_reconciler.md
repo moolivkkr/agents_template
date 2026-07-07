@@ -24,6 +24,12 @@ dependencies:
 ## Role
 Bidirectional validation between `docs/BRD.md` requirements and the phase specs (TRDs). Runs after spec generation, before implementation. Ensures specs are complete AND grounded — no gaps, no gold-plating.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Direction A → B: BRD → Specs
 
 For each FR-*, NFR-*, OBJ-* assigned to this phase in `PHASE_PLAN.md`:

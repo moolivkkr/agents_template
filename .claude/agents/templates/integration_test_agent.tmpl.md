@@ -145,6 +145,7 @@ Integration tests require live services. Before running:
 
 ## Required Reading Sequence
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/design/phases/{{PHASE}}/specs/` — derive integration scenarios from feature specs
 2. `agent_state/phases/{{PHASE}}/api_developer/manifest.json` — enumerate all routes to test
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — avoid duplicating integration tests from previous phase

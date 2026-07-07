@@ -22,6 +22,7 @@ Produces Mermaid sequence diagrams for the most important system flows. Helps de
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory, §Architecture Overview
 2. `docs/BRD.md` §Functional Requirements (for identifying key flows)
 3. Phase specs in `docs/design/phases/{{PHASE}}/specs/` (for endpoint details)

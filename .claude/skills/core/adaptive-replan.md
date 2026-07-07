@@ -116,3 +116,30 @@ Scope expansion: YES (touched ${EXTRA_FILES}) / NO
 ```
 
 This data feeds into Post-Gate lessons — patterns of which categories appear most often inform future planning.
+
+## Dual-Ledger Integration
+
+This protocol answers **WHAT to re-run** — the failure-classification table maps a failure to
+its minimum re-test scope. It does **not** answer **WHEN to stop iterating** and change
+strategy, or when to escalate to a human. A fix agent following only this protocol can loop
+forever re-classifying and re-running while making zero real progress.
+
+`dual-ledger-replan.md` supplies the missing self-monitoring loop (Magentic-One dual-ledger +
+stall detection). They compose along a clean seam:
+
+| Question | Owner |
+|---|---|
+| **WHEN** replan vs keep iterating vs escalate | `dual-ledger-replan.md` (Progress Ledger stall rule + replan cap) |
+| **WHAT** to re-run once we've decided to fix | this skill (classification table → minimum scope) |
+
+Flow in Wave 5: the orchestrator's **Progress Ledger** watches for a stall (`loop_count > 2`
+with no new fact, or a repeated action with no progress). Until it stalls, each cycle uses the
+classification table above to pick scope — normal adaptive replanning. On a **stall**, the
+orchestrator self-reflects, falsifies its lowest-confidence assumption, and **rewrites the
+plan** — which typically means **re-classifying** the failure (e.g. LOGIC → WIRING), and that
+new class drives the new minimum scope via this table. After the tier-appropriate replan cap
+(`sdlc-config.json` retry caps), it escalates.
+
+So classification still owns scope end-to-end; the ledger decides when to trust the current
+classification versus tear it up and re-classify. See `dual-ledger-replan.md` for the ledger
+formats and the exact stall → replan → escalate rule.

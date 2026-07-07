@@ -86,14 +86,37 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | Command | When to use |
 |---------|------------|
 | `/init` | Project setup (run once) |
+| `/remember <fact>` | Record a Tier 0 ground-truth fact (retired/renamed component, hard constraint) — propagates to every session + subagent |
 | `/plan --phase=N` | Plan a phase before implementing |
 | `/develop --phase=N` | Implement a phase end-to-end |
+| `/converge --phase=N` | Generate catch-up tasks where code lags the spec (inverse of reconcile) |
 | `/test --e2e` | Run e2e tests standalone |
 | `/test --traceability` | Check TC-* ID coverage |
 | `/review` | Code review on current changes |
+| `/diagnose` / `/hotfix` | Bug investigation / fast-track fix (reproduction-test-first) |
 | `/deploy --target=local` | Deploy locally |
 | `/accept` | Global acceptance after all phases |
+| `/consolidate` | Off-path memory maintenance (dedup lessons, audit Tier 0 facts) |
+| `/eval --compare` | Measure whether a framework change improved/regressed output quality |
 | `/status` | Check project progress |
+
+---
+
+## Shared Context & Memory (CRITICAL — every agent must follow)
+
+**Ground truth = `docs/PROJECT_FACTS.md` (Tier 0).** Every session and every subagent reads it
+FIRST; it overrides conflicting assumptions in prompts, specs, or training. Add facts with
+`/remember` — stated once, honored everywhere (this is how "vertix-gateway is retired" reaches
+every agent without re-typing). Delivered three ways: agent Required-Reading item 0, the
+orchestrator ground-truth injection line on every spawn, and the SessionStart hook.
+
+Three memory tiers by access pattern (full model: `.claude/skills/core/shared-context-protocol.md`):
+- **Tier 0 — Facts** (`docs/PROJECT_FACTS.md`): tiny, always loaded, bi-temporal (superseding a
+  fact closes the old one's validity window via deterministic `(subject,relation)` match, never
+  semantic similarity). Written by `/remember`.
+- **Tier 1 — Lessons/Patterns** (`agent_state/`): queried on demand by category/tag
+  (`memory-as-tools.md`), never loaded whole. Maintained by `/consolidate`.
+- **Tier 2 — Codebase KB** (`agent_state/codebase/`): loaded when relevant; ranked repo map from `/map`.
 
 ---
 

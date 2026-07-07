@@ -69,6 +69,9 @@ Every finding MUST be classified by evidence level. This is non-negotiable — u
 
 Read these in order. Each reading builds context for the next.
 
+### 0. Project Facts — GROUND TRUTH
+- `docs/PROJECT_FACTS.md` — **Read before anything else.** It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
 ### 1. BRD Requirements (load sections only)
 - `docs/BRD.md` §Functional Requirements — FR-* rows for this phase
 - `docs/BRD.md` §Non-Functional Requirements — NFR-* rows (especially NFR-SEC-*, NFR-PERF-*)

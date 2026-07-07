@@ -30,6 +30,7 @@ Second pass in the review pipeline. Validates that the implementation respects t
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Architecture Overview, §Component Inventory, §Design Constraints
 2. `agent_state/phases/{{PHASE}}/reports/code_review_I.md` — skip anything already flagged
 3. `docs/design/phases/{{PHASE}}/specs/` — interface contracts defined in TRDs

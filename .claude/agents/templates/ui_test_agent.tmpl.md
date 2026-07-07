@@ -302,6 +302,7 @@ test('page meets WCAG 2.2 AA', async ({ page }) => {
 
 ## Required Reading Sequence
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — **READ FIRST** — exact response shapes. ALL Tier 2 mocks must match these shapes.
 2. `docs/design/phases/{{PHASE}}/specs/` — wireframe interaction flows define test scenarios
 3. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — which screens/components to test

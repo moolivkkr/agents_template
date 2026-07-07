@@ -47,6 +47,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any code:
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/ui/professional-ui-standards.md` — design tokens, 4-states rule, anti-patterns
 - `.claude/skills/ui/api-integration-patterns.md` — HTTP client, TanStack Query hooks
 - `.claude/skills/ui/error-handling-patterns.md` — error type to UI pattern mapping
@@ -283,6 +284,31 @@ button and call `triggerRef.current?.focus()` in `onClose`.
 ### 7. Tab Order Matches Visual Order
 Ensure tab order follows left-to-right, top-to-bottom layout. Never use positive
 `tabIndex`. Group related controls so Tab flows naturally between them.
+
+---
+
+## AI-Assisted Features — Integration Pattern
+
+When the project includes an AI service (e.g., `composer-ai-service/` with LangGraph):
+
+### API Design
+- Use versioned, plugin-scoped routes: `/api/v1/{plugin}/{entity_type}/{action}`
+- Every entity type gets 4 actions: `generate`, `explain`, `validate`, `improve`
+- Cross-cutting AI features (regex assist, health) go under `/api/v1/ai/`
+- Legacy routes kept for backward compat but deprecated
+
+### Prompt Engineering (proven via testing)
+- **Always use 2-shot examples** — 0-shot gives 30% quality, 1-shot 80%, 2-shot 100%
+- Examples should cover two different data categories to teach generalization
+- System prompt MUST include "Start with {" and "No prose" for JSON-only output
+- Embed format specifications directly in prompts (don't rely on model knowledge)
+- Include negative examples in prompts (what NOT to do) alongside positive examples
+
+### Frontend AI Service Layer
+- Create an `aiService.ts` abstraction that auto-detects backend availability
+- Support fallback: LangGraph service → direct LLM → graceful degradation
+- All AI functions return `{ content, model, durationMs }` regardless of backend
+- Provider switching via single env var: `AI_PROVIDER=ollama|bedrock|vertex|openai`
 
 ---
 

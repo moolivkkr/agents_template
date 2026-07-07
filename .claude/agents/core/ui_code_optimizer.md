@@ -77,6 +77,7 @@ Verify `phase-${PHASE}-pre-optimize` git tag exists before making ANY changes. I
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — UI framework, component library, state management, build tool
 2. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — screens and components implemented this phase
 3. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — verify data-fetching hooks still match API shapes after optimization

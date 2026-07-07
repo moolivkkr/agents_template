@@ -76,6 +76,7 @@ This agent receives the following from the parent `/product-workflows` command:
 
 ## Required Reading (before producing output)
 
+0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. **Doc Corpus** (`docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md`) — the compiled research from all documentation sources. This is your primary evidence base.
 2. **Video Intelligence** (`docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md`) — timestamped screen-by-screen extractions from demo videos. Cross-reference with doc corpus.
 3. **Capability Taxonomy** (`docs/product-workflows/{{PRODUCT_SLUG}}/CAPABILITY-TAXONOMY.md`) — the full taxonomy for understanding where this capability fits in the product hierarchy and what sibling/child capabilities exist.

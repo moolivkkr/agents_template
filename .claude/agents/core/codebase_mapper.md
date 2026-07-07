@@ -6,9 +6,15 @@ category: audit
 invoked_by: /map
 input:
   required:
+    - type: ground_truth
+      path: docs/PROJECT_FACTS.md
+      description: "GROUND TRUTH — retired/renamed components + hard constraints; overrides conflicting assumptions"
     - type: guidelines
       path: docs/IMPLEMENTATION_GUIDELINES.md
       description: "Tech stack and component inventory for targeted exploration"
+    - type: skill
+      path: .claude/skills/core/repo-map.md
+      description: "Def→ref graph + personalized-PageRank ranked map protocol"
   optional:
     - type: phase_plan
       path: "docs/design/phases/{{PHASE}}/PHASE_PLAN.md"
@@ -49,6 +55,15 @@ This agent receives the following from the parent `/map` command:
 | `changed_files` | NO | List of files changed since last mapping (only when scope=incremental) |
 | `component_paths` | NO | List of component paths to analyze (only when scope=phase) |
 | `previous_document` | NO | Path to existing focus document (only when scope=incremental, for merge) |
+
+---
+
+## Required Reading
+
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+1. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack and component inventory for targeted exploration
+2. `.claude/skills/core/repo-map.md` — how to build the def→ref graph and emit a ranked, token-budgeted map for your focus area
+3. `agent_state/codebase/` — previous mapping (only when `scope=incremental`, for merge)
 
 ---
 
@@ -143,6 +158,23 @@ Use Grep to verify patterns hold across the codebase:
 - Import patterns (dependency direction)
 - Auth middleware usage
 - Naming conventions
+
+### Phase 4 — Def→Ref Graph + Ranked Map (repo-map protocol)
+
+> Protocol: `.claude/skills/core/repo-map.md`
+
+For your focus area's file set, build the symbol **def→ref graph** and emit a ranked slice:
+
+1. **Extract tags** — probe the tool fallback ladder once (tree-sitter/`ast-grep` → `ctags` → LSP/compiler
+   index → Grep def regexes) and pull definitions + references. Nodes = files, edges = ref→def.
+2. **Rank** — run personalized PageRank (or the deterministic in/out-degree approximation) biased toward your
+   focus-area scope files, changed files (~10x when `scope=incremental`), and well-named identifiers (~10x).
+3. **Budget** — emit files in descending rank with their top ranked symbol *signatures* (skeletons, never
+   bodies) up to ~1K tokens for your focus; omit the low-rank tail.
+
+You do not build the whole-repo persistent artifact — that is `/map` Step 2.5. You emit the *focus-scoped*
+def→ref graph + ranked slice so the parent can merge it and so your focus document's findings cite the
+highest-centrality files first. Record the tool rung used in your document header.
 
 ---
 

@@ -27,6 +27,12 @@ dependencies:
 ## Role
 Quick first-pass that maps each screen to a page archetype. Produces initial UI spec scaffolding that `ux_designer` refines into full component-level specs.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Process
 
 1. Read BRD FR-UI-* requirements for this phase

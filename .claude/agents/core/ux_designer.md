@@ -48,6 +48,7 @@ Produces wireframe specification files for UI screens scoped to the current phas
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — **READ FIRST** — typed response shapes for ALL endpoints. This is the source of truth for data bindings.
 2. `.claude/skills/ui/archetypes/` — page archetypes (list-page, detail-page, form-page, dashboard-page, settings-page). **Always start from an archetype.**
 3. `docs/BRD.md` §FR-UI-* — screen requirements and acceptance criteria

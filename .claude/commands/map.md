@@ -38,6 +38,7 @@ Produces a persistent, reusable codebase knowledge base in `agent_state/codebase
 | Step 0 Orient | ~3K (check existing mapping, git diff, phase plan) |
 | Step 1 Per mapper agent | ~15K each (Glob discovery + targeted file reads) |
 | Step 2 Synthesize | ~10K (read 4 focus documents, write summary) |
+| Step 2.5 Ranked repo map | ~8K (build def→ref graph, PageRank, budget to ~2K output) |
 | Step 3 Output | ~1K (format and print summary) |
 
 **Agent return protocol:** Every mapper agent returns 3 lines to the parent:
@@ -282,6 +283,45 @@ If `--incremental`:
 
 ---
 
+## Step 2.5 — Ranked Repo Map (Personalized PageRank)
+
+> Protocol: `.claude/skills/core/repo-map.md`
+
+**Runs after:** synthesis, before final output. Produces a persistent, token-budgeted ranked map so
+downstream agents get the *most relevant* files+symbols for a task instead of re-reading directories.
+
+1. **Build the def→ref tag graph** (Part A) — probe the tool fallback ladder once
+   (tree-sitter/`ast-grep` → `ctags` → LSP/compiler index → Grep heuristics) and extract definitions +
+   references across the same file set the mappers analyzed. Nodes = files, edges = ref→def.
+2. **Rank with PageRank** (Part B) — for the *persistent* map there is no task in context, so bias the
+   personalization vector toward entry points (high out-degree), high-fan-in core files, and — if
+   `--incremental` — the changed files (~10x). Well-named identifiers get ~10x.
+3. **Budget to ~2K tokens** (Part C) — emit files in descending rank with their top ranked symbol
+   signatures (skeletons, never bodies). Omit the low-rank tail; record the omitted count.
+4. **Write** `agent_state/codebase/repo-map.md`:
+
+```markdown
+# Ranked Repo Map
+Generated: {{TIMESTAMP}}
+Git SHA: {{GIT_SHA}}
+Tool rung: {{tree-sitter | ctags | lsp | grep-heuristic}}
+Ranking: {{power-iteration | deterministic-approximation}}
+Budget: ~2K tokens · files ranked: {{N}} · files emitted: {{M}} · omitted (below budget): {{N-M}}
+
+## Ranked Files + Symbols
+<Output Shape from repo-map.md Part C — path, rank, top-N symbol signatures with ref counts>
+
+## How to Use This Map
+Audit/localization consumers re-rank this graph with a TASK-personalized vector (spec/audit-scope
+files + task-mentioned symbols weighted up), then apply hierarchical narrowing (file → skeleton → lines).
+See `.claude/skills/core/repo-map.md` Part D.
+```
+
+If `--incremental`, re-rank rather than rebuild from scratch where possible: update edges for changed
+files and re-run PageRank, then rewrite the artifact.
+
+---
+
 ## Step 3 — Output
 
 Print the mapping summary:
@@ -296,6 +336,7 @@ Print the mapping summary:
 
   Files:
     agent_state/codebase/SUMMARY.md
+    agent_state/codebase/repo-map.md   (ranked, token-budgeted)
     agent_state/codebase/tech-stack.md
     agent_state/codebase/architecture.md
     agent_state/codebase/quality.md
@@ -313,6 +354,7 @@ If `--incremental`:
 
   Files:
     agent_state/codebase/SUMMARY.md (updated)
+    agent_state/codebase/repo-map.md (re-ranked)
     agent_state/codebase/tech-stack.md
     agent_state/codebase/architecture.md
     agent_state/codebase/quality.md
@@ -331,6 +373,7 @@ If `--phase`:
 
   Files:
     agent_state/codebase/SUMMARY.md
+    agent_state/codebase/repo-map.md   (ranked, phase-scoped)
     agent_state/codebase/tech-stack.md
     agent_state/codebase/architecture.md
     agent_state/codebase/quality.md
@@ -345,6 +388,7 @@ If `--phase`:
 - Every finding must include **file:line references** — "the codebase uses MVC" without evidence is not a finding
 - The knowledge base is **append-friendly** — incremental mode updates sections, never deletes previous findings unless the underlying code was deleted
 - `agent_state/codebase/SUMMARY.md` is the **entry point** for all downstream agents — keep it under 2K tokens
+- `agent_state/codebase/repo-map.md` is the **ranked localization map** — audit/localization agents re-rank it with a task-personalized vector rather than re-reading directories (see `.claude/skills/core/repo-map.md`); keep it under ~2K tokens
 - Focus documents can be detailed — no hard token limit, but use structured tables and avoid prose
 - The `.last-mapped` file is the **single source of truth** for incremental mode — if corrupted, fall back to full scan
 - All 4 focus areas run even for small codebases — the categories of analysis don't change with project size

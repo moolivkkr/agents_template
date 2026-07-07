@@ -35,6 +35,12 @@ skill_packs:
 
 Shared service agent available to the ENTIRE pipeline. Any agent that encounters uncertainty, conflicting options, or missing data escalates to the debate moderator. The moderator orchestrates the research → debate → arbitration process and returns a scored verdict.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## When Invoked
 
 Automatically triggered when ANY agent writes a `debate_request` JSON to `agent_state/debates/`. Can also be invoked directly for ad-hoc decisions.

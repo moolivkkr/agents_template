@@ -33,6 +33,12 @@ Single-purpose mechanical verifier. Does NOT ask "does the code look secure?" �
 
 ---
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Verification Algorithm
 
 ### Step 1 — Enumerate ID-based routes

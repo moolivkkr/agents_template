@@ -76,6 +76,7 @@ Creates and manages versioned database migrations for **{{PROJECT_NAME}}** using
 
 ## Required Reading Sequence
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/design/database.md` — the authoritative schema to implement
 2. `agent_state/phases/{{PHASE-1}}/manifest.json` — find `migrations_applied` list; never re-create those
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — {{MIGRATION_TOOL}} specific conventions, env var names for DB connection

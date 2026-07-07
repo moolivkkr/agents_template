@@ -27,6 +27,12 @@ subagents: [c4_diagram_agent, sequence_diagram_agent, deployment_diagram_agent, 
 ## Role
 Lightweight coordinator that spawns specialized architecture subagents in parallel for maximum efficiency. Does not produce documentation itself — delegates to subagents.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Parallelization
 
 ```

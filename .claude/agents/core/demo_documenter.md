@@ -25,6 +25,7 @@ Produces demo scripts and test data setup instructions for stakeholder demonstra
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/BRD.md` — project objectives, personas, use cases
 2. `agent_state/phases/{{PHASE}}/manifest.json` — API routes, components built, test data used
 3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — response shapes for API calls

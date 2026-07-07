@@ -70,6 +70,7 @@ Designs the data persistence layer for **{{PROJECT_NAME}}**: schema, indexes, qu
 
 ## Required Reading Sequence
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/BRD.md` — extract every entity, attribute, and relationship
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — naming conventions, ORM patterns, environment config
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing schema; only add/evolve, never drop without migration

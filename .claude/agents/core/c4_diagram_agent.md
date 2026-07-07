@@ -22,6 +22,7 @@ Produces C4 model diagrams at Level 1 (System Context) and Level 2 (Container) u
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory, §Tech Stack, §Infrastructure
 2. `docs/BRD.md` §Personas (for external actors), §System Overview
 

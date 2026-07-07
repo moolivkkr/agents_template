@@ -40,10 +40,13 @@ Bypasses the full `/develop` pipeline for targeted, scoped bug fixes. Produces a
 | "I'll just commit directly to main" | NO. Hotfixes use branches. The branch is the audit trail. |
 | "I'll fix this AND that other thing while I'm here" | NO. One hotfix, one component, one concern. Open a second hotfix for the other thing. |
 | "Tests pass, so the fix is correct" | Tests verify what's checked. The reviewer verifies what's NOT checked. Both run. |
+| "The bug is obvious, I'll fix it and add a test after" | NO. Reproduction-first is mandatory: the failing repro test comes BEFORE the fix. A hotfix with no test that goes fail→pass does not merge. |
 
 ---
 
 ## Step 0 — Identify Scope
+
+**Ground truth first:** read `docs/PROJECT_FACTS.md` and honor any retired/renamed facts before scoping the fix.
 
 ```bash
 PHASE=${ARG_PHASE}
@@ -90,23 +93,36 @@ echo "  Or use a different description."
 
 ---
 
-## Step 2 — Scoped Fix
+## Step 2 — Reproduce First (MANDATORY — write the failing test BEFORE the fix)
+
+A hotfix without a test that reproduces the bug is **not allowed to merge.** Follow
+`.claude/skills/testing/reproduction-first.md` before touching production code:
+
+1. Read the component spec (expected behavior) and current implementation (actual behavior).
+2. Write the **minimal** repro test — in `${COMPONENT}`'s test files — that FAILS on the actual
+   symptom. Run it and confirm it is **RED for the right reason** (the bug, not an unrelated error).
+
+```bash
+<test-runner> <repro-test>   # MUST fail: expect FAIL on <symptom>
+```
+
+> If you cannot make the test fail, you have not reproduced the bug. STOP — do not fix. Investigate
+> (or run `/diagnose`) until you have a red test. No red test → no hotfix.
+
+The repro test is permanent: annotate it with a `TC-*` ID
+(`.claude/skills/testing/test-case-traceability.md`) — it becomes a regression test that keeps this
+bug from returning.
+
+---
+
+## Step 3 — Scoped Fix
 
 Apply the targeted fix. Rules:
 
 1. **ONLY modify files belonging to `${COMPONENT}`** — no other component files
-2. Read the component spec first to understand expected behavior
-3. Read the current implementation to identify the bug
-4. Apply the minimal fix — no refactoring, no feature additions, no "while I'm here" changes
-5. Commit the fix:
-
-```bash
-git add <changed-files>
-git commit -m "hotfix(phase-${PHASE}): ${DESCRIPTION}
-
-Component: ${COMPONENT}
-Scope: [list of changed files]"
-```
+2. Read the current implementation to identify the bug (spec was already read in Step 2)
+3. Apply the minimal fix — no refactoring, no feature additions, no "while I'm here" changes
+4. Do NOT commit yet — the commit happens in Step 4 once the repro test goes fail→pass
 
 ### Fix Scope Violation
 
@@ -125,9 +141,22 @@ Or open two separate hotfixes if the components are independently fixable.
 
 ---
 
-## Step 3 — Scoped Test
+## Step 4 — Fix Loop + Scoped Regression (fail→pass, then pass-to-pass)
 
-Run ONLY tests related to the affected component — not the full test suite.
+Loop the fix against the repro test from Step 2, then confirm no regressions. Follow
+`.claude/skills/testing/reproduction-first.md`.
+
+**Fix loop — flip the repro test fail→pass:**
+
+```bash
+<test-runner> <repro-test>   # target: was RED (Step 2), now GREEN
+```
+
+1. Still red? Refine the fix (still scoped to `${COMPONENT}`) and re-run.
+2. **Max 3 attempts** (`test_retry_max`), then STOP and escalate — do not merge a hotfix whose repro
+   test never went green.
+
+**Scoped regression — pass-to-pass (no full suite):**
 
 ```bash
 # Unit tests for this component
@@ -137,30 +166,38 @@ Run ONLY tests related to the affected component — not the full test suite.
 <test-runner> <integration-test-path-for-component>
 ```
 
-**Do NOT run:**
-- Full test suite
-- E2E tests
-- Acceptance tests
-- Tests for other components
+**Do NOT run:** full test suite · E2E tests · acceptance tests · tests for other components.
 
-### Test Failure Recovery
+The pre-existing scoped tests that were green must stay green. The gate requires BOTH the fail→pass
+transition of the repro test AND pass-to-pass of the pre-existing tests.
 
-1. If tests fail: diagnose, fix (still scoped to component), re-run (max 2 retries)
-2. If tests still fail after retries: STOP — do not merge a failing hotfix
+**Commit** once both hold (fix + permanent repro test together):
 
-### Test Failure Recovery Guardrails (same as /develop)
+```bash
+git add <changed-files> <repro-test>
+git commit -m "hotfix(phase-${PHASE}): ${DESCRIPTION}
 
-When auto-fixing test failures, these constraints are absolute:
+Component: ${COMPONENT}
+Repro: ${REPRO_TEST} (TC-${CAT}-${NNN}) fail→pass
+Scope: [list of changed files]"
+```
+
+### Fix Loop Guardrails (same as /develop)
+
+When iterating on the fix, these constraints are absolute:
 - **NEVER** delete, skip, or comment out an existing test to make the suite pass
-- **NEVER** modify test expectations to match buggy behavior
+- **NEVER** weaken the repro test's assertion or modify expectations to match buggy behavior
+- **NEVER** add `//nolint`/`@ts-ignore`/`# type: ignore`/`eslint-disable` to force green
 - **NEVER** downgrade a dependency to fix a build
+- **Fix the bug, not the test.**
 - If root cause is unclear after reading failure output → STOP and escalate to user
 - Strip secrets/tokens/connection strings from test output before analysis
 
 ```
-⛔ Hotfix tests failing after 2 retries
+⛔ Repro test still red after 3 attempts (or a regression appeared)
   Component: ${COMPONENT}
-  Failing tests: [list]
+  Repro test: ${REPRO_TEST}
+  Failing/regressed tests: [list]
 
   Options:
     1. Investigate further with /diagnose
@@ -169,7 +206,7 @@ When auto-fixing test failures, these constraints are absolute:
 
 ---
 
-## Step 4 — Scoped Review
+## Step 5 — Scoped Review
 
 **Single-layer review only** — not the full 4-layer review from `/develop`.
 
@@ -211,13 +248,17 @@ Hotfix Review — ${COMPONENT}
 
 ---
 
-## Step 5 — Abbreviated Gate
+## Step 6 — Abbreviated Gate
 
 The hotfix gate checks ONLY:
 
-1. ✅ Scoped tests pass (from Step 3)
-2. ✅ Review clean — no blockers (from Step 4)
-3. ✅ No files modified outside component scope
+1. ✅ **Repro test flips fail→pass** — the test that was RED in Step 2 is now GREEN (from Step 4)
+2. ✅ **Pass-to-pass** — pre-existing scoped tests stay green, no regressions (from Step 4)
+3. ✅ Review clean — no blockers (from Step 5)
+4. ✅ No files modified outside component scope
+
+A hotfix with **no repro test**, or whose repro test **did not go fail→pass**, does NOT pass this
+gate and does NOT merge.
 
 **NOT checked (deferred to next full `/develop` run):**
 - Optimization
@@ -227,7 +268,8 @@ The hotfix gate checks ONLY:
 
 ```
 Hotfix Gate:
-  Tests:  ✅ PASS (N/N)
+  Repro:  ✅ FAIL→PASS (${REPRO_TEST}, TC-${CAT}-${NNN})
+  Tests:  ✅ PASS-TO-PASS (N/N pre-existing still green)
   Review: ✅ CLEAN
   Scope:  ✅ CONTAINED (N files in ${COMPONENT} only)
 
@@ -236,7 +278,7 @@ Hotfix Gate:
 
 ---
 
-## Step 6 — Merge and Record
+## Step 7 — Merge and Record
 
 ```bash
 git checkout main
@@ -261,6 +303,9 @@ Add to `hotfixes[]` in manifest:
       "description": "${DESCRIPTION}",
       "branch": "hotfix/phase-${PHASE}-${SLUG}",
       "files_changed": ["<list>"],
+      "repro_test": "${REPRO_TEST}",
+      "repro_tc_id": "TC-${CAT}-${NNN}",
+      "repro_transition": "fail->pass",
       "reviewer": "<security_reviewer | code_reviewer_I>",
       "review_verdict": "PASS",
       "tests_passed": true
@@ -277,7 +322,7 @@ git commit -m "chore: record hotfix in phase ${PHASE} manifest — ${DESCRIPTION
 
 ---
 
-## Step 7 — Deploy (optional)
+## Step 8 — Deploy (optional)
 
 If `--deploy` flag was set:
 
@@ -307,6 +352,8 @@ If `--deploy` was not set:
 ## Rules
 
 - **One component per hotfix** — multi-component fixes use `/develop`
+- **Reproduction-first is mandatory** — write a failing repro test BEFORE the fix; the gate requires it to flip fail→pass. No red test → no hotfix. No fail→pass → no merge.
+- **The repro test is permanent** — it stays as a `TC-*`-tagged regression test so the bug can't return
 - **Always review** — no exceptions, even for one-line fixes
 - **Always test** — scoped tests, not full suite, but never zero tests
 - **Branch-based** — hotfixes never commit directly to main

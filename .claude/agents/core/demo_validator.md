@@ -18,6 +18,12 @@ dependencies:
 ## Role
 Walks through every step in the demo script and verifies each produces the expected result. Catches broken flows before a live stakeholder demonstration.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Process
 
 For each scene in the demo script:

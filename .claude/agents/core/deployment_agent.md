@@ -41,6 +41,7 @@ Manages ALL deployment artifacts and executes deployments. **Dynamically discove
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — §1 Tech Stack, §3 Component Inventory, §5 Local Dev Environment
 2. `docs/BRD.md` — §NFRs for deployment/infrastructure requirements (NFR-DEPLOY-*, NFR-OBS-*)
 3. `.claude/skills/infrastructure/docker.md` — Dockerfile and compose patterns

@@ -39,6 +39,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any tests:
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/core/testing-principles.md` — test philosophy, coverage strategy, anti-patterns
 - `.claude/skills/core/code-quality.md` — naming, readability, self-review
 - `.claude/skills/core/verification-protocol.md` — assignment-delivery checklist

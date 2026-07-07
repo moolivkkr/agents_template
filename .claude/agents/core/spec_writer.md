@@ -22,6 +22,7 @@ dependencies:
   downstream: [brd_spec_reconciler, spec_verifier]
 skill_packs:
   - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/ears-notation.md"
   - ".claude/skills/requirements/edge-case-taxonomy.md"
   - ".claude/skills/requirements/nfr-patterns.md"
   - ".claude/skills/requirements/requirement-clarity.md"
@@ -37,6 +38,7 @@ Generates a complete technical reference document (TRD) for one component or flo
 
 ## Required Reading (before producing output)
 
+0. `docs/PROJECT_FACTS.md` — GROUND TRUTH; overrides conflicting assumptions; if a task references anything RETIRED there, STOP and flag it
 1. `docs/BRD.md` — find the exact FR-*, NFR-*, OBJ-* IDs assigned to this component
 2. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — confirm this component is in scope; get the assigned FR-* IDs
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, naming conventions, design constraints, API versioning
@@ -56,6 +58,17 @@ Only spec what is explicitly assigned to this phase in `PHASE_PLAN.md`. Do NOT s
 - NFR-* satisfied: [exact IDs]
 - OBJ-* addressed: [exact IDs]
 - Gate criteria covered: [which gate checklist items this satisfies]
+
+## Acceptance Criteria (EARS form)
+
+Express every acceptance criterion in EARS notation — one of the five templates (Ubiquitous / Event-driven / State-driven / Optional / Unwanted). Keep the FR-*/NFR-* ID; suffix (`-a`, `-b`) only when splitting a compound requirement into one clause per behavior. See `.claude/skills/requirements/ears-notation.md`.
+
+| Req ID | EARS clause | TC-* ID |
+|--------|-------------|---------|
+| FR-XXX | WHEN <trigger> THE SYSTEM SHALL <response> | TC-XXX-NNN |
+| FR-XXXb | IF <undesired condition> THEN THE SYSTEM SHALL <response> | TC-XXX-NNN |
+
+Each EARS clause maps to **exactly one TC-*** — the trigger (WHEN/WHILE/IF/WHERE) becomes the test precondition, the SHALL becomes the assertion. These Tier-0 TC-* IDs seed the inventory below; the per-tier matrices then add auth/validation/IDOR/shape/state variations.
 
 ## Interface Contracts
 
@@ -174,6 +187,7 @@ Every testable behavior in this spec MUST be assigned a unique TC-* ID. These ID
 
 | Tier | What to enumerate | Min TC-* IDs |
 |------|------------------|--------------|
+| EARS (Tier 0) | One TC-* per EARS clause (precondition = trigger, assertion = SHALL) | 1 per EARS clause |
 | Unit | Happy path + error path + edge cases per function | 10+ per spec |
 | Integration | Per-endpoint matrix (11 IDs) + per-entity matrix (6 IDs) | 10/endpoint + 6/entity |
 | E2E | Per-workflow matrix (7 IDs) or per-pipeline matrix (7 IDs) | 5+ per workflow |
@@ -261,6 +275,8 @@ type GetUsersResponse = {
 ## Quality Rules
 
 - Every FR-* ID cited MUST exist verbatim in `docs/BRD.md` — no invented IDs
+- Every acceptance criterion MUST be written in EARS notation (one of the five templates) — see `.claude/skills/requirements/ears-notation.md`
+- Every EARS clause MUST map to exactly one TC-* (precondition = the WHEN/WHILE/IF/WHERE trigger, assertion = the SHALL) — no compound (multi-SHALL) clause mapped to a single TC-*
 - Minimum 10 edge cases — fewer than 10 = incomplete spec
 - Every API endpoint must declare all 4xx/5xx error codes with exact JSON shapes
 - Every API endpoint must explicitly state whether `data` is an array or object — ambiguous shapes are a spec failure

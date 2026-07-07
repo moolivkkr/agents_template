@@ -45,6 +45,12 @@ This is the difference between checking that all puzzle pieces are well-formed (
 
 Runs after spec verification and BRD reconciliation. Catches architectural gaps, missing integration paths, and unstated assumptions that would only surface mid-implementation.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Reconciliation Sequence
 
 This agent is step 2b of the verification pipeline within `/plan`:

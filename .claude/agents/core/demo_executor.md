@@ -21,6 +21,12 @@ dependencies:
 ## Role
 Automates demo environment setup. Reads the demo script's Setup section, starts services, seeds test data, and verifies the environment is ready for a live demonstration.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Steps
 
 1. Start application stack (commands from IMPLEMENTATION_GUIDELINES §Local Dev)

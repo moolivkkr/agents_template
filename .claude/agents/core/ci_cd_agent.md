@@ -29,6 +29,7 @@ Creates CI/CD pipeline configuration based on the project's tech stack from IMPL
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack, §Infrastructure, §Design Constraints
 2. `.claude/skills/infrastructure/github-actions.md` — pipeline patterns
 3. `agent_state/agent_registry.json` — test commands, lint commands for the tech stack

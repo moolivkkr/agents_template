@@ -42,6 +42,12 @@ Validates quality gate checklist items with concrete evidence. Every gate item g
 
 ---
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Step 0 — Determine Files in Scope
 
 Before running any checks, determine which files to scan. Use BOTH methods and union the results:

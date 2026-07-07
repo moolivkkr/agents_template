@@ -27,6 +27,12 @@ skill_packs:
 ## Role
 Scans project dependencies for known security vulnerabilities, outdated packages, and license issues. Runs as part of the security review in `/develop` Step 4 (parallel with code review).
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Detection Method
 
 Use the native audit tool for the project's package manager:

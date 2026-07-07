@@ -35,6 +35,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs:
+- `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/core/implementation-guidelines-template.md` — 24-section template for generating comprehensive guidelines
 - `.claude/skills/core/code-quality.md` — code quality standards to embed in guidelines
 - `.claude/skills/core/software-architecture.md` — architecture patterns to reference

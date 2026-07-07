@@ -28,13 +28,17 @@ Produces comprehensive market research that directly feeds into `/init` as the `
 
 ```
 Step 0:    Scope & Strategy           Define the exact product category and research plan
+Step 0.5:  Internal System Discovery  Explore existing codebase + sister systems (CRITICAL — before external research)
 Step 1:    Market Landscape           6 parallel research agents gather vendor + market data
 Step 2:    Capability Matrix          Build complete feature taxonomy from vendor research
 Step 3:    Technical Deep Dive        Architecture, data model, technology analysis
 Step 3.5:  Behavioral Edge Cases      Document boundary behavior for every P0 capability
 Step 3.6:  Performance Baselines      Research SLAs, user perception thresholds, competitor benchmarks
 Step 3.7:  Visual Specifications      Exact measurements for UI fidelity targets (UI products only)
+Step 3.8:  Entity Lifecycle Workflows Define complete state machines + user workflows for every core entity
+Step 3.9:  Shared Component Catalog   Identify reusable components with data contracts + adapter pattern
 Step 4:    Persona & Workflow         Map every user type, their interaction journeys, SLA expectations
+Step 4.5:  Module Dashboard Specs     Define dashboard → widgets → data sources → queries per module
 Step 5:    Gap & Moat Analysis        Identify opportunities and defensible advantages
 Step 6:    Requirements Seed          Auto-generate draft BRD sections from all research
 Step 6.5:  Contradiction Audit        Cross-check research findings against input requirements for conflicts
@@ -77,6 +81,94 @@ Load `.claude/skills/core/vendor-comparison-framework.md` and select applicable 
 
 Document which dimensions apply and which are N/A (with reason).
 ```
+
+---
+
+## Step 0.5 — Internal System Discovery (CRITICAL — Before External Research)
+
+**Depends on:** Step 0
+**Business impact:** Without this step, external research produces recommendations that CONFLICT with existing technical decisions. Example failures from real sessions:
+- Recommended Neo4j when the codebase already uses NebulaGraph
+- Recommended pure OCSF schema when a custom schema with OCSF adapters already existed
+- Proposed building entity resolution from scratch when it already existed in a sister system
+- Missed that Cytoscape.js was already the graph visualization library in use
+
+Every recommendation that contradicts an existing technical decision = wasted research + eroded trust.
+
+### What to Discover
+
+**Before ANY external vendor research, explore the user's existing systems:**
+
+```
+1. SCAN SIBLING DIRECTORIES
+   - ls ../  — what sister projects exist?
+   - For each: read README.md, CLAUDE.md, go.mod/package.json, docker-compose*
+   - Map: what does each system own? What tech does it use?
+
+2. EXISTING TECHNOLOGY DECISIONS (locked — do NOT recommend alternatives)
+   - Graph database (Neo4j? NebulaGraph? TigerGraph? Neptune?)
+   - Data schema (OCSF? custom? CEF? ECS? CIM?)
+   - Storage engines (ClickHouse? Elasticsearch? PostgreSQL? S3/Iceberg?)
+   - Message broker (Kafka? NATS? RabbitMQ?)
+   - Frontend framework (React version? Vue? Angular?)
+   - Graph visualization (Cytoscape.js? D3.js? vis.js?)
+   - Auth (OIDC? SAML? custom?)
+
+3. EXISTING DATA MODELS
+   - What entity types already exist? (users, devices, CVEs, techniques, etc.)
+   - What relationships exist? (edges in the graph)
+   - What event schemas exist? (OCSF classes, custom event types)
+   - What APIs exist that the product could consume?
+
+4. EXISTING INTEGRATION POINTS
+   - What APIs do sister systems expose?
+   - What message topics/queues exist?
+   - What shared databases exist?
+   - What shared libraries/packages exist?
+
+5. BUILD VS CONSUME DECISIONS
+   - For each capability area: does a sister system already own this?
+   - Example: "entity resolution" → Storage already has Entity API → consume, don't build
+   - Example: "incident correlation" → SIEM already has CorrelationEngine → consume, don't build
+```
+
+### Output Format
+
+```markdown
+## Internal System Discovery
+
+### Sister Systems Found
+| System | Path | Purpose | Tech Stack | APIs Exposed |
+|--------|------|---------|-----------|-------------|
+| threatmatrix | ../threatmatrix | Knowledge graph | Go + NebulaGraph + Cytoscape.js | REST :8080 |
+| siem | ../siem | Telemetry pipeline | Go + ClickHouse + Kafka | REST + Kafka |
+| storage | ../storage | Data fabric | ClickHouse + Iceberg + NebulaGraph | REST + SQL + Kafka |
+
+### Locked Technology Decisions (DO NOT recommend alternatives in research)
+| Decision | Current Choice | Used By | Implication for Research |
+|----------|---------------|---------|------------------------|
+| Graph DB | NebulaGraph 3.x | threatmatrix, storage | Research graph patterns for NebulaGraph, not Neo4j |
+| Viz library | Cytoscape.js | threatmatrix UI | Research Cytoscape.js plugins, not D3.js alternatives |
+| Data schema | Custom + OCSF adapters | siem, storage | Research OCSF interop, not OCSF replacement |
+
+### Capabilities Already Built (consume, don't rebuild)
+| Capability | Owner System | API/Interface | What Portal Should Do |
+|-----------|-------------|--------------|---------------------|
+| Entity resolution | Storage | Entity API /v1/entities/* | Query, don't rebuild |
+| Threat enrichment | ThreatMatrix | Threat API /v1/threats/* | Query, don't rebuild |
+| Incident correlation | SIEM | CorrelationEngine | Display results, don't rebuild engine |
+
+### Capabilities NOT Built (research needed)
+| Capability | Notes |
+|-----------|-------|
+| Incident lifecycle management | No system owns triage → investigate → resolve workflow |
+| Dashboard framework | No shared widget registry exists |
+| Cross-module RBAC | No unified permission model |
+```
+
+**Output:** `requirements/research/00-internal-discovery.md`
+
+**This file MUST be read by ALL subsequent research agents.** Every recommendation must be checked against locked decisions.
 
 ---
 
@@ -374,6 +466,182 @@ Every visual claim must include source: documentation URL, measured from screens
 
 ---
 
+## Step 3.8 — Entity Lifecycle Workflows (CRITICAL — NEW)
+
+**Depends on:** Steps 2 + 3 + 0.5
+**Business impact:** Defining a data schema without the complete user workflow is the #1 cause of missed requirements. A schema tells you WHAT data exists. A lifecycle tells you WHO acts on it, WHEN, and WHAT HAPPENS NEXT. Without lifecycles, you get data models that look correct but miss: triage queues, assignment workflows, escalation chains, resolution states, feedback loops, and audit trails. These are discovered during implementation, causing 30-40% rework.
+
+**The test:** For every core entity, can you answer: "Walk me through a user spending 30 minutes working with this entity"? If not, the spec is incomplete.
+
+### What to Define
+
+For EVERY core entity type in the product (incidents, alerts, cases, policies, rules, users, devices, etc.):
+
+```
+1. STATE MACHINE
+   Draw the complete state diagram:
+   - Every valid state (e.g., NEW → TRIAGED → INVESTIGATING → RESOLVED → CLOSED)
+   - Every valid transition (who/what triggers it)
+   - Invalid transitions (explicitly document what CANNOT happen)
+   - Terminal states (CLOSED, DELETED)
+   - Re-entry states (REOPENED → back to INVESTIGATING)
+
+   Format as ASCII state diagram + transition table:
+   | From State | To State | Trigger | Who Can Trigger | Side Effects |
+   |-----------|----------|---------|----------------|-------------|
+
+2. COMPLETE USER WORKFLOW (per state transition)
+   For each transition, define:
+   - UI: What does the user see? What dialog/form appears?
+   - Inputs: What fields are required? Optional?
+   - Validation: What rules must pass?
+   - Side effects: What system actions occur? (notifications, API calls, audit log, feedback loops)
+   - Error paths: What happens if a side effect fails?
+
+3. ASSIGNMENT & OWNERSHIP
+   - Who can be assigned?
+   - How is assignment determined? (manual, round-robin, AI-suggested, workload-based)
+   - Can ownership transfer? How?
+   - What happens when the assignee is unavailable?
+
+4. ESCALATION CHAIN (if applicable)
+   - What triggers escalation? (manual, SLA breach, severity increase, pattern match)
+   - How many escalation levels?
+   - What happens at each level? (who is notified, what authority do they gain)
+   - What context transfers between levels? (everything? summary only?)
+   - War room / collaboration mode for high-severity escalations
+
+5. SLA TRACKING
+   - What SLAs apply per severity/priority?
+   - When does the clock start? When does it pause? When does it breach?
+   - What happens on SLA breach? (visual indicator, auto-escalate, notification)
+
+6. RESOLUTION & FEEDBACK LOOPS
+   - What are ALL resolution types? (true positive, false positive, benign, inconclusive, etc.)
+   - What data is required at resolution? (summary, remediation actions, root cause)
+   - What feedback loops fire? (FP → detection tuning, TP → knowledge base, RLHF → AI model)
+   - What happens AFTER resolution? (auto-close timer, metrics update, report generation)
+
+7. AI/AUTOMATION TOUCHPOINTS
+   - Where does AI assist? (auto-triage, RCA generation, suggested assignee, severity adjustment)
+   - What confidence thresholds trigger automation vs human review?
+   - How does analyst feedback improve the AI? (RLHF, FP rate tracking)
+
+8. INVESTIGATION WORKSPACE (for investigatable entities)
+   - What tabs/sections does the investigation view have?
+   - What data sources feed each section?
+   - What actions can the analyst take from each section?
+   - How is the investigation log maintained? (append-only, immutable, chain-of-custody)
+```
+
+### Output Format
+
+```markdown
+## Entity Lifecycle: Incident
+
+### State Machine
+[ASCII diagram]
+
+### State Transition Table
+| From | To | Trigger | Who | Required Fields | Side Effects |
+
+### Assignment Model
+[assignment rules, AI suggestions, workload balancing]
+
+### Escalation Chain
+[levels, triggers, context transfer, war room mode]
+
+### Resolution Types
+| Type | Sub-types | Required Data | Feedback Loop |
+
+### Investigation Workspace
+| Tab | Data Source | Actions Available | Shared Component |
+
+### SLA Policy
+| Severity | Triage SLA | Resolution SLA | Breach Action |
+```
+
+**Output:** `requirements/research/08e-entity-lifecycles.md`
+
+**CRITICAL:** If you define a data model without a lifecycle workflow, flag it as INCOMPLETE. The lifecycle IS the requirement — the data model is just how you store it.
+
+---
+
+## Step 3.9 — Shared Component Catalog (Platform Products Only — NEW)
+
+**Depends on:** Steps 2 + 3.8 + 0.5
+**Business impact:** Platform products (portals, consoles, dashboards hosting multiple modules) need shared UI components that work across all modules. Without a component catalog, each module builds its own incident panel, graph viewer, timeline, data table — creating inconsistent UX, duplicated code, and maintenance burden. The adapter pattern (same component, different data) is the key to reusability without sacrificing functionality.
+
+**Skip this step** if the product is a single-purpose application (not a platform).
+
+### What to Define
+
+```
+1. COMPONENT IDENTIFICATION
+   From the capability matrix (Step 2) and lifecycle workflows (Step 3.8),
+   identify UI patterns that appear in 2+ modules:
+   - Graph/relationship visualization
+   - Incident/finding/alert display
+   - Event timeline
+   - Entity profile view
+   - Data table (sortable, filterable, exportable)
+   - Dashboard grid (drag-and-drop widget layout)
+   - Risk score display
+   - Coverage heatmap (MITRE ATT&CK)
+   - Correlation/relationship map
+   - Data lineage DAG
+   - Search/filter bar
+   - Action panel (containment, notification, playbook)
+
+2. FOR EACH SHARED COMPONENT, DEFINE:
+   a. DATA CONTRACT (TypeScript interface)
+      - What props does the component accept?
+      - What data shape does it expect?
+      - Keep it domain-agnostic — no DLP-specific or SIEM-specific fields
+
+   b. MODULE ADAPTER PATTERN
+      - How does each module transform its domain data into the component's contract?
+      - Example: DLP violations → IncidentPanel props vs SIEM findings → IncidentPanel props
+      - What module-specific actions/context menus does each module add?
+
+   c. COMPONENT × MODULE FIT MATRIX
+      | Component | Module A Use Case | Module B Use Case | Module C Use Case |
+
+   d. INTERACTION PATTERNS
+      - What user interactions does the component support?
+      - Click, expand, filter, drill-down, export, real-time updates
+
+   e. REAL-TIME DELIVERY PATTERN
+      - Does this component need real-time updates?
+      - WebSocket primary + SSE fallback + long-poll fallback
+      - What events trigger updates?
+```
+
+### Output Format
+
+```markdown
+## Shared Component: GraphExplorer
+
+### Data Contract
+[TypeScript interface — domain-agnostic]
+
+### Module Fit
+| Module | Node Types | Edge Types | Use Case |
+
+### Adapter Example
+[DLP adapter code showing domain data → generic props transformation]
+
+### Interactions
+[click, expand, filter, time-travel, context menu]
+
+### Real-Time
+[WebSocket events that trigger graph updates]
+```
+
+**Output:** `requirements/research/08f-shared-component-catalog.md`
+
+---
+
 ## Step 4 — Persona & Workflow Mapping (ENHANCED)
 
 **Depends on:** Step 2 (capability matrix — need to know what features personas use)
@@ -435,6 +703,134 @@ For each persona's top 3 workflows, document the EXACT step-by-step interaction:
 ```
 
 **Output:** `requirements/research/11-personas.md`
+
+---
+
+## Step 4.5 — Module Dashboard Specifications (Platform Products — NEW)
+
+**Depends on:** Steps 2 + 3.8 + 3.9 + 4
+**Business impact:** Dashboard specs that say "show incidents" without specifying the exact widgets, data sources, queries, refresh intervals, and real-time channels produce vague BRDs that lead to 3-4 design iteration cycles during implementation. Widget-level specificity eliminates ambiguity: developers know exactly what to build, what API to call, and what data shape to expect.
+
+**Skip this step** if the product has no dashboard or is a single-purpose tool.
+
+### What to Define
+
+For EACH module/system in the platform:
+
+```
+DASHBOARD TYPES PER MODULE:
+  1. OPERATIONS DASHBOARD (home page)
+     The daily view for operators/analysts. "What's happening right now?"
+
+  2. AUTHORING/ENGINEERING DASHBOARD (if applicable)
+     The view for engineers who create/tune rules, policies, detections.
+     "What rules exist, how are they performing, what needs tuning?"
+
+  3. INVESTIGATION VIEW (drill-down from operations)
+     The detailed view when an analyst clicks into a specific incident/entity.
+     "Show me everything about this incident/entity."
+
+ALSO DEFINE:
+  4. PORTAL EXECUTIVE DASHBOARD (cross-module)
+     Aggregated KPIs from ALL licensed modules.
+     "What's the security posture across the entire organization?"
+```
+
+### For Each Dashboard, Define Every Widget:
+
+```markdown
+### Widget: [widget-id]
+
+| Field | Value |
+|-------|-------|
+| **ID** | `module.widget-name` (e.g., `dlp.violations-by-severity`) |
+| **Display Name** | Human label |
+| **Category** | kpi | chart | table | graph | timeline | heatmap | map |
+| **Description** | What it shows and why it matters |
+| **Data Source** | Which backend API or database table |
+| **Sample Query** | Actual SQL/nGQL/API call (not pseudocode) |
+| **Refresh Interval** | Seconds (0 = manual, -1 = real-time only) |
+| **Real-Time** | WebSocket event type that triggers update (or "No") |
+| **Grid Size** | Width × Height in 12-column grid |
+| **Shared Component** | Which shared component from Step 3.9 (or "Custom") |
+| **Adapter Needed** | Does this need a module-specific data adapter? |
+| **User Interactions** | Click → what happens? Filter → what changes? |
+```
+
+### Dashboard Layout
+
+Provide ASCII grid layout showing widget placement:
+
+```
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ KPI Card 1   │ │ KPI Card 2   │ │ KPI Card 3   │ │ KPI Card 4   │
+│ (3×1)        │ │ (3×1)        │ │ (3×1)        │ │ (3×1)        │
+└──────────────┘ └──────────────┘ └──────────────┘ └──────────────┘
+┌──────────────────────────────┐ ┌──────────────────────────────────┐
+│ Chart Widget (6×2)           │ │ Chart Widget (6×2)               │
+└──────────────────────────────┘ └──────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ Full-width Table (12×3)                                          │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Common Dashboard Anatomy (apply to EVERY module)
+
+Every module dashboard follows this standard layout:
+
+```
+ROW 1: KPI CARDS (4 across)
+   - Primary count metric
+   - Action/attention metric
+   - Queue/pending metric
+   - Health/quality metric (FP rate, MTTR, coverage %)
+
+ROW 2: DISTRIBUTION CHARTS (2 side-by-side)
+   - By severity/category (bar/stacked bar)
+   - By source/channel/type (donut/pie)
+
+ROW 3: LIVE TABLE (full width)
+   - Recent items with real-time WebSocket updates
+   - Click row → drill-down to investigation view
+   - Uses shared DataTable component
+
+ROW 4: ANALYSIS (2 side-by-side)
+   - Top-N analysis (bar chart or ranked table)
+   - Risk/entity view (RiskScoreCard or EntityProfile)
+
+ROW 5: VISUALIZATION (full width)
+   - Graph/timeline/lineage/heatmap
+   - Uses shared GraphExplorer, TimelineView, or ATTACKHeatmap
+
+ROW 6: MANAGEMENT (authoring dashboards only)
+   - Rule/policy catalog
+   - Performance tuning view
+   - Deployment/rollout status
+```
+
+### Real-Time Event Delivery
+
+Define for each dashboard:
+
+```
+TRANSPORT NEGOTIATION:
+  1. WebSocket (primary) — persistent connection, lowest latency
+  2. SSE (fallback) — when WebSocket blocked by corporate proxy
+  3. Long-poll (fallback) — when SSE also blocked
+     Server holds request up to 30s, returns immediately on new data
+  4. Pull/REST poll (last resort) — client polls every N seconds
+
+PER-WIDGET REAL-TIME CHANNELS:
+  | Widget | Event Channel | Update Behavior |
+  |--------|--------------|-----------------|
+  | Recent violations | ws:findings.dlp | Prepend new row, flash highlight |
+  | Active incidents | ws:incidents.count | Update count badge |
+  | EPS gauge | ws:ingest.rate | Update gauge value |
+```
+
+**Output:** One file per module:
+- `requirements/research/dashboard-{module}.md`
+- `requirements/research/dashboard-portal-executive.md`
 
 ---
 
@@ -659,15 +1055,38 @@ Then run: /startup:init
 
 All research agents follow these rules:
 
+### Evidence Standards
 - **Cite everything** — vendor name + URL for every claim
 - **Quantify** — revenue, customers, funding, response times (not "large" or "fast")
 - **Cross-reference** — verify claims across 2+ sources
 - **Prefer primary sources** — vendor docs/product pages over analyst summaries
 - **Check recency** — flag data older than 18 months
 - **Include contrarian views** — not just consensus, also criticisms and limitations
+- **Flag assumptions** — if you cannot verify a behavior from primary sources, mark it explicitly as **ASSUMPTION** for human review. Never silently guess.
+
+### Research Sources
 - **Search job postings** — reveals what vendors are building NEXT
 - **Search GitHub** — reveals actual capabilities of open-source alternatives
-- **Document behavior, not just features** — "what happens when X" is more valuable than "supports X"
-- **Flag assumptions** — if you cannot verify a behavior from primary sources, mark it explicitly as **ASSUMPTION** for human review. Never silently guess.
 - **Search SEC filings** — for public company revenue/customer data
 - **Search patent filings** — reveals technical approaches and R&D direction
+
+### Internal Codebase Rules (from Step 0.5 lessons)
+- **ALWAYS explore sister systems BEFORE external research** — prevents recommending tech that conflicts with existing decisions
+- **Never recommend alternatives to locked technology decisions** — if the codebase uses NebulaGraph, research NebulaGraph patterns, don't suggest Neo4j
+- **Identify capabilities that already exist** — if a sister system has an Entity API, recommend consuming it, not rebuilding it
+- **Read 00-internal-discovery.md before writing any recommendation** — every suggestion must be compatible with existing architecture
+
+### Completeness Rules (from lifecycle workflow lessons)
+- **Define the VERB, not just the NOUN** — a data model without a lifecycle workflow is incomplete
+- **For every entity: define the complete state machine** — states, transitions, triggers, side effects, SLAs
+- **"Walk through a user's day" test** — for every dashboard/workflow, simulate a real user spending 30 minutes. If you can't describe every click and decision point, the spec is incomplete
+- **Document behavior, not just features** — "what happens when X" is more valuable than "supports X"
+- **Always ask "then what?"** — if a user creates an incident, then what? Who triages it? How? What if they escalate? What happens after resolution? Follow every thread to completion
+- **Include feedback loops** — FP → detection tuning, resolution → knowledge base, escalation → SLA metrics. Actions have consequences that feed back into the system
+
+### Dashboard Rules (from module dashboard lessons)
+- **Every widget must specify its data source AND sample query** — not "shows incidents" but the actual SQL/API call
+- **Every dashboard must specify real-time delivery** — WebSocket channels, SSE fallback, long-poll fallback, per-widget refresh
+- **Every dashboard follows the standard anatomy** — KPI row → distribution → live table → analysis → visualization → management
+- **Shared components use the adapter pattern** — same component, different data, module-specific context menus
+- **Define BOTH operations AND authoring dashboards** — operators and engineers have completely different needs

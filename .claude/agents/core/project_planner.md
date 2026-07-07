@@ -52,6 +52,7 @@ Reads BRD requirements and IMPLEMENTATION_GUIDELINES component inventory to defi
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/BRD.md` — §FR-*, §NFR-*, §Gate checklists (load these sections; skip personas, out-of-scope, open questions)
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — §Technology Stack, §Component Inventory (skip CI/CD, observability, full setup details)
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what is already built (artifacts, api_routes, known_issues)

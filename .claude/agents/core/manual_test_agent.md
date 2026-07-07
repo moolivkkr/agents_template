@@ -21,6 +21,12 @@ dependencies:
 ## Role
 Produces structured manual test scripts for scenarios requiring human judgment, visual verification, or external system interaction that cannot be automated reliably. Used as a complement to automated tests, not a replacement.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## When Manual Tests Are Needed
 - Visual/UX quality checks (does this look right?)
 - Third-party OAuth/SSO flows

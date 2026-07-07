@@ -33,6 +33,7 @@ skill_packs:
 
 ## Skill Packs to Load
 Load and apply the following skill packs before writing any code:
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 - `.claude/skills/core/code-quality.md` — function size, naming, KISS, self-review
 - `.claude/skills/core/software-architecture.md` — SOLID, patterns, layer boundaries
 - `.claude/skills/core/resiliency-patterns.md` — circuit breakers, retries, timeouts

@@ -28,10 +28,11 @@ Phase 0:  Environment pre-flight
 Phase 1:  /init --auto (research all decisions)
 Phase 1b: /map (persistent codebase knowledge base)
 Phase 2:  /discuss --auto --phase=1 (surface assumptions)
+Phase 2a: /design --phase=1 --source=stitch (UI design contract, if frontend phase)
 Phase 2b: /plan --auto --phase=1
-Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions)
+Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions + UI designs)
 Phase 4:  /develop --auto --phase=1 (includes Wave 3.5: local deploy + health check)
-Phase 5:  Repeat discuss→plan→develop for remaining phases
+Phase 5:  Repeat discuss→design→plan→develop for remaining phases
 Phase 5b: Local deploy (build + migrate + health check for final acceptance)
 Phase 6:  /accept --auto (global acceptance + pipeline completeness)
 Phase 7:  Final report + /health check
@@ -121,6 +122,29 @@ Surface assumptions and research decisions BEFORE planning:
 Output: `agent_state/phases/1/DISCUSSION.md` (consumed by `/plan`)
 
 **Checkpoint:** Write checkpoint with assumption count and auto-resolved decision count.
+
+### Step 2a.5 — UI Design Contract (if frontend phase)
+
+Detect if the phase has frontend indicators (UI, interface, component, screen, dashboard, widget, chat, graph):
+
+```bash
+# Check phase scope for frontend keywords
+echo "$PHASE_GOAL" | grep -iE "UI|interface|frontend|component|screen|dashboard|widget|chat|graph" > /dev/null 2>&1
+HAS_UI=$?
+```
+
+**If frontend phase detected (`HAS_UI == 0`):**
+
+1. Run `/design --phase=N --source=stitch` to generate professional UI designs via Google Stitch MCP
+2. `ui_researcher` generates UI-SPEC.md (design contract)
+3. `stitch_designer` creates screens in Google Stitch, fetches rendered designs
+4. `stitch_design_importer` validates design system compliance, auto-fixes
+5. `ui_checker` validates 6 quality dimensions (BLOCKING gate)
+6. `design_quality_reviewer` runs final quality gate on wireframes
+
+**In `--auto` mode:** If Stitch MCP is not available, fall back to `ux_designer` + `wireframe_generator` (ASCII wireframes). Log fallback to auto-resolved decisions.
+
+**Checkpoint:** Write checkpoint with UI-SPEC status and Stitch artifact count.
 
 ### Step 2b — Plan Phase 1 (`/plan --auto --phase=1`)
 
@@ -281,10 +305,12 @@ Log failure report → continue to next phase if independent, or STOP if blockin
 For each phase N (2, 3, ... max_phases):
   1. /map --incremental (update codebase knowledge with changes from previous phase)
   2. /discuss --auto --phase=N (surface assumptions for THIS phase)
+  2a. /design --phase=N --source=stitch (if frontend phase detected)
   3. /plan --auto --phase=N
   4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3)
   5. /develop --auto --phase=N
-  6. Checkpoint
+  6. phase_verifier: goal-level verification (VERIFICATION.md)
+  7. Checkpoint
 ```
 
 ### Post-Phase Auto-Resolution Review

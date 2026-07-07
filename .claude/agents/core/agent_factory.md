@@ -34,6 +34,12 @@ dependencies:
 ## Role
 Reads `docs/IMPLEMENTATION_GUIDELINES.md` after it has been confirmed and evaluated, extracts the tech stack and component inventory, then generates project-specific agents by populating templates from `.claude/agents/templates/`. Writes all generated agents to `.claude/agents/generated/`.
 
+## Required Reading
+
+- **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+
+---
+
 ## Step 1 — Parse Tech Stack
 
 Read `docs/IMPLEMENTATION_GUIDELINES.md` Section 1 (Tech Stack) and Section 3 (Component Inventory). Extract into a structured profile:

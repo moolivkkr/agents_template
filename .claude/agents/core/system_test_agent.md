@@ -26,6 +26,7 @@ Validates that the complete system satisfies the phase exit criteria from `PHASE
 
 ## Required Reading
 
+0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
 1. `docs/BRD.md` §Gate checklists — Gate 1/2/3 criteria
 2. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — exit criteria
 3. `agent_state/phases/{{PHASE}}/manifest.json` — what was implemented
