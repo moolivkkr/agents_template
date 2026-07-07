@@ -54,7 +54,7 @@ backend:
   auth_method: <e.g. jwt, session, oauth2>
 database:
   db_type: <relational | document | graph | kv>
-  db_tech: <e.g. postgres, mysql, mongodb, redis, neo4j, sqlite>
+  db_tech: <e.g. postgres, mysql, mongodb, redis, nebula, sqlite>   # graph DB = nebula (NOT neo4j — see docs/PROJECT_FACTS.md)
   orm: <e.g. pgx, sqlx, prisma, typeorm, sqlalchemy, gorm>
   migration_tool: <e.g. goose, flyway, alembic, prisma>
 cache:
@@ -102,7 +102,8 @@ Verify that each referenced skill pack exists in `.claude/skills/`. Log any miss
 ```
 ✅ .claude/skills/languages/go.md — found
 ✅ .claude/skills/frameworks/gin.md — found
-⚠  .claude/skills/databases/neo4j.md — not found, agent will use generic DB patterns
+✅ .claude/skills/databases/nebula.md — found
+⚠  .claude/skills/databases/<unsupported>.md — not found, agent will use generic DB patterns
 ```
 
 ## Step 4 — Write Agent Registry
