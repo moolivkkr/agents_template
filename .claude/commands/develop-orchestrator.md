@@ -211,6 +211,10 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - has DB migrations: ADD migration_agent AND migration_safety_reviewer (adversarial migration review).
 #  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
 #  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
+#  - candidate-selection will run this phase (Wave 2 mode N>=2 — PLATFORM / high-complexity /
+#    prev-failure / --candidates=N): ADD solution_selector. It is a REQUIRED agent whenever N>=2, so
+#    its completed line + candidate_selection.md report are proven by the Wave-6 roster check. When
+#    N==1 (single implementation), OMIT it (record candidate_selection:skipped in the manifest).
 REQUIRED='["backend_audit_agent","backend_developer","api_developer","unit_test_agent","integration_test_agent","e2e_test_agent","code_reviewer_I","code_reviewer_II","security_reviewer","dependency_scanner","code_quality_verifier","spec_impl_reconciler","spec_test_reconciler","acceptance_test_agent","tenant_isolation_verifier"]'
 python3 - "$REQUIRED" "${PHASE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "agent_state/phases/${PHASE}/roster.json" << 'PY'
 import json, sys
@@ -278,6 +282,39 @@ test -f agent_state/phases/${PHASE}/audit_report.md || echo "⛔ BLOCKED: audit_
 
 ## Wave 2: IMPLEMENT
 
+**Two modes.** Default = a **single** implementation (Wave 2A). Hard/high-value phases run
+**candidate-selection** (Wave 2B): N independent implementations + a selector picks the winner. Decide
+the mode FIRST, then run exactly one branch below.
+
+### Wave 2 Mode Decision (candidate-selection gate)
+
+Run candidate-selection ONLY when a trigger fires — it costs ≈N× the Wave-2 tokens, so it is OPT-IN,
+not the default (see `.claude/skills/core/candidate-selection.md` §When it triggers). Evaluate:
+
+```bash
+# N = 1 means "single implementation" (default). N in [2,3] turns on candidate-selection.
+N=1; TRIGGER=""
+CLASS=$(python3 -c "import json;print(json.load(open('agent_state/phases/${PHASE}/complexity.json')).get('complexity_class',''))" 2>/dev/null || echo "")
+PREV_FB="agent_state/phases/$((PHASE-1))/reports/collective_feedback.md"
+
+if [ -n "${ARG_CANDIDATES:-}" ]; then                     # explicit --candidates=N (clamped 2..3)
+  N=$(( ARG_CANDIDATES < 2 ? 1 : (ARG_CANDIDATES > 3 ? 3 : ARG_CANDIDATES) )); TRIGGER="flag"
+elif [ "$CLASS" = "platform" ]; then                      # scale-class PLATFORM
+  N=2; TRIGGER="platform"
+elif [ "${RAW_SCORE:-0}" -gt 60 ]; then                   # high model-routing complexity (>60)
+  N=2; TRIGGER="complexity"
+elif [ -f "$PREV_FB" ] && grep -qiE "phase ${PHASE}|<this-component>" "$PREV_FB" 2>/dev/null; then
+  N=2; TRIGGER="prev-failure"                             # prev-phase failure touched this component
+fi
+echo "Wave 2 mode: N=${N} ${TRIGGER:+(trigger=$TRIGGER)}"
+```
+
+If `N == 1` → run **Wave 2A**. If `N >= 2` → run **Wave 2B** (and add `solution_selector` to the
+roster — see below). For TRIVIAL/SMALL/STANDARD classes with no trigger, `N` stays 1 and the manifest
+records `candidate_selection: skipped (class=${CLASS}, no trigger)`.
+
+### Wave 2A — Single Implementation (default)
+
 Spawn implementation agent(s):
 
 ```
@@ -289,13 +326,82 @@ literal Unicode, table-driven Go tests, document spec deviations.
 Implement all components. Commit after each logical unit."
 ```
 
-**Verify before proceeding:**
+### Wave 2B — Candidate Selection (conditional — hard phases only)
+
+Full protocol: `.claude/skills/core/candidate-selection.md`. This REPLACES Wave 2A's single
+implementation for this phase; it does NOT replace Wave 3/4/6 — the winner runs them as usual.
+
+**1. Create N isolated worktrees (one per candidate) off the current HEAD:**
 ```bash
-# New source files exist
-git diff --name-only HEAD~1 | grep -E '\.(ts|tsx|go)$' | head -5
+BASE="$(git rev-parse --short HEAD)"
+WT_ROOT="agent_state/phases/${PHASE}/candidates"; mkdir -p "$WT_ROOT"
+for i in $(seq 1 "${N}"); do
+  git worktree add -b "cand/phase-${PHASE}/c${i}" "${WT_ROOT}/c${i}" "$BASE"
+done
+git worktree list
 ```
 
-**Auto-checkpoint:** Write `checkpoints/wave-2.json` with `artifacts_produced: [<new source files>]`.
+**2. Spawn N candidate implementers IN PARALLEL**, each in its OWN worktree with a DISTINCT starting
+strategy for diversity (round-robin: c1=interface-first, c2=test-first, c3=data-model-first). Each MUST
+write its own tests. Prepend the GROUND TRUTH line to each:
+```
+Agent prompt: "[GROUND TRUTH] You are candidate implementer c${i} for Phase ${PHASE}.
+WORKING DIRECTORY: ${PROJECT_DIR}/agent_state/phases/${PHASE}/candidates/c${i}  (your OWN git worktree — commit ONLY here)
+STARTING STRATEGY: ${STRATEGY}  (interface-first | test-first | data-model-first)
+Read the SAME specs as Wave 2A: docs/design/phases/${PHASE}/specs/ + IMPLEMENTATION_GUIDELINES.md.
+Implement ALL in-scope components AND write your own tests (unit + this surface's TC-* IDs).
+HARDENING RULES apply. Do NOT read/merge from sibling candidate worktrees. Commit in THIS worktree only.
+Return: files created + one line on how your strategy shaped the design."
+```
+
+**3. Model-test voting (Signal A) — build the cross-test matrix** before the selector runs. Run each
+candidate's own suite, and cross-run comparable suites (same public interface / same TC-* IDs) against
+the sibling implementations. Write `agent_state/phases/${PHASE}/candidates/cross_test_matrix.md` (own
+pass + cross pass rate per candidate; mark non-comparable pairs `N/A` — never fake a PASS).
+
+**4. Spawn `solution_selector` (Signal B + combine):**
+```
+Agent prompt: "[GROUND TRUTH] You are solution_selector for Phase ${PHASE}.
+Read .claude/skills/core/candidate-selection.md, docs/design/phases/${PHASE}/specs/,
+and agent_state/phases/${PHASE}/candidates/cross_test_matrix.md.
+Score EACH candidate on the fixed rubric (R1 coverage, R2 test, R3 quality, R4 arch, R5 risk).
+Combine 0.5*cross_test + 0.5*rubric. Disqualify any candidate that fails its own tests or uses a
+RETIRED component. Execution overrides preference. Produce a winner + rationale + a specific graft list.
+Write agent_state/phases/${PHASE}/reports/candidate_selection.md and log a completed line to execution.jsonl."
+```
+
+**5. Rejoin — merge the winner, graft, discard losers** (per skill §How the winner rejoins):
+```bash
+WINNER=$(grep -oE 'WINNER: c[0-9]+' "agent_state/phases/${PHASE}/reports/candidate_selection.md" | grep -oE 'c[0-9]+' | head -1)
+git merge --no-ff "cand/phase-${PHASE}/${WINNER}" -m "phase ${PHASE}: adopt candidate ${WINNER} (selected — see candidate_selection.md)"
+# Apply grafts named in candidate_selection.md (cherry-pick specific files — NEVER blind-merge a loser), then:
+for i in $(seq 1 "${N}"); do
+  C="c${i}"
+  git worktree remove --force "agent_state/phases/${PHASE}/candidates/${C}" 2>/dev/null || true
+  [ "$C" = "$WINNER" ] || git branch -D "cand/phase-${PHASE}/${C}" 2>/dev/null || true
+done
+git worktree prune
+```
+
+**6. Log the decision** to `execution.jsonl`:
+```bash
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"candidate_selection\",\"phase\":${PHASE},\"n\":${N},\"trigger\":\"${TRIGGER}\",\"winner\":\"${WINNER}\",\"report\":\"agent_state/phases/${PHASE}/reports/candidate_selection.md\"}" >> "agent_state/phases/${PHASE}/execution.jsonl"
+```
+
+After rejoin, **continue to Wave 3 on the winner** (merged working tree). The gate is unchanged.
+
+**Verify before proceeding:**
+```bash
+# New source files exist (Wave 2A: on HEAD; Wave 2B: after the winner merge)
+git diff --name-only HEAD~1 | grep -E '\.(ts|tsx|go)$' | head -5
+# If Wave 2B ran: the selector report must exist and name a winner, and no dangling candidate worktrees remain.
+if [ "${N:-1}" -ge 2 ]; then
+  test -f "agent_state/phases/${PHASE}/reports/candidate_selection.md" || echo "⛔ BLOCKED: candidate_selection.md missing — solution_selector did not complete"
+  git worktree list | grep -q "phases/${PHASE}/candidates/" && echo "⚠ dangling candidate worktree — run git worktree prune"
+fi
+```
+
+**Auto-checkpoint:** Write `checkpoints/wave-2.json` with `artifacts_produced: [<new source files>]` and, if Wave 2B ran, `candidate_selection: {n: N, trigger: "<trigger>", winner: "cN"}`.
 
 ---
 
@@ -812,6 +918,9 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    - breaking_change_review.md — when the phase changes a contract an earlier phase consumes (breaking_change_reviewer)
    - visual_validation.md — when `*.wireframe.html` files exist for this phase
    - ui_test_results.md / ui_code_optimization.md — when `frontend.enabled = true`
+   - candidate_selection.md — when Wave 2 ran candidate-selection (N≥2). `solution_selector` is then
+     in `roster.required`, so the roster check (0b) already blocks if it didn't run; this report must
+     name a winner and its `BLOCKING` count must be 0 (or carried forward with a reason).
 
    **Content validation (not just file existence):**
    ```bash

@@ -48,6 +48,7 @@ Performs exhaustive research of enterprise product documentation to build a stru
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -294,3 +295,37 @@ Write full source index to `docs/product-workflows/{{PRODUCT_SLUG}}/research/sou
 - **Community wisdom is valuable but untrustworthy.** Forum posts reveal gotchas admin guides omit. They also contain outdated advice and errors. Always cross-reference.
 - **Never fabricate URLs.** An honest gap in the source index is infinitely better than a fabricated URL.
 - **Research scope discipline.** FULL_SYSTEM: breadth-first taxonomy before depth. Scoped: document only specified capabilities, note adjacencies in Cross-References.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Doc corpus written to `docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md` (exact frontmatter `output.primary`), plus sources.md (and CAPABILITY-TAXONOMY.md in FULL_SYSTEM mode).
+- [ ] Every source URL is real and reachable (found via WebSearch) and carries an evidence grade; no invented documentation references.
+- [ ] Capability claims trace back to a graded source; unverified capabilities are labelled as such, not presented as fact.
+- [ ] The corpus reflects the actual product's documented behavior, not a plausible-sounding generic description.
+- [ ] If a capability area is undocumented or could not be found, I record the gap explicitly rather than filling it with assumption.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** research
+- **Tags:** product-research, documentation, capability
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"product_doc_researcher","phase":{{PHASE}},"status":"completed","report":"docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md","ts":"<iso8601>"}
+```

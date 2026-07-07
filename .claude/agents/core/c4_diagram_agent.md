@@ -23,6 +23,7 @@ Produces C4 model diagrams at Level 1 (System Context) and Level 2 (Container) u
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory, §Tech Stack, §Infrastructure
 2. `docs/BRD.md` §Personas (for external actors), §System Overview
 
@@ -195,3 +196,37 @@ C4Container
 - Keep diagrams clean — if >12 containers, split into domain-specific Level 2 diagrams
 - Mermaid C4 syntax must be valid (test rendering before finalizing)
 - Include port numbers in relationship labels where known from IMPLEMENTATION_GUIDELINES
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Diagram written to `docs/architecture/c4-diagram.md` (exact frontmatter `output.primary`), with valid, renderable Mermaid/PlantUML (I mentally traced the syntax — no unclosed blocks, no undefined nodes).
+- [ ] Every C4 level required by scope is present (System Context + Container at minimum) and EVERY container/service in the codebase appears — no silent omissions.
+- [ ] Every element in the diagram maps to a real component in the code/specs (each labelled node cites the file or spec it represents); no invented boxes.
+- [ ] Relationships/arrows reflect actual dependencies, not assumed ones.
+- [ ] If I could not render or could not cover all containers, I say so explicitly with the gap named — I do NOT emit a partial diagram that reads as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** architecture
+- **Tags:** c4, diagram, mermaid, architecture
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/architecture/c4-diagram.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"c4_diagram_agent","phase":{{PHASE}},"status":"completed","report":"docs/architecture/c4-diagram.md","ts":"<iso8601>"}
+```

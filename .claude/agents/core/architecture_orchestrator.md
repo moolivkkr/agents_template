@@ -30,6 +30,7 @@ Lightweight coordinator that spawns specialized architecture subagents in parall
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -59,3 +60,35 @@ All five subagents run simultaneously. Each reads `docs/BRD.md` and `docs/IMPLEM
 
 After all subagents complete, write index `docs/architecture/README.md` listing all produced documents.
 Report summary to user — no gate, just informational.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] All five subagents were actually spawned and each produced its `docs/architecture/` (and `docs/adr/`) artifact — I verify the files exist, not just that I dispatched them.
+- [ ] `docs/architecture/README.md` index written, listing every produced document with a working relative path.
+- [ ] ADRs were promoted to `docs/DECISIONS.md` (via `adr_agent`) — the decision ledger reflects this run's tech decisions.
+- [ ] The subagent artifacts are real content (diagrams render, ADRs have rationale), not empty stubs.
+- [ ] If any subagent failed or produced no output, I say so explicitly in the summary — I do NOT report "architecture complete" over a missing diagram.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When architecture synthesis surfaces something a FUTURE phase should know — a topology constraint, a cross-cutting decision, a subagent-coordination issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning
+- **Tags:** architecture, adr, <domain>
+- **Type:** pattern_that_worked|issue_encountered|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/architecture/README.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a routine run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"architecture_orchestrator","phase":{{PHASE}},"status":"completed","report":"docs/architecture/","ts":"<iso8601>"}
+```

@@ -39,6 +39,7 @@ Generates a complete technical reference document (TRD) for one component or flo
 ## Required Reading (before producing output)
 
 0. `docs/PROJECT_FACTS.md` — GROUND TRUTH; overrides conflicting assumptions; if a task references anything RETIRED there, STOP and flag it
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — find the exact FR-*, NFR-*, OBJ-* IDs assigned to this component
 2. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — confirm this component is in scope; get the assigned FR-* IDs
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, naming conventions, design constraints, API versioning
@@ -288,3 +289,36 @@ type GetUsersResponse = {
 - Every spec MUST include a "Test Case Inventory" table with unique TC-* IDs for every testable behavior — see `.claude/skills/testing/test-case-traceability.md`
 - Every edge case row MUST map to at least one TC-* ID
 - TC-* ID ranges must be coordinated across specs within the same phase (use contiguous non-overlapping ranges)
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] TRD written to `docs/design/phases/{{PHASE}}/specs/{{COMPONENT}}.md` (exact frontmatter path) using the Output template.
+- [ ] Every FR-*/NFR-*/OBJ-* ID cited exists verbatim in `docs/BRD.md` — no invented IDs.
+- [ ] Every acceptance criterion is in EARS notation and maps 1:1 to a TC-* ID; the Test Case Inventory table is populated with real, unique, priority+tier-tagged TC-* IDs (not `NNN` placeholders).
+- [ ] ≥10 meaningful edge cases, each mapped to ≥1 TC-* ID; every API endpoint declares data array-vs-object, empty state, and all 4xx/5xx shapes; a `## Data Contracts` section with typed interfaces exists for any endpoints.
+- [ ] Only in-scope-for-this-phase behavior is spec'd — no later-phase features, no re-speccing existing code.
+- [ ] If the component is under-specified in PHASE_PLAN/BRD (ambiguous scope, missing NFR), I flag it explicitly rather than inventing a contract that reads as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When speccing surfaces something a FUTURE spec/phase should know — a reusable contract shape, a recurring EARS/edge-case gap, an ambiguous BRD requirement, a coordination pitfall on TC-* ranges — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** spec
+- **Tags:** ears, api-contract, <domain>
+- **Type:** pattern_that_worked|issue_encountered|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/design/phases/{{PHASE}}/specs/{{COMPONENT}}.md
+- **Reuse:** <actionable instruction for a future spec>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a routine spec.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"spec_writer","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/specs/{{COMPONENT}}.md","ts":"<iso8601>"}
+```

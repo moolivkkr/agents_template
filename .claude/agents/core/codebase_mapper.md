@@ -61,6 +61,7 @@ This agent receives the following from the parent `/map` command:
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack and component inventory for targeted exploration
 2. `.claude/skills/core/repo-map.md` — how to build the def→ref graph and emit a ranked, token-budgeted map for your focus area
 3. `agent_state/codebase/` — previous mapping (only when `scope=incremental`, for merge)
@@ -728,3 +729,37 @@ codebase_mapper ({{FOCUS}}) — blocked → partial output at agent_state/codeba
 - Prefer structured tables over prose — tables are scannable, prose requires re-reading
 - For large codebases (>500 files): use sampling strategy — analyze 100% of config/entry points, 30% of implementation files (stratified by module)
 - For small codebases (<50 files): analyze 100% of all files
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Map written to `agent_state/codebase/{{FOCUS}}.md` (exact frontmatter `output.primary`) as real ranked content, not a stub.
+- [ ] Every entry cites a real `file:line` (or file path); the def→ref graph reflects actual symbols in the repo, not guessed structure.
+- [ ] Evidence grades applied per the grading protocol; unverified inferences are marked as such, not stated as fact.
+- [ ] Token budget respected — the map is ranked, not an undifferentiated dump.
+- [ ] If a focus area could not be mapped (missing source, parse failure), I say so explicitly with the reason — I do NOT emit an empty-but-present map that reads as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning
+- **Tags:** codebase-map, repo-map, {{LANG}}
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/codebase/{{FOCUS}}.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"codebase_mapper","phase":{{PHASE}},"status":"completed","report":"agent_state/codebase/{{FOCUS}}.md","ts":"<iso8601>"}
+```

@@ -21,6 +21,7 @@ Produces a deployment topology diagram showing how containers/services are deplo
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Infrastructure, §Local Dev Environment, §Component Inventory
 2. `docker-compose.yml` or equivalent orchestration config (if exists)
 
@@ -239,3 +240,37 @@ graph TB
 - Include a port mapping table alongside the diagram for quick reference
 - Include a volumes table documenting all persistent storage
 - Production diagram should be clearly labeled as "projected" if not yet deployed
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Diagram written to `docs/architecture/deployment-diagram.md` (exact frontmatter `output.primary`) with valid, renderable syntax (I traced it — no unclosed blocks, no undefined nodes).
+- [ ] Every deployable node/service, network boundary, and data store from the actual infra config appears — no silent omissions.
+- [ ] Each node maps to a real deployment artifact (compose service, container, managed resource) cited from the infra files; no invented topology.
+- [ ] Connections reflect real network paths and dependencies, not assumed ones.
+- [ ] If I could not render or could not cover the full topology, I say so explicitly with the gap named rather than emitting a partial diagram as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** architecture
+- **Tags:** deployment, diagram, infrastructure, mermaid
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/architecture/deployment-diagram.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"deployment_diagram_agent","phase":{{PHASE}},"status":"completed","report":"docs/architecture/deployment-diagram.md","ts":"<iso8601>"}
+```

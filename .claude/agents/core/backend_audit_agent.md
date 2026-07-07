@@ -47,6 +47,7 @@ Every finding in the audit report MUST be classified by evidence level:
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/design/phases/{{PHASE}}/specs/` — what must be built this phase
 2. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — exit criteria and wave structure
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what already exists
@@ -180,4 +181,37 @@ When reading `carried_forward[]` from previous manifests, apply escalating sever
 
 ## Recommended Implementation Order
 [Ordered list respecting wave structure from PHASE_PLAN.md, security gaps addressed first]
+```
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/audit_report.md` (exact frontmatter path) using the Output template.
+- [ ] Every finding is graded Confirmed / Deduced / Hypothesized; Confirmed findings cite `file:line`, Deductions show the chain, Hypotheses state what would confirm/refute.
+- [ ] Carried-forward issues are listed first and escalated by consecutive-phase count (3+ → BLOCKING, 2 → WARNING, 1 → INFO).
+- [ ] Pre-implementation security gaps (missing tenantID, unguarded in-memory stores, unforwarded auth context) scanned across ALL spec interfaces — none skipped.
+- [ ] Gap counts (missing/incomplete/missing-tests/migration) are REAL, derived from scanning the codebase against specs — not estimates.
+- [ ] If the codebase is empty (Phase 1) or specs are missing, I say so explicitly with the reason — I do NOT emit an empty audit that reads as "no gaps".
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When the audit surfaces something a FUTURE phase should know — a recurring stub pattern, a persistent carried-forward issue, an interface-design anti-pattern that keeps recurring — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** implementation
+- **Tags:** audit, gap-analysis, <domain>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/audit_report.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean audit.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"backend_audit_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/audit_report.md","ts":"<iso8601>"}
 ```

@@ -26,6 +26,7 @@ Produces demo scripts and test data setup instructions for stakeholder demonstra
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — project objectives, personas, use cases
 2. `agent_state/phases/{{PHASE}}/manifest.json` — API routes, components built, test data used
 3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — response shapes for API calls
@@ -286,3 +287,37 @@ curl -s -X POST $BASE_URL/<resource> -H "Authorization: Bearer $TOKEN" \
 - Seed data must be idempotent (safe to run multiple times)
 - Include cleanup instructions to reset the demo environment
 - Connect every scenario back to a BRD objective or FR-* requirement
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Demo artifacts written under `docs/demos/` (exact frontmatter `output.primary`): `phase-{{PHASE}}/demo-script.md` and `phase-{{PHASE}}/test-data.md` — both real, non-stub.
+- [ ] The demo script walks a real, implemented workflow end-to-end; every step maps to a shipped feature/endpoint (cited) — no steps for unbuilt functionality.
+- [ ] Test data is concrete and runnable (real payloads/values), not placeholders.
+- [ ] Commands/URLs in the script were sanity-checked against the actual routes and local dev setup.
+- [ ] If a demo step depends on something not yet built, I mark it explicitly as pending — I do NOT present it as working.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** documentation
+- **Tags:** demo, documentation, walkthrough
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/demos/
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"demo_documenter","phase":{{PHASE}},"status":"completed","report":"docs/demos/","ts":"<iso8601>"}
+```

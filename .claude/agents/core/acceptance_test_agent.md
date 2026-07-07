@@ -64,6 +64,7 @@ Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the product type. If the p
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -380,3 +381,36 @@ CONTRACT_VIOLATION = **BLOCKER** — same severity as a failing acceptance crite
 - Report partial passes explicitly — "2/3 criteria met" not just PASS/FAIL
 - Acceptance test failures are **phase gate blockers** — gate does not pass with unresolved failures
 - CONTRACT_VIOLATION findings are **phase gate blockers** — these cause UI↔API integration failures
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/acceptance_report.md` (exact frontmatter path) using the Output template, plus the seed and cleanup artifacts.
+- [ ] Step 0 ran: app/binary confirmed healthy. If NOT healthy, every use case is marked `UNTESTED — app not running` and the report is `BLOCKED` — never a fabricated PASS against a dead service.
+- [ ] Every in-scope FR-* use case was executed as its persona with real requests; PASS means ALL criteria met (any note → PARTIAL PASS, stated as "N/M criteria met").
+- [ ] Every persona in BRD §Personas is exercised by ≥1 use case; contract-shape assertions run for every API call, CONTRACT_VIOLATIONs flagged as BLOCKER.
+- [ ] Pass/partial/fail counts are REAL numbers derived from execution, not estimates; unresolved failures include exact reproduction steps.
+- [ ] If I could not test (app down, missing seed access, product type without a testable interface handled), I say so explicitly — I do NOT emit an empty-but-present PASS.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When acceptance testing surfaces something a FUTURE phase should know — a recurring criterion the build keeps missing, a seed-data pitfall, a persona/permission gap, a contract-shape class of bug — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** testing
+- **Tags:** acceptance, persona, <domain>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/acceptance_report.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
+
+```json
+{"agent":"acceptance_test_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/acceptance_report.md","ts":"<iso8601>"}
+```

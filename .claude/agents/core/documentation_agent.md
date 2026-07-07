@@ -33,6 +33,7 @@ Keeps project documentation accurate and up to date. Generates API documentation
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — project purpose and feature overview
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, local dev setup, architecture
 3. `agent_state/phases/{{PHASE}}/manifest.json` — API routes and components built this phase
@@ -323,3 +324,37 @@ Before finalizing documentation:
 - Update, don't replace — preserve existing correct documentation
 - API response shapes must match `data-contracts.md` TypeScript interfaces exactly
 - When updating docs for a new phase, preserve previous phase documentation (additive, not destructive)
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Docs written under `docs/` and repo root (exact frontmatter `output.primary` + artifacts): README.md, docs/api/, developer-guide.md — all real, non-stub.
+- [ ] Every documented endpoint/command/setup step matches the actual shipped code (cited) — no documentation for features that do not exist.
+- [ ] Setup/run commands were sanity-checked against the real local dev config; API docs match actual route signatures.
+- [ ] No stale or contradictory instructions left in place; where docs describe behavior, it is the as-built behavior.
+- [ ] If part of the system is undocumented because it is not yet built or I could not verify it, I mark that gap explicitly rather than inventing docs.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** documentation
+- **Tags:** documentation, readme, api-docs
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"documentation_agent","phase":{{PHASE}},"status":"completed","report":"docs/","ts":"<iso8601>"}
+```

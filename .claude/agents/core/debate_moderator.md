@@ -38,6 +38,7 @@ Shared service agent available to the ENTIRE pipeline. Any agent that encounters
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -177,3 +178,37 @@ When user overrides a debate verdict, log to `agent_state/debates/<topic>-overri
 }
 ```
 All overrides also appended to `agent_state/debates/overrides.jsonl` for cross-phase audit.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Debate artifacts produced under `agent_state/debates/` (exact frontmatter `output.primary`): a `{topic}-verdict.json` and a `{topic}-transcript.md` — both real, non-stub.
+- [ ] Every option received research AND advocacy (I spawned researchers + advocates per option) and the arbitrator ran to a single verdict — no side was skipped.
+- [ ] The verdict returned to the escalating agent is the arbitrator's actual output, unaltered by me (I orchestrate, I do not overrule).
+- [ ] The transcript records who argued what and the deciding rationale — traceable, not summarized away.
+- [ ] If the debate could not reach a verdict (e.g. missing input), I report that explicitly with the blocker — I do NOT return a fabricated verdict.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** debate
+- **Tags:** debate, orchestration, decision
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/debates/
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"debate_moderator","phase":{{PHASE}},"status":"completed","report":"agent_state/debates/","ts":"<iso8601>"}
+```

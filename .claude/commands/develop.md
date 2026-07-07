@@ -21,6 +21,10 @@ arguments:
     required: false
     default: false
     description: "Autonomous mode — all escalations use recommended defaults. Gate failures auto-fix (max 3 cycles) then force-gate with logging. No user prompts."
+  - name: candidates
+    required: false
+    default: 1
+    description: "Test-time compute scaling: generate N (2–3) independent candidate implementations in isolated worktrees, then select the winner by model-test voting + solution_selector. EXPENSIVE (~N× Wave-2 cost) — opt-in for hard phases. Also auto-triggers for PLATFORM class / high complexity / prev-phase failure. See .claude/skills/core/candidate-selection.md."
 ---
 
 # /develop — Autonomous Phase Implementation
@@ -340,6 +344,12 @@ done
 - api_developer → handlers + middleware + OTEL + OpenAPI
 - ui_developer → components + hooks + engine + styles
 - Output: source code committed
+- **Candidate-selection (conditional):** for hard phases (PLATFORM class / high complexity /
+  prev-phase failure / `--candidates=N`), Wave 2 instead generates N (2–3) independent candidate
+  implementations in isolated git worktrees, each with its own tests, and `solution_selector` picks
+  the winner via model-test voting + rubric. The winner merges back and Wave 3 runs on it as usual.
+  Gated because it costs ≈N× Wave-2 tokens — see `.claude/skills/core/candidate-selection.md` and
+  `/develop-orchestrator` Wave 2B for the mechanism.
 
 **Wave 3: TEST** (parallel)
 - unit_test_agent → write + run unit tests

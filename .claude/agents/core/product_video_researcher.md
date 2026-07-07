@@ -42,6 +42,7 @@ Discovers and analyzes product demo videos, conference talks, and training webin
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -315,3 +316,37 @@ Aggregated gotchas, workarounds, and tips from ALL videos, deduplicated and orga
 - **One product, one report.** Do not scope-creep into competitor product videos unless they are direct comparison demos that reveal THIS product's workflow. Competitor-only content belongs in a separate research pass.
 - **Chapter markers are gold.** YouTube chapter markers (timestamps in description) almost always correspond to screen transitions. Extract these first before parsing transcript text — they provide the structural skeleton of the workflow.
 - **Dedup across videos.** Multiple videos often show the same workflow. Consolidate into the BEST source (highest confidence, most detail) and note corroborating sources. Do not repeat the same workflow steps from different videos.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Video intelligence written to `docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md` (exact frontmatter `output.primary`) as real findings — not a stub.
+- [ ] Every workflow/step extracted cites the specific video source (found via WebSearch); observations are graded for reliability.
+- [ ] Steps described are what the video actually demonstrates, not an inferred ideal flow; inferences are labelled as inferences.
+- [ ] Screen-by-screen sequences are grounded in observed footage, not generic assumptions about the product.
+- [ ] If no usable video coverage exists for a workflow, I say so explicitly rather than fabricating a walkthrough.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** research
+- **Tags:** product-research, video, workflow
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"product_video_researcher","phase":{{PHASE}},"status":"completed","report":"docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md","ts":"<iso8601>"}
+```

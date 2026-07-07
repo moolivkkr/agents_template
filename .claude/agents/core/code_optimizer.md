@@ -100,6 +100,7 @@ This agent MUST verify this tag exists before making changes. If missing: `⛔ B
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, patterns, NFR-PERF-* targets
 2. `agent_state/phases/{{PHASE}}/manifest.json` — files in scope for this phase
 3. `.claude/skills/languages/{{LANG}}.md` — language-specific optimization patterns
@@ -462,3 +463,37 @@ FIX CYCLE (max 3 attempts per optimization):
 - **Max 2 full passes** — if Pass 2 finds optimizations that create new dead code, run Pass 1 once more
 - **Validation (Pass 3) MUST run** — even if Pass 1 and Pass 2 made zero changes, capture metrics for trending
 - After completion: all tests must pass. If any test was broken and not restored, this is a BLOCKING failure.
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/code_optimization.md` (exact frontmatter `output.primary`), plus the `dead_code.md` / `optimizations.md` artifacts.
+- [ ] Tests + review passed BEFORE optimization (baseline captured) AND pass AFTER — behavior is provably unchanged. I did NOT ship an optimization on a red baseline.
+- [ ] Every reported reduction (LOC removed, allocations saved) is a REAL measured delta, not an estimate; before/after numbers cited.
+- [ ] Every dead-code removal is proven unreferenced (no dynamic/reflection call site) — I traced references, not assumed them.
+- [ ] If tests could not pass after optimization, I reverted that change and reported it — I do NOT emit a PASS with a broken build.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** optimization
+- **Tags:** {{LANG}}, dead-code, refactor, performance
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/code_optimization.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"code_optimizer","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/code_optimization.md","ts":"<iso8601>"}
+```

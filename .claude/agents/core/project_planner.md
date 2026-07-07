@@ -62,6 +62,7 @@ Reads BRD requirements and IMPLEMENTATION_GUIDELINES component inventory to defi
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — §FR-*, §NFR-*, §Gate checklists (load these sections; skip personas, out-of-scope, open questions)
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — §Technology Stack, §Component Inventory (skip CI/CD, observability, full setup details)
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what is already built (artifacts, api_routes, known_issues)
@@ -232,3 +233,36 @@ If you need more detail not covered above, read ONLY the relevant section:
 - Each phase must have at least one testable exit criterion
 - Wave 1 must always include DB/migration work if schema changes are needed
 - Carry forward any `known_issues[]` from previous manifest into phase context
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` written using the Output 1 template — scope, exit criteria, waves, E2E workflows all populated (not placeholder text).
+- [ ] `docs/design/phases/{{PHASE}}/phase_context.md` written and self-contained (5-8K tokens) — an implementation agent could build from it WITHOUT loading full BRD/IMPLEMENTATION_GUIDELINES.
+- [ ] Every FR-*/NFR-* cited in the plan exists verbatim in `docs/BRD.md` — no invented IDs.
+- [ ] Every exit criterion is measurable (has a test file / command / measurement that proves it), and every wave has concrete agents.
+- [ ] Any resolved `/discuss` decision or HIGH-risk assumption is reflected in scope/exit criteria; open questions land in PHASE_PLAN.md "Open Items" — not silently re-decided.
+- [ ] If I could not scope the phase (missing BRD sections, contradictory inputs), I say so explicitly with the reason — I do NOT emit a thin plan that reads as complete.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
+
+## Lessons Write-Back (see agent-common Block 3)
+When planning surfaces something a FUTURE phase should know — a scoping pattern that worked, a wave-ordering pitfall, a recurring context-file omission, a requirement that keeps splitting across phases — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** planning
+- **Tags:** scope, waves, <domain>
+- **Type:** pattern_that_worked|issue_encountered|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/design/phases/{{PHASE}}/PHASE_PLAN.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a routine phase.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"project_planner","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/PHASE_PLAN.md","ts":"<iso8601>"}
+```

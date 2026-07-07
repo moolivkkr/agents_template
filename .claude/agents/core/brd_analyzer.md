@@ -47,6 +47,7 @@ Reads all files in `requirements/` (any format), extracts every stated and impli
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale (may not yet exist at BRD stage). Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -131,3 +132,34 @@ gaps:
 - [ ] Gaps cover all 9 dimensions checked
 - [ ] `analysis.yaml` is valid with no missing fields
 - [ ] Ambiguous requirements flagged, not silently accepted
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] `agent_state/brd_refiner/analysis.yaml` written (exact frontmatter path), valid YAML with every field populated, plus `gaps.md` and `requirements_extracted.md`.
+- [ ] EVERY file in `requirements/` was actually read; every extracted requirement has a unique ID, a type, and a `source: filename:line` citation.
+- [ ] Gaps cover all 9 dimensions; each gap has a severity and a concrete question. No gap was filled with an assumption.
+- [ ] The route decision (interviewer vs writer) matches the real gap count — not a default.
+- [ ] If `requirements/` is empty or unreadable, I say so explicitly rather than emitting an empty analysis that reads as "complete, no gaps".
+
+## Lessons Write-Back (see agent-common Block 3)
+When requirements analysis surfaces something a FUTURE run should know — a recurring gap class, a source-format parsing pitfall, an ambiguity pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** requirements
+- **Tags:** brd, gap-analysis, <domain>
+- **Type:** issue_encountered|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/brd_refiner/analysis.yaml
+- **Reuse:** <actionable instruction for a future run>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid.
+
+## Completion Log (roster check — see agent-common Block 2)
+This is an internal sub-agent of the `brd_agent` pipeline. For uniformity (so the `/health` roster grep counts it), a completion line is appended to `agent_state/phases/{{PHASE}}/execution.jsonl` — written by/through the parent `brd_agent` orchestrator on my behalf (my real agent name + my primary output path):
+
+```json
+{"agent":"brd_analyzer","phase":{{PHASE}},"status":"completed","report":"agent_state/brd_refiner/analysis.yaml","ts":"<iso8601>"}
+```

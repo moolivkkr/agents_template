@@ -67,6 +67,7 @@ Interactive agent that presents focused questions to fill gaps identified by `br
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale (may not yet exist at BRD stage). Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -136,3 +137,33 @@ If critical gaps remain deferred: notify user and ask how to proceed.
 - [ ] No answer is inferred — every decision traces to a user response
 - [ ] `decisions.yaml` is valid YAML with no missing fields
 - [ ] Follow-up questions asked when answers were ambiguous
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] `agent_state/brd_refiner/decisions.yaml` written (exact frontmatter path), valid YAML with every field populated, plus `answers.md`.
+- [ ] Every decision traces to a real user answer (or, in `--auto` mode, to a logged research-ladder level with confidence + evidence) — nothing inferred and presented as a user decision.
+- [ ] Every critical gap has a `resolved` or explicit `deferred` status; deferred gaps carry a fallback and are surfaced, not hidden.
+- [ ] If critical gaps remain unresolved and cannot be auto-answered, I say so explicitly and ask how to proceed rather than fabricating answers.
+
+## Lessons Write-Back (see agent-common Block 3)
+When the interview surfaces something a FUTURE run should know — a question that repeatedly stumps users, a default that proved wrong, a persona/NFR clarification pattern — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** requirements
+- **Tags:** brd, interview, <domain>
+- **Type:** issue_encountered|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/brd_refiner/decisions.yaml
+- **Reuse:** <actionable instruction for a future run>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid.
+
+## Completion Log (roster check — see agent-common Block 2)
+This is an internal sub-agent of the `brd_agent` pipeline. For uniformity (so the `/health` roster grep counts it), a completion line is appended to `agent_state/phases/{{PHASE}}/execution.jsonl` — written by/through the parent `brd_agent` orchestrator on my behalf (my real agent name + my primary output path):
+
+```json
+{"agent":"brd_interviewer","phase":{{PHASE}},"status":"completed","report":"agent_state/brd_refiner/decisions.yaml","ts":"<iso8601>"}
+```

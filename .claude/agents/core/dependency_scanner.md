@@ -30,6 +30,7 @@ Scans project dependencies for known security vulnerabilities, outdated packages
 ## Required Reading
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 
 ---
 
@@ -99,3 +100,37 @@ License issues: N (or: not checked)
 - CRITICAL/HIGH vulnerabilities with fixes are blocking
 - Auto-fix: if native tool supports `--fix` (e.g., `npm audit fix`), apply non-breaking fixes automatically
 - Breaking fixes (major version bumps) → flag for user decision, do not auto-apply
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/dependency_scan.md` (exact frontmatter `output.primary`) using the report template.
+- [ ] Every DIRECT dependency was checked against a real CVE source; each flagged CVE cites its ID and the affected package+version — no invented advisories.
+- [ ] The vulnerability count I report is REAL (derived from the scan), and each finding carries a severity per the unified model with `BLOCKING:N WARNING:N INFO:N`.
+- [ ] If the scanner/tooling could not run, I say so explicitly with the reason — I do NOT emit a clean report that reads as PASS when nothing was scanned.
+- [ ] A zero-CVE result is only reported after a real scan actually ran and returned zero.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** security
+- **Tags:** dependencies, cve, sca, {{LANG}}
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/dependency_scan.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"dependency_scanner","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/dependency_scan.md","ts":"<iso8601>"}
+```

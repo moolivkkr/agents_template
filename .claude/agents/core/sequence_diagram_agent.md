@@ -23,6 +23,7 @@ Produces Mermaid sequence diagrams for the most important system flows. Helps de
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory, §Architecture Overview
 2. `docs/BRD.md` §Functional Requirements (for identifying key flows)
 3. Phase specs in `docs/design/phases/{{PHASE}}/specs/` (for endpoint details)
@@ -221,3 +222,37 @@ Write to `docs/architecture/sequence-diagrams.md`:
 - Include notes for non-obvious behavior (auth, caching, retry logic)
 - Every response must show the actual HTTP status code and response shape
 - Use `activate`/`deactivate` consistently for all synchronous calls
+
+---
+
+## Definition of Done (verify before returning — see agent-common Block 2)
+- [ ] Diagrams written to `docs/architecture/sequence-diagrams.md` (exact frontmatter `output.primary`) with valid, renderable syntax (traced — no unclosed blocks, no undefined participants).
+- [ ] Every key workflow/interaction required by scope has a sequence diagram, and each participant maps to a real component/service (cited from code/specs).
+- [ ] Message ordering, calls, and returns reflect the ACTUAL call flow in the code — not an assumed happy path; error/alt paths shown where they matter.
+- [ ] No invented participants or messages; every arrow corresponds to a real call.
+- [ ] If I could not render a diagram or could not trace a workflow, I say so explicitly with the gap named rather than emitting a plausible-but-wrong sequence.
+- [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
+
+**Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.
+
+## Lessons Write-Back (see agent-common Block 3)
+When this run surfaces something a FUTURE phase should know — a pattern that worked, an anti-pattern, a recurring gap, an agent-performance issue — append a tagged lesson to `agent_state/phases/{{PHASE}}/lessons.md`:
+
+```
+### L-{{PHASE}}-<seq>
+- **Category:** architecture
+- **Tags:** sequence, diagram, mermaid, architecture
+- **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
+- **Summary:** <one line>
+- **Detail:** <2-3 lines with context>
+- **Evidence:** docs/architecture/sequence-diagrams.md
+- **Reuse:** <actionable instruction for a future phase>
+```
+Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
+
+## Completion Log (roster check — see agent-common Block 2)
+After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
+
+```json
+{"agent":"sequence_diagram_agent","phase":{{PHASE}},"status":"completed","report":"docs/architecture/sequence-diagrams.md","ts":"<iso8601>"}
+```
