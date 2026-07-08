@@ -198,6 +198,22 @@ Output: `agent_state/reports/cicd_setup.md`
 
 ---
 
+## Step 4d — Reliability / SLO Validation (staging or prod)
+
+**Agent:** `reliability_agent`
+**When:** Deploying to staging or prod (`TARGET != local`) AND the project has SLOs defined (a prior
+`/plan` Step 3b produced `reliability_review.md`, or NFR-PERF-*/availability targets exist).
+
+Validates the DEPLOYED system against the SLIs/SLOs and error budgets it defined at design time:
+health/readiness/liveness endpoints respond correctly, timeout/retry/circuit-breaker behavior is
+active, and the SLO measurement (metrics/probes) is wired. Confirms runbook stubs exist for the
+top failure modes.
+
+Output: `agent_state/reports/reliability_validation.md` (+ `.json`). BLOCKING findings cap release
+readiness at NOT READY (same treatment as an unhealthy deploy).
+
+---
+
 ## Step 5 — Post-Deploy Health Validation
 
 After successful deployment, verify the application actually works beyond the basic health endpoint:

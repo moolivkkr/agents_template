@@ -1,6 +1,6 @@
 # Skill Index
 
-> Machine- and human-readable index of every skill in `.claude/skills/` (207 files). Agents
+> Machine- and human-readable index of every skill in `.claude/skills/` (211 files). Agents
 > should consult this index and load only the skill files they need (by path) rather than
 > pulling whole large files blindly. Columns: **File** (path relative to `.claude/skills/`),
 > **Description** (one line), **Tags**. Redirect stubs are marked `↪` and point to their canonical target.
@@ -256,14 +256,18 @@
 | `frameworks/trpc.md` | tRPC patterns — end-to-end type-safe procedures, Zod input validation, routers/context/middleware, and TanStack Query client integration | trpc, typescript, type-safety, api, zod |
 | `frameworks/vue.md` | Vue 3 Composition API patterns for reactive, maintainable UIs. | — |
 
-## Infrastructure (6)
+## Infrastructure (10)
 
 | File | Description | Tags |
 |------|-------------|------|
+| `infrastructure/auth-session-flows.md` | Auth session flows — OAuth2/OIDC (auth-code + PKCE), session vs JWT, refresh-token rotation, token storage, logout/revocation | auth, oauth2, oidc, jwt, sessions, pkce, infrastructure |
+| `infrastructure/caching-strategies.md` | Caching strategies — cache-aside/read-through/write-through, TTL + invalidation, stampede/thundering-herd protection, Redis patterns, cache key design, when NOT to cache | caching, redis, performance, invalidation, stampede, infrastructure |
 | `infrastructure/docker.md` | Docker patterns for containerized application builds and local development. | — |
+| `infrastructure/feature-flags.md` | Feature flags — flag types (release/ops/experiment/permission), evaluation, cleanup discipline, kill-switches, config management | feature-flags, release, kill-switch, experimentation, config, infrastructure |
 | `infrastructure/github-actions.md` | GitHub Actions patterns for reliable CI/CD pipelines. | — |
 | `infrastructure/kubernetes.md` | Kubernetes patterns for container orchestration and production deployments. | — |
 | `infrastructure/localstack-aws-local.md` | LocalStack — Local AWS Service Simulation | — |
 | `infrastructure/saas-tenancy-models.md` | SaaS Tenancy Models — Pooled, Dedicated, and Hybrid Architecture | — |
+| `infrastructure/secrets-management.md` | Secrets management — Vault/cloud secret managers, rotation, never-in-env-file, runtime injection, least-privilege, detecting committed secrets | secrets, vault, kms, rotation, security, infrastructure |
 | `infrastructure/terraform.md` | Terraform patterns — remote state with locking, modules, workspaces vs directories, variable/output discipline, and safe plan/apply workflow | terraform, iac, infrastructure, state, modules |
 

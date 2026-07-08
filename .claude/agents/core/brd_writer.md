@@ -32,6 +32,7 @@ dependencies:
 skill_packs:
   - ".claude/skills/requirements/requirement-clarity.md"
   - ".claude/skills/requirements/acceptance-criteria.md"
+  - ".claude/skills/requirements/ears-notation.md"
   - ".claude/skills/requirements/edge-case-taxonomy.md"
   - ".claude/skills/requirements/persona-definition.md"
   - ".claude/skills/requirements/nfr-patterns.md"
@@ -143,7 +144,7 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
 4. **If `requirements/research/` exists:**
    a. Load `contradiction-audit.md` → apply all CONFLICT/CORRECTION fixes to the BRD (do NOT use original spec values for contradicted claims)
    b. Load `completeness-audit.md` → address all dimensions < 70% (as requirements, constraints, or explicit out-of-scope with rationale)
-   c. Load `08b-edge-cases.md` → for every P0 FR-*, write acceptance criteria that cover: **happy path + 2 error paths + 1 boundary case** (sourced from edge cases)
+   c. Load `08b-edge-cases.md` → for every P0 FR-*, write acceptance criteria that cover: **happy path + 2 error paths + 1 boundary case** (sourced from edge cases). Author each behavioral criterion in **EARS notation** — one of the five templates (Ubiquitous / Event-driven `WHEN` / State-driven `WHILE` / Optional `WHERE` / Unwanted `IF…THEN`), one SHALL per clause, no compound SHALLs. See `.claude/skills/requirements/ears-notation.md`. Purely descriptive/non-behavioral requirements may stay prose.
    d. Load `08c-performance-baselines.md` → every NFR-PERF-* must cite its evidence source
    e. Load `08d-visual-specifications.md` → any UI fidelity FR-* must reference specific measurements: "Implements visual specifications documented in 08d-visual-specifications.md" + cite key values (hex colors, px dimensions, animation durations)
 5. Draft `docs/BRD.md` following the format above
@@ -162,6 +163,7 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
 - [ ] Traceability matrix covers 100% of requirement IDs
 - [ ] Definition of Ready and Definition of Done checklists present
 - [ ] Every P0 FR-* has acceptance criteria: happy path + 2 error paths + 1 boundary
+- [ ] Every behavioral FR-* acceptance criterion is authored in EARS notation (one of the five templates, single SHALL per clause, no compound SHALLs) — see `.claude/skills/requirements/ears-notation.md`
 - [ ] Every NFR-PERF-* cites an evidence source (not arbitrary)
 - [ ] Every OBJ-* has measurable success criteria with specific numbers
 - [ ] All contradiction-audit CONFLICT/CORRECTION items incorporated (if research exists)

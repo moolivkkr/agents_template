@@ -27,6 +27,7 @@ skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
   - ".claude/skills/frameworks/{{FRAMEWORK}}.md"
   - ".claude/skills/databases/{{DB_TECH}}.md"
+  - ".claude/skills/databases/query-optimization.md"
 ---
 
 # Agent: Backend Developer

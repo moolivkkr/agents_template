@@ -75,6 +75,41 @@ Each change records provenance: `merged_from: [L-2-003, L-4-001]`, `confidence_c
 
 ---
 
+## Step 1.5 — Procedural Promotion (Tier 1 → procedural memory)
+
+Runs right after the Step 1 sweep, because dedup/merge/confidence-recalibration are exactly what expose a
+lesson's true **recurrence** and **confidence** — the promotion inputs. This is the CoALA *procedural*
+tier: a recurring, validated lesson graduates from prose (that agents may or may not read) into an
+**enforced routine**. Full model: `.claude/skills/core/procedural-memory.md`.
+
+Scan the freshly consolidated `patterns.md`/`lessons.md` index. A pattern is a **promotion candidate**
+only when it meets ALL of the promotion criteria (see the skill for the full gate):
+
+1. **Recurrence ≥ N** — its evidence cites **≥ 3 distinct phases** (default `N = 3`; **N = 2** for
+   `security`-category patterns).
+2. **Confidence ≥ HIGH** — `Confidence: HIGH` in `patterns.md`. `DEPRECATED` never promotes.
+3. **Actionable** — phrasable as a concrete pass/fail check or a repeatable routine step (not a vague
+   aspiration).
+4. **Not already enforced** — no existing skill checklist item, Tier 0 fact, or gate candidate covers it.
+
+For each qualifying pattern, promote it to the appropriate **target** (a lesson may hit more than one):
+
+- **A — Skill checklist:** it is a routine an agent should run every time → append a checklist line to the
+  relevant `.claude/skills/**/*.md`, tagged with provenance
+  (`<!-- promoted from P-014 (recur×3, HIGH) via /consolidate <ts> -->`).
+- **B — Tier 0 fact:** it has hardened into an inviolable, environment-wide constraint → hand off to
+  `/remember` (never hand-edit `PROJECT_FACTS.md` — the script does the deterministic supersession).
+- **C — Gate/reviewer rule candidate:** it should mechanically block the gate or drive a reviewer if
+  violated → append a `PC-*` block to `agent_state/procedural_candidates.md` with `status: proposed`
+  (a **proposal only** — wiring into `verify-gate.sh`/a reviewer is a separate human step; this command
+  never edits the gate, `remember.sh`'s script aside, or creates agents).
+
+**Non-destructive:** promotion is strictly additive. It NEVER deletes or edits the source lesson — it only
+adds a `Promoted-to:` backlink on the source pattern entry so the episodic record shows it became
+procedure. The lesson stays in Tier 1 and in git.
+
+---
+
 ## Step 2 — Sweep Tier 0: `docs/PROJECT_FACTS.md`
 
 Audit for **supersession drift** per `shared-context-protocol.md`'s deterministic rule
@@ -106,6 +141,11 @@ Memory Consolidation — <timestamp>
     Novelty gate: ADD 6 · NOOP 22 · MERGE 5   (LLM touched 17% of writes)
     Confidence:  ↑ 3 upgraded · ↓ 1 deprecated
     Index rebuilt: Index by Category, Index by Tag
+
+  Procedural promotion (Tier 1 → procedural):
+    Candidates (recur≥N, HIGH): 2
+    Promoted:  A skill-checklist 1 (skills/testing/…) · B fact 0 · C gate-candidate 1 (PC-001)
+    Source lessons kept + backlinked: P-014 (Promoted-to added, 0 deleted)
 
   Tier 0 facts:
     Active facts: 12   Drift flagged: 1 (subject=queue-svc, relation=port — 2 active)

@@ -38,6 +38,7 @@ skill_packs:
   - ".claude/skills/languages/{{LANG}}.md"
   - ".claude/skills/core/api-design.md"
   - ".claude/skills/core/testing-principles.md"
+  - ".claude/skills/requirements/ears-notation.md"
 ---
 
 # Agent: Acceptance Test Agent
@@ -131,7 +132,8 @@ Extract:
 - **FR-* requirements** assigned to this phase that have user-facing acceptance criteria
 - **Gate checklist items** that require observable user-facing outcomes
 
-For each in-scope FR-*, derive the use case:
+For each in-scope FR-*, derive the use case. **Where the FR-*'s acceptance criteria are written in EARS notation** (`.claude/skills/requirements/ears-notation.md`), treat **each EARS SHALL as one discrete pass/fail check**: the trigger (WHEN/WHILE/IF/WHERE) is the precondition to set up, the SHALL is the exact assertion to verify. Never collapse multiple SHALLs into a single "it works" check — one EARS clause = one criterion line = one PASS/FAIL.
+
 ```yaml
 use_case:
   id: FR-001
@@ -141,10 +143,10 @@ use_case:
   steps:
     - "Navigate to /register"
     - "Submit form with valid email and password"
-  acceptance_criteria:
-    - "User account created in system"
-    - "User can immediately log in with provided credentials"
-    - "Welcome email sent (or record created)"
+  acceptance_criteria:            # one line per EARS SHALL — each is an independent PASS/FAIL
+    - "WHEN a valid email+password is submitted THE SYSTEM SHALL create a user account (verify row exists)"
+    - "WHEN the new user logs in with those credentials THE SYSTEM SHALL return a session token (verify login succeeds)"
+    - "WHEN registration completes THE SYSTEM SHALL send a welcome email (verify record created)"
   brd_ref: "FR-001"
 ```
 
@@ -377,6 +379,7 @@ CONTRACT_VIOLATION = **BLOCKER** — same severity as a failing acceptance crite
 - Read `requirements/test-data/` first — always respect user-provided data over generated
 - Never use production credentials or data in acceptance tests
 - Every acceptance criterion maps to an exact BRD FR-* ID — no free-text criteria
+- Where the FR-*'s criteria are in EARS form, each EARS SHALL is validated as its own discrete PASS/FAIL — a use case with N SHALLs has N checks, and any failing SHALL makes the use case PARTIAL PASS (not a blanket PASS)
 - Seed data is isolated (test-only email patterns, test namespace) — safe to clean up
 - Report partial passes explicitly — "2/3 criteria met" not just PASS/FAIL
 - Acceptance test failures are **phase gate blockers** — gate does not pass with unresolved failures
@@ -388,6 +391,7 @@ CONTRACT_VIOLATION = **BLOCKER** — same severity as a failing acceptance crite
 - [ ] Report written to `agent_state/phases/{{PHASE}}/reports/acceptance_report.md` (exact frontmatter path) using the Output template, plus the seed and cleanup artifacts.
 - [ ] Step 0 ran: app/binary confirmed healthy. If NOT healthy, every use case is marked `UNTESTED — app not running` and the report is `BLOCKED` — never a fabricated PASS against a dead service.
 - [ ] Every in-scope FR-* use case was executed as its persona with real requests; PASS means ALL criteria met (any note → PARTIAL PASS, stated as "N/M criteria met").
+- [ ] Where the FR-*'s criteria are in EARS form, each EARS SHALL was validated as a separate PASS/FAIL check (trigger = precondition, SHALL = assertion) — no compound SHALL collapsed into one check.
 - [ ] Every persona in BRD §Personas is exercised by ≥1 use case; contract-shape assertions run for every API call, CONTRACT_VIOLATIONs flagged as BLOCKER.
 - [ ] Pass/partial/fail counts are REAL numbers derived from execution, not estimates; unresolved failures include exact reproduction steps.
 - [ ] If I could not test (app down, missing seed access, product type without a testable interface handled), I say so explicitly — I do NOT emit an empty-but-present PASS.

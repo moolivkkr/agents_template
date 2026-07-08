@@ -122,6 +122,11 @@ Memory tiers by access pattern (full model: `.claude/skills/core/shared-context-
 - **Tier 1 — Lessons/Patterns** (`agent_state/`): queried on demand by category/tag
   (`memory-as-tools.md`), never loaded whole. Lessons authored per-phase and aggregated to the root
   `agent_state/lessons.md` at each gate. Maintained by `/consolidate`.
+- **Tier 1.5 — Procedural** (skill checklists + `agent_state/procedural_candidates.md`): the CoALA
+  procedural quadrant. When `/consolidate` sees a lesson recur (≥3 phases, HIGH confidence, actionable),
+  it PROMOTES it — additively, never deleting the source — into an enforced routine: a skill checklist
+  item, a Tier 0 fact via `/remember`, or a proposed gate/reviewer rule. "We always forget X" becomes
+  "the process enforces X." Model: `.claude/skills/core/procedural-memory.md`. Maintained by `/consolidate`.
 - **Tier 2 — Codebase KB** (`agent_state/codebase/`): loaded when relevant; ranked repo map from `/map`.
 
 **Activity ledger.** `/worklog` regenerates `docs/WORKLOG.md` — the single consolidated view of what

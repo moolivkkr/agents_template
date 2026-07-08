@@ -172,6 +172,8 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `tenant_isolation_verifier` | opus | handler + service files | isolation_report.md | tenantID trace through every route |
 | `breaking_change_reviewer` | opus | current diff, prior-phase contracts | breaking_change_report.md | Cross-phase contract breakage (API sig, response shape, event schema, shared types, config keys, DB columns) |
 | `migration_safety_reviewer` | opus | migration files | migration_safety.md | Destructive/irreversible ops, backfill safety, lock risk, rollback correctness |
+| `threat_model_agent` | opus | phase specs, data flows | threat_model.md (+ .json) | Design-time STRIDE per trust boundary; threat→mitigation→TC-SEC-* (runs in /plan for security-relevant phases) |
+| `accessibility_auditor` | sonnet | built UI, wireframes | accessibility_audit.md (+ .json) | WCAG-AA pass/fail per rule against the BUILT UI (axe/keyboard/contrast/ARIA); runs in /develop UI phases |
 | `code_quality_verifier` | sonnet | guidelines, manifest | quality_gate_verification.md | TODO/stub/secret/import checks |
 | `design_quality_reviewer` | sonnet | wireframes, guidelines | design quality report | UI spec quality validation |
 | `dependency_scanner` | haiku | guidelines | dependency scan results | CVE detection, license compliance |
@@ -204,6 +206,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `deployment_agent` | sonnet | guidelines | deployment artifacts | Docker, orchestration, health checks |
 | `ci_cd_agent` | sonnet | guidelines | CI/CD pipeline config | First deployment only |
 | `observability_agent` | sonnet | guidelines | observability validation | First staging/prod deployment |
+| `reliability_agent` | opus | specs, NFR-* targets, guidelines | reliability_review.md (+ .json), runbooks | SLI/SLO/error-budget, health-check design, timeout/retry/circuit-breaker, runbook stubs (runs in /plan + /deploy) |
 
 ### Quality & Optimization
 
@@ -349,10 +352,10 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 63 |
+| Core agents (`.claude/agents/core/`) | 66 |
 | Generation templates (`.claude/agents/templates/`) | 8 |
 | Generated agents (`.claude/agents/generated/`) | 0 in repo — populated at `/init` by `agent_factory` (gitignored) |
-| **Total agents (repo)** | **71** |
+| **Total agents (repo)** | **74** |
 
 | Category | Count |
 |---|---|
@@ -363,10 +366,10 @@ debate team (on-demand, any pipeline):
 | Design | 8 (incl. `eagle_diagram_agent` — 10,000-ft strategic overview) |
 | Implementation (generated) | 4 |
 | Testing | 6 |
-| Review & Security | 8 (incl. `breaking_change_reviewer`, `migration_safety_reviewer`) |
+| Review & Security | 10 (incl. `breaking_change_reviewer`, `migration_safety_reviewer`, `threat_model_agent` STRIDE, `accessibility_auditor` WCAG-AA) |
 | Reconciliation | 6 |
 | Decision Support | 5 (incl. `solution_selector` — candidate-selection winner) |
-| Infrastructure | 3 |
+| Infrastructure | 4 (incl. `reliability_agent` — SLO/error-budget/runbooks) |
 | Quality & Optimization | 5 |
 | Documentation & Demo | 4 |
 

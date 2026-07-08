@@ -307,6 +307,26 @@ BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still bl
 
 ---
 
+## Step 3b — Design-Time Security & Reliability (conditional, parallel)
+
+Design-time review that feeds `spec_writer` (mitigations and SLOs become spec requirements), distinct
+from the code-level reviewers that run later in `/develop`. Both are conditional — run when applicable
+and add them to the phase roster so the gate proves they ran; otherwise record the skip + reason.
+
+**Agent:** `threat_model_agent` — **Run when** the phase touches auth, PII/sensitive data, external
+input, payments, multi-tenant boundaries, or a new trust boundary. Produces STRIDE-per-element threat
+model with each threat mapped to a mitigation and (where testable) a `TC-SEC-*` id →
+`agent_state/phases/${PHASE}/reports/threat_model.md` (+ `.json`). BLOCKING threats with no mitigation
+block `/develop`.
+
+**Agent:** `reliability_agent` — **Run when** the phase adds/changes a service with an NFR-PERF-* or
+availability target. Defines SLIs/SLOs + error budgets tied to NFR-* IDs, reviews health-check and
+timeout/retry/circuit-breaker design, and generates runbook stubs →
+`agent_state/phases/${PHASE}/reports/reliability_review.md` (+ `.json`). It also runs again in
+`/deploy` (Step 4d) to validate the deployed system against the SLOs it defined here.
+
+---
+
 ## Step 4 — Spec Verification
 
 **Agent:** `spec_verifier`

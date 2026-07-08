@@ -43,9 +43,13 @@ skill_packs:
   - ".claude/skills/ui/accessibility-patterns.md"
   - ".claude/skills/ui/responsive-patterns.md"
   - ".claude/skills/ui/form-patterns.md"
+  # Derive Zod validation schemas from data-contracts.md request types so client validation matches the API.
+  - ".claude/skills/ui/form-validation-protocol.md"
   - ".claude/skills/ui/loading-states.md"
   - ".claude/skills/ui/error-handling-patterns.md"
   - ".claude/skills/ui/api-integration-patterns.md"
+  # Generate types/api.ts from data-contracts.md so UI and API code share one type source.
+  - ".claude/skills/ui/type-generation-protocol.md"
   - ".claude/skills/core/shared-backend-patterns.md"
 ---
 

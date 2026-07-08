@@ -207,7 +207,11 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - trivial/small: keep only the agents whose waves you actually run.
 #  - not multi-tenant: DROP tenant_isolation_verifier from the array (record the skip in the manifest).
 #  - no web UI: use e2e_orchestrator (not ui_test_agent); DROP ui_developer/ui_test_agent/design_quality_reviewer.
-#  - web UI: ADD ui_developer, ui_test_agent (and design_quality_reviewer if used) to the array.
+#  - web UI: ADD ui_developer, ui_test_agent, accessibility_auditor (WCAG-AA against the built UI),
+#    and design_quality_reviewer if used, to the array.
+#  - touches auth/PII/trust-boundary: ADD threat_model_agent (design-time STRIDE; usually run in /plan
+#    but list it here if the phase itself introduces the security-relevant surface).
+#  - adds/changes a service with an NFR-PERF-*/availability target: ADD reliability_agent.
 #  - has DB migrations: ADD migration_agent AND migration_safety_reviewer (adversarial migration review).
 #  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
 #  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
@@ -652,8 +656,13 @@ Wave 4 Track A (parallel):
   ├─ Agent: security_reviewer        → reports/security_review.md      (OWASP + project constraints)
   ├─ Agent: tenant_isolation_verifier → reports/tenant_isolation.md    (only if multi-tenant; see IMPL_GUIDELINES)
   ├─ Agent: dependency_scanner       → reports/dependency_scan.md      (CVEs, licenses, outdated)
-  └─ Agent: code_quality_verifier    → reports/quality_gate.md         (TODOs, stubs, secrets, dead code)
+  ├─ Agent: code_quality_verifier    → reports/quality_gate.md         (TODOs, stubs, secrets, dead code)
+  └─ Agent: accessibility_auditor    → reports/accessibility_audit.md  (only if web UI; WCAG-AA against the BUILT UI)
 ```
+
+> `accessibility_auditor` runs only for web-UI phases and tests the BUILT UI (axe/keyboard/contrast/
+> ARIA) — distinct from the design-time `design_quality_reviewer`. It requires the app running (Wave
+> 3.5). If the phase has no UI, record it as `skipped:not_applicable` in the roster.
 
 Each spawn prompt (prepend the GROUND TRUTH line):
 ```
