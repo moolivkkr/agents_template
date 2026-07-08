@@ -66,29 +66,37 @@ of eval task T-004.
 
 ---
 
-## Remaining backlog (NOT yet done)
+## P2 — SOTA-backed upgrades (DONE, commits 312b0d6, c23a8b2)
 
-### P2 — SOTA-backed upgrades (evidence-ranked)
-- **verify-gate.sh should RUN the tests/lint/typecheck itself**, not audit a markdown report claiming
-  they passed. Judged the single biggest available win (SWE-bench/AgentForge/ReVeal all execution-ground).
-- **In-flight process verification (PRMs)** inside long waves — a taxonomy-guided "still on-spec?"
-  check lifted SWE-bench Verified +10.6pts *and shortened* trajectories (arXiv 2509.02360).
-- **Schema-force agent reports to JSON** validated by jq at PostToolUse — kills the brittle grep/awk
-  parsing; constrained decoding raises compliance ~35%→~100%.
-- **EARS notation for acceptance criteria** ("WHEN [condition] THE SYSTEM SHALL [behavior]") — cheapest
-  high-impact win; every FR-* becomes directly testable and 1:1-mappable to a TC-* (from Amazon Kiro).
-- **Procedural-memory tier** — `/consolidate` should promote recurring lessons into enforced
-  hooks/skills, not more prose (the missing CoALA quadrant).
-- **Collapse the two gate implementations** into one (delete develop.md's duplicated gate bash).
+- ✅ **verify-gate.sh RUNS the tests/lint/typecheck itself** (check e) — execution-grounded, config-
+  driven (`verify-commands.json`/`sdlc-verify.json`), opt-in + timeout-wrapped + skip-env, advisory
+  when unconfigured. Blocks on real non-zero exit, not a self-reported claim.
+- ✅ **Machine-checkable JSON sidecars** (check b) — jq numeric assertions on `<report>.json`
+  `{blocking, findings[].resolved, total, passed, failed}`; grep fallback when absent. New agents emit them.
+- ✅ **EARS notation** — verified already present (spec_writer + skill); filled gaps in
+  acceptance_test_agent (each SHALL = discrete PASS/FAIL) and brd_writer.
+- ✅ **Procedural-memory tier** — `.claude/skills/core/procedural-memory.md` + `/consolidate` Step 1.5
+  promotes recurring high-confidence lessons into enforced skills/facts/gate-rule candidates; CLAUDE.md
+  Tier 1.5 bullet.
+- ✅ **Collapsed the two gate implementations** — develop.md defers to verify-gate.sh (removed the
+  duplicated REQUIRED_REPORTS array + existence/stub/BLOCKING loops). One source of truth.
+- ⏳ **In-flight PRM checks** inside long waves (+10.6pts SWE-bench, arXiv 2509.02360) — NOT yet done;
+  the highest-value *remaining* item. Would add a periodic "still on-spec?" evaluator mid-wave.
 
-### P3 — coverage gaps
-- Add `reliability_agent` (SLO/error-budget) and `threat_model_agent` (STRIDE) — the roster deploys to
-  prod with no reliability owner and no design-time security.
-- Add `accessibility_auditor` (axe/WCAG-AA against built UI).
-- Deepen `infrastructure/` skills (cloud primitives, secrets, caching, auth-flow) — the real frontier,
-  not more languages.
-- Wire in or retire ~10 orphaned skills (e.g. `external-service-mocks.md`, `query-optimization.md`).
-- Consolidate the diagram tier (eagle→c4) and parameterize the 6 near-identical reconcilers.
+## P3 — coverage gaps (DONE, commit c23a8b2)
+
+- ✅ `reliability_agent` (SLO/error-budget/runbooks) — wired into /plan Step 3b + /deploy Step 4d.
+- ✅ `threat_model_agent` (STRIDE) — wired into /plan Step 3b for security-relevant phases.
+- ✅ `accessibility_auditor` (axe/WCAG-AA) — wired into develop-orchestrator Wave 4 web-UI track.
+- ✅ Deepened `infrastructure/` — 4 new skills (caching, secrets, auth-session-flows, feature-flags).
+- ✅ Wired in 6 orphaned skills; `edit-validation.md` flagged as a deletion candidate (git-workflow kept).
+- ⏳ Diagram tier merge (eagle→c4) + reconciler parameterization — deliberately SKIPPED as risky
+  structural changes with low payoff; the reconciler one-per-link design is defensible as-is.
+
+### Regression tests (commit c23a8b2)
+`tests/run-all.sh` — 25 assertions across verify-gate (15), remember (5), agent-registry (5). The
+registry test guards the exact bug classes found (roster names must resolve to real agents; INVENTORY
+count must match disk). Wire into CI/pre-commit.
 
 ### Standing caution
 mini-SWE-agent (~100 lines) scores >74% on SWE-bench Verified. Scaffold complexity has diminishing
