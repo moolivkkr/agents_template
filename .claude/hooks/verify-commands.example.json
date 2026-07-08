@@ -1,0 +1,7 @@
+{
+  "_comment": "Copy to your PROJECT ROOT as sdlc-verify.json (or agent_state/config/verify-commands.json) to turn on verify-gate.sh check (e) — EXECUTION-GROUNDED verification. When present, the gate RUNS these commands and BLOCKS on a non-zero exit, so a phase cannot pass by merely CLAIMING tests passed. Absent = the check is an advisory skip. Commands run from the project root via `bash -c`. Provide any subset; empty/omitted keys are skipped.",
+  "typecheck": "npm run typecheck --silent",
+  "lint": "npm run lint --silent",
+  "test": "npm test --silent",
+  "timeout_seconds": 600
+}

@@ -153,94 +153,31 @@ PARENT SESSION executes this sequence (not delegated):
 
 ### Gate File Precondition Check (HARD GATE)
 
-Before writing `gate.passed`, the parent MUST verify these files exist:
+**⛔ `.claude/hooks/verify-gate.sh` is the SINGLE SOURCE OF TRUTH for the gate contract** (shared with
+`/develop-orchestrator` Wave 6 — do NOT maintain a parallel gate here; that drift is exactly how
+reviews got dropped). It deterministically enforces: (a) roster completeness, (a2) the mandatory
+review FLOOR, (b) report integrity — existence + non-stub + JSON-sidecar/BLOCKING checks, (c) no
+dangling failures, (d) gate.passed honesty, and (e) execution-grounded test/lint/typecheck when a
+`verify-commands.json` config exists. Call it and honor its exit code — it OWNS report validation, so
+this file no longer re-lists reports (that duplication is removed):
 
 ```bash
-REQUIRED_REPORTS=(
-  "agent_state/phases/${PHASE}/reports/unit_tests.md"
-  "agent_state/phases/${PHASE}/reports/integration_tests.md"
-  "agent_state/phases/${PHASE}/reports/e2e_results.md"
-  # Review dimensions — each a SEPARATE named agent (never bundled). Previously only a single
-  # code_quality_review.md was required, which let security review + both reconcilers be skipped.
-  "agent_state/phases/${PHASE}/reports/code_review_I.md"
-  "agent_state/phases/${PHASE}/reports/code_review_II.md"
-  "agent_state/phases/${PHASE}/reports/security_review.md"
-  "agent_state/phases/${PHASE}/reports/dependency_scan.md"
-  "agent_state/phases/${PHASE}/reports/quality_gate.md"
-  # Reconciliation — spec↔impl and spec↔test. BLOCKING findings must be 0 to gate.
-  "agent_state/phases/${PHASE}/reports/specs_vs_impl.md"
-  "agent_state/phases/${PHASE}/reports/spec_test_coverage.md"
-  "agent_state/phases/${PHASE}/reports/acceptance_report.md"
-  "agent_state/phases/${PHASE}/reports/collective_feedback.md"
-  "agent_state/phases/${PHASE}/manifest.json"
-)
-# tenant_isolation.md is required too, UNLESS the project is single-tenant (roster marks it
-# not_applicable). Add it conditionally:
-# Roster is a FLAT array of agent names; tenant_isolation_verifier is present iff multi-tenant.
-# Use membership, not a "status" object grep (the old grep never matched the flat schema).
-if jq -e '.required | index("tenant_isolation_verifier")' \
-     "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; then
-  REQUIRED_REPORTS+=("agent_state/phases/${PHASE}/reports/tenant_isolation.md")
-fi
-
-# ⛔ AGENT-ROSTER COMPLETENESS — the execution guarantee (see develop-orchestrator Wave 0b/6).
-# A missing report catches a dropped agent only if we remembered to list the report. The roster
-# check is the backstop: it proves every REQUIRED agent has a "completed" entry in execution.jsonl.
-# The single source of truth is .claude/hooks/verify-gate.sh — defer to it (it also checks that each
-# completed line's report exists and is non-stub, and that no "failed" lacks a later "completed").
 if [ -f ".claude/hooks/verify-gate.sh" ]; then
   bash .claude/hooks/verify-gate.sh "${PHASE}" || {
-    echo "⛔ GATE BLOCKED by verify-gate.sh (roster.required vs execution.jsonl)."
-    echo "   Re-spawn any missing/failed agents before gating."
+    echo "⛔ GATE BLOCKED by verify-gate.sh — fix every item it names, then re-run. Do NOT write gate.passed."
     exit 1
   }
 else
-  # Fallback membership check (hook is authoritative — roster uses a flat "required" array of REAL
-  # agent names, matching the "agent" field each writes to execution.jsonl).
-  ROSTER="agent_state/phases/${PHASE}/roster.json"
-  EXEC="agent_state/phases/${PHASE}/execution.jsonl"
-  if [ -f "$ROSTER" ]; then
-    python3 - "$ROSTER" "$EXEC" << 'PY' || exit 1
-import json, sys, os
-roster = json.load(open(sys.argv[1]))
-required = roster.get("required", [])
-completed = set()
-if os.path.exists(sys.argv[2]):
-    for line in open(sys.argv[2]):
-        line = line.strip()
-        if not line: continue
-        try:
-            e = json.loads(line)
-            if e.get("status") == "completed": completed.add(e.get("agent"))
-        except Exception: pass
-missing = [a for a in required if a not in completed]
-if missing:
-    print("⛔ GATE BLOCKED — required agents never completed:", ", ".join(missing))
-    sys.exit(1)
-print("✓ Roster complete — every required agent ran.")
-PY
-  fi
+  echo "⛔ verify-gate.sh missing — the deterministic gate cannot run. Restore .claude/hooks/verify-gate.sh."
+  exit 1
 fi
 
-# Content validation — file existence is necessary but NOT sufficient.
-# A report that says "0 tests" or "SKIPPED" must not pass the gate.
-# This was added after dlp_composer shipped with ZERO E2E, ZERO component,
-# ZERO acceptance, and ZERO pipeline tests despite report files existing.
-TEST_REPORTS=("unit_tests.md" "integration_tests.md" "e2e_results.md" "acceptance_report.md")
-for REPORT in "${TEST_REPORTS[@]}"; do
-  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
-  if [ -f "$FILE" ]; then
-    # Check for zero-test reports (file exists but no tests were actually run)
-    if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+(run|found|written|executed)|no tests|SKIPPED.*all|not applicable)' "$FILE" 2>/dev/null; then
-      echo "⛔ GATE BLOCKED: ${REPORT} reports ZERO tests — this tier was skipped"
-      echo "   Every test tier (unit, integration, e2e, acceptance) must produce >= 1 test."
-      echo "   If a tier genuinely doesn't apply (e.g., no browser for a CLI tool),"
-      echo "   the spec must declare this and the E2E report must contain CLI/pipeline tests instead."
-    fi
-  fi
-done
-
-# ⛔ FULL REGRESSION TEST (not just current phase)
+# ⛔ FULL REGRESSION TEST (not just current phase) — additive to the hook.
+# If a verify-commands.json config exists, the hook's check (e) ALREADY ran the suite above, so skip
+# this block (no double-run). Otherwise fall back to the test commands in IMPLEMENTATION_GUIDELINES.
+if [ -f sdlc-verify.json ] || [ -f "agent_state/phases/${PHASE}/verify-commands.json" ] || [ -f agent_state/config/verify-commands.json ]; then
+  echo "✓ Full regression already executed by verify-gate.sh check (e) from verify-commands.json."
+else
 # Run the ENTIRE test suite — ALL tiers, ALL phases — before writing gate.passed.
 # This catches regressions where Phase N changes break Phase 1-N-1 tests.
 # This was added after Phase 4 broke 6 Phase 1/2 E2E tests and gate.passed was written anyway.
@@ -301,38 +238,19 @@ if [ $UNIT_EXIT -ne 0 ] || [ $INTEG_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ]; then
     echo "   Fix regressions before gating. Route failures to Wave 5 feedback loop."
     exit 1
 fi
-echo "✅ Full regression: all tiers pass (unit + integration + e2e)"
+  echo "✅ Full regression: all tiers pass (unit + integration + e2e)"
+fi
 
-for f in "${REQUIRED_REPORTS[@]}"; do
-  if [ ! -f "$f" ]; then
-    echo "⛔ GATE BLOCKED: Missing required report: $f"
-    echo "   Wave 4 (review + reconcile + acceptance) was likely skipped."
-    echo "   Re-run the missing wave before gating."
-    exit 1
-  fi
-done
-
-# Review/reconcile reports must be real, not stubs.
-for REPORT in code_review_I.md code_review_II.md security_review.md dependency_scan.md \
-              quality_gate.md specs_vs_impl.md spec_test_coverage.md; do
-  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
-  if [ -f "$FILE" ] && [ "$(wc -l < "$FILE")" -lt 3 ]; then
-    echo "⛔ GATE BLOCKED: ${REPORT} is a stub — its agent did not actually run"
-    exit 1
-  fi
-done
-
-# Reconciliation must have zero unresolved BLOCKING findings.
-for REPORT in specs_vs_impl.md spec_test_coverage.md; do
-  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
-  if [ -f "$FILE" ] && grep -qiP '\bBLOCKING\b' "$FILE"; then
-    echo "⛔ GATE BLOCKED: ${REPORT} has BLOCKING reconciliation findings — resolve or carry forward with a documented reason"
-    exit 1
-  fi
-done
+# NOTE: report EXISTENCE, STUB detection, and unresolved-BLOCKING checks are intentionally NOT
+# duplicated here — verify-gate.sh check (b) owns them (existence + non-stub + JSON-sidecar/BLOCKING,
+# for the reviewers, reconcilers, and acceptance reports named in roster.required). One place, no drift.
 ```
 
-**If ANY required report is missing, gate.passed MUST NOT be written.** This prevents the exact failure mode we observed: implementation + tests pass, gate written, but no reviews or acceptance tests ever ran.
+**verify-gate.sh must exit 0 before `gate.passed` is written.** It proves every required agent ran
+(roster completeness + review FLOOR), every report is real (existence + non-stub + no unresolved
+BLOCKING), and — when configured — the tests actually pass (execution-grounded). This prevents the
+exact failure mode we observed: implementation + tests pass, gate written, but no reviews or
+acceptance tests ever ran.
 
 ### Wave Details
 
@@ -2059,8 +1977,9 @@ here ever diverges from the orchestrator's, the orchestrator wins — reconcile 
 now share ONE required set (below), with the same report paths (`reports/…`, not a separate
 `agent_state/reconciliation/…` path).
 
-**Always-required reports** (a missing/stub one BLOCKS the gate — same list as the orchestrator's
-`REQUIRED_REPORTS` and the precondition check in the "Gate File Precondition Check" block above):
+**Always-required reports** (a missing/stub one BLOCKS the gate — this is the human-readable view of
+what `verify-gate.sh` check (b) enforces from `roster.required`; the hook, not a duplicated array
+here, is the source of truth — see the "Gate File Precondition Check" block above):
 
 ```
 Gate Item                    Source File                                          Pass Condition

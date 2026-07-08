@@ -16,9 +16,13 @@
 #                             security_reviewer, code_quality_verifier). Closes the "thin roster drops
 #                             review" hole where the model picks its own bar.
 #   (b)  report integrity    — every completed line with a non-null "report" points to a file that
-#                             EXISTS and is non-stub: test reports rejected on "total: 0"/"SKIPPED";
-#                             ANY report rejected on an unresolved "BLOCKING" (a BLOCKING line with
-#                             no later matching "BLOCKING ... resolved").
+#                             EXISTS and is non-stub. Preferred path: a `<report>.json` sidecar is
+#                             checked with jq NUMERIC assertions (blocking/findings/total/failed).
+#                             Fallback (no sidecar): test reports rejected on "total: 0"/"SKIPPED";
+#                             ANY report rejected on an unresolved "BLOCKING".
+#   (e)  execution-grounded  — OPT-IN: if a verify-commands config exists, the hook RUNS the project's
+#                             test/lint/typecheck and blocks on non-zero (real execution, not self-
+#                             report). Only on an explicit-phase gate; advisory-skip when unconfigured.
 #   (c)  no dangling failure — no "failed" status without a LATER "completed" for the same agent.
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
@@ -273,6 +277,31 @@ while IFS=$'\t' read -r agent report; do
     continue
   fi
 
+  # A2 — machine-checkable JSON sidecar preferred. If a `<report>.json` sits beside the markdown
+  # report and parses, use jq NUMERIC assertions (robust) instead of the grep/awk heuristics below.
+  # Schema (progressive; any subset): {blocking:N, findings:[{severity,resolved}], total,passed,failed}.
+  sidecar="${candidate%.*}.json"
+  if [ -f "$sidecar" ] && jq -e . "$sidecar" >/dev/null 2>&1; then
+    sc_bad=0
+    if [ "$(jq -r 'has("findings")' "$sidecar" 2>/dev/null)" = "true" ]; then
+      ub=$(jq -r '[.findings[]? | select((.severity|ascii_upcase)=="BLOCKING") | select((.resolved // false) != true)] | length' "$sidecar" 2>/dev/null || echo 0)
+    else
+      ub=$(jq -r '(.blocking // 0)' "$sidecar" 2>/dev/null || echo 0)
+    fi
+    [ -z "$ub" ] && ub=0
+    if [ "$ub" -gt 0 ] 2>/dev/null; then
+      fail "report sidecar '$sidecar' (agent '$agent') has $ub unresolved BLOCKING finding(s)."; sc_bad=1
+    fi
+    if [ "$(jq -r 'has("total")' "$sidecar" 2>/dev/null)" = "true" ]; then
+      total=$(jq -r '(.total // 0)' "$sidecar" 2>/dev/null || echo 0)
+      failed=$(jq -r '(.failed // 0)' "$sidecar" 2>/dev/null || echo 0)
+      if [ "$total" -le 0 ] 2>/dev/null; then fail "report sidecar '$sidecar' (agent '$agent') reports total=$total — no tests ran."; sc_bad=1; fi
+      if [ "$failed" -gt 0 ] 2>/dev/null; then fail "report sidecar '$sidecar' (agent '$agent') reports failed=$failed."; sc_bad=1; fi
+    fi
+    if [ "$sc_bad" -eq 0 ]; then ok "report OK (json sidecar): $sidecar (agent '$agent')"; else REPORT_ISSUES=$((REPORT_ISSUES + 1)); fi
+    continue
+  fi
+
   # Stub detection for test reports: "total: 0" (any spacing/case) or a bare "SKIPPED".
   # We treat a report as a "test report" heuristically if agent name or filename implies tests,
   # BUT the "total: 0" / "SKIPPED" check is cheap and safe to apply to all reports.
@@ -318,6 +347,51 @@ while IFS=$'\t' read -r agent report; do
 
   ok "report OK: $report (agent '$agent')"
 done <<< "$REPORTS"
+
+# ---------------------------------------------------------------------------
+# 5b. Check (e): EXECUTION-GROUNDED verification. Rather than trust a report that CLAIMS tests passed,
+#     RUN the project's own test/lint/typecheck commands and block on a non-zero exit. Highest-value
+#     enforcement — grounds the gate in real execution, not self-report (SWE-bench-style).
+#     Safe + opt-in: runs ONLY when (1) an explicit phase arg was given (Wave 6 / the PostToolUse
+#     manifest hook — NOT the passive Stop sweep), (2) a verify-commands config exists, and (3) it is
+#     not disabled via VERIFY_GATE_SKIP_EXEC=1. Absent config => advisory skip (framework repo safe).
+#     Config (first found): <phase>/verify-commands.json | agent_state/config/verify-commands.json |
+#     sdlc-verify.json — shape: {"typecheck":"<cmd>","lint":"<cmd>","test":"<cmd>","timeout_seconds":600}
+# ---------------------------------------------------------------------------
+echo "── (e) execution-grounded verification ──"
+VERIFY_CFG=""
+for c in "$PHASE_DIR/verify-commands.json" "agent_state/config/verify-commands.json" "sdlc-verify.json"; do
+  [ -f "$c" ] && { VERIFY_CFG="$c"; break; }
+done
+if [ "${VERIFY_GATE_SKIP_EXEC:-0}" = "1" ]; then
+  ok "execution-grounded verification skipped (VERIFY_GATE_SKIP_EXEC=1)"
+elif [ "$AUTODETECT" = "true" ]; then
+  ok "passive sweep — execution-grounded verification deferred to the explicit-phase gate"
+elif [ -z "$VERIFY_CFG" ]; then
+  ok "no verify-commands config — execution-grounded verification not configured (advisory)"
+elif ! jq -e . "$VERIFY_CFG" >/dev/null 2>&1; then
+  fail "verify-commands config is not valid JSON: $VERIFY_CFG"
+else
+  TOSECS="$(jq -r '.timeout_seconds // 600' "$VERIFY_CFG" 2>/dev/null)"
+  TO=""
+  if command -v timeout >/dev/null 2>&1; then TO="timeout ${TOSECS}"
+  elif command -v gtimeout >/dev/null 2>&1; then TO="gtimeout ${TOSECS}"; fi
+  ran_any=0
+  for key in typecheck lint test; do
+    cmd="$(jq -r --arg k "$key" '.[$k] // empty' "$VERIFY_CFG" 2>/dev/null)"
+    [ -z "$cmd" ] && continue
+    ran_any=1
+    echo "  → running $key: $cmd"
+    if $TO bash -c "$cmd" >"/tmp/verify-gate-$key.log" 2>&1; then
+      ok "$key passed: $cmd"
+    else
+      rc=$?
+      fail "$key FAILED (exit $rc): $cmd — see /tmp/verify-gate-$key.log"
+      tail -5 "/tmp/verify-gate-$key.log" 2>/dev/null | sed 's/^/      | /'
+    fi
+  done
+  [ "$ran_any" -eq 0 ] && ok "verify-commands config present but declares no test/lint/typecheck commands"
+fi
 
 # ---------------------------------------------------------------------------
 # 6. Check (d): gate.passed honesty.

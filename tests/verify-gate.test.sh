@@ -131,6 +131,69 @@ echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 echo '{}' > "$D/agent_state/phases/1/gate.forced"
 LAST_OUT="$(run_hook "$D" 1)"; check "empty gate.forced does NOT disarm gate" 2 "$?"
 
+# --- 10. JSON sidecar with unresolved BLOCKING finding → BLOCK (jq path, not grep) ---
+D=$(new_phase sidecar_blocking)
+cat > "$D/agent_state/phases/1/roster.json" <<'J'
+{"phase":1,"required":["security_reviewer"]}
+J
+echo '{"agent":"security_reviewer","phase":1,"status":"completed","report":"reports/security_review.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo 'clean-looking prose report with no BLOCKING word at all' > "$D/agent_state/phases/1/reports/security_review.md"
+echo '{"agent":"security_reviewer","blocking":1,"findings":[{"id":"S1","severity":"BLOCKING","resolved":false,"ref":"h.go:12"}]}' > "$D/agent_state/phases/1/reports/security_review.json"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "JSON sidecar unresolved BLOCKING BLOCKs (jq)" 2 "$?" "sidecar"
+
+# --- 11. JSON sidecar all resolved + tests pass → PASS ---
+D=$(new_phase sidecar_ok)
+cat > "$D/agent_state/phases/1/roster.json" <<'J'
+{"phase":1,"required":["unit_test_agent"]}
+J
+echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":"reports/unit_tests.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo 'unit test report' > "$D/agent_state/phases/1/reports/unit_tests.md"
+echo '{"agent":"unit_test_agent","blocking":0,"findings":[],"total":42,"passed":42,"failed":0}' > "$D/agent_state/phases/1/reports/unit_tests.json"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "JSON sidecar clean+tests-pass PASSes" 0 "$?"
+
+# --- 12. JSON sidecar reports failed>0 → BLOCK ---
+D=$(new_phase sidecar_failed)
+cat > "$D/agent_state/phases/1/roster.json" <<'J'
+{"phase":1,"required":["unit_test_agent"]}
+J
+echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":"reports/unit_tests.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo 'unit test report' > "$D/agent_state/phases/1/reports/unit_tests.md"
+echo '{"agent":"unit_test_agent","total":42,"passed":40,"failed":2}' > "$D/agent_state/phases/1/reports/unit_tests.json"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "JSON sidecar failed>0 BLOCKs" 2 "$?" "failed=2"
+
+# --- 13. Execution-grounded (e): failing test command → BLOCK (explicit phase, config present) ---
+D=$(new_phase exec_fail)
+cat > "$D/agent_state/phases/1/roster.json" <<'J'
+{"phase":1,"required":["unit_test_agent"]}
+J
+echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+echo '{"test":"exit 1"}' > "$D/sdlc-verify.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "exec-grounded failing test BLOCKs" 2 "$?" "test FAILED"
+
+# --- 14. Execution-grounded (e): passing test command → PASS ---
+D=$(new_phase exec_pass)
+cat > "$D/agent_state/phases/1/roster.json" <<'J'
+{"phase":1,"required":["unit_test_agent"]}
+J
+echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+echo '{"test":"true","lint":"true"}' > "$D/sdlc-verify.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "exec-grounded passing test PASSes" 0 "$?"
+
+# --- 15. Execution-grounded honors VERIFY_GATE_SKIP_EXEC=1 (failing cmd skipped) → PASS ---
+D=$(new_phase exec_skip)
+cat > "$D/agent_state/phases/1/roster.json" <<'J'
+{"phase":1,"required":["unit_test_agent"]}
+J
+echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+echo '{"test":"exit 1"}' > "$D/sdlc-verify.json"
+LAST_OUT="$(VERIFY_GATE_SKIP_EXEC=1 run_hook "$D" 1)"; check "exec-grounded skip env honored" 0 "$?"
+
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
