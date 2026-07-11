@@ -13,6 +13,7 @@
 
 set -e
 
+REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_NAME="${1:?Usage: $0 <project-name> [/path/to/parent]}"
 PARENT_DIR="${2:-$(pwd)}"
 PROJECT_DIR="$PARENT_DIR/$PROJECT_NAME"
@@ -30,6 +31,14 @@ mkdir -p "$PROJECT_DIR/docs"
 mkdir -p "$PROJECT_DIR/agent_state/phases"
 mkdir -p "$PROJECT_DIR/agent_state/reconciliation"
 mkdir -p "$PROJECT_DIR/.claude/agents/generated"
+
+# Rule board specialists — the /rules-board* commands read these project-relative
+if [ -d "$REPO_DIR/.claude/agents/rule_board" ]; then
+  mkdir -p "$PROJECT_DIR/.claude/agents/rule_board"
+  cp -R "$REPO_DIR/.claude/agents/rule_board/." "$PROJECT_DIR/.claude/agents/rule_board/"
+  RB_COUNT=$(find "$PROJECT_DIR/.claude/agents/rule_board" -name "*.md" | wc -l | tr -d ' ')
+  echo "  Scaffolded $RB_COUNT rule board agents → .claude/agents/rule_board/"
+fi
 
 # IMPLEMENTATION_GUIDELINES template
 cat > "$PROJECT_DIR/requirements/IMPLEMENTATION_GUIDELINES.md" << 'TMPL'

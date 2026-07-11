@@ -50,6 +50,22 @@ cp "$REPO_DIR/.claude/agents/templates/"*.tmpl.md "$DEST_TEMPLATES/" 2>/dev/null
 TMPL_COUNT=$(ls "$DEST_TEMPLATES/"*.tmpl.md 2>/dev/null | wc -l | tr -d ' ')
 echo "  ✅ $TMPL_COUNT agent templates installed"
 
+# ── Rule board specialists (EDR/SIEM/CSPM/DSPM/KSPM/NSPM/AI-security) ─────────
+# The /rules-board* commands read .claude/agents/rule_board/ project-relative, so
+# new-project.sh scaffolds these per project. Installed globally too as a fallback
+# and so existing projects can reference ~/.claude/agents/rule_board/.
+if [ -d "$REPO_DIR/.claude/agents/rule_board" ]; then
+  echo "Installing rule board specialists → $DEST_AGENTS_CORE/rule_board/"
+  mkdir -p "$DEST_AGENTS_CORE/rule_board"
+  if command -v rsync &>/dev/null; then
+    rsync -a --include='*/' --include='*.md' --exclude='*' "$REPO_DIR/.claude/agents/rule_board/" "$DEST_AGENTS_CORE/rule_board/"
+  else
+    cp -R "$REPO_DIR/.claude/agents/rule_board/." "$DEST_AGENTS_CORE/rule_board/"
+  fi
+  RULE_BOARD_COUNT=$(find "$REPO_DIR/.claude/agents/rule_board" -name "*.md" | wc -l | tr -d ' ')
+  echo "  ✅ $RULE_BOARD_COUNT rule board agents installed"
+fi
+
 # ── Project templates (CLAUDE.md template for /init) ─────────────────────────
 echo "Installing project templates → $CLAUDE_DIR/templates/"
 mkdir -p "$CLAUDE_DIR/templates"
