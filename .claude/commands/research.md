@@ -72,7 +72,7 @@ Define the research target:
 [Anything the user already knows — target market, tech preferences, constraints]
 
 ## Evaluation Framework
-Load `.claude/skills/core/vendor-comparison-framework.md` and select applicable dimensions:
+Load `~/.claude/skills/core/vendor-comparison-framework.md` and select applicable dimensions:
 - SaaS/enterprise product → all 18 dimensions
 - Developer tool / OSS → dimensions 1-5, 8-9, 13-14, 17
 - Consumer product clone → dimensions 1, 2, 9, 13-14

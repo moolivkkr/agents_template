@@ -9,17 +9,16 @@ All agent files use YAML frontmatter (delimited by `---`) to declare metadata. T
 | Field | Type | Description | Example |
 |-------|------|-------------|---------|
 | `name` | `string` | Unique snake_case identifier for the agent | `brd_agent`, `code_reviewer_I` |
-| `description` | `string` | One-line summary of what the agent does | `"Reviews code for style, idioms, naming"` |
-| `model` | `enum` | Model tier to use | `opus`, `sonnet`, `haiku` |
+| `description` | `string` | What the agent produces **and when to use it** - Claude Code routes delegation on this text | `"First-pass code review for idioms and naming. Use in the /develop review wave before code_reviewer_II."` |
+| `model` | `enum` | Model to use. Fleet default is `opus` (Claude Opus 5.5); tune cost and speed with `effort`, not smaller models | `opus` |
+| `effort` | `enum` | Thinking effort (Opus 5.5 defaults to `medium` when unset): `high` for reviewers, verifiers, security and implementation; `medium` for writers and planners; `low` for mechanical runners | `high` |
 | `category` | `enum` | Functional category for grouping | See category values below |
 
 ### Valid `model` Values
 
 | Value | When to Use |
 |-------|-------------|
-| `opus` | Complex reasoning, architecture review, security analysis, arbitration, UX design |
-| `sonnet` | Standard implementation, spec writing, planning, most review tasks, orchestration |
-| `haiku` | Simple execution tasks, test running, demo setup, dependency scanning |
+| `opus` | Every agent (Claude Opus 5.5). Depth and cost are tuned with `effort`, not by switching to a smaller model - see `~/.claude/skills/core/model-routing.md` |
 
 ### Valid `category` Values
 
@@ -113,8 +112,8 @@ List of skill pack file paths this agent loads for domain knowledge:
 
 ```yaml
 skill_packs:
-  - ".claude/skills/languages/{{LANG}}.md"
-  - ".claude/skills/core/security-owasp.md"
+  - "~/.claude/skills/languages/{{LANG}}.md"
+  - "~/.claude/skills/core/security-owasp.md"
 ```
 
 Paths may contain `{{TEMPLATE_VARS}}` that are resolved at runtime from `agent_registry.json`.
@@ -214,7 +213,7 @@ dependencies:
 
 ### Pattern 4: Generated (Template)
 
-Lives in `.claude/agents/generated/` with `.tmpl.md` extension. Instantiated by `agent_factory` with project-specific values.
+Lives in `~/.claude/agents/templates/` with a `.tmpl` extension, which keeps Claude Code from loading unfilled templates as live agents. `agent_factory` instantiates them into the project's `.claude/agents/generated/` as `.md` files with project-specific values.
 
 ```yaml
 ---
@@ -226,12 +225,12 @@ category: development
 ```
 
 **Characteristics:**
-- File extension is `.tmpl.md`
+- File extension is `.tmpl` (not `.md`, so the template itself is never loaded as an agent)
 - Contains `{{TEMPLATE_VARS}}` resolved at project init time
 - Created by `agent_factory` agent
 - Moved to active agents directory after generation
 
-**Examples:** `backend_developer.tmpl.md`, `api_developer.tmpl.md`, `database_agent.tmpl.md`, `migration_agent.tmpl.md`
+**Examples:** `backend_developer.tmpl`, `api_developer.tmpl`, `database_agent.tmpl`, `migration_agent.tmpl`
 
 ---
 
@@ -252,7 +251,7 @@ category: development
 
 Frontmatter is not enough — the prompt BODY must contain these sections. This is enforced by
 `/health` 5.5e and reviewed by the agent-quality pass. Shared block text lives in
-`.claude/skills/core/agent-common.md` (copy verbatim; don't paraphrase the invariant lines).
+`~/.claude/skills/core/agent-common.md` (copy verbatim; don't paraphrase the invariant lines).
 
 | Section | Rule |
 |---|---|
@@ -267,3 +266,12 @@ Frontmatter is not enough — the prompt BODY must contain these sections. This 
 a present-but-empty report that passes a file-existence gate; an agent that never writes lessons
 starves the Tier 1 memory system; an inconsistent Required-Reading heading breaks the ground-truth
 invariant check. All three were real gaps found in the fleet audit.
+
+## Generated blocks (do not hand-edit)
+
+`_sync-contract.sh` maintains two marked blocks in every agent, just above `## Definition of Done`:
+
+- **reference-packs** - rendered from `skill_packs:`. Claude Code ignores that frontmatter key, so this block is what makes an agent read its packs. Pack paths are user-level: `~/.claude/skills/...` (a project-relative `.claude/skills/...` does not resolve inside projects).
+- **operating-contract** - copied from Block 0 of `~/.claude/skills/core/agent-common.md`: unattended operation (subagents cannot ask the user; interviewers return `NEEDS_INPUT`), scope, evidence, correction only on external signals, and the final-message format the orchestrator relies on.
+
+After adding an agent or editing either source, run `~/.claude/agents/_sync-contract.sh`.

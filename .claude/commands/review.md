@@ -68,7 +68,7 @@ Writes: `agent_state/review/spec_compliance_review.md`
 ## Step 1 — Style & Idioms (`code_reviewer_I`)
 
 **Agent:** `code_reviewer_I`
-**Reads:** Active language skill pack (`.claude/skills/languages/{{LANG}}.md`)
+**Reads:** Active language skill pack (`~/.claude/skills/languages/{{LANG}}.md`)
 
 Checks:
 - **Security-adjacent idioms (checked first, BLOCKING):**
@@ -135,7 +135,7 @@ Writes: `agent_state/review/tenant_isolation.md`
 ## Step 3 — Security (`security_reviewer`)
 
 **Agent:** `security_reviewer`
-**Reads:** `.claude/skills/core/security-owasp.md`, IMPLEMENTATION_GUIDELINES, `agent_state/review/tenant_isolation.md`
+**Reads:** `~/.claude/skills/core/security-owasp.md`, IMPLEMENTATION_GUIDELINES, `agent_state/review/tenant_isolation.md`
 
 Checks (adversarial property verification + OWASP Top 10):
 - **IDOR chain trace** — for every ID-based route, tenantID flows from auth context through every data access (references tenant_isolation.md)

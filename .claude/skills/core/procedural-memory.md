@@ -68,7 +68,7 @@ Choose the target by the *nature* of the lesson, not by convenience:
 
 | Target | Choose when | Artifact touched | Enforced by |
 |---|---|---|---|
-| **A — Skill checklist** | The lesson is a *routine* an agent should run every time (a repeatable procedure or verification step) | Add/append a checklist item to the relevant `.claude/skills/**/*.md` (e.g. a testing or UX skill) | The agent that reads that skill runs the step |
+| **A — Skill checklist** | The lesson is a *routine* an agent should run every time (a repeatable procedure or verification step) | Add/append a checklist item to the relevant `~/.claude/skills/**/*.md` (e.g. a testing or UX skill) | The agent that reads that skill runs the step |
 | **B — Tier 0 fact** | The lesson has hardened into an *inviolable constraint* — a thing that must never happen, environment-wide | A fact via `/remember` (see [[shared-context-protocol]]) | Loaded into every session + subagent (3 layers) |
 | **C — Gate/reviewer rule candidate** | The lesson should *block the gate* or drive a reviewer if violated — mechanical, checkable at gate time | An entry in `agent_state/procedural_candidates.md` (a proposal list; wiring is a separate human/framework step) | verify-gate hook or a named reviewer, once wired |
 

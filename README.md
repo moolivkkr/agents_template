@@ -429,7 +429,7 @@ Four skill packs in `.claude/skills/core/` add intelligence to the pipeline:
 |----------|-----------|-----------------|
 | **Adaptive replanning** | `adaptive-replan.md` | Wave 5 — classifies failures (LOGIC/WIRING/CONTRACT/SCHEMA/UI/CONFIG/FLAKY), determines minimum re-test scope instead of re-running all tiers |
 | **Change-impact test selection** | `change-impact-analysis.md` | Wave 6 gate — analyzes `git diff` to run only affected tests for per-phase regression (full regression still at `/accept`) |
-| **Complexity-based model routing** | `model-routing.md` | All agents — `model: auto` selects haiku/sonnet/opus based on task complexity (spec count, LOC changed, FR-* scope) |
+| **Model and effort routing** | `model-routing.md` | All agents run on Claude Opus 5.5 at their frontmatter `effort`; Fable only for retries after a failure and cross-model gate verification. The phase complexity score feeds workflow depth and candidate selection |
 | **Structured lessons** | `structured-lessons.md` | Post-Gate — lessons indexed by category/tag with confidence levels, queryable by downstream agents |
 
 ### Implementation waves
@@ -576,15 +576,15 @@ These live in `~/.claude/agents/` after install. No project setup required.
 
 | Agent | Role | Model |
 |-------|------|-------|
-| `brd_agent` | Reads `requirements/`, extracts and classifies requirements, interviews for gaps, produces `docs/BRD.md` | sonnet |
-| `impl_guidelines_agent` | Evaluates draft IMPLEMENTATION_GUIDELINES, asks targeted clarifying questions, produces confirmed `docs/IMPLEMENTATION_GUIDELINES.md` | sonnet |
-| `project_planner` | Assigns FR-* requirements to phases, defines exit criteria and implementation waves | sonnet |
-| `spec_writer` | Generates TRD for one component/flow — interface contracts, data model, 10+ edge cases, test coverage requirements | sonnet |
-| `agent_factory` | Reads confirmed IMPLEMENTATION_GUIDELINES, populates agent templates, writes project-specific agents to `.claude/agents/generated/` | sonnet |
-| `product_manager` | Handles change requests and BRD amendments after `/init` — invoke manually | opus |
-| `phase_assumptions_analyzer` | **NEW** Deep codebase analysis — surfaces structured assumptions with evidence levels (CONFIRMED/DEDUCED/HYPOTHESIZED) before planning | opus |
-| `decision_researcher` | **NEW** Researches gray area decisions — produces comparison tables with pros/cons/risk/recommendation for each option | sonnet |
-| `plan_goal_verifier` | **NEW** Goal-backward verification — traces phase goal → specs → components → contracts to verify the plan will achieve its objective | opus |
+| `brd_agent` | Reads `requirements/`, extracts and classifies requirements, interviews for gaps, produces `docs/BRD.md` | opus/medium |
+| `impl_guidelines_agent` | Evaluates draft IMPLEMENTATION_GUIDELINES, asks targeted clarifying questions, produces confirmed `docs/IMPLEMENTATION_GUIDELINES.md` | opus/medium |
+| `project_planner` | Assigns FR-* requirements to phases, defines exit criteria and implementation waves | opus/medium |
+| `spec_writer` | Generates TRD for one component/flow — interface contracts, data model, 10+ edge cases, test coverage requirements | opus/medium |
+| `agent_factory` | Reads confirmed IMPLEMENTATION_GUIDELINES, populates agent templates, writes project-specific agents to `.claude/agents/generated/` | opus/medium |
+| `product_manager` | Handles change requests and BRD amendments after `/init` — invoke manually | opus/medium |
+| `phase_assumptions_analyzer` | **NEW** Deep codebase analysis — surfaces structured assumptions with evidence levels (CONFIRMED/DEDUCED/HYPOTHESIZED) before planning | opus/high |
+| `decision_researcher` | **NEW** Researches gray area decisions — produces comparison tables with pros/cons/risk/recommendation for each option | opus/medium |
+| `plan_goal_verifier` | **NEW** Goal-backward verification — traces phase goal → specs → components → contracts to verify the plan will achieve its objective | opus/high |
 
 **BRD pipeline sub-agents** (invoked internally by `brd_agent`):
 
@@ -606,11 +606,11 @@ These live in `~/.claude/agents/` after install. No project setup required.
 
 | Agent | Role | Model |
 |-------|------|-------|
-| `ux_designer` | Produces wireframe specs — layout, components, API bindings, interactions | opus |
-| `wireframe_generator` | Initial wireframe scaffolding (invoked by `ux_designer`) | sonnet |
-| `design_quality_reviewer` | Validates wireframes: no TBD bindings, loading/error/empty states, accessibility | sonnet |
-| `spec_verifier` | Confirms all FR-* in scope have spec coverage; all cited IDs exist in BRD | sonnet |
-| `adr_agent` | Writes Architecture Decision Records for significant design choices | sonnet |
+| `ux_designer` | Produces wireframe specs — layout, components, API bindings, interactions | opus/medium |
+| `wireframe_generator` | Initial wireframe scaffolding (invoked by `ux_designer`) | opus/low |
+| `design_quality_reviewer` | Validates wireframes: no TBD bindings, loading/error/empty states, accessibility | opus/medium |
+| `spec_verifier` | Confirms all FR-* in scope have spec coverage; all cited IDs exist in BRD | opus/high |
+| `adr_agent` | Writes Architecture Decision Records for significant design choices | opus/medium |
 
 #### Implementation (generated per project)
 
@@ -618,14 +618,14 @@ These are created by `agent_factory` from templates during `/init`:
 
 | Template | Generated agent | When |
 |----------|----------------|------|
-| `backend_developer.tmpl.md` | `{lang}_backend_developer_{project}.md` | Always |
-| `api_developer.tmpl.md` | `{lang}_api_developer_{project}.md` | Always |
-| `database_agent.tmpl.md` | `{db}_database_agent_{project}.md` | Always |
-| `migration_agent.tmpl.md` | `{db}_migration_agent_{project}.md` | Relational/document DB |
-| `unit_test_agent.tmpl.md` | `{lang}_unit_test_agent_{project}.md` | Always |
-| `integration_test_agent.tmpl.md` | `{lang}_integration_test_agent_{project}.md` | Always |
-| `ui_developer.tmpl.md` | `{ui}_ui_developer_{project}.md` | `frontend.enabled = true` |
-| `ui_test_agent.tmpl.md` | `{ui}_ui_test_agent_{project}.md` | `frontend.enabled = true` |
+| `backend_developer.tmpl` | `{lang}_backend_developer_{project}.md` | Always |
+| `api_developer.tmpl` | `{lang}_api_developer_{project}.md` | Always |
+| `database_agent.tmpl` | `{db}_database_agent_{project}.md` | Always |
+| `migration_agent.tmpl` | `{db}_migration_agent_{project}.md` | Relational/document DB |
+| `unit_test_agent.tmpl` | `{lang}_unit_test_agent_{project}.md` | Always |
+| `integration_test_agent.tmpl` | `{lang}_integration_test_agent_{project}.md` | Always |
+| `ui_developer.tmpl` | `{ui}_ui_developer_{project}.md` | `frontend.enabled = true` |
+| `ui_test_agent.tmpl` | `{ui}_ui_test_agent_{project}.md` | `frontend.enabled = true` |
 
 Each generated agent is pre-loaded with your project's specific language, framework, ORM, test library, and design conventions.
 
@@ -633,27 +633,27 @@ Each generated agent is pre-loaded with your project's specific language, framew
 
 | Agent | Role | Model | Trigger |
 |-------|------|-------|---------|
-| `code_optimizer` | Backend dead code removal + code/performance optimization | sonnet | `/develop` Step 3f (mandatory) |
-| `ui_code_optimizer` | UI dead code removal + bundle size/render optimization | sonnet | `/develop` Step 3f (if frontend enabled) |
-| `dependency_scanner` | Scans dependencies for CVEs, outdated packages, license issues | haiku | `/develop` Step 4 (parallel with review) |
+| `code_optimizer` | Backend dead code removal + code/performance optimization | opus/medium | `/develop` Step 3f (mandatory) |
+| `ui_code_optimizer` | UI dead code removal + bundle size/render optimization | opus/medium | `/develop` Step 3f (if frontend enabled) |
+| `dependency_scanner` | Scans dependencies for CVEs, outdated packages, license issues | opus/low | `/develop` Step 4 (parallel with review) |
 
 #### Code Review
 
 | Agent | Role | Model |
 |-------|------|-------|
-| `code_reviewer_I` | Style, idioms, naming, formatting — reads active language skill pack | sonnet |
-| `code_reviewer_II` | Architecture, design patterns, constraint compliance | opus |
-| `security_reviewer` | OWASP top 10, auth/authz, injection, secrets, data exposure | opus |
+| `code_reviewer_I` | Style, idioms, naming, formatting — reads active language skill pack | opus/high |
+| `code_reviewer_II` | Architecture, design patterns, constraint compliance | opus/high |
+| `security_reviewer` | OWASP top 10, auth/authz, injection, secrets, data exposure | opus/high |
 
 #### Testing
 
 | Agent | Role | Model | Invoked by |
 |-------|------|-------|-----------|
-| `e2e_orchestrator` | Runs complete user workflow tests across full stack | sonnet | `/develop` Step 3c, `/test --e2e` |
-| `acceptance_test_agent` | Use case + persona level validation with seed data | opus | `/develop` Step 5, `/test --acceptance`, `/accept` |
-| `performance_agent` | Load tests vs NFR-PERF-* targets | sonnet | `/test --performance` |
-| `system_test_agent` | Cross-phase smoke tests, data flow validation | sonnet | `/test --system` |
-| `manual_test_agent` | Generates structured manual QA test plan | sonnet | `/test --manual` |
+| `e2e_orchestrator` | Runs complete user workflow tests across full stack | opus/medium | `/develop` Step 3c, `/test --e2e` |
+| `acceptance_test_agent` | Use case + persona level validation with seed data | opus/high | `/develop` Step 5, `/test --acceptance`, `/accept` |
+| `performance_agent` | Load tests vs NFR-PERF-* targets | opus/medium | `/test --performance` |
+| `system_test_agent` | Cross-phase smoke tests, data flow validation | opus/medium | `/test --system` |
+| `manual_test_agent` | Generates structured manual QA test plan | opus/medium | `/test --manual` |
 
 #### Reconciliation
 
@@ -806,13 +806,15 @@ Providing your own seed data gives you deterministic acceptance tests from day o
 
 ## Model cost profile
 
-| Tier | Agents | Rationale |
-|------|--------|-----------|
-| **opus** (12) | `architecture_orchestrator`, `backend_developer`, `api_developer`, `ux_designer`, `code_reviewer_II`, `security_reviewer`, `acceptance_test_agent`, `spec_impl_reconciler`, `product_manager`, **`phase_assumptions_analyzer`**, **`plan_goal_verifier`**, `tenant_isolation_verifier` | Deep reasoning: architecture design, complex code generation, security analysis, nuanced acceptance validation, assumption surfacing, goal-backward verification |
-| **sonnet** (41) | `code_optimizer`, `ui_code_optimizer`, `code_reviewer_I`, **`decision_researcher`**, **`codebase_mapper`**, all spec/reconciliation/planning agents | Structured output, document processing, spec generation, reconciliation, code review style, optimization, codebase mapping, decision research |
-| **haiku** (3) | `demo_executor`, `test_runner`, `dependency_scanner` | Lightweight execution, result formatting, audit tool invocation |
+Every agent runs on Claude Opus 5.5 (`model: opus`); depth and cost are tuned per agent with `effort` rather than by switching to a smaller model. One model family also keeps the whole pipeline in one prompt-cache namespace.
 
-To adjust: edit `~/.claude/settings.json` `agents.opus_agents` array.
+| Effort | Agents | Rationale |
+|------|--------|-----------|
+| **high** (26) | reviewers, verifiers, reconcilers, security and migration safety, implementation templates | Correctness-critical judgment and code generation |
+| **medium** (44) | spec, planning, design, documentation, research, test-writing agents | Structured writing and analysis |
+| **low** (4) | `test_runner`, `demo_executor`, `dependency_scanner`, `wireframe_generator` | Mechanical execution and result formatting |
+
+Escalation: when an agent's first attempt fails on an external signal (tests, a blocking review finding, a gate miss), the orchestrator retries it with `model: fable`; Layer 3 gate verification also runs on `fable`. See `.claude/skills/core/model-routing.md`. To change an agent's depth, edit `effort:` in its frontmatter.
 
 ---
 
@@ -880,22 +882,13 @@ Codebase mappings track a **confidence lifecycle**: `initial` (freshly mapped) �
 | Acceptance | ~10K |
 | Gate | ~5K (report headers only) |
 
-### Auto-compact at 75% context usage
+### Long sessions and compaction
 
-Performance degrades sharply once context exceeds ~80%. The framework enforces a **75% threshold** — at every wave boundary, the orchestrator checks context pressure:
+The main session runs with a 1M-token context window, and Claude Code compacts the conversation automatically as it nears the limit (only the user can run `/compact`). The orchestrator doesn't pause or wrap up because a session is long; instead, at every wave boundary it refreshes a self-contained resume summary:
 
-1. **Checkpoint** — wave checkpoint is already written (happens at every boundary)
-2. **Write compact context** — `agent_state/phases/N/checkpoints/compact-context.md` captures completed waves, decisions, current state, and next steps
-3. **Run `/compact`** — Claude Code's built-in context compression clears scrollback
-4. **Resume inline** — reads `compact-context.md` + `phase_context.md` and continues to the next wave without breaking the session
-
-```
-Wave 3 complete → checkpoint written → context at 78%
-⚡ Context at 75% — compacting before Wave 4. Resuming inline.
-→ /compact runs → reads compact-context.md → continues Wave 4
-```
-
-This is automatic and invisible — no manual `/pause` or session restart needed. The 5% gap before 80% is the safety margin.
+1. **Checkpoint** — the wave checkpoint JSON is written at every boundary
+2. **Resume summary** — `agent_state/phases/N/checkpoints/compact-context.md` captures completed waves, decisions, current state, and next steps
+3. **After a compaction or `/resume`** — the orchestrator reads `compact-context.md` + `phase_context.md` and continues with the next wave, without re-running completed ones
 
 ### If the window fills despite compaction
 

@@ -216,7 +216,7 @@ To confirm the fix works:
 ## Step 6 — Auto-Fix (if `--fix` flag)
 
 If `--fix` was provided, apply the **reproduction-test-first self-repair loop** — do NOT edit
-production code before you have a failing test. Follow `.claude/skills/testing/reproduction-first.md`:
+production code before you have a failing test. Follow `~/.claude/skills/testing/reproduction-first.md`:
 
 1. **Reproduce (RED)** — from the root cause and Verification Test in the diagnosis report, write the
    minimal repro test that FAILS on the actual symptom. If you cannot make it fail, the root cause is
@@ -227,7 +227,7 @@ production code before you have a failing test. Follow `.claude/skills/testing/r
 4. **Gate** — accept only when the repro test flips **fail→pass** AND the pre-existing scoped suite
    stays green (**pass-to-pass**, no regressions). Record the fail→pass transition as evidence.
 5. **Keep the repro test** — it is permanent; annotate it with a `TC-*` ID
-   (`.claude/skills/testing/test-case-traceability.md`) so this bug can never silently return.
+   (`~/.claude/skills/testing/test-case-traceability.md`) so this bug can never silently return.
 
 Guardrails are the framework's standard ones (see the skill): never delete/skip/weaken a test or add
 `//nolint`/`@ts-ignore` to force green — fix the bug, not the test.

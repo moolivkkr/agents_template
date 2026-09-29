@@ -1,8 +1,8 @@
 # Skill Index
 
-> Machine- and human-readable index of every skill in `.claude/skills/` (211 files). Agents
+> Machine- and human-readable index of every skill in `~/.claude/skills/` (211 files). Agents
 > should consult this index and load only the skill files they need (by path) rather than
-> pulling whole large files blindly. Columns: **File** (path relative to `.claude/skills/`),
+> pulling whole large files blindly. Columns: **File** (path relative to `~/.claude/skills/`),
 > **Description** (one line), **Tags**. Redirect stubs are marked `↪` and point to their canonical target.
 
 > Regenerate discipline: when you add or rename a skill, add its row here in the matching category.
@@ -28,7 +28,7 @@
 | `core/git-workflow.md` | Trunk-based branching strategy, conventional commits, PR process, branch naming, commit message format | git, workflow, ci, branching |
 | `core/implementation-guidelines-template.md` | 24-section template for generating comprehensive IMPLEMENTATION_GUIDELINES.md — used by impl_guidelines_agent to produce the engineering contract for all dow... | template, implementation, guidelines, architecture, engineering-standards |
 | `core/memory-as-tools.md` | Retrieval discipline for Tier 1/Tier 2 memory — query lessons/codebase KB on demand by category/tag rather than loading whole files | memory, retrieval, lessons, knowledge-base, core |
-| `core/model-routing.md` | Complexity-based model routing — pick haiku/sonnet/opus per task complexity to balance cost and quality | model-routing, cost, complexity, intelligence, core |
+| `core/model-routing.md` | Model and effort policy - Opus 5.5 with per-agent effort; Fable for escalation and cross-model verification; the phase complexity score | model-routing, cost, complexity, intelligence, core |
 | `core/observability-patterns.md` | Structured logging, OpenTelemetry metrics/traces, tenant-aware observability, error taxonomy, SLA metrics, correlation IDs | observability, logging, metrics, tracing, opentelemetry, monitoring |
 | `core/product-workflow-research.md` | Skill pack — research a product's configuration workflows from docs/videos/community into screen-by-screen guides and config schemas | research, workflows, product, config, core |
 | `core/repo-map.md` | Ranked repo map — Personalized-PageRank over a tree-sitter symbol graph to surface the most relevant files for a task | repo-map, ranking, tree-sitter, codebase, core |

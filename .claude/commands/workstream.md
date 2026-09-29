@@ -46,7 +46,7 @@ Manages parallel workstreams that allow concurrent work on independent features.
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`
 
 `/workstream` actions are short-lived (except `merge`). Context budget targets:
 

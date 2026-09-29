@@ -1,6 +1,6 @@
 ---
 skill: code-quality
-description: Code quality enforcement — self-review, function size, naming, KISS, DRY, incremental development, early returns, nesting limits
+description: Code quality enforcement — completion checklist, function size, naming, KISS, DRY, incremental development, early returns, nesting limits
 version: "1.0"
 tags:
   - quality
@@ -14,9 +14,9 @@ tags:
 
 Standards and checkpoints for writing clean, maintainable, production-grade code. Every agent must enforce these rules before marking any task complete.
 
-## Self-Review Checkpoint
+## Completion Checklist
 
-Before marking ANY task done, re-read every file you touched. Check for:
+Before marking a task done, check every file you touched for the items below - with a tool wherever one exists (linter, type checker or the LSP diagnostics reported after each edit, `grep -n 'TODO\|FIXME'`, the test run) rather than by re-reading. Fix what the checks flag; code that passes them doesn't need another pass.
 
 1. **Unused imports** — remove them, they cause lint failures and confusion
 2. **Dead code** — no commented-out blocks, no unreachable branches
@@ -454,11 +454,11 @@ All agents in the SDLC pipeline use different native severity names, but they AL
 | **WARNING** | Should fix. Logged in known_issues if unresolved after 2 rounds. Does not block gate. | code_reviewer_I: WARNING, code_reviewer_II: WARNING, security_reviewer: MEDIUM, spec_impl_reconciler: UNSPECCED (scope_creep), spec_test_reconciler: MEDIUM-priority untested |
 | **INFO** | Consider. No gate impact. | code_reviewer_I: INFO, security_reviewer: LOW, spec_test_reconciler: LOW-priority untested |
 
-When reading review reports, the gate step (develop.md Step 6) uses this mapping to determine pass/fail. The native severity names remain in individual reports for specificity, but the gate decision uses the unified model.
+When reading review reports, the gate step (`~/.claude/skills/core/develop-steps/step-6-phase-gate.md`) uses this mapping to determine pass/fail. The native severity names remain in individual reports for specificity, but the gate decision uses the unified model.
 
 ## Critical Rules
 
-- Self-review is mandatory, not optional — run through the checklist before completing any task
+- Run the completion checklist before completing any task
 - Functions over 40 lines are a code smell — extract helpers
 - More than 4 parameters signals a design problem — use options
 - Nesting deeper than 2 levels makes code unreadable — flatten with guards

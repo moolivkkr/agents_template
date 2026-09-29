@@ -16,8 +16,8 @@ PASS=0; FAIL=0
 ok()  { echo "  ✓ $1"; PASS=$((PASS+1)); }
 bad() { echo "  ✗ FAIL: $1"; FAIL=$((FAIL+1)); }
 
-# agent name resolves if core/<name>.md OR templates/<name>.tmpl.md exists.
-resolves() { [ -f "$CORE/$1.md" ] || [ -f "$TMPL/$1.tmpl.md" ]; }
+# agent name resolves if core/<name>.md OR templates/<name>.tmpl exists.
+resolves() { [ -f "$CORE/$1.md" ] || [ -f "$TMPL/$1.tmpl" ]; }
 
 # 1. Every name in the orchestrator's base REQUIRED roster resolves to a real agent file.
 REQ_LINE="$(grep -m1 "^REQUIRED='" "$ORCH" | sed "s/^REQUIRED='//; s/'$//")"

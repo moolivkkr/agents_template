@@ -33,16 +33,16 @@ Generates the **UI design contract** for a phase: per-screen wireframes (visual 
 
 ## Ground Truth & Decisions (read before generating)
 
-- `docs/PROJECT_FACTS.md` — **GROUND TRUTH (Tier 0).** Read FIRST. Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or agent training. If a screen references anything marked RETIRED/superseded, STOP and flag it. (Protocol: `.claude/skills/core/shared-context-protocol.md`)
+- `docs/PROJECT_FACTS.md` — **GROUND TRUTH (Tier 0).** Read FIRST. Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or agent training. If a screen references anything marked RETIRED/superseded, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 - `docs/DECISIONS.md` — settled decisions (Tier 0.5). Do not re-litigate an active UI/design decision without new evidence.
 
-Every agent this command spawns inherits Required-Reading item 0/0b via `.claude/skills/core/agent-common.md` and the orchestrator ground-truth injection line. Do not skip it because "it's just a wireframe."
+Every agent this command spawns inherits Required-Reading item 0/0b via `~/.claude/skills/core/agent-common.md` and the orchestrator ground-truth injection line. Do not skip it because "it's just a wireframe."
 
 ---
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step targets below are specific to this command.
 
 **Agent result discipline:** Every agent returns a 3-line summary to the parent. Full wireframe content lives in files — never echoed back to the conversation.
 
@@ -149,13 +149,13 @@ HAS_REVIEW=$([ -f "docs/design/phases/${PHASE}/DESIGN_REVIEW.md" ] && echo true 
 - `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — UI framework + component library
 - `docs/design/phases/${PHASE}/PHASE_PLAN.md` + `phase_context.md` — phase scope
 - `docs/design/phases/$((PHASE-1))/specs/` — previous phase wireframes (navigation continuity), when PHASE > 1
-- Design skills (precedence per `.claude/skills/ui/README.md`):
-  - `.claude/skills/ui/professional-ui-standards.md` — spacing, typography, z-index, state discipline
-  - `.claude/skills/ui/vertix-portal-design-system.md` — **house style (if the project uses it).** Semantic tokens + `@portal/components` primitives; overrides the generic standards on color/tokens/components.
-  - `.claude/skills/ui/structured-wireframe-format.md` — wireframe file format
-  - `.claude/skills/ui/accessibility-patterns.md` — heading hierarchy, landmarks, focus order, ARIA
-  - `.claude/skills/ui/archetypes/` — page archetypes
-  - `.claude/skills/testing/test-case-generation.md` + `test-case-traceability.md` — TC-UI-* matrices
+- Design skills (precedence per `~/.claude/skills/ui/README.md`):
+  - `~/.claude/skills/ui/professional-ui-standards.md` — spacing, typography, z-index, state discipline
+  - `~/.claude/skills/ui/vertix-portal-design-system.md` — **house style (if the project uses it).** Semantic tokens + `@portal/components` primitives; overrides the generic standards on color/tokens/components.
+  - `~/.claude/skills/ui/structured-wireframe-format.md` — wireframe file format
+  - `~/.claude/skills/ui/accessibility-patterns.md` — heading hierarchy, landmarks, focus order, ARIA
+  - `~/.claude/skills/ui/archetypes/` — page archetypes
+  - `~/.claude/skills/testing/test-case-generation.md` + `test-case-traceability.md` — TC-UI-* matrices
 
 ---
 
@@ -204,7 +204,7 @@ The `.wireframe.md` MUST contain (per the `ux_designer` agent definition):
 When and only when the flag resolved to Stitch-available, enrich each wireframe with a Google Stitch render. This runs the Stitch MCP tools **directly from this command** (there is no separate stitch agent):
 
 1. `mcp__stitch__list_projects` / `mcp__stitch__create_project` (title = "`<project> — Phase N`") — reuse or create the phase's Stitch project.
-2. If the project has a design system (`.claude/skills/ui/vertix-portal-design-system.md`): `mcp__stitch__upload_design_md` → `mcp__stitch__create_design_system_from_design_md` so Stitch renders in the house style; pass the resulting `designSystem` id to generation.
+2. If the project has a design system (`~/.claude/skills/ui/vertix-portal-design-system.md`): `mcp__stitch__upload_design_md` → `mcp__stitch__create_design_system_from_design_md` so Stitch renders in the house style; pass the resulting `designSystem` id to generation.
 3. Per screen: `mcp__stitch__generate_screen_from_text` with a prompt derived from the archetype + `data-contracts.md` bindings + BRD acceptance criteria. Generation can take minutes — **do not retry on timeout**; poll `mcp__stitch__get_screen` every ~30s (up to ~10 times).
 4. **Import/normalize:** feed the rendered screen back to `ux_designer`, which reconciles the Stitch output into the SAME two-file contract — extracting exact tokens/spacing into the `.wireframe.html` and keeping bindings/states/a11y/TC-IDs in the `.wireframe.md`. Stitch renders are a visual aid; the canonical artifact is always the wireframe pair, so downstream `ui_developer` consumes one format regardless of source.
 

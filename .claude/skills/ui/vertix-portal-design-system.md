@@ -12,7 +12,7 @@ tags:
 
 # Vertix Portal Design System — house style for all module UIs
 
-> **Precedence (see `.claude/skills/ui/README.md`).** For Vertix portal modules this file is **tier 2
+> **Precedence (see `~/.claude/skills/ui/README.md`).** For Vertix portal modules this file is **tier 2
 > — it OVERRIDES the generic `professional-ui-standards.md` on colors/tokens, the component library,
 > theme, severity scale, and card radius/shadow.** The generic standards still govern spacing (4px
 > grid), typography, z-index, a11y, and state discipline — this file does not restate those; follow

@@ -27,7 +27,7 @@ Generates detailed technical specifications (TRDs), typed data contracts, and co
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Agent result discipline:** Every agent returns a 3-line summary to the parent. Full spec content is in files — never echoed back to the conversation.
 
@@ -277,7 +277,7 @@ type CreateUserResponse = {
 **Run when:** `docs/IMPLEMENTATION_GUIDELINES.md` shows `frontend.enabled = true` AND phase scope includes UI screens
 **Depends on:** Step 2b (data-contracts.md must exist before UI specs)
 
-Reads: ALL Step 0 context + `data-contracts.md` + page archetypes from `.claude/skills/ui/archetypes/`
+Reads: ALL Step 0 context + `data-contracts.md` + page archetypes from `~/.claude/skills/ui/archetypes/`
 
 Produces component-level UI spec files in `docs/design/phases/${PHASE}/specs/`:
 
@@ -301,7 +301,7 @@ Each UI spec contains:
 8. Consistency — matches previous phase screens
 9. Data Contract Binding — every field references real type in data-contracts.md, array/object matches component type
 10. Data Contract Cross-Reference — every wireframe field verified against the contract field map
-11. Design-System Adherence — semantic tokens (not hardcoded colors) + reuse of the shared component library (if a project design system exists, e.g. `.claude/skills/ui/vertix-portal-design-system.md`)
+11. Design-System Adherence — semantic tokens (not hardcoded colors) + reuse of the shared component library (if a project design system exists, e.g. `~/.claude/skills/ui/vertix-portal-design-system.md`)
 
 BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked.
 

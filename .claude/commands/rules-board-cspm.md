@@ -7,8 +7,8 @@ arguments:
     description: "Scope: --all (all rules), --provider aws (single provider), --rule cspm_rule_aws_s3_public (single rule). Defaults to --all."
   - name: model
     required: false
-    default: sonnet
-    description: "Model for review agents. Default: sonnet."
+    default: opus
+    description: "Model for review agents. Default: opus (Claude Opus 5.5); pass sonnet for large low-risk batches at about half the cost."
   - name: batch_size
     required: false
     default: 50
@@ -64,7 +64,7 @@ print(f'Fixed {fixed} files with missing entity_type')
 Follow the orchestrator:
 - Step 0: Discovery + filter test fixtures
 - Step 1: Group by provider (aws / azure / gcp+multi / identity)
-- Step 2: Spawn group agents (sonnet, batched)
+- Step 2: Spawn group agents ({{model}}, batched)
 - Step 3: Consolidation
 - Step 4: Final report
 

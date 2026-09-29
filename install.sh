@@ -41,13 +41,20 @@ if ls "$REPO_DIR/.claude/agents/"*.md &>/dev/null; then
   echo "  ✅ $DOC_COUNT agent docs installed (AGENT_SCHEMA.md, INVENTORY.md)"
 fi
 
+# ── Contract sync script (keeps reference-packs + operating-contract blocks current) ──
+cp "$REPO_DIR/.claude/agents/_sync-contract.sh" "$DEST_AGENTS_CORE/_sync-contract.sh"
+chmod +x "$DEST_AGENTS_CORE/_sync-contract.sh"
+echo "  ✅ _sync-contract.sh installed"
+
 # ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"
 mkdir -p "$DEST_TEMPLATES"
 # Install from both generated/ and templates/ directories
-cp "$REPO_DIR/.claude/agents/generated/"*.tmpl.md "$DEST_TEMPLATES/" 2>/dev/null || true
-cp "$REPO_DIR/.claude/agents/templates/"*.tmpl.md "$DEST_TEMPLATES/" 2>/dev/null || true
-TMPL_COUNT=$(ls "$DEST_TEMPLATES/"*.tmpl.md 2>/dev/null | wc -l | tr -d ' ')
+# Templates use .tmpl (not .md) so Claude Code never loads an unfilled template as a live agent.
+# Remove copies left by older installs under the old .tmpl.md name.
+rm -f "$DEST_TEMPLATES/"*.tmpl.md
+cp "$REPO_DIR/.claude/agents/templates/"*.tmpl "$DEST_TEMPLATES/" 2>/dev/null || true
+TMPL_COUNT=$(ls "$DEST_TEMPLATES/"*.tmpl 2>/dev/null | wc -l | tr -d ' ')
 echo "  ✅ $TMPL_COUNT agent templates installed"
 
 # ── Rule board specialists (EDR/SIEM/CSPM/DSPM/KSPM/NSPM/AI-security) ─────────

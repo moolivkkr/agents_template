@@ -21,7 +21,7 @@ Runs a fixed suite of small, representative tasks through the framework and meas
 of what the framework produces — so a prompt/skill/wave change can be proven to help, wash, or
 hurt instead of being changed blind.
 
-**Read `.claude/skills/core/eval-harness.md` first** — it defines the suite format, the two
+**Read `~/.claude/skills/core/eval-harness.md` first** — it defines the suite format, the two
 scoring modes (OUTCOME + TRAJECTORY), the metrics, and the before/after protocol this command
 executes.
 
@@ -42,7 +42,7 @@ mkdir -p agent_state/eval/suite agent_state/eval/baselines agent_state/eval/runs
 SUITE_TASKS=$(ls -d agent_state/eval/suite/*/ 2>/dev/null)
 if [ -z "$SUITE_TASKS" ]; then
   echo "No eval tasks found. Seed agent_state/eval/suite/<task-id>/ using the starter"
-  echo "format in .claude/skills/core/eval-harness.md (task.md + rubric.json +"
+  echo "format in ~/.claude/skills/core/eval-harness.md (task.md + rubric.json +"
   echo "expected_artifacts.json + expected_trajectory.json), then re-run /eval."
   exit 0
 fi

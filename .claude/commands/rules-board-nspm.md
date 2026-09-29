@@ -7,8 +7,8 @@ arguments:
     description: "Scope: --all (all rules), --domain firewall_policy (single domain), --rule nspm_rule_firewall_policy_any_any_permit (single rule deep review). Defaults to --all."
   - name: model
     required: false
-    default: sonnet
-    description: "Model for review agents. Default: sonnet (opus for --rule deep review)."
+    default: opus
+    description: "Model for review agents. Default: opus (Claude Opus 5.5); pass sonnet for large low-risk batches at about half the cost."
   - name: batch_size
     required: false
     default: 40
@@ -53,7 +53,7 @@ python3 tests/nspm_corpus_validation_test.py
 Follow the orchestrator:
 - Step 0: Discovery + filter
 - Step 1: Group by NSPM domain (4 groups)
-- Step 2: Spawn group agents (sonnet, batched) — fact-registry + unified-index lookups, NOT training knowledge
+- Step 2: Spawn group agents ({{model}}, batched) — fact-registry + unified-index lookups, NOT training knowledge
 - Step 2b: Quality gate (every rule ≥ 4.0/5)
 - Step 3: Consolidation (cross-domain severity parity, modality drift, fact-registry closure, scope-boundary audit)
 - Step 4: Final report

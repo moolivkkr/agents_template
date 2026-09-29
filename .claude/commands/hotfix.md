@@ -96,7 +96,7 @@ echo "  Or use a different description."
 ## Step 2 — Reproduce First (MANDATORY — write the failing test BEFORE the fix)
 
 A hotfix without a test that reproduces the bug is **not allowed to merge.** Follow
-`.claude/skills/testing/reproduction-first.md` before touching production code:
+`~/.claude/skills/testing/reproduction-first.md` before touching production code:
 
 1. Read the component spec (expected behavior) and current implementation (actual behavior).
 2. Write the **minimal** repro test — in `${COMPONENT}`'s test files — that FAILS on the actual
@@ -110,7 +110,7 @@ A hotfix without a test that reproduces the bug is **not allowed to merge.** Fol
 > (or run `/diagnose`) until you have a red test. No red test → no hotfix.
 
 The repro test is permanent: annotate it with a `TC-*` ID
-(`.claude/skills/testing/test-case-traceability.md`) — it becomes a regression test that keeps this
+(`~/.claude/skills/testing/test-case-traceability.md`) — it becomes a regression test that keeps this
 bug from returning.
 
 ---
@@ -144,7 +144,7 @@ Or open two separate hotfixes if the components are independently fixable.
 ## Step 4 — Fix Loop + Scoped Regression (fail→pass, then pass-to-pass)
 
 Loop the fix against the repro test from Step 2, then confirm no regressions. Follow
-`.claude/skills/testing/reproduction-first.md`.
+`~/.claude/skills/testing/reproduction-first.md`.
 
 **Fix loop — flip the repro test fail→pass:**
 
