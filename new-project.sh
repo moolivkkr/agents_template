@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # new-project.sh — bootstrap a new project directory
-# Usage: ./new-project.sh <project-name> [/path/to/parent]
+# Usage: ./new-project.sh <project-name> [/path/to/parent] [--rule-board]
 #
 # Creates:
 #   <project-name>/
@@ -14,8 +14,11 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_NAME="${1:?Usage: $0 <project-name> [/path/to/parent]}"
-PARENT_DIR="${2:-$(pwd)}"
+# Optional --rule-board flag (anywhere in the args) adds the vertix rule board specialists.
+WITH_RULE_BOARD=0; ARGS=()
+for a in "$@"; do if [ "$a" = "--rule-board" ]; then WITH_RULE_BOARD=1; else ARGS+=("$a"); fi; done
+PROJECT_NAME="${ARGS[0]:?Usage: $0 <project-name> [/path/to/parent] [--rule-board]}"
+PARENT_DIR="${ARGS[1]:-$(pwd)}"
 PROJECT_DIR="$PARENT_DIR/$PROJECT_NAME"
 
 if [ -d "$PROJECT_DIR" ]; then
@@ -32,8 +35,9 @@ mkdir -p "$PROJECT_DIR/agent_state/phases"
 mkdir -p "$PROJECT_DIR/agent_state/reconciliation"
 mkdir -p "$PROJECT_DIR/.claude/agents/generated"
 
-# Rule board specialists — the /rules-board* commands read these project-relative
-if [ -d "$REPO_DIR/.claude/agents/rule_board" ]; then
+# Rule board specialists (vertix security-rule boards) — only when asked for with --rule-board;
+# the /rules-board* commands read these project-relative
+if [ "$WITH_RULE_BOARD" = 1 ] && [ -d "$REPO_DIR/.claude/agents/rule_board" ]; then
   mkdir -p "$PROJECT_DIR/.claude/agents/rule_board"
   cp -R "$REPO_DIR/.claude/agents/rule_board/." "$PROJECT_DIR/.claude/agents/rule_board/"
   RB_COUNT=$(find "$PROJECT_DIR/.claude/agents/rule_board" -name "*.md" | wc -l | tr -d ' ')
