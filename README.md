@@ -124,12 +124,20 @@ bash install.sh
 
 This installs commands, agents, and skill packs into `~/.claude/` so they're available globally in every project.
 
+The rule board specialists (`.claude/agents/rule_board/`, used by the `/rules-board*` commands for vertix security-rule reviews) are project-specific, so they are never installed globally. Add them to the project that needs them:
+
+```bash
+bash ~/development/startup-agents/install.sh --rule-board ~/development/vertix
+```
+
 ### 2. Start a new project
 
 ```bash
 bash ~/development/startup-agents/new-project.sh my-app ~/development
 cd ~/development/my-app
 ```
+
+Add `--rule-board` to also scaffold the rule board specialists into the new project.
 
 This creates the project scaffold:
 ```

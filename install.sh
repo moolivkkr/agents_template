@@ -6,6 +6,16 @@
 set -e
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# ./install.sh --rule-board <project-dir> : install only the rule board specialists into one project.
+if [ "${1:-}" = "--rule-board" ]; then
+  PROJECT="${2:?Usage: $0 --rule-board <project-dir>}"
+  [ -d "$PROJECT" ] || { echo "No such project directory: $PROJECT" >&2; exit 1; }
+  mkdir -p "$PROJECT/.claude/agents/rule_board"
+  rsync -a --include='*/' --include='*.md' --exclude='*' "$REPO_DIR/.claude/agents/rule_board/" "$PROJECT/.claude/agents/rule_board/"
+  echo "✅ $(find "$PROJECT/.claude/agents/rule_board" -name '*.md' | wc -l | tr -d ' ') rule board agents installed → $PROJECT/.claude/agents/rule_board/"
+  exit 0
+fi
 CLAUDE_DIR="$HOME/.claude"
 DEST_COMMANDS="$CLAUDE_DIR/commands/startup"
 DEST_AGENTS_CORE="$CLAUDE_DIR/agents"
@@ -58,20 +68,12 @@ TMPL_COUNT=$(ls "$DEST_TEMPLATES/"*.tmpl 2>/dev/null | wc -l | tr -d ' ')
 echo "  ✅ $TMPL_COUNT agent templates installed"
 
 # ── Rule board specialists (EDR/SIEM/CSPM/DSPM/KSPM/NSPM/AI-security) ─────────
-# The /rules-board* commands read .claude/agents/rule_board/ project-relative, so
-# new-project.sh scaffolds these per project. Installed globally too as a fallback
-# and so existing projects can reference ~/.claude/agents/rule_board/.
-if [ -d "$REPO_DIR/.claude/agents/rule_board" ]; then
-  echo "Installing rule board specialists → $DEST_AGENTS_CORE/rule_board/"
-  mkdir -p "$DEST_AGENTS_CORE/rule_board"
-  if command -v rsync &>/dev/null; then
-    rsync -a --include='*/' --include='*.md' --exclude='*' "$REPO_DIR/.claude/agents/rule_board/" "$DEST_AGENTS_CORE/rule_board/"
-  else
-    cp -R "$REPO_DIR/.claude/agents/rule_board/." "$DEST_AGENTS_CORE/rule_board/"
-  fi
-  RULE_BOARD_COUNT=$(find "$REPO_DIR/.claude/agents/rule_board" -name "*.md" | wc -l | tr -d ' ')
-  echo "  ✅ $RULE_BOARD_COUNT rule board agents installed"
-fi
+# Rule board specialists are project-specific (vertix security-rule boards). The /rules-board*
+# commands read .claude/agents/rule_board/ project-relative, so they are installed into a project
+# with `./install.sh --rule-board <project-dir>`, never into ~/.claude - installing them globally
+# would load 49 unrelated agents into every session.
+echo "Rule board specialists: not installed globally (project-specific)."
+echo "  To add them to a project: ./install.sh --rule-board <project-dir>"
 
 # ── Project templates (CLAUDE.md template for /init) ─────────────────────────
 echo "Installing project templates → $CLAUDE_DIR/templates/"
