@@ -13,7 +13,7 @@ Writes a durable fact to `docs/PROJECT_FACTS.md` so it is loaded by every future
 injected into every subagent — stated once, honored everywhere. Fixes the "I have to repeat
 this to every session" problem.
 
-Full model: `.claude/skills/core/shared-context-protocol.md`.
+Full model: `~/.claude/skills/core/shared-context-protocol.md`.
 
 ---
 

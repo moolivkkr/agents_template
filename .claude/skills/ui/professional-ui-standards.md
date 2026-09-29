@@ -12,7 +12,7 @@ tags:
 
 # Professional UI Standards — Generic House Defaults
 
-> **⛔ Precedence (see `.claude/skills/ui/README.md`).** If the project has a design system
+> **⛔ Precedence (see `~/.claude/skills/ui/README.md`).** If the project has a design system
 > (e.g. `vertix-portal-design-system.md`), **that file OVERRIDES the Colors, Border-Radius, and
 > Shadow sections below** — use its tokens (`bg-panel`, `text-ink`, `text-crit`, `rounded-card`,
 > `shadow-card`) instead of the generic shadcn ones here. This file remains authoritative for the

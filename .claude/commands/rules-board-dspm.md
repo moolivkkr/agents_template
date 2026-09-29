@@ -7,8 +7,8 @@ arguments:
     description: "Scope: --all (all rules), --category exposure (single category), --rule prule_public_sensitive (single rule deep review), --seed (review the engine's 6-rule seed). Defaults to --all."
   - name: model
     required: false
-    default: sonnet
-    description: "Model for review agents. Default: sonnet (single-rule --rule uses opus)."
+    default: opus
+    description: "Model for review agents. Default: opus (Claude Opus 5.5); pass sonnet for large low-risk batches at about half the cost."
   - name: batch_size
     required: false
     default: 50
@@ -83,7 +83,7 @@ test -f research/dspm/policies/00-catalog-overview.md \
 Follow the orchestrator:
 - Step 0: Discovery + filter test fixtures (handles empty corpus + --seed)
 - Step 1: Group by catalog category (G1 Exposure … G8 Column-level)
-- Step 2: Spawn group agents (sonnet, batched ~50) — each loads its catalog files ONCE as the parity index
+- Step 2: Spawn group agents ({{model}}, batched ~50) — each loads its catalog files ONCE as the parity index
 - Step 2b: Quality gate (post-score >= 4.0)
 - Step 3: Consolidation (shared `rule_board_consolidator.md`) — cross-category consistency + catalog-coverage gaps + fact-registry drift
 - Step 4: Final report

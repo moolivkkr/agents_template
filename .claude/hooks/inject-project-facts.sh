@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # SessionStart hook — surfaces Tier 0 ground-truth facts AND Tier 0.5 active decisions into every
-# new session. Part of the Shared Context Protocol (.claude/skills/core/shared-context-protocol.md).
+# new session. Part of the Shared Context Protocol (~/.claude/skills/core/shared-context-protocol.md).
 # Safe by design: no-ops silently if the source files are absent or have no active entries.
 
 set -euo pipefail

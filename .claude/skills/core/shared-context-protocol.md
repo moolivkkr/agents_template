@@ -154,7 +154,7 @@ disabled). Ground truth is important enough to deliver redundantly.
 
 ## Writing facts: `/remember`
 
-Humans and agents add facts with `/remember <fact>` (see `.claude/commands/remember.md`). It:
+Humans and agents add facts with `/remember <fact>` (see `~/.claude/commands/startup/remember.md`). It:
 1. Classifies the fact into `(subject, relation)`.
 2. Applies the deterministic supersession rule above.
 3. Appends the bi-temporal block and commits `docs/PROJECT_FACTS.md` with a "why" message.

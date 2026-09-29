@@ -12,7 +12,7 @@ Every requirement must be traceable end-to-end:
 | NFR-PERF-001 | requirements/nfr.md:L3 | specs/performance-budget.md | PERF-001 | TC-PERF-001 to TC-PERF-005 | k6 load test passes | Pending |
 ```
 
-The **TC-* IDs** column links to explicit test case IDs defined in spec documents (see `.claude/skills/testing/test-case-traceability.md`). Each FR-* should map to a range of TC-* IDs that verify its behavior.
+The **TC-* IDs** column links to explicit test case IDs defined in spec documents (see `~/.claude/skills/testing/test-case-traceability.md`). Each FR-* should map to a range of TC-* IDs that verify its behavior.
 
 ## Bidirectional Tracing
 

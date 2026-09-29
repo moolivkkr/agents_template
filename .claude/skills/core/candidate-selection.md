@@ -32,7 +32,7 @@ The gain comes from **diversity + verification**, not from one model "trying har
 
 ---
 
-## ⛔ When it triggers (this is EXPENSIVE — gate it)
+## When it triggers (it multiplies Wave-2 cost, so it is gated)
 
 Candidate-selection multiplies Wave-2 cost by N (Anthropic reports multi-agent systems burn ≈15× the
 tokens of a single-agent chat; Cognition's "Don't Build Multi-Agents" warns that over-parallelizing
@@ -41,8 +41,8 @@ the default for every phase.** Run it ONLY when at least one trigger fires:
 
 | Trigger | Source of truth | Rationale |
 |---|---|---|
-| **scale-class = PLATFORM** | `.claude/skills/core/scale-adaptive-depth.md` classifier (Wave 0) | New subsystem / shared-contract change — highest correctness value, worth the spend. |
-| **High model-routing complexity** | `.claude/skills/core/model-routing.md` `RAW_SCORE > 60` (well above the opus threshold of 40) | Large, multi-file, high-FR work where a single pass most often misses cases. |
+| **scale-class = PLATFORM** | `~/.claude/skills/core/scale-adaptive-depth.md` classifier (Wave 0) | New subsystem / shared-contract change — highest correctness value, worth the spend. |
+| **High model-routing complexity** | `~/.claude/skills/core/model-routing.md` `RAW_SCORE > 60` (the "large" band starts at 40) | Large, multi-file, high-FR work where a single pass most often misses cases. |
 | **Previous-phase failure on this component** | `agent_state/phases/$((PHASE-1))/reports/collective_feedback.md` names this component / area | The single-attempt approach already failed here once; diversity is the cheapest fix. |
 | **Explicit `--candidates=N` flag** | User invocation (`/develop --candidates=3`) | Manual override — the human decided this phase is worth it. Always honored. |
 
@@ -241,9 +241,9 @@ The `solution_selector` agent additionally writes the full rationale + rubric ta
 
 | Concern | Skill | Question answered |
 |---|---|---|
-| Which **model** per agent | `model-routing.md` | haiku / sonnet / opus |
+| Which **model and effort** per agent | `model-routing.md` | Opus 5.5 at frontmatter effort; Fable for escalation and cross-model verification |
 | Which **workflow depth** (waves) | `scale-adaptive-depth.md` | skip / light / full / full+ADR |
 | **How many Wave-2 attempts** (this skill) | `candidate-selection.md` | 1 (default) vs N candidates + select |
 
-They compose: a PLATFORM class runs full+ADR depth, routes opus for the implementers and selector, and
+They compose: a PLATFORM class runs full+ADR depth, runs the implementers and selector at their frontmatter effort, and
 turns on N-candidate generation. A STANDARD class runs full waves, one implementation, no candidates.

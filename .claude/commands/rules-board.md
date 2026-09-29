@@ -7,8 +7,8 @@ arguments:
     description: "Scope: --all (all rules), --tactic defense_evasion (single tactic), --technique T1003 (single MITRE technique), --rule edr_rule_amsi_bypass (single rule). Defaults to --all."
   - name: model
     required: false
-    default: sonnet
-    description: "Model for rule review agents: sonnet (cost-efficient) or opus (highest quality). Orchestrator always uses the parent model."
+    default: opus
+    description: "Model for rule review agents: opus (default, Claude Opus 5.5) or sonnet (about half the cost, for large low-risk batches). Orchestrator always uses the parent model."
   - name: batch_size
     required: false
     default: 10
@@ -62,9 +62,9 @@ Parse the scope argument:
 
 ## Model Selection
 
-Use `{{model}}` (default: sonnet) for all group agents. This controls cost:
-- `sonnet`: ~75% cheaper, good for structured rule review
-- `opus`: highest quality, use for final quality gates or complex rules
+Use `{{model}}` (default: opus) for all group agents. This controls cost:
+- `opus`: Claude Opus 5.5, the default - best review quality
+- `sonnet`: about half the cost of opus, reasonable for large batches of simple, structured rules
 
 ## Execution
 
@@ -90,5 +90,5 @@ Follow the orchestrator steps exactly:
 - Stage 0 vendor cache: run ONCE, skip on subsequent invocations
 - Research cache: per-technique, reuse across rules sharing the same technique
 - Batch rules by technique to minimize context switching
-- Use `{{model}}` (sonnet by default) for review agents — ~75% cheaper than opus
+- Use `{{model}}` (opus by default) for review agents; pass `sonnet` to halve cost on large low-risk batches
 - Fast-track APPROVED rules (all dimensions ≥ 4) — skip deep review

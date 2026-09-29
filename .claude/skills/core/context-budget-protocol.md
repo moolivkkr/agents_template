@@ -22,59 +22,21 @@ Optimize agent prompts and context for **output quality**, not token efficiency.
 - When `agent_state/codebase/` exists, load the relevant focus document — the extra 5-10K prevents avoidable implementation errors
 - More context for judgment steps (review, acceptance, debugging) > less context for speed
 
-## Auto-Compact Protocol — Context Pressure Relief
+## Long Sessions and Compaction
 
-Performance degrades sharply once context usage exceeds ~80%. The framework enforces a **75% threshold** — at every wave boundary (and between major pipeline steps), the parent session assesses context pressure and triggers compaction before degradation begins.
+The main session runs with a 1M-token context window, and Claude Code compacts the conversation automatically as it nears the limit. Don't pause, wrap up, or skip steps because a session is getting long - that costs more than any context it saves. Only the user can run `/compact`, so never plan around running it.
 
-### How to detect context pressure (concrete signals)
+What keeps a long pipeline safe across a compaction or a `/resume` is the resume summary: at every wave boundary in `/develop`, and after each major step in `/plan`, `/accept`, and `/review`, update `agent_state/phases/${PHASE}/checkpoints/compact-context.md` so it stands on its own:
+- `## RESUME INSTRUCTIONS` - read this file and `phase_context.md`, continue with the next wave, don't re-run earlier waves
+- `## Completed Waves` - summary and artifacts from each checkpoint JSON
+- `## Key Decisions` - architectural choices made during the session
+- `## Current State` - git SHA, test status, blocking issues
+- `## Next Steps` - what the next wave does and what remains after it
 
-Claude Code does NOT expose a `context_percentage` API. Use these proxy signals:
-
-| Signal | Threshold | Confidence |
-|--------|-----------|------------|
-| Waves completed with subagent spawns | 3+ waves | High — each wave adds ~15-25K tokens |
-| System compression already triggered | Any "[earlier messages compressed]" notice | Definitive — you are past 75% |
-| Total tool calls in this session | 15+ tool calls | Medium — depends on result sizes |
-| Estimated cumulative tokens | ~150K consumed (75% of 200K) | High — track per-wave: ~20K per subagent spawn |
-
-**Rule: when in doubt, compact.** Cost of unnecessary compaction: ~5 seconds. Cost of degraded output at 80%+: wrong code, dropped steps, missed reviews.
-
-### When to check
-- **Between every wave** in `/develop` orchestrator (after writing the wave checkpoint)
-- **Between major steps** in `/plan`, `/accept`, `/review` (after each step completes)
-- **Any long-running command** that spawns 3+ sequential subagents
-
-### What to do when triggered
-
-1. **Save state** — write/update the wave checkpoint (should already be written at wave boundary). Add `"compacted_before_next": true` and `"compact_context_path"` to the checkpoint JSON.
-
-2. **Write `compact-context.md`** — a self-contained bootstrap file. This is the ONLY file the orchestrator reads after compaction (plus `phase_context.md`). It MUST include:
-   - `## RESUME INSTRUCTIONS` — explicit "read this file, continue to Wave N+1, do NOT re-run earlier waves"
-   - `## Completed Waves` — summary + artifacts from each checkpoint JSON
-   - `## Key Decisions` — architectural choices made during this session
-   - `## Current State` — git SHA, test status, blocking issues
-   - `## Next Steps` — what the next wave does and what remains after
-
-3. **Announce:** `"⚡ Context pressure detected — compacting before Wave N. Resuming inline."`
-
-4. **Run `/compact`** — invoke Claude Code's built-in context compression.
-
-5. **Post-compact bootstrap** — immediately read `compact-context.md` (the RESUME INSTRUCTIONS tell exactly what to do) + `phase_context.md`, then continue. Do NOT start a new conversation.
-
-### Key constraints
-- **Never compact mid-wave** — only at wave boundaries after checkpoint is written
-- **When in doubt, compact** — false positive is cheap; false negative degrades everything after
-- **Subagent context is independent** — subagent spawns get fresh context windows. This protocol applies to the PARENT orchestrator session only.
-- **compact-context.md is the post-compact source of truth** — it replaces conversation scrollback. That's why it must be self-contained with explicit resume instructions.
+After a compaction or a resumed session, read that file first, then `phase_context.md`, and continue. Subagents start with fresh context windows, so this applies to the parent session only.
 
 ## Agent Result Discipline
-Every agent (subagent or inline) must end with this exact pattern:
-```
-✅ <agent-name> complete → wrote <output-file-path>
-   Summary: <3 lines max of what was done>
-   Issues: none | <count + severity>
-```
-The full output is in the file. The parent conversation receives only the summary above.
+Every agent ends with the short final message its operating contract defines (status, files written, gate counts, blockers), or with the command-specific return format where a command defines one. The full output is in the file; the parent conversation receives only that summary.
 **Never echo file contents back to the parent conversation.**
 
 ## Read Discipline

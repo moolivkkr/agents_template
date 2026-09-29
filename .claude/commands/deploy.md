@@ -247,7 +247,7 @@ After successful deployment, verify the application actually works beyond the ba
        > agent_state/deploy/last-deploy-status.json
      ```
 
-### ⛔ Health is a GATE, not just a signal
+### Health is a gate, not just a signal
 
 An unhealthy deploy must not silently be treated as "done." Enforce by target:
 

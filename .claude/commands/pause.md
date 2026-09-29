@@ -25,7 +25,7 @@ Explicitly saves the current work state — what was being done, what's complete
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Agent result discipline:** `/pause` is a lightweight command. No subagents are spawned. The parent session reads existing state files and writes the pause snapshot directly.
 

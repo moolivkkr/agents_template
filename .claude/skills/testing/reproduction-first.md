@@ -100,7 +100,7 @@ These are the same absolutes as `/develop` and `/hotfix` test recovery — never
 
 The reproducing test is not scratch — it stays in the suite forever as a **regression test**:
 
-- Annotate it with a **TC-* ID** per `.claude/skills/testing/test-case-traceability.md` (use the
+- Annotate it with a **TC-* ID** per `~/.claude/skills/testing/test-case-traceability.md` (use the
   category matching the bug: `TC-API-*`, `TC-AUTH-*`, `TC-DB-*`, etc.; append the next free number).
 - It joins the pass-to-pass set for all future runs — this exact bug can never silently return.
 - Reference it in the fix's commit message and (for `/hotfix`) the manifest hotfix record.

@@ -26,7 +26,7 @@ Produces a persistent, reusable codebase knowledge base in `agent_state/codebase
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Agent result discipline:** Every `codebase_mapper` agent returns a 3-line summary to the parent. Full analysis content is in files — never echoed back to the conversation.
 
@@ -285,7 +285,7 @@ If `--incremental`:
 
 ## Step 2.5 — Ranked Repo Map (Personalized PageRank)
 
-> Protocol: `.claude/skills/core/repo-map.md`
+> Protocol: `~/.claude/skills/core/repo-map.md`
 
 **Runs after:** synthesis, before final output. Produces a persistent, token-budgeted ranked map so
 downstream agents get the *most relevant* files+symbols for a task instead of re-reading directories.
@@ -314,7 +314,7 @@ Budget: ~2K tokens · files ranked: {{N}} · files emitted: {{M}} · omitted (be
 ## How to Use This Map
 Audit/localization consumers re-rank this graph with a TASK-personalized vector (spec/audit-scope
 files + task-mentioned symbols weighted up), then apply hierarchical narrowing (file → skeleton → lines).
-See `.claude/skills/core/repo-map.md` Part D.
+See `~/.claude/skills/core/repo-map.md` Part D.
 ```
 
 If `--incremental`, re-rank rather than rebuild from scratch where possible: update edges for changed
@@ -388,7 +388,7 @@ If `--phase`:
 - Every finding must include **file:line references** — "the codebase uses MVC" without evidence is not a finding
 - The knowledge base is **append-friendly** — incremental mode updates sections, never deletes previous findings unless the underlying code was deleted
 - `agent_state/codebase/SUMMARY.md` is the **entry point** for all downstream agents — keep it under 2K tokens
-- `agent_state/codebase/repo-map.md` is the **ranked localization map** — audit/localization agents re-rank it with a task-personalized vector rather than re-reading directories (see `.claude/skills/core/repo-map.md`); keep it under ~2K tokens
+- `agent_state/codebase/repo-map.md` is the **ranked localization map** — audit/localization agents re-rank it with a task-personalized vector rather than re-reading directories (see `~/.claude/skills/core/repo-map.md`); keep it under ~2K tokens
 - Focus documents can be detailed — no hard token limit, but use structured tables and avoid prose
 - The `.last-mapped` file is the **single source of truth** for incremental mode — if corrupted, fall back to full scan
 - All 4 focus areas run even for small codebases — the categories of analysis don't change with project size

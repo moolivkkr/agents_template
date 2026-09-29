@@ -80,12 +80,12 @@ tags:
 
 ## Section 0: Coding Standards & Engineering Principles
 
-> **Agent guidance:** This section is NON-NEGOTIABLE. Load `code-quality.md` and `software-architecture.md` skill packs. Every sub-section must have concrete rules with code examples showing correct and incorrect patterns.
+> **Agent guidance:** This section is required. Load `code-quality.md` and `software-architecture.md` skill packs. Every sub-section must have concrete rules with code examples showing correct and incorrect patterns.
 
 ```markdown
 ## 0. Coding Standards & Engineering Principles
 
-> **This section is NON-NEGOTIABLE. Every developer, every agent, every code review MUST enforce these standards. No exceptions. No shortcuts.**
+> **Every developer, agent, and code review applies these standards.**
 
 ### 0.1 Performance-First Design
 
@@ -1048,7 +1048,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - **Tenant ID extraction:** {{TENANT_EXTRACTION}} (JWT claims | API key | mTLS SAN | subdomain)
 - **Encryption:** {{ENCRYPTION_MODEL}} (shared KEK | per-tenant KEK via Vault Transit | per-tenant AWS KMS)
 - **Rate limiting:** Per-tenant with tier-based limits
-- **Skill pack:** `.claude/skills/infrastructure/saas-tenancy-models.md`
+- **Skill pack:** `~/.claude/skills/infrastructure/saas-tenancy-models.md`
 
 ### 15.7 Local AWS Simulation
 
@@ -1057,7 +1057,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - **Regions:** {{LOCAL_AWS_REGIONS}} (e.g., us-east-1, us-west-1, eu-west-1)
 - **Init scripts:** `localstack/init/ready.d/` (auto-run on container start)
 - **Multi-region simulation:** {{MULTI_REGION}} (geo-router nginx | single region)
-- **Skill pack:** `.claude/skills/infrastructure/localstack-aws-local.md`
+- **Skill pack:** `~/.claude/skills/infrastructure/localstack-aws-local.md`
 ```
 
 ---

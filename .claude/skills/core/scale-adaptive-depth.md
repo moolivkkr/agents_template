@@ -107,9 +107,9 @@ scope the classifier missed.
 
 | Concern | Skill | Question answered |
 |---|---|---|
-| Which **model** per agent | `model-routing.md` | haiku / sonnet / opus |
+| Which **model and effort** per agent | `model-routing.md` | Opus 5.5 at frontmatter effort; Fable for escalation |
 | Which **workflow depth** | this skill | skip / light / full / full+ADR |
 
-They compose: a PLATFORM class typically routes opus for spec + review agents; a TRIVIAL class routes
-haiku and skips most agents entirely. Consult **both** — one picks the engine, the other picks how
+They compose: a PLATFORM class runs full depth with every agent at its frontmatter effort; a TRIVIAL
+class skips most agents entirely. Consult **both** — one picks the engine, the other picks how
 far the car drives.

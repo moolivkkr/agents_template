@@ -7,8 +7,8 @@ arguments:
     description: "Scope: --all (all log sources), --log-source cloud_trail (single source), --technique T1562.008 (single MITRE technique), --rule siem_rule_aws_cloudtrail_stop_logging (single rule), --pilot (one rule + format validation). Defaults to --all."
   - name: model
     required: false
-    default: sonnet
-    description: "Model for group/specialist agents (default: sonnet). Opus is used automatically for Step 2b escalation (failed rules) and Step 4 final quality gate — do not override these."
+    default: opus
+    description: "Model for group/specialist agents (default: opus). Fable is used automatically for Step 2b escalation (failed rules) and Step 4 final quality gate — do not override these."
   - name: batch_size
     required: false
     default: 10
@@ -112,15 +112,15 @@ Model assignment is fixed per pipeline step — not a single global flag:
 
 | Step | Agent | Model | Reason |
 |------|-------|-------|--------|
-| Step 0.5 | Research cache generation | **sonnet** | Structured research, no judgment required |
-| Step 2 | Group agents (R0–R3 debate) | **sonnet** | Structured format; 7 specialists produce scored output |
-| Step 2b | Quality gate failure escalation | **opus** | Rules that couldn't reach 4.0/5 need deepest structural redesign |
-| Step 3 | Consolidation | **sonnet** | Aggregating change docs, not making quality calls |
-| Step 4 | Final quality validation | **opus** | Hard gate — determines APPROVED vs blocked. Must be highest quality. |
+| Step 0.5 | Research cache generation | **{{model}}** (default opus) | Structured research, no judgment required |
+| Step 2 | Group agents (R0–R3 debate) | **{{model}}** (default opus) | Structured format; 7 specialists produce scored output |
+| Step 2b | Quality gate failure escalation | **fable** | Rules that couldn't reach 4.0/5 on the first pass need the most capable model for a structural redesign |
+| Step 3 | Consolidation | **{{model}}** (default opus) | Aggregating change docs, not making quality calls |
+| Step 4 | Final quality validation | **fable** | Hard gate that decides APPROVED vs blocked; a different model from the reviewers avoids sharing their blind spots |
 | `--rule` single rule | Full deep review | **opus** | Scoped to one rule; quality matters more than cost |
-| `--pilot` | Format validation | **sonnet** | Dry run only |
+| `--pilot` | Format validation | **{{model}}** (default opus) | Dry run only |
 
-The `{{model}}` argument controls Step 2 group agents only. Steps 2b and 4 always use opus.
+The `{{model}}` argument controls the group, research, consolidation, and pilot steps. Steps 2b and 4 always use fable (see `~/.claude/skills/core/model-routing.md`).
 
 ## Execution
 

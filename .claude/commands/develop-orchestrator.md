@@ -9,7 +9,7 @@ arguments:
 
 # /develop Orchestrator — Wave-by-Wave Execution
 
-**⛔ THIS command is executed by the PARENT session directly — NOT delegated to a subagent.**
+**This command runs in the parent session itself, not in a subagent.**
 
 The parent reads this script and executes each wave as a separate Agent tool call, verifying outputs between waves. This is the structural enforcement that prevents review/acceptance steps from being dropped.
 
@@ -59,43 +59,21 @@ EOF
 
 ---
 
-## Context Pressure Check — MANDATORY Between Every Wave
+## Resume Summary at Every Wave Boundary
 
-**⛔ After writing each wave checkpoint, BEFORE starting the next wave, assess context pressure.**
+After writing each wave checkpoint, refresh `checkpoints/compact-context.md` before starting the next wave. It is the self-contained record a session needs to continue the phase after Claude Code compacts the conversation or after `/resume` in a new session, so it must stand on its own: after a compaction, the orchestrator reads only this file and `phase_context.md` to know what happened and what comes next.
 
-Performance degrades sharply at ~80% context utilization. The 75% threshold gives a 5% safety margin.
+Don't pause, wrap up, or skip work because the conversation is getting long. The main session runs with a 1M-token context window, and Claude Code compacts automatically as it nears the limit; the summary below is what carries the phase across that. (Only the user can run `/compact`; there is no need to ask for it.)
 
-### How to detect 75% context pressure
-
-Claude Code does NOT expose a `context_percentage` variable. Use these **concrete proxy signals** to self-assess:
-
-1. **Wave count heuristic** — if you have completed **3+ waves** with subagent spawns, you are likely near or past 75%. Each wave with a subagent adds ~15-25K tokens (prompt + result).
-2. **System compression warnings** — if the system has already compressed prior messages (you'll see "[earlier messages compressed]" or similar), you are past 75%.
-3. **Conversation length** — if this orchestrator session has made **15+ tool calls** (reads, writes, agent spawns combined), trigger compaction proactively.
-4. **Cumulative token estimate** — track approximate tokens consumed:
-   - Each subagent spawn + result: ~20K tokens
-   - Each file read: ~2-5K tokens
-   - Each checkpoint write: ~1K tokens
-   - **Trigger at estimated 150K tokens consumed** (75% of 200K window)
-
-**Rule: when in doubt, compact.** The cost of an unnecessary compaction is ~5 seconds. The cost of degraded output quality at 80%+ is wrong code, missed reviews, and dropped steps.
-
-### Protocol — what to do when context pressure is detected
-
-**At every wave boundary (after checkpoint, before next wave):**
-
-1. **Assess** — apply the heuristics above. If any signal triggers:
-
-2. **Write compact context summary** — this file is the post-compact bootstrap. It must be **self-contained** — after `/compact`, the orchestrator reads ONLY this file + `phase_context.md` to know what happened and what's next:
    ```bash
    mkdir -p "agent_state/phases/${PHASE}/checkpoints"
    cat > "agent_state/phases/${PHASE}/checkpoints/compact-context.md" << EOF
    # Compact Context — Phase ${PHASE} (post-Wave ${WAVE_NUM})
    Generated: $(date -u +%Y-%m-%dT%H:%M:%SZ)
-   Reason: context pressure detected — compacted before Wave $((WAVE_NUM + 1))
+   Reason: wave-boundary resume summary
 
    ## RESUME INSTRUCTIONS
-   After /compact, read THIS file + docs/design/phases/${PHASE}/phase_context.md.
+   If this session was compacted or restarted, read THIS file + docs/design/phases/${PHASE}/phase_context.md.
    Then continue directly to Wave $((WAVE_NUM + 1)) of the develop-orchestrator.
    Do NOT re-run Waves 1-${WAVE_NUM}. Do NOT re-read files already summarized below.
 
@@ -125,46 +103,12 @@ Claude Code does NOT expose a `context_percentage` variable. Use these **concret
    EOF
    ```
 
-3. **Update checkpoint with compaction marker:**
-   ```bash
-   # Read existing checkpoint, add compaction flag
-   python3 -c "
-   import json, sys
-   with open('agent_state/phases/${PHASE}/checkpoints/wave-${WAVE_NUM}.json') as f:
-       data = json.load(f)
-   data['compacted_before_next'] = True
-   data['compact_context_path'] = 'agent_state/phases/${PHASE}/checkpoints/compact-context.md'
-   with open('agent_state/phases/${PHASE}/checkpoints/wave-${WAVE_NUM}.json', 'w') as f:
-       json.dump(data, f, indent=2)
-   " 2>/dev/null || true
-   ```
-
-4. **Announce and compact:**
-   ```
-   ⚡ Context pressure detected after Wave ${WAVE_NUM} — compacting before Wave $((WAVE_NUM + 1)).
-      State saved: agent_state/phases/${PHASE}/checkpoints/compact-context.md
-      Resuming inline after compaction.
-   ```
-   Then run `/compact`.
-
-5. **Post-compact bootstrap** — immediately after `/compact` completes:
-   - Read `agent_state/phases/${PHASE}/checkpoints/compact-context.md` (the RESUME INSTRUCTIONS section tells you exactly what to do)
-   - Read `docs/design/phases/${PHASE}/phase_context.md` (tech stack, conventions, acceptance criteria)
-   - Continue to Wave $((WAVE_NUM + 1)) — do NOT restart earlier waves
-
-### Key rules
-- **Never compact mid-wave** — only at wave boundaries after the checkpoint is written
-- **When in doubt, compact** — false positive costs 5 seconds; false negative costs quality
-- **Compact inline, don't break the session** — compaction is a mid-session refresh, not a reason to stop and `/resume`
-- **compact-context.md is the source of truth post-compact** — it replaces conversation scrollback. That's why it includes RESUME INSTRUCTIONS at the top.
-- **If compaction happens, say so:** `"⚡ Context pressure detected — compacting before Wave N. Resuming inline."`
-
----
+**After a compaction or a resumed session**, read `compact-context.md` first, then `phase_context.md`, and continue with the wave its Next Steps names. Don't re-run completed waves or re-read files it already summarizes.
 
 ## Wave 0: SCALE THE WORKFLOW DEPTH
 
 Before Wave 1, classify phase complexity and scale how many waves run — do not pay full
-six-wave ceremony for a typo fix. See `.claude/skills/core/scale-adaptive-depth.md`.
+six-wave ceremony for a typo fix. See `~/.claude/skills/core/scale-adaptive-depth.md`.
 
 | Class | Signals | Waves to run |
 |-------|---------|--------------|
@@ -185,7 +129,7 @@ agents this phase MUST execute (derived from the scale class + project shape) an
 against what actually completed (`execution.jsonl`) and BLOCKS the gate if any `required` agent has no
 `completed` entry. This turns "we hope the reviewers ran" into "we proved they ran."
 
-**⛔ CONTRACT — `roster.required` MUST use the REAL agent names, verbatim, exactly as each agent logs
+**Contract — `roster.required` MUST use the REAL agent names, verbatim, exactly as each agent logs
 itself into `execution.jsonl` (the `"agent"` field).** Never use generic slot labels like
 `wave1_audit` or `e2e_or_ui_test_agent` — the completeness diff is a straight set-membership check
 (`roster.required ⊆ {agents with a completed line}`), and slot labels live in a different namespace
@@ -244,7 +188,9 @@ bug this roster exists to catch.
 
 ---
 
-## ⛔ MANDATORY — Ground-Truth Injection on EVERY spawn
+## Ground-Truth Injection on Every Spawn
+
+**Step detail on demand.** The full procedure for each /develop step lives in its own file under `~/.claude/skills/core/develop-steps/` (index in `~/.claude/commands/startup/develop.md`). When a wave agent needs more than the prompt below gives it, add the matching path(s) to its prompt - for example `step-2-implementation.md` for Wave 2, `step-3-tests.md` for Wave 3, `step-6-phase-gate.md` for the gate - so it reads only its own step instead of the whole pipeline.
 
 Every `Agent prompt:` in this orchestrator MUST begin with the ground-truth injection line so
 Tier 0 facts reach every subagent (subagents do not inherit the conversation). Prepend verbatim:
@@ -258,7 +204,7 @@ instead of proceeding. Do not re-litigate an active decision without new evidenc
 ```
 
 The wave prompts below omit this line only for brevity — you must add it to each. See
-`.claude/skills/core/shared-context-protocol.md`.
+`~/.claude/skills/core/shared-context-protocol.md`.
 
 ---
 
@@ -293,7 +239,7 @@ the mode FIRST, then run exactly one branch below.
 ### Wave 2 Mode Decision (candidate-selection gate)
 
 Run candidate-selection ONLY when a trigger fires — it costs ≈N× the Wave-2 tokens, so it is OPT-IN,
-not the default (see `.claude/skills/core/candidate-selection.md` §When it triggers). Evaluate:
+not the default (see `~/.claude/skills/core/candidate-selection.md` §When it triggers). Evaluate:
 
 ```bash
 # N = 1 means "single implementation" (default). N in [2,3] turns on candidate-selection.
@@ -336,7 +282,7 @@ Implement all components. Commit after each logical unit."
 
 ### Wave 2B — Candidate Selection (conditional — hard phases only)
 
-Full protocol: `.claude/skills/core/candidate-selection.md`. This REPLACES Wave 2A's single
+Full protocol: `~/.claude/skills/core/candidate-selection.md`. This REPLACES Wave 2A's single
 implementation for this phase; it does NOT replace Wave 3/4/6 — the winner runs them as usual.
 
 **1. Create N isolated worktrees (one per candidate) off the current HEAD:**
@@ -370,7 +316,7 @@ pass + cross pass rate per candidate; mark non-comparable pairs `N/A` — never 
 **4. Spawn `solution_selector` (Signal B + combine):**
 ```
 Agent prompt: "[GROUND TRUTH] You are solution_selector for Phase ${PHASE}.
-Read .claude/skills/core/candidate-selection.md, docs/design/phases/${PHASE}/specs/,
+Read ~/.claude/skills/core/candidate-selection.md, docs/design/phases/${PHASE}/specs/,
 and agent_state/phases/${PHASE}/candidates/cross_test_matrix.md.
 Score EACH candidate on the fixed rubric (R1 coverage, R2 test, R3 quality, R4 arch, R5 risk).
 Combine 0.5*cross_test + 0.5*rubric. Disqualify any candidate that fails its own tests or uses a
@@ -637,7 +583,7 @@ fi
 
 ## Wave 4: REVIEW + RECONCILE + ACCEPTANCE (parallel tracks)
 
-**⛔ CRITICAL — do NOT collapse review into one agent.** A single "code quality review" agent
+**Keep review split across separate agents.** A single "code quality review" agent
 exhausts context on the first dimension and silently drops the rest — this is the *exact*
 single-agent failure mode Wave 3 rails against for tests, and it is how security review, both
 reconcilers, and the dependency scan get dropped from a run. Spawn each reviewer/reconciler as a
@@ -668,7 +614,7 @@ Each spawn prompt (prepend the GROUND TRUTH line):
 ```
 Agent prompt: "[GROUND TRUTH] You are <agent_name> running Wave 4 Track A for Phase ${PHASE}.
 Review ALL source changed/added in this phase against IMPLEMENTATION_GUIDELINES and the phase specs.
-Use the Unified Severity Model (.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
+Use the Unified Severity Model (~/.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
 Every finding MUST cite file:line. Produce your named report at the exact path above.
 Definition of Done: report written, every BLOCKING finding has file:line + a fix recommendation,
 and the report ends with a one-line COUNT summary: 'BLOCKING:N WARNING:N INFO:N'."
@@ -754,14 +700,14 @@ For each report with BLOCKING findings:
 Anti-rationalization: "the fix looks right, no need to re-run" is WRONG — always re-run the agent.
 ```
 
-**⛔ DO NOT PROCEED TO WAVE 5 until every required Wave-4 report exists and its BLOCKING count is
+**Don't start Wave 5 until every required Wave-4 report exists and its BLOCKING count is
 0 (or the item is explicitly carried forward with a reason).**
 
 ---
 
 ## Wave 5: COLLECTIVE FEEDBACK + ITERATE (with Adaptive Replanning)
 
-> **Skill references:** `.claude/skills/core/adaptive-replan.md` (failure classification → minimum re-test SCOPE) and `.claude/skills/core/dual-ledger-replan.md` (Task/Progress ledgers → WHEN to replan vs keep iterating vs escalate). They compose: the ledger decides *whether* to keep going; the classification decides *what* to re-run.
+> **Skill references:** `~/.claude/skills/core/adaptive-replan.md` (failure classification → minimum re-test SCOPE) and `~/.claude/skills/core/dual-ledger-replan.md` (Task/Progress ledgers → WHEN to replan vs keep iterating vs escalate). They compose: the ledger decides *whether* to keep going; the classification decides *what* to re-run.
 
 **Maintain the dual ledgers across iterations.** The PARENT keeps `agent_state/phases/${PHASE}/ledger.md`:
 - **Task Ledger** — `facts[]` (verified only), `assumptions[]` (guesses, kept explicitly separate — never present a guess as a fact), `plan[]`.
@@ -851,7 +797,7 @@ fi
 ## Wave 6: GATE
 
 The PARENT session runs the gate check using the **Gate Verification Protocol**
-(`.claude/skills/core/gate-verification.md`) — evidence-based, graded, cross-checked. The
+(`~/.claude/skills/core/gate-verification.md`) — evidence-based, graded, cross-checked. The
 binary "file exists + non-zero count" check below is only Layer 0; it is necessary but NOT
 sufficient. The parent MUST also run Layer 1 (independent file:line re-verification — never
 trust the subagent's report), Layer 2 (numeric `gate_score ≥ 0.90`), and Layer 3 (cross-model
@@ -972,7 +918,7 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    done
    ```
 
-2. Run regression test suite using **change-impact analysis** (see `.claude/skills/core/change-impact-analysis.md`):
+2. Run regression test suite using **change-impact analysis** (see `~/.claude/skills/core/change-impact-analysis.md`):
 
    ```bash
    # Determine regression scope based on what this phase changed
@@ -1024,7 +970,7 @@ Read:
 - `execution.jsonl` — which agents failed/retried and why
 - `checkpoints/` — how long each wave took
 
-Write `agent_state/phases/${PHASE}/lessons.md` using the **structured lessons format** (see `.claude/skills/core/structured-lessons.md`):
+Write `agent_state/phases/${PHASE}/lessons.md` using the **structured lessons format** (see `~/.claude/skills/core/structured-lessons.md`):
 
 ```markdown
 # Phase ${PHASE} Lessons Learned
@@ -1047,7 +993,7 @@ Phase goal: <from PHASE_PLAN.md>
 
 Each entry is categorized and tagged so downstream agents can query by domain instead of loading the entire file.
 
-**⛔ Then aggregate into the root lessons index — this closes a broken loop.** The retrieval recipes
+**Then aggregate into the root lessons index — this closes a broken loop.** The retrieval recipes
 in `memory-as-tools.md` read `agent_state/lessons.md` (repo root), but lessons are WRITTEN per-phase
 to `agent_state/phases/N/lessons.md`. Without this step `memory_search` finds nothing. After writing
 the per-phase file, append its entries to the root index so future phases actually see them:
@@ -1071,7 +1017,7 @@ the source; the root index is the queryable aggregate.
 
 ### 2. Update Cross-Phase Patterns (append-only, indexed)
 
-> **Skill reference:** `.claude/skills/core/structured-lessons.md` — full indexed format with confidence levels.
+> **Skill reference:** `~/.claude/skills/core/structured-lessons.md` — full indexed format with confidence levels.
 
 If `agent_state/patterns.md` exists, append new patterns with structured indexing. If not, create it.
 

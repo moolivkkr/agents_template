@@ -1,122 +1,57 @@
 ---
 skill: model-routing
-description: Complexity-based model routing — pick haiku/sonnet/opus per task complexity to balance cost and quality
-version: "1.0"
+description: Model and effort policy for spawned agents - Opus 5.5 everywhere with per-agent effort, Fable only for escalation and cross-model verification; the complexity score that other skills consume
+version: "2.0"
 tags:
   - model-routing
+  - effort
   - cost
   - complexity
-  - intelligence
   - core
 ---
 
-# Complexity-Based Model Routing Protocol
+# Model and Effort Routing
 
-Agents currently use a hardcoded model per role (e.g., spec_impl_reconciler always uses opus).
-This protocol enables `model: auto` — the orchestrator selects the model based on task complexity,
-saving cost on trivial tasks without sacrificing quality on complex ones.
+## Policy
 
----
+Every agent runs on Claude Opus 5.5 (`model: opus` in its frontmatter) at the `effort` its frontmatter sets: `high` for reviewers, verifiers, security and implementation agents, `medium` for writers and planners, `low` for mechanical runners. One model family means one prompt-cache namespace across the pipeline, and on current models the strongest model at a lower effort matches or beats a smaller model at a higher one, at a similar cost per completed task.
 
-## Routing Tiers
+**When spawning an agent, don't pass a `model` parameter.** A per-launch `model` overrides the agent's frontmatter, so passing one silently undoes the policy above. The two exceptions are the only times to pass it:
 
-| Tier | Model | Latency | Cost | When to Use |
-|------|-------|---------|------|-------------|
-| 1 | haiku | ~300ms | Low | Simple, bounded tasks: file existence checks, format validation, small diffs |
-| 2 | sonnet | ~1.5s | Medium | Standard work: spec writing, code review, test generation for <10 files |
-| 3 | opus | ~3s | High | Complex reasoning: architecture decisions, security audit, multi-file reconciliation |
+| Situation | Pass | Why |
+|---|---|---|
+| Retry after the agent's first attempt failed on an external signal (failing tests, a reviewer's blocking finding, a gate miss) | `model: fable` | The most capable model on the second attempt; the failure is the evidence the task needs it. Log it (below). |
+| Layer 3 adversarial verification in `gate-verification.md` | `model: fable` | Work is produced on Opus; verifying on a different model avoids sharing its blind spots. |
 
-## Complexity Heuristic
+Don't escalate pre-emptively on a high score - high complexity is handled by workflow depth (`scale-adaptive-depth.md`) and by candidate selection (`candidate-selection.md`), which pay for more attempts only where they help.
 
-When an agent is defined with `model: auto`, the orchestrator computes a complexity score
-before spawning it. The score is based on input size, not agent type.
+## Complexity score
 
-### Input Signals
+The orchestrator still computes a complexity score once per phase and persists it in `agent_state/phases/${PHASE}/complexity.json` as `raw_score`; `scale-adaptive-depth.md` and `candidate-selection.md` (trigger `RAW_SCORE > 60`) read it.
 
 | Signal | Measurement | Weight |
 |---|---|---|
 | Spec file count | `ls docs/design/phases/${PHASE}/specs/*.md \| wc -l` | 3x |
 | Source file count (phase diff) | `git diff --name-only \| grep -E '\.(go\|ts\|tsx\|py)$' \| wc -l` | 2x |
-| Total LOC changed | `git diff --stat \| tail -1` (insertions + deletions) | 1x |
+| Total LOC changed | `git diff --stat \| tail -1` (insertions + deletions) | 1x per 500 |
 | Number of FR-* in scope | `grep -c 'FR-' PHASE_PLAN.md` | 2x |
-| Has UI components | `ls specs/*.wireframe.md 2>/dev/null \| wc -l` | 1x |
-| Previous phase had failures | `test -f agent_state/phases/$((PHASE-1))/reports/collective_feedback.md` | 2x |
-
-### Scoring
+| Has UI components | `ls specs/*.wireframe.md 2>/dev/null \| wc -l` | 5 if any |
+| Previous phase had failures | `test -f agent_state/phases/$((PHASE-1))/reports/collective_feedback.md` | 10 if present |
 
 ```
 RAW_SCORE = (spec_count * 3) + (source_files * 2) + (loc_changed / 500) + (fr_count * 2) + (has_ui * 5) + (prev_failures * 10)
-
-if RAW_SCORE <= 10:  model = haiku
-elif RAW_SCORE <= 40: model = sonnet
-else:                 model = opus
 ```
 
-### Override Rules (always escalate to opus)
+Rough bands for reading it: up to 10 is small, 11-40 is typical, above 40 is large, above 60 triggers candidate selection.
 
-Regardless of score, use opus for:
-- `security_reviewer` — security reasoning needs maximum capability
-- `acceptance_test_agent` — final validation, cannot afford false positives
-- `spec_impl_reconciler` — 4-level verification requires deep code understanding
-- `debate_arbitrator` — decision-making needs nuanced reasoning
-- Any agent where `quality_gates` contains security-related checks
+## Logging
 
-### Override Rules (can downgrade to haiku)
-
-Regardless of score, haiku is sufficient for:
-- `test_runner` — just executes commands and reports output
-- `dependency_scanner` — structured tool output parsing
-- File existence checks, format validation, JSONL parsing
-
-## How to Apply
-
-### In agent definitions (frontmatter)
-
-```yaml
-model: auto  # orchestrator picks based on complexity
-```
-
-### In orchestrator (develop-orchestrator, accept)
-
-When spawning an agent with `model: auto`:
-
-```
-1. Read phase_context.md for spec count, FR-* count
-2. Run: git diff --stat to get LOC changed
-3. Compute RAW_SCORE
-4. Select model tier
-5. Log selection: "Agent ${NAME}: score=${SCORE} → model=${MODEL}"
-6. Spawn agent with selected model
-```
-
-### Logging
-
-Every model routing decision is logged to `execution.jsonl`:
+Log every escalation to `execution.jsonl`, so post-gate lessons can show which agents need it repeatedly - an agent that escalates often needs a better prompt or a higher frontmatter effort:
 
 ```json
-{"ts":"<ISO>","event":"model_route","agent":"spec_writer","raw_score":25,"model":"sonnet","signals":{"spec_count":3,"source_files":8,"loc_changed":450,"fr_count":4}}
+{"ts":"<ISO>","event":"model_escalation","agent":"backend_developer","from":"opus","to":"fable","reason":"integration tests failed after first attempt"}
 ```
 
-This data feeds Post-Gate lessons — if agents routed to sonnet frequently fail and need opus retries, the scoring thresholds need adjustment.
+## Cost check after a phase
 
-## Gradual Rollout
-
-Phase 1 (now): Document the protocol. All agents keep their current hardcoded models.
-Phase 2: Add `model: auto` to low-risk agents first (spec_writer, code_reviewer_I, backend_audit_agent).
-Phase 3: Expand to all agents except security and reconciliation.
-Phase 4: Full auto-routing with per-project threshold tuning from execution.jsonl data.
-
-## Cost Tracking
-
-After each phase, the orchestrator estimates token cost:
-
-```
-Estimated cost (Phase ${PHASE}):
-  opus agents:  N × ~$0.15/agent = $X.XX
-  sonnet agents: N × ~$0.03/agent = $X.XX
-  haiku agents:  N × ~$0.005/agent = $X.XX
-  Total: $X.XX (vs $X.XX if all-opus)
-  Savings: $X.XX (N%)
-```
-
-Written to `manifest.json` under `cost_estimate` field.
+`/usage` in the session shows the phase's spend and attributes it to subagents, skills, and MCP servers. Record the total in `manifest.json` under `cost_estimate`, along with the number of escalations.

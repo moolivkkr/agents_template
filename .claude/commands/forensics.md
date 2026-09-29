@@ -39,7 +39,7 @@ Reconstructs what happened during a failed pipeline run. Builds a timeline, iden
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Read discipline:** Start with execution.jsonl (small, structured) and expand outward only as needed. Do not load all phase artifacts into context.
 

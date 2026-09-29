@@ -23,7 +23,7 @@ Reads the session state saved by `/pause` and restores full context — what was
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Agent result discipline:** `/resume` is a lightweight coordination command. No subagents are spawned. The parent session reads the pause snapshot, validates current state, and routes to the correct pipeline command.
 

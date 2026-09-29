@@ -78,7 +78,7 @@ Complete index of all agents in the SDLC pipeline.
 
 All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin_id>.json` for all plugin-specific knowledge (entity types, coverage framework, vendor sources, quality thresholds). Add a new plugin by creating a manifest file; all 7 agents work immediately with `--plugin <id>`.
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
 | `rule_pipeline_orchestrator` | sonnet | plugin manifest, args | pipeline_summary.md | Orchestrates all 7 stages with checkpoints + feedback loop |
 | `market_research_agent` | opus | plugin manifest, scope | `<plugin>_wave_N_research.md` | Coverage gap analysis + 7-source vendor research |
@@ -97,135 +97,135 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 
 ### Requirements & BRD
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `brd_agent` | sonnet | requirements/ | docs/BRD.md | Orchestrates full BRD creation pipeline |
-| `brd_analyzer` | sonnet | requirements/ | agent_state/brd_refiner/analysis.yaml | Subagent of brd_agent |
-| `brd_interviewer` | sonnet | analysis.yaml | agent_state/brd_refiner/decisions.yaml | Subagent of brd_agent |
-| `brd_writer` | sonnet | analysis.yaml | docs/BRD.md | Subagent of brd_agent |
-| `product_manager` | opus | docs/BRD.md, change request | docs/BRD.md (amended), docs/user-stories/ | Post-init BRD amendments |
-| `impl_guidelines_agent` | sonnet | docs/BRD.md | docs/IMPLEMENTATION_GUIDELINES.md | Tech stack confirmation |
-| `agent_factory` | sonnet | IMPLEMENTATION_GUIDELINES.md | .claude/agents/generated/ | Generates project-specific agents |
+| `brd_agent` | opus/medium | requirements/ | docs/BRD.md | Orchestrates full BRD creation pipeline |
+| `brd_analyzer` | opus/medium | requirements/ | agent_state/brd_refiner/analysis.yaml | Subagent of brd_agent |
+| `brd_interviewer` | opus/medium | analysis.yaml | agent_state/brd_refiner/decisions.yaml | Subagent of brd_agent |
+| `brd_writer` | opus/medium | analysis.yaml | docs/BRD.md | Subagent of brd_agent |
+| `product_manager` | opus/medium | docs/BRD.md, change request | docs/BRD.md (amended), docs/user-stories/ | Post-init BRD amendments |
+| `impl_guidelines_agent` | opus/medium | docs/BRD.md | docs/IMPLEMENTATION_GUIDELINES.md | Tech stack confirmation |
+| `agent_factory` | opus/medium | IMPLEMENTATION_GUIDELINES.md | .claude/agents/generated/ | Generates project-specific agents |
 
 ### Product Workflow Intelligence
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `product_doc_researcher` | opus | product name, capabilities | doc-corpus.md, CAPABILITY-TAXONOMY.md | Official docs, KB, training, forums |
-| `product_video_researcher` | sonnet | product name, capabilities | video-intelligence.md | YouTube demos, conference talks, webinars |
-| `product_api_researcher` | sonnet | product name, capabilities | api-intelligence.md, api-schemas.yaml, api-coverage-matrix.md | REST/GraphQL/SDK/CLI research |
-| `capability_flow_mapper` | sonnet | capability + doc corpus + video/API intel | workflow.md, quickstart.md, advanced.md, prerequisites.md, gotchas.md, lifecycle.md | Per-capability deep mapping (parallel) |
-| `workflow_synthesizer` | sonnet | all capability flows + API intel | OVERVIEW.md, dependency-graph.md, personas/*.md, reference/*.yaml | Final assembly + persona summaries |
+| `product_doc_researcher` | opus/medium | product name, capabilities | doc-corpus.md, CAPABILITY-TAXONOMY.md | Official docs, KB, training, forums |
+| `product_video_researcher` | opus/medium | product name, capabilities | video-intelligence.md | YouTube demos, conference talks, webinars |
+| `product_api_researcher` | opus/medium | product name, capabilities | api-intelligence.md, api-schemas.yaml, api-coverage-matrix.md | REST/GraphQL/SDK/CLI research |
+| `capability_flow_mapper` | opus/medium | capability + doc corpus + video/API intel | workflow.md, quickstart.md, advanced.md, prerequisites.md, gotchas.md, lifecycle.md | Per-capability deep mapping (parallel) |
+| `workflow_synthesizer` | opus/medium | all capability flows + API intel | OVERVIEW.md, dependency-graph.md, personas/*.md, reference/*.yaml | Final assembly + persona summaries |
 
 ### Planning & Specs
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `project_planner` | sonnet | BRD, guidelines, prev manifest | PHASE_PLAN.md, phase_context.md | Defines scope, exit criteria, waves |
-| `spec_writer` | sonnet | PHASE_PLAN.md, BRD | docs/design/phases/N/specs/*.md | One TRD per component/flow |
-| `spec_verifier` | sonnet | BRD, PHASE_PLAN, specs | VERIFICATION_REPORT.md | Quality gate for specs completeness |
-| `phase_assumptions_analyzer` | opus | BRD, guidelines, codebase | assumptions.md, open_questions.md | Deep pre-planning assumption surfacing |
-| `decision_researcher` | sonnet | open question, guidelines | research/*.md | Gray area decision comparison tables |
-| `plan_goal_verifier` | opus | PHASE_PLAN, BRD, specs | plan_check.md | Goal-backward plan verification |
+| `project_planner` | opus/medium | BRD, guidelines, prev manifest | PHASE_PLAN.md, phase_context.md | Defines scope, exit criteria, waves |
+| `spec_writer` | opus/medium | PHASE_PLAN.md, BRD | docs/design/phases/N/specs/*.md | One TRD per component/flow |
+| `spec_verifier` | opus/high | BRD, PHASE_PLAN, specs | VERIFICATION_REPORT.md | Quality gate for specs completeness |
+| `phase_assumptions_analyzer` | opus/high | BRD, guidelines, codebase | assumptions.md, open_questions.md | Deep pre-planning assumption surfacing |
+| `decision_researcher` | opus/medium | open question, guidelines | research/*.md | Gray area decision comparison tables |
+| `plan_goal_verifier` | opus/high | PHASE_PLAN, BRD, specs | plan_check.md | Goal-backward plan verification |
 
 ### Design
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `architecture_orchestrator` | opus | BRD, guidelines | docs/architecture/ | Spawns 4 subagents in parallel |
-| `c4_diagram_agent` | sonnet | BRD, guidelines | docs/architecture/c4-diagram.md | Subagent of architecture_orchestrator |
-| `sequence_diagram_agent` | sonnet | BRD, guidelines | docs/architecture/sequence-diagrams.md | Subagent of architecture_orchestrator |
-| `deployment_diagram_agent` | sonnet | guidelines | docs/architecture/deployment-diagram.md | Subagent of architecture_orchestrator |
-| `eagle_diagram_agent` | sonnet | BRD, guidelines | docs/architecture/eagle-view.md | 10,000-ft strategic overview: pattern classification, domain boundaries, evolution recs |
-| `adr_agent` | sonnet | guidelines | docs/architecture/adrs/ | Subagent of architecture_orchestrator; also invoked by /plan |
-| `ux_designer` | opus | BRD, guidelines | docs/design/phases/N/specs/*.wireframe.md | UI wireframe specifications |
-| `wireframe_generator` | sonnet | BRD | wireframe scaffolding | Subagent of ux_designer |
-| `design_quality_reviewer` | sonnet | wireframes, guidelines | design quality report | Validates UI specs against 9 dimensions |
+| `architecture_orchestrator` | opus/medium | BRD, guidelines | docs/architecture/ | Spawns 4 subagents in parallel |
+| `c4_diagram_agent` | opus/medium | BRD, guidelines | docs/architecture/c4-diagram.md | Subagent of architecture_orchestrator |
+| `sequence_diagram_agent` | opus/medium | BRD, guidelines | docs/architecture/sequence-diagrams.md | Subagent of architecture_orchestrator |
+| `deployment_diagram_agent` | opus/medium | guidelines | docs/architecture/deployment-diagram.md | Subagent of architecture_orchestrator |
+| `eagle_diagram_agent` | opus/medium | BRD, guidelines | docs/architecture/eagle-view.md | 10,000-ft strategic overview: pattern classification, domain boundaries, evolution recs |
+| `adr_agent` | opus/medium | guidelines | docs/architecture/adrs/ | Subagent of architecture_orchestrator; also invoked by /plan |
+| `ux_designer` | opus/medium | BRD, guidelines | docs/design/phases/N/specs/*.wireframe.md | UI wireframe specifications |
+| `wireframe_generator` | opus/low | BRD | wireframe scaffolding | Subagent of ux_designer |
+| `design_quality_reviewer` | opus/medium | wireframes, guidelines | design quality report | Validates UI specs against 9 dimensions |
 
 ### Implementation (Generated)
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `backend_developer` | sonnet | guidelines, phase specs | backend source code | Template: .claude/agents/generated/ |
-| `api_developer` | sonnet | guidelines, phase specs | API layer code | Template: .claude/agents/generated/ |
-| `database_agent` | sonnet | guidelines, phase specs | schema design | Template: .claude/agents/generated/ |
-| `migration_agent` | sonnet | guidelines, database design | migration files | Template: .claude/agents/generated/ |
+| `backend_developer` | opus/high | guidelines, phase specs | backend source code | Template: .claude/agents/generated/ |
+| `api_developer` | opus/high | guidelines, phase specs | API layer code | Template: .claude/agents/generated/ |
+| `database_agent` | opus/high | guidelines, phase specs | schema design | Template: .claude/agents/generated/ |
+| `migration_agent` | opus/high | guidelines, database design | migration files | Template: .claude/agents/generated/ |
 
 ### Testing
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `test_runner` | haiku | agent_registry.json | test results | Executes test commands |
-| `acceptance_test_agent` | opus | BRD, PHASE_PLAN, guidelines | acceptance_report.md | Final validation before gate |
-| `e2e_orchestrator` | sonnet | guidelines, phase manifests | e2e test results | End-to-end workflow tests |
-| `performance_agent` | sonnet | BRD (NFR-PERF-*) | performance report | Load tests, latency/throughput |
-| `system_test_agent` | sonnet | BRD | system smoke test results | Cross-phase boundary tests |
-| `manual_test_agent` | sonnet | PHASE_PLAN | manual test plan | Structured QA plan for humans |
+| `test_runner` | opus/low | agent_registry.json | test results | Executes test commands |
+| `acceptance_test_agent` | opus/high | BRD, PHASE_PLAN, guidelines | acceptance_report.md | Final validation before gate |
+| `e2e_orchestrator` | opus/medium | guidelines, phase manifests | e2e test results | End-to-end workflow tests |
+| `performance_agent` | opus/medium | BRD (NFR-PERF-*) | performance report | Load tests, latency/throughput |
+| `system_test_agent` | opus/medium | BRD | system smoke test results | Cross-phase boundary tests |
+| `manual_test_agent` | opus/medium | PHASE_PLAN | manual test plan | Structured QA plan for humans |
 
 ### Review & Security
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `code_reviewer_I` | sonnet | guidelines, skill pack | code_review_I.md | Style, idioms, naming (pass 1 of 2) |
-| `code_reviewer_II` | opus | guidelines, code_review_I.md | code_review_II.md | Architecture compliance (pass 2 of 2) |
-| `security_reviewer` | opus | guidelines, OWASP skill pack | security_review.md | OWASP Top 10, IDOR chains |
-| `tenant_isolation_verifier` | opus | handler + service files | isolation_report.md | tenantID trace through every route |
-| `breaking_change_reviewer` | opus | current diff, prior-phase contracts | breaking_change_report.md | Cross-phase contract breakage (API sig, response shape, event schema, shared types, config keys, DB columns) |
-| `migration_safety_reviewer` | opus | migration files | migration_safety.md | Destructive/irreversible ops, backfill safety, lock risk, rollback correctness |
-| `threat_model_agent` | opus | phase specs, data flows | threat_model.md (+ .json) | Design-time STRIDE per trust boundary; threat→mitigation→TC-SEC-* (runs in /plan for security-relevant phases) |
-| `accessibility_auditor` | sonnet | built UI, wireframes | accessibility_audit.md (+ .json) | WCAG-AA pass/fail per rule against the BUILT UI (axe/keyboard/contrast/ARIA); runs in /develop UI phases |
-| `code_quality_verifier` | sonnet | guidelines, manifest | quality_gate_verification.md | TODO/stub/secret/import checks |
-| `design_quality_reviewer` | sonnet | wireframes, guidelines | design quality report | UI spec quality validation |
-| `dependency_scanner` | haiku | guidelines | dependency scan results | CVE detection, license compliance |
+| `code_reviewer_I` | opus/high | guidelines, skill pack | code_review_I.md | Style, idioms, naming (pass 1 of 2) |
+| `code_reviewer_II` | opus/high | guidelines, code_review_I.md | code_review_II.md | Architecture compliance (pass 2 of 2) |
+| `security_reviewer` | opus/high | guidelines, OWASP skill pack | security_review.md | OWASP Top 10, IDOR chains |
+| `tenant_isolation_verifier` | opus/high | handler + service files | isolation_report.md | tenantID trace through every route |
+| `breaking_change_reviewer` | opus/high | current diff, prior-phase contracts | breaking_change_report.md | Cross-phase contract breakage (API sig, response shape, event schema, shared types, config keys, DB columns) |
+| `migration_safety_reviewer` | opus/high | migration files | migration_safety.md | Destructive/irreversible ops, backfill safety, lock risk, rollback correctness |
+| `threat_model_agent` | opus/high | phase specs, data flows | threat_model.md (+ .json) | Design-time STRIDE per trust boundary; threat→mitigation→TC-SEC-* (runs in /plan for security-relevant phases) |
+| `accessibility_auditor` | opus/high | built UI, wireframes | accessibility_audit.md (+ .json) | WCAG-AA pass/fail per rule against the BUILT UI (axe/keyboard/contrast/ARIA); runs in /develop UI phases |
+| `code_quality_verifier` | opus/high | guidelines, manifest | quality_gate_verification.md | TODO/stub/secret/import checks |
+| `design_quality_reviewer` | opus/medium | wireframes, guidelines | design quality report | UI spec quality validation |
+| `dependency_scanner` | opus/low | guidelines | dependency scan results | CVE detection, license compliance |
 
 ### Reconciliation
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `requirements_brd_reconciler` | sonnet | requirements/, BRD | requirements_vs_brd.md | Step 0: source docs match BRD |
-| `spec_verifier` | sonnet | BRD, PHASE_PLAN, specs | VERIFICATION_REPORT.md | Step 1: specs are complete |
-| `brd_spec_reconciler` | sonnet | BRD, PHASE_PLAN, specs | brd_vs_specs.md | Step 2: BRD matches specs |
-| `spec_impl_reconciler` | opus | specs, manifest | specs_vs_impl.md | Step 3: specs match code |
-| `spec_test_reconciler` | sonnet | specs, test results | specs_vs_tests.md | Step 4: specs match tests |
-| `pipeline_completeness_agent` | opus | all reconciliation reports, manifests, BRD | pipeline_completeness_report.md | Step 5: full chain validation (capstone) |
+| `requirements_brd_reconciler` | opus/high | requirements/, BRD | requirements_vs_brd.md | Step 0: source docs match BRD |
+| `spec_verifier` | opus/high | BRD, PHASE_PLAN, specs | VERIFICATION_REPORT.md | Step 1: specs are complete |
+| `brd_spec_reconciler` | opus/high | BRD, PHASE_PLAN, specs | brd_vs_specs.md | Step 2: BRD matches specs |
+| `spec_impl_reconciler` | opus/high | specs, manifest | specs_vs_impl.md | Step 3: specs match code |
+| `spec_test_reconciler` | opus/high | specs, test results | specs_vs_tests.md | Step 4: specs match tests |
+| `pipeline_completeness_agent` | opus/high | all reconciliation reports, manifests, BRD | pipeline_completeness_report.md | Step 5: full chain validation (capstone) |
 
 ### Decision Support
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `debate_moderator` | sonnet | debate_request JSON | verdict JSON + transcript | Orchestrates debate team |
-| `debate_researcher` | sonnet | assigned option | research evidence | Subagent: one per option |
-| `debate_advocate` | opus | assigned option + all research | argument | Subagent: argues FOR an option |
-| `debate_arbitrator` | opus | all arguments | verdict + scores | Subagent: final decision-maker |
-| `solution_selector` | opus | N candidate impls + cross_test_matrix.md | reports/candidate_selection.md | Picks winning implementation via rubric + model-test voting; emits graft list (candidate-selection mode) |
+| `debate_moderator` | opus/medium | debate_request JSON | verdict JSON + transcript | Orchestrates debate team |
+| `debate_researcher` | opus/medium | assigned option | research evidence | Subagent: one per option |
+| `debate_advocate` | opus/medium | assigned option + all research | argument | Subagent: argues FOR an option |
+| `debate_arbitrator` | opus/high | all arguments | verdict + scores | Subagent: final decision-maker |
+| `solution_selector` | opus/high | N candidate impls + cross_test_matrix.md | reports/candidate_selection.md | Picks winning implementation via rubric + model-test voting; emits graft list (candidate-selection mode) |
 
 ### Infrastructure & Deployment
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `deployment_agent` | sonnet | guidelines | deployment artifacts | Docker, orchestration, health checks |
-| `ci_cd_agent` | sonnet | guidelines | CI/CD pipeline config | First deployment only |
-| `observability_agent` | sonnet | guidelines | observability validation | First staging/prod deployment |
-| `reliability_agent` | opus | specs, NFR-* targets, guidelines | reliability_review.md (+ .json), runbooks | SLI/SLO/error-budget, health-check design, timeout/retry/circuit-breaker, runbook stubs (runs in /plan + /deploy) |
+| `deployment_agent` | opus/medium | guidelines | deployment artifacts | Docker, orchestration, health checks |
+| `ci_cd_agent` | opus/medium | guidelines | CI/CD pipeline config | First deployment only |
+| `observability_agent` | opus/medium | guidelines | observability validation | First staging/prod deployment |
+| `reliability_agent` | opus/high | specs, NFR-* targets, guidelines | reliability_review.md (+ .json), runbooks | SLI/SLO/error-budget, health-check design, timeout/retry/circuit-breaker, runbook stubs (runs in /plan + /deploy) |
 
 ### Quality & Optimization
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `backend_audit_agent` | sonnet | phase_context, specs | audit_report.md | Pre-implementation gap analysis |
-| `ui_audit_agent` | sonnet | PHASE_PLAN, specs | UI audit report | Pre-implementation UI gap analysis |
-| `code_optimizer` | sonnet | guidelines | optimization report | Dead code removal, perf optimization |
-| `ui_code_optimizer` | sonnet | guidelines | UI optimization report | Bundle size, render performance |
-| `codebase_mapper` | sonnet | guidelines, codebase | agent_state/codebase/*.md | Persistent codebase knowledge base |
+| `backend_audit_agent` | opus/medium | phase_context, specs | audit_report.md | Pre-implementation gap analysis |
+| `ui_audit_agent` | opus/medium | PHASE_PLAN, specs | UI audit report | Pre-implementation UI gap analysis |
+| `code_optimizer` | opus/medium | guidelines | optimization report | Dead code removal, perf optimization |
+| `ui_code_optimizer` | opus/medium | guidelines | UI optimization report | Bundle size, render performance |
+| `codebase_mapper` | opus/medium | guidelines, codebase | agent_state/codebase/*.md | Persistent codebase knowledge base |
 
 ### Documentation & Demo
 
-| Agent | Model | Input | Output | Notes |
+| Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `documentation_agent` | sonnet | guidelines, manifest | API docs, README, guides | Post-implementation docs |
-| `demo_documenter` | sonnet | BRD, manifest | demo scripts | Stakeholder demo documentation |
-| `demo_executor` | haiku | demo script, guidelines | demo environment | Seeds data, starts services |
-| `demo_validator` | sonnet | demo script | validation report | Verifies demo works end-to-end |
+| `documentation_agent` | opus/medium | guidelines, manifest | API docs, README, guides | Post-implementation docs |
+| `demo_documenter` | opus/medium | BRD, manifest | demo scripts | Stakeholder demo documentation |
+| `demo_executor` | opus/low | demo script, guidelines | demo environment | Seeds data, starts services |
+| `demo_validator` | opus/medium | demo script | validation report | Verifies demo works end-to-end |
 
 ---
 
@@ -353,7 +353,7 @@ debate team (on-demand, any pipeline):
 | Location | Count |
 |---|---|
 | Core agents (`.claude/agents/core/`) | 66 |
-| Generation templates (`.claude/agents/templates/`) | 8 |
+| Generation templates (`~/.claude/agents/templates/`) | 8 |
 | Generated agents (`.claude/agents/generated/`) | 0 in repo — populated at `/init` by `agent_factory` (gitignored) |
 | **Total agents (repo)** | **74** |
 

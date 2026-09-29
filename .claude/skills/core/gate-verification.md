@@ -83,8 +83,8 @@ The second clause prevents a high aggregate from masking a fully-failed critical
 
 For the highest-risk claims (security-critical code, tenant isolation, "the bug is fixed"),
 run the verification on a **different model** than the one that produced the work — a model
-verifying its own output shares its blind spots. Use `model-routing.md` to pick a distinct tier
-(e.g. work done by sonnet → verified by opus). The verifier is prompted to **refute**:
+verifying its own output shares its blind spots. Work is produced on Opus 5.5, so launch the verifier
+with `model: fable` (see `model-routing.md`), in a fresh context that did not produce the work. The verifier is prompted to **refute**:
 
 ```
 "Try to prove this claim is FALSE. Find one counterexample, one uncovered path, or one file:line

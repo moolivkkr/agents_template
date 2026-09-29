@@ -40,7 +40,7 @@ Checks the integrity of `agent_state/` — manifests, gate files, file reference
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Read discipline:** Load one phase at a time. Never load all manifests into context simultaneously. Process each phase, write findings, move to the next.
 
@@ -392,7 +392,7 @@ for f in $(find .claude/agents -name '*.md' -not -name 'INVENTORY*' -not -name '
 done
 [ "$MISSING_GT" -eq 0 ] && echo "✓ All agent definitions reference PROJECT_FACTS.md"
 # Also verify generated/ copies aren't stale vs templates/ (they ship the ground-truth item):
-for t in .claude/agents/templates/*.tmpl.md; do
+for t in ~/.claude/agents/templates/*.tmpl; do
   g=".claude/agents/generated/$(basename "$t")"
   if [ -f "$g" ] && ! diff -q "$t" "$g" >/dev/null 2>&1; then
     echo "WARNING: generated/$(basename "$g") differs from templates/ — re-sync (/init regenerates it)"
@@ -473,7 +473,7 @@ that was previously missing (only prose asked agents to do it).
 ```bash
 DOD=0; LES=0; EXE=0; TOTAL=0
 MISS_DOD=(); MISS_LES=(); MISS_EXE=()
-for f in .claude/agents/core/*.md .claude/agents/templates/*.md; do
+for f in .claude/agents/core/*.md ~/.claude/agents/templates/*.tmpl; do
   [ -f "$f" ] || continue
   case "$f" in *INVENTORY*|*AGENT_SCHEMA*) continue;; esac
   TOTAL=$((TOTAL+1))
@@ -532,7 +532,7 @@ fi
 ### 5.6c. Roster / execution-log agent names ⊆ known agent names
 
 `roster.json` keys and every `execution.jsonl` agent must be REAL agent names (from
-`.claude/agents/{core,templates}/`, template `.tmpl.md` names normalized). A name/slot mismatch
+`.claude/agents/{core,templates}/`, template `.tmpl` names normalized). A name/slot mismatch
 means the roster-completeness gate compares against phantom names and can never be satisfied (or is
 trivially satisfied) — the key/name mismatch bug class.
 
@@ -540,7 +540,7 @@ trivially satisfied) — the key/name mismatch bug class.
 # Build the set of known agent names (core basenames + template basenames minus .tmpl).
 KNOWN=$(
   { ls .claude/agents/core/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//'
-    ls .claude/agents/templates/*.tmpl.md 2>/dev/null | xargs -n1 basename | sed 's/\.tmpl\.md$//'
+    ls ~/.claude/agents/templates/*.tmpl 2>/dev/null | xargs -n1 basename | sed 's/\.tmpl$//'
     ls .claude/agents/generated/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//'
   } | sort -u
 )

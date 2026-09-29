@@ -226,17 +226,17 @@ After approval:
 
 Fully autonomous — no more human prompts.
 
-> **⛔ MANDATORY execution path:** each `/develop --auto --phase=N` in this command MUST be run via
+> **Execution path:** each `/develop --auto --phase=N` in this command MUST be run via
 > the `/develop-orchestrator` wave-by-wave pattern (parent spawns a separate agent per wave with
 > verification between each). Do NOT delegate a whole phase to a single agent — that is the exact
-> "reviews/acceptance get dropped" failure the orchestrator exists to prevent (see the HARD RULE at
+> "reviews/acceptance get dropped" failure the orchestrator exists to prevent (see the orchestration protocol at
 > the top of `develop.md`). Autonomous mode makes this MORE important, not less: there is no human
 > checking that Wave 4 actually ran, so the roster/`verify-gate.sh` execution guarantee is the only
 > backstop, and it only works if every wave is spawned as its own logged agent.
 
 ### Auto-mode behaviors:
 - **Escalations:** `continueWithDefault: true` for architecture/feature decisions — proceed with recommendation, log for review
-- **⛔ Security escalations:** NEVER auto-resolve with permissive defaults. Use the **hardened default** (most restrictive option). If no clear hardened default exists → PAUSE and surface to user even in auto mode. Security domains: auth patterns, token storage/caching, IDOR mitigation, encryption, PII handling, CORS/CSRF, rate limiting.
+- **Security escalations:** never auto-resolve with permissive defaults. Use the **hardened default** (most restrictive option). If no clear hardened default exists → PAUSE and surface to user even in auto mode. Security domains: auth patterns, token storage/caching, IDOR mitigation, encryption, PII handling, CORS/CSRF, rate limiting.
 - **Gate failures:** Auto-fix loop (max 3 cycles per failing item)
   - Cycle 1: Agent fixes → re-test specific failure
   - Cycle 2: Re-run with fresh context → re-test

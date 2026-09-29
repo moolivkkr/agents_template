@@ -30,7 +30,7 @@ Surfaces assumptions, risks, and open questions about a phase BEFORE `/plan` run
 
 ## Session Context Budget
 
-> Full protocol: `.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
+> Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
 **Agent result discipline:** Every agent returns a 3-line summary to the parent. Full analysis content is in files — never echoed back to the conversation.
 

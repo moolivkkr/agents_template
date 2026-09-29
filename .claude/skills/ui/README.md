@@ -25,7 +25,7 @@ tags:
 ```
 1. docs/PROJECT_FACTS.md + docs/DECISIONS.md        ← ground truth / settled decisions (always)
 2. PROJECT DESIGN SYSTEM                             ← if one exists for this project
-     .claude/skills/ui/vertix-portal-design-system.md  (Vertix portal modules)
+     ~/.claude/skills/ui/vertix-portal-design-system.md  (Vertix portal modules)
 3. docs/design/phases/N/specs/*.wireframe.{html,md}  ← the phase's concrete UI spec
 4. GENERIC HOUSE STANDARDS                           ← professional-ui-standards.md (defaults only)
 5. FRAMEWORK MECHANICS                               ← shadcn.md, tailwind.md, {{UI_FRAMEWORK}}.md

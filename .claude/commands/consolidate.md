@@ -80,7 +80,7 @@ Each change records provenance: `merged_from: [L-2-003, L-4-001]`, `confidence_c
 Runs right after the Step 1 sweep, because dedup/merge/confidence-recalibration are exactly what expose a
 lesson's true **recurrence** and **confidence** — the promotion inputs. This is the CoALA *procedural*
 tier: a recurring, validated lesson graduates from prose (that agents may or may not read) into an
-**enforced routine**. Full model: `.claude/skills/core/procedural-memory.md`.
+**enforced routine**. Full model: `~/.claude/skills/core/procedural-memory.md`.
 
 Scan the freshly consolidated `patterns.md`/`lessons.md` index. A pattern is a **promotion candidate**
 only when it meets ALL of the promotion criteria (see the skill for the full gate):
@@ -95,7 +95,7 @@ only when it meets ALL of the promotion criteria (see the skill for the full gat
 For each qualifying pattern, promote it to the appropriate **target** (a lesson may hit more than one):
 
 - **A — Skill checklist:** it is a routine an agent should run every time → append a checklist line to the
-  relevant `.claude/skills/**/*.md`, tagged with provenance
+  relevant `~/.claude/skills/**/*.md`, tagged with provenance
   (`<!-- promoted from P-014 (recur×3, HIGH) via /consolidate <ts> -->`).
 - **B — Tier 0 fact:** it has hardened into an inviolable, environment-wide constraint → hand off to
   `/remember` (never hand-edit `PROJECT_FACTS.md` — the script does the deterministic supersession).
