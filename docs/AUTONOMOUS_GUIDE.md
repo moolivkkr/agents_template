@@ -64,8 +64,8 @@ report.
 ## 4. `run.json` — the run state
 
 ```json
-{"active": true, "status": "running", "phase": 1, "step": "plan_complete", "next_step": "design",
- "updated": "<iso8601>", "started": "<iso8601>", "args": "<the /autonomous args>"}
+{"active": true, "status": "running", "session_id": null, "phase": 1, "step": "plan_complete",
+ "next_step": "design", "updated": "<iso8601>", "started": "<iso8601>", "args": "<the /autonomous args>"}
 ```
 
 Written at Step 0 and after every step (`updated` is bumped, `step` = last completed, `next_step` =
@@ -78,7 +78,25 @@ what runs next).
 | `paused` (with `reason`) | Escalation limit exceeded, catastrophic failure, a roster agent never ran, or you said stop | Allows stop |
 | `failed` | Unrecoverable | Allows stop |
 | `complete` | Step 7 done (`active` becomes `false`) | Allows stop |
-| `stalled` | Set **by the hook** when `updated` hasn't changed across repeated blocked stops (default 2, `AUTONOMOUS_MAX_NUDGES`) | Allows stop, so a stuck run can't loop forever |
+| `stalled` | Set **by the hook** when the run makes no progress across repeated blocked stops (default 3, `AUTONOMOUS_MAX_NUDGES`) | Allows stop, so a stuck run can't loop forever |
+
+**How the hooks decide (2026-09-30 hardening):**
+- **Progress** is a fingerprint of `run.json.updated`, the newest wave checkpoint, the
+  `execution.jsonl` line counts and git state. Many turns inside one long `/develop` step therefore
+  count as progress as long as agents keep checkpointing, logging or committing.
+- **Background agents:** when the Stop input lists running background tasks (subagents run in the
+  background by default), the turn is allowed to end without spending a nudge. The tasks'
+  completion wakes the session.
+- **One session per run:** `session_id` starts `null`. The first session that stops binds the run,
+  and stops from any other session (a status check in a second terminal) are ignored.
+  `--resume` clears the binding so the resuming session takes over.
+- **API errors:** a `StopFailure` hook records `last_error` and `error_count`. Permanent errors
+  (billing, auth, account, invalid request, model not found) set `paused` with a reason; transient
+  ones (rate limit, overloaded, server) leave the run `running` for `--resume` or a supervisor.
+- **After compaction or resume:** a `SessionStart` hook restates the run's position and the driver
+  rules, because compaction truncates the `/autonomous` instructions.
+- **Claude Code's 8-block cap** counts consecutive blocks with no tool use in between, so it only
+  ends a genuinely stuck loop.
 
 ## 5. The one human checkpoint
 
@@ -117,8 +135,8 @@ the run by fix loops, with the outcome logged.
 /startup:autonomous --resume
 ```
 
-Reads `phase` and `next_step` from `run.json`, re-arms it (`status: running`, clears the
-nudge/stall fields) and continues from that step. Step ids, in order:
+Reads `phase` and `next_step` from `run.json`, re-arms it (`status: running`, `session_id: null`,
+clears the nudge, progress and stall fields) and continues from that step. Step ids, in order:
 
 ```
 preflight → init → map → discuss → plan → design → checkpoint → develop →
