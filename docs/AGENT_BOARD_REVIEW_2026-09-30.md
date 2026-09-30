@@ -472,7 +472,7 @@ e2e (`tests/k8s-e2e.sh`, 32/32).
 | 11 | Optimizers break behaviour | **Done.** `/optimize` only. Tests and mocks are read-only, dead code is proven by static reachability, error handling is never removed, and scope comes from `base_sha`; no `git reset --hard`. | `coding-agents.test.sh` |
 | 12 | Unproduced hand-offs | **Done.** `ui_developer/manifest.json` is declared and produced, e2e scope comes from the spec inventory, and the depgraph matching is segment-aware (regression fixture). | `dependency-graph.test.sh` 54 |
 | 13 | Commands and versions drift | **Done.** A `## Commands and versions` table is parsed by `commands-table.py` and read by agents, test_runner, CI and gate check (e). The docker USER bug and CI Postgres ports are fixed, and test_runner's broken fallbacks are removed. | `evidence-tools.test.sh` (CT01-04), `coding-agents.test.sh` |
-| 14 | Stack and project leakage | **Partly.** Vertix and the browser-LLM sections are removed, and the coding rules are language-neutral. The per-language packs remain as they are. | `coding-agents.test.sh` |
+| 14 | Stack and project leakage | **Done (follow-up, same day).** Vertix and the browser-LLM sections are removed, and the coding rules are language-neutral. A design system is used only when the project names one (`tech_profile.frontend.design_system`); ux_designer and design_quality_reviewer no longer hard-load Vertix, shadcn or Tailwind. `/develop` Wave 2/3.5 and `/accept` build with the Commands-and-versions rows, not go/npm/cargo guesses. Vue and Svelte packs are extended and an Angular pack is new, each covering the envelope client, cursor lists, 4 states, forms, session, safe rendering, a11y and component tests. | `coding-agents.test.sh` (10 genericity checks), `ui-framework-packs.test.sh`, `tests/archetype-compile/ui-frameworks/run.sh` |
 
 **Tool flags, verified by running them (2026-09-30, follow-up):** everything except Spring was run
 for real on this machine. Spring was checked against the Spring Data docs, because no JDK is installed.
@@ -507,8 +507,35 @@ Two recipes could pass a run that should fail; both are fixed and have regressio
     Postgres 17);
   - `deadcode -test`, knip;
   - every Spring Data `scroll()` / `Window` / `ScrollPosition` call (minimum Spring Data 3.1, Boot 3.1).
-- **Still not compiled:** about 30 per-language archetype code samples. A broken sample fails at the
-  coder's build gate, so it can't pass silently.
+- **Archetype samples, compiled and run (follow-up, same day).** There were about 790 code blocks in 75
+  archetype files, not ~30. Each language now has a re-runnable harness in `tests/archetype-compile/<lang>/`.
+  It extracts the blocks from the markdown at run time and fails when a block is neither checked nor
+  skipped with a reason. An offline inventory check for each language runs in `run-all.sh`. The harnesses
+  need the toolchain and network for the first dependency install, so they stay opt-in.
+
+  | Language | Blocks checked | Units | Also run |
+  |---|---|---|---|
+  | Go 1.27.1 | 146/151 (5 comment-only) | 9/9 | handler/service tests; repository tests 26/26 on Postgres |
+  | Python 3.12 (pyright) | 162/163 | 15/15 | handler 51/51, service 43/43; repository 32/32 + migrations 4/4 on Postgres |
+  | TypeScript 7.0.2 strict | 198/200 | 20/20 | handler 40/40, service 43/43; `prisma validate`; Nest DI probe |
+  | Rust 1.98.1 | 157/182 (25 unchecked blocks in the newly covered `languages/rust.md` and `frameworks/axum.md`) | 11/11 | 97/97 on Postgres 17, full migration set |
+  | Java 25 / Spring Boot 4.1 | 143/145 | 18/18 | handler 64/64, service 34/34, repository 40/40 on Postgres |
+  | Vue / Svelte / Angular packs | 41/41 | 3/3 | 7 component tests each |
+
+  Running them found more than compile errors. The fixes include:
+  - an SQL injection (`ORDER BY` direction, Go);
+  - gRPC streams with no auth (Go) and a gRPC server whose middleware never ran (TS);
+  - JWTs taken from websocket URLs (Go, TS, Rust);
+  - auth and rate-limit errors in a second envelope shape (Go, Python, TS, Java);
+  - a JWT decode `NameError` that turned every request into a 401 (Python);
+  - cursors that broke page 2 for non-default sorts (Rust, Python);
+  - a tenant filter enabled outside the transaction, so it filtered nothing (Java);
+  - log masking that masked nothing (Java);
+  - Postgres DDL that was a syntax error (Go, Rust);
+  - APIs removed in Zod 4, Express 5, Prisma 7, axum 0.8, OpenTelemetry, Spring Boot 4, Hibernate 7 and Jackson 3.
+
+  MSW 3 (released 2026-09-28) renamed `onUnhandledRequest` to `onUnhandledFrame` and silently ignores
+  the old key. `msw.md` and the RN testing pack are updated.
 
 **Decisions (confirmed by the owner, 2026-09-30):**
 - **Changing an existing test.** A coder may change an *existing* test's expectation only when this
