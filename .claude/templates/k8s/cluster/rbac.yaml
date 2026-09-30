@@ -1,0 +1,22 @@
+# Agent identity for the sdlc lab cluster (human bootstrap, admin kubeconfig).
+# ServiceAccount sdlc-agent: read-only across the cluster (ClusterRole "view" excludes Secrets),
+# and "admin" only inside each app's <app>-dev / <app>-qa namespaces (RoleBindings created by
+# app-namespaces.sh). It can never create/delete namespaces, touch cluster-scoped objects, change
+# quotas/RBAC outside its namespaces, or read kube-system secrets.
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: sdlc-agent, namespace: sdlc-system}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sdlc-agent-token
+  namespace: sdlc-system
+  annotations: {kubernetes.io/service-account.name: sdlc-agent}
+type: kubernetes.io/service-account-token
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: sdlc-agent-view}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: view}
+subjects: [{kind: ServiceAccount, name: sdlc-agent, namespace: sdlc-system}]

@@ -1,11 +1,14 @@
 # sdlc-agent.yaml — Lima VM running a k3s AGENT that joins the sdlc-server over the Thunderbolt link.
-# See sdlc-server.yaml for the topology. This host forwards only WireGuard (51820/udp) onto its
-# Thunderbolt address; the agent reaches the server's API at https://<serverIP>:6443 directly.
+# See sdlc-server.yaml for the topology. This host forwards WireGuard (51820/udp) onto its
+# Thunderbolt address, and the registry and ingress onto ITS OWN loopback, so the developer Mac pushes
+# images to localhost:5001 and tests against http://<app>-<env>.localhost:18080 without leaving
+# 127.0.0.1. The agent reaches the server's API at https://<serverIP>:6443 over the link.
 #
 # Create:  limactl create --name sdlc-agent \
 #            --set '.param.serverURL="https://10.10.10.2:6443"' --set ".param.token=\"$(ssh tb2 limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/server/node-token)\"" \
 #            --set '.param.externalIP="10.10.10.3"' --set '.param.nodeIP="172.30.10.3"' \
-#            --set '.param.registryIP="10.10.10.2"' sdlc-agent.yaml && limactl start sdlc-agent
+#            sdlc-agent.yaml && limactl start sdlc-agent
+#          (scripts/cluster-up.sh does all of this, plus the cluster bootstrap)
 minimumLimaVersion: 2.0.0
 base: template:_images/ubuntu-lts
 vmType: vz
@@ -21,7 +24,6 @@ param:
   token: ""
   externalIP: "10.10.10.3"
   nodeIP: "172.30.10.3"
-  registryIP: "10.10.10.2"
 provision:
 - mode: system
   script: |
@@ -43,7 +45,7 @@ provision:
     cat >/etc/rancher/k3s/registries.yaml <<EOF
     mirrors:
       "localhost:5001":
-        endpoint: ["http://{{.Param.registryIP}}:5001"]
+        endpoint: ["http://{{.Param.nodeIP}}:30501"]
     EOF
     if [ ! -d /var/lib/rancher/k3s ]; then
       curl -sfL https://get.k3s.io | K3S_URL="{{.Param.serverURL}}" K3S_TOKEN="{{.Param.token}}" \
@@ -63,6 +65,18 @@ portForwards:
   guestIPMustBeZero: false
   proto: udp
   hostIP: "10.10.10.3"   # literal (Lima does not template hostIP); override with --set
+# The two below are STATIC (set up by the host agent at start): the guest agent discovers NodePorts and
+# LoadBalancer ports by watching Services with the admin kubeconfig, which only the server VM has.
+- guestPort: 30501          # in-cluster registry NodePort -> push to localhost:5001 from this Mac
+  guestIP: "127.0.0.1"
+  hostPort: 5001
+  hostIP: "127.0.0.1"
+  static: true
+- guestPort: 80             # Traefik ingress (svclb hostPort) -> http://<app>-<env>.localhost:18080
+  guestIP: "127.0.0.1"
+  hostPort: 18080
+  hostIP: "127.0.0.1"
+  static: true
 - guestIP: "0.0.0.0"
   proto: any
   ignore: true

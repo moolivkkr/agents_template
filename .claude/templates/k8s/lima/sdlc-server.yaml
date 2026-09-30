@@ -7,8 +7,9 @@
 # its Thunderbolt address — no routes, no sudo:
 #   6443/tcp   k3s API + supervisor (agents join through it)
 #   51820/udp  WireGuard (flannel wireguard-native pod network between nodes)
-#   5001/tcp   in-cluster image registry (NodePort 30501)
-#   18080/tcp  ingress (Traefik web entrypoint)
+#   5001/tcp   in-cluster image registry (NodePort 30501, cluster/registry.yaml)
+#   18080/tcp  ingress (Traefik, port 80)
+# Lima applies the FIRST matching portForwards rule, so each guest port goes to exactly one host IP.
 # k3s runs in its documented "distributed / multicloud" mode: --node-external-ip + wireguard-native
 # + --flannel-external-ip (https://docs.k3s.io/networking/distributed-multicloud).
 # Each node also gets a unique internal node IP on a dummy interface (both VMs would otherwise share
@@ -47,12 +48,13 @@ provision:
     Address={{.Param.nodeIP}}/32
     EOF
     systemctl restart systemd-networkd
-    # pull images pushed to localhost:5001 from the in-cluster registry (NodePort 30501 on this node)
+    # images are referenced as localhost:5001/...; pull them from the in-cluster registry through
+    # this node's own NodePort (cluster/registry.yaml), never over the Thunderbolt link
     mkdir -p /etc/rancher/k3s
     cat >/etc/rancher/k3s/registries.yaml <<EOF
     mirrors:
       "localhost:5001":
-        endpoint: ["http://{{.Param.externalIP}}:5001"]
+        endpoint: ["http://{{.Param.nodeIP}}:30501"]
     EOF
     if [ ! -d /var/lib/rancher/k3s ]; then
       curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644 \
@@ -71,8 +73,6 @@ probes:
 portForwards:
 - guestPort: 6443
   hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
-- guestPort: 6443
-  hostIP: "127.0.0.1"
 - guestPort: 51820
   guestIP: "0.0.0.0"
   guestIPMustBeZero: false
@@ -96,6 +96,6 @@ copyToHost:
   host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
   deleteOnStop: true
 message: |
-  k3s server ready. Kubeconfig (API on 127.0.0.1:6443 and {{.Param.externalIP}}:6443):
+  k3s server ready. Admin kubeconfig (edit its server to https://{{.Param.externalIP}}:6443):
     {{.Dir}}/copied-from-guest/kubeconfig.yaml
   Join token for agents: limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/server/node-token

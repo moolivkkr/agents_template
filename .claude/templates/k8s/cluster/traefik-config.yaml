@@ -1,0 +1,10 @@
+# Keep the ingress controller on the server node: the agent node is a laptop that sleeps and roams, and
+# ingress on the server Mac (<serverIP>:18080) should not depend on it. (HelmChartConfig is k3s's way to
+# override values of the bundled Traefik chart.)
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata: {name: traefik, namespace: kube-system}
+spec:
+  valuesContent: |-
+    nodeSelector:
+      node-role.kubernetes.io/control-plane: "true"
