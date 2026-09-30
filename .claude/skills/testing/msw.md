@@ -5,6 +5,13 @@
 npm install msw --save-dev
 ```
 
+> **MSW 3 (3.0.0 shipped 2026-09-28; `latest` is 3.0.1, checked 2026-09-30).** The option that decides what
+> happens to a request no handler matches is now `onUnhandledFrame` (`"error" | "warn" | "bypass"` or a
+> callback); MSW 2's `onUnhandledRequest` no longer exists in 3.x and fails to type-check. Use the name
+> for the major in your lockfile; the examples below are MSW 3. `msw/native` was removed in 3.0.
+> **Svelte:** pin `msw@^2.15` while tests run under `svelteTesting()` — its `browser` resolve condition
+> stops `msw/node` 3.x from loading (see `frameworks/svelte.md`).
+
 ## Mocks are typed from the envelope — never hand-shaped
 
 Every mocked response uses the one envelope in `api/response-envelope.md`:
@@ -88,7 +95,7 @@ export const server = setupServer(...handlers)
 import { beforeAll, afterEach, afterAll } from "vitest"
 import { server } from "../mocks/server"
 
-beforeAll(() => server.listen({ onUnhandledRequest: "error" }))
+beforeAll(() => server.listen({ onUnhandledFrame: "error" }))   // MSW 2: onUnhandledRequest
 afterEach(() => server.resetHandlers())   // restore default handlers between tests
 afterAll(() => server.close())
 ```
@@ -132,7 +139,7 @@ export const worker = setupWorker(...handlers)
 async function enableMocking() {
   if (import.meta.env.DEV) {
     const { worker } = await import("./mocks/browser")
-    return worker.start({ onUnhandledRequest: "bypass" })
+    return worker.start({ onUnhandledFrame: "bypass" })   // MSW 2: onUnhandledRequest
   }
 }
 
@@ -187,6 +194,6 @@ http.get("/healthz", () => {
 - Test both `data: [...]` and `data: []` for lists, a found resource and a 404 `NOT_FOUND` for single resources, and every documented error code
 - Define base handlers in `handlers.ts` — per-test overrides go in `server.use()`
 - Always call `server.resetHandlers()` in `afterEach` — prevents test pollution
-- Use `onUnhandledRequest: "error"` in tests to catch missing handlers early
-- Use `onUnhandledRequest: "bypass"` in browser to allow real requests for non-mocked endpoints
+- Use `onUnhandledFrame: "error"` (MSW 2: `onUnhandledRequest`) in tests to catch missing handlers early
+- Use `onUnhandledFrame: "bypass"` (MSW 2: `onUnhandledRequest`) in the browser to let non-mocked requests through
 - MSW intercepts at the network level — works with any HTTP client (fetch, axios, ky)

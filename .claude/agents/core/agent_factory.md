@@ -138,6 +138,11 @@ every pack named here exists.
 | `{{UI_COMPONENTS}}` | shadcn/ui, shadcn | `ui/shadcn.md` |
 | `{{UI_COMPONENTS}}` | tailwind | `ui/tailwind.md` |
 | `{{STATE_MANAGEMENT}}` | react-query, tanstack-query | `frameworks/tanstack-query.md` |
+| `{{STATE_MANAGEMENT}}` | pinia, @tanstack/vue-query, vue-query | `frameworks/vue.md` |
+| `{{STATE_MANAGEMENT}}` | @tanstack/svelte-query, svelte-query | `frameworks/svelte.md` |
+| `{{STATE_MANAGEMENT}}` | angular-signals, httpresource, signals | `frameworks/angular.md` |
+| `{{UI_FRAMEWORK}}` | sveltekit, svelte-kit | `frameworks/svelte.md` |
+| `{{UI_FRAMEWORK}}` | vue3 | `frameworks/vue.md` |
 | `{{DB_TECH}}` | postgres, postgresql | `databases/postgres.md` |
 | `{{MOBILE_E2E_TOOL}}` | maestro | `testing/maestro.md` |
 | `{{MOBILE_E2E_TOOL}}` | detox | `testing/detox.md` |
@@ -162,7 +167,7 @@ agents (`ux_designer`, `design_quality_reviewer`, `ui_standards_auditor`) read t
 `~/.claude/skills/ui/` — that folder holds other products' packs too.
 
 **No pack for the UI framework.** `ui_developer`'s code examples are React-flavoured and rely on
-`frameworks/{{UI_FRAMEWORK}}.md` to translate them. When that pack is missing (e.g. `angular`), say so
+`frameworks/{{UI_FRAMEWORK}}.md` to translate them (react, nextjs, vue, svelte and angular have one). When that pack is missing, say so
 in the Step 5 report as a warning, not just in `missing_skill_packs`: the UI agents will work from
 generic patterns, and the human may want to add the pack before `/develop`.
 
