@@ -17,7 +17,8 @@ See .claude/skills/testing/test-results-sidecar.md for the schema and the gate r
 import argparse, datetime, json, os, re, subprocess, sys
 import xml.etree.ElementTree as ET
 
-TC_RE = re.compile(r"(?<![A-Za-z0-9])TC[-_]([A-Z0-9]+)[-_](\d+)(?![0-9])")   # TC_X_1 inside TestFoo_TC_X_1 too
+# TC_X_1 inside TestFoo_TC_X_1, and Go/JUnit-style TestTC_X_1 / testTC_X_1
+TC_RE = re.compile(r"(?:(?<![A-Za-z0-9])|(?<=[Tt]est))TC[-_]([A-Z0-9]+)[-_](\d+)(?![0-9])")
 CODE_EXCLUDES = ["agent_state", "docs", ".claude", "deploy/k8s/overlays"]
 
 
@@ -44,17 +45,27 @@ def parse(paths):
             root = ET.parse(p).getroot()
         except (ET.ParseError, OSError) as e:
             sys.exit(f"junit-to-sidecar: cannot read {p}: {e}")
-        for tc in root.iter("testcase"):
-            name = tc.get("name", "")
-            cls = tc.get("classname", "")
-            full = f"{cls} {name}".strip() if cls and cls not in name else name
-            if tc.find("failure") is not None or tc.find("error") is not None:
-                v = "FAIL"
-            elif tc.find("skipped") is not None:
-                v = "SKIPPED"
-            else:
-                v = "PASS"
-            cases.append({"name": full, "verdict": v, "ids": tc_ids(full)})
+        # Playwright writes one <testsuite hostname="<project>"> per project (chromium, mobile, ...) with the
+        # same classname + name. Keep them apart, or a chromium-only failure followed by the mobile pass
+        # reads as FLAKY and the total halves. Other runners put the machine name there, the same for
+        # every suite, so a single hostname adds nothing to the name.
+        suites = ([] if root.tag == "testsuite" else [root]) + list(root.iter("testsuite"))
+        multi = len({s.get("hostname") for s in suites if s.get("hostname")}) > 1
+        for suite in suites:
+            host = suite.get("hostname") or ""
+            for tc in suite.findall("testcase"):          # direct children only: nested suites are visited too
+                name = tc.get("name", "")
+                cls = tc.get("classname", "")
+                full = f"{cls} {name}".strip() if cls and cls not in name else name
+                if multi and host:
+                    full = f"[{host}] {full}"
+                if tc.find("failure") is not None or tc.find("error") is not None:
+                    v = "FAIL"
+                elif tc.find("skipped") is not None:
+                    v = "SKIPPED"
+                else:
+                    v = "PASS"
+                cases.append({"name": full, "verdict": v, "ids": tc_ids(full)})
     return cases
 
 

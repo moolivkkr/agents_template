@@ -474,9 +474,41 @@ e2e (`tests/k8s-e2e.sh`, 32/32).
 | 13 | Commands and versions drift | **Done.** A `## Commands and versions` table is parsed by `commands-table.py` and read by agents, test_runner, CI and gate check (e). The docker USER bug and CI Postgres ports are fixed, and test_runner's broken fallbacks are removed. | `evidence-tools.test.sh` (CT01-04), `coding-agents.test.sh` |
 | 14 | Stack and project leakage | **Partly.** Vertix and the browser-LLM sections are removed, and the coding rules are language-neutral. The per-language packs remain as they are. | `coding-agents.test.sh` |
 
-**Not executed here, so unverified:**
-- **Syntax and flags checked only against docs:** `GOFLAGS=-count=1 -race`, Vitest `--outputFile.junit=`, k6 `handleSummary` sub-metric parsing, Alembic `autocommit_block()`, Go `deadcode -test`, Spring Data `scroll()`.
-- **Archetype samples:** the ~30 per-language archetype code samples edited for the envelope and tenant rules were reviewed but not compiled.
+**Tool flags, verified by running them (2026-09-30, follow-up):** everything except Spring was run
+for real on this machine. Spring was checked against the Spring Data docs, because no JDK is installed.
+Two recipes could pass a run that should fail; both are fixed and have regression tests:
+- **k6 parser (`performance_agent`) failed open.** With `--no-thresholds`, or with a scenario tag that
+  matched no request, k6 exits 0 and reports p95 = 0, so the parser said PASS while the real p95 was
+  405 ms against a 300 ms target. It now fails a case whose three thresholds weren't all evaluated, or
+  which saw no requests. The seven real k6 v2.3.0 summaries are fixtures in `tests/fixtures/k6/`; the
+  old parser passes two of them.
+- **`go test -json | go-junit-report` failed open.** The default parser drops a package that fails to
+  build, and the pipe replaces the exit code with 0, so the sidecar said PASS. The recipe now uses
+  `-parser gojson` and keeps go test's exit code.
+- **Fail-closed fixes:**
+  - Playwright `--reporter=junit` rows wrote no file (the flag replaces the config's reporters). They
+    now set `PLAYWRIGHT_JUNIT_OUTPUT_FILE` and pass `--reporter=list,junit`. The `x:acceptance` row
+    uses its own `--config`.
+  - `test_runner` silently dropped `-race` where cgo was off; the report now says races were NOT checked.
+  - `junit-to-sidecar.py` merged Playwright projects, so a chromium-only failure read as FLAKY and the
+    total halved. It now keys cases by project.
+  - The TC regex now also matches `TestTC_UNIT_10101` function names.
+  - `vulture --min-confidence 80` hid every unused function (vulture rates them all 60%); it's now 60.
+  - The Java archetypes used `Specification.where(null)`, which Spring Data JPA 4.0 rejects.
+  - golang-migrate note: a leading `SET lock_timeout` breaks a `CONCURRENTLY` file.
+  - `deadcode` guidance: the exit code is always 0, test-only code is reported, and a library's
+    exported API is off limits.
+- **Verified as written:**
+  - `gotestsum … -count=1 -race`, and `GOFLAGS` honoured;
+  - all three Vitest `--outputFile` forms;
+  - Playwright config reporters;
+  - k6 summary keys and exit 99 on a broken threshold;
+  - Alembic `autocommit_block()` with `CREATE INDEX CONCURRENTLY` (upgrade, downgrade and re-run, on
+    Postgres 17);
+  - `deadcode -test`, knip;
+  - every Spring Data `scroll()` / `Window` / `ScrollPosition` call (minimum Spring Data 3.1, Boot 3.1).
+- **Still not compiled:** about 30 per-language archetype code samples. A broken sample fails at the
+  coder's build gate, so it can't pass silently.
 
 **Decisions (confirmed by the owner, 2026-09-30):**
 - **Changing an existing test.** A coder may change an *existing* test's expectation only when this

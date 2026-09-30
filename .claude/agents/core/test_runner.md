@@ -118,13 +118,17 @@ TO="$(jq -r '.timeout_seconds // 900' "$VC")"
 export PHASE APP_BASE_URL CI=1                 # CI=1: runners refuse .only / new snapshots in CI mode
 # Go: no cached results, race detector where cgo is available (the table should already say so)
 if echo "$CMD" | grep -qE '(^|[^a-z])(go test|gotestsum)'; then
-  export GOFLAGS="-count=1 $( [ "$(go env CGO_ENABLED)" = 1 ] && command -v cc >/dev/null && echo -race )"
+  # -race needs cgo + a C compiler on Linux (golang:*-alpine has neither); macOS has it without cgo
+  RACE=$( { [ "$(go env GOOS)" = darwin ] || { [ "$(go env CGO_ENABLED)" = 1 ] && command -v cc >/dev/null; }; } && echo -race )
+  export GOFLAGS="${GOFLAGS:+$GOFLAGS }-count=1 $RACE"   # keep the project's own GOFLAGS
+  [ -n "$RACE" ] || echo "race detector unavailable (no cgo / C compiler): races were NOT checked" >> "$J/<tier>.notes"
 fi
 perl -e 'alarm shift; exec @ARGV' "$TO" bash -c "$CMD" > "$J/<tier>.log" 2>&1; RC=$?   # wall-clock limit; RC 142 = timed out
 ```
 - **Never** add retry flags, `--passWithNoTests`, `-run` filters or `--bail`. Run the command as the
   table states it. If `GOFLAGS` had to add `-count=1` or `-race`, say so in the report and recommend
-  fixing the table row.
+  fixing the table row. If `$J/<tier>.notes` says the race detector was unavailable, the report says
+  "races NOT checked" in its summary. A racy test passing without `-race` is not evidence of no race.
 - A timed-out run (RC 142) is `ERROR`, and the log's last lines show where it hung.
 - e2e needs `APP_BASE_URL` (the Wave 3.5 deploy). If it isn't set, or `GET $APP_BASE_URL/healthz`
   isn't 200, the e2e tier is `BLOCKED — app not reachable`, never skipped silently.

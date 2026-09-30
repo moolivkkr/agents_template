@@ -137,9 +137,18 @@ Commit every change separately so each one can be reverted on its own.
 
 ### Detection
 1. **Run the language's reachability tool** over the scope, with the command recorded in the report:
-   - Go: `deadcode -test ./...` (golang.org/x/tools/cmd/deadcode — whole-program reachability from `main` and tests) and `staticcheck -checks U1000 ./...` (unused identifiers)
+   - Go: `deadcode -test ./...` (golang.org/x/tools/cmd/deadcode: whole-program reachability from `main`
+     and tests) gives the removal candidates. Also run `deadcode ./...` without `-test`: what it adds
+     is reachable only from tests, and goes to Step 3's report, never to removal. `deadcode` exits 0
+     whether or not it finds anything, so count its output lines. In a library module (no `main`
+     package), `deadcode ./...` fails with "no main packages" and `-test` lists unused exported API:
+     exported identifiers of a library are its API, so they are LOW. Add
+     `staticcheck -checks U1000 ./...` for unused unexported identifiers. staticcheck must be built with
+     the project's Go version: an older build fails with "requires newer Go version" and exit 1, the same
+     exit as real findings, so read the output.
    - TypeScript/JavaScript: `npx knip --include files,exports,types,dependencies`
-   - Python: `vulture <paths> --min-confidence 80`
+   - Python: `vulture <paths> --min-confidence 60`. vulture rates every unused function, class, method and
+     variable at 60% and imports at 90%, so 80 hides everything but imports (verified on vulture 2.14/2.16).
    - Java: IDE/`spotbugs` unused-code inspections; Rust: compiler `dead_code` warnings
    If the tool isn't installed and can't be run, Pass 1 removes **nothing**: report "no reachability
    evidence — Pass 1 skipped".

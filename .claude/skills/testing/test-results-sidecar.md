@@ -23,7 +23,7 @@ python3 .claude/hooks/junit-to-sidecar.py --tier unit --command "<the command yo
 
 | Stack | JUnit reporter |
 |---|---|
-| Go | `gotestsum --junitfile unit.xml -- -count=1 -race ./...` (or `go test -json … \| go-junit-report`) |
+| Go | `gotestsum --junitfile unit.xml -- -count=1 -race ./...`, or `go test -json -count=1 -race ./... > go-test.json; RC=$?; go-junit-report -parser gojson -in go-test.json -out unit.xml`. Keep go test's RC: piping into go-junit-report replaces it with 0, and the default parser silently drops a package that fails to build (verified: sidecar PASS) |
 | Jest / Vitest | `jest --ci --reporters=default --reporters=jest-junit` · `vitest run --reporter=junit --outputFile=unit.xml` |
 | pytest | `pytest --junitxml=unit.xml` |
 | Playwright | `reporter: [['junit', { outputFile: 'e2e.xml' }]]`, with `failOnFlakyTests: true` in CI |

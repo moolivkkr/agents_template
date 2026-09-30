@@ -36,7 +36,8 @@ Writes an sdlc.test-results/v1 sidecar (tier "tc-inventory"); exit 0 = PASS, 1 =
 import argparse, datetime, json, os, re, subprocess, sys
 
 TC = r"TC[-_]([A-Z0-9]+)[-_](\d+)"
-TC_RE = re.compile(r"(?<![A-Za-z0-9])" + TC + r"(?![0-9])")   # TC_X_1 inside TestFoo_TC_X_1 too
+# TC_X_1 inside TestFoo_TC_X_1, and Go/JUnit-style TestTC_X_1 / testTC_X_1
+TC_RE = re.compile(r"(?:(?<![A-Za-z0-9])|(?<=[Tt]est))" + TC + r"(?![0-9])")
 RANGE_RE = re.compile(r"\bTC-[A-Z0-9]+-\d+\s*(?:to|through|thru|–|—|\.\.|-)\s*TC-[A-Z0-9]+-\d+\b")
 SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", ".next", "coverage", "Pods", "agent_state",
              "docs", ".claude", "__pycache__", "target", ".venv", "venv", ".gradle", "DerivedData", ".expo"}

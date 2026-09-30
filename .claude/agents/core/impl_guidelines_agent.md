@@ -214,11 +214,11 @@ and Go tests run with `-count=1`. Example for a Go API + React web app on Postgr
 | test:unit | gotestsum --junitfile agent_state/phases/$PHASE/junit/unit.xml -- -count=1 -race ./internal/... |
 | test:integration | gotestsum --junitfile agent_state/phases/$PHASE/junit/integration.xml -- -count=1 -tags=integration ./... |
 | test:ui | cd web && npx vitest run --reporter=junit --outputFile=../agent_state/phases/$PHASE/junit/ui.xml |
-| test:e2e | cd web && npx playwright test --reporter=junit |
+| test:e2e | cd web && PLAYWRIGHT_JUNIT_OUTPUT_FILE=../agent_state/phases/$PHASE/junit/e2e.xml npx playwright test --reporter=list,junit |
 | migrate | go run ./cmd/app migrate |
 | seed | go run ./cmd/app seed |
 | run | go run ./cmd/app serve |
-| x:acceptance | cd web && npx playwright test tests/acceptance --reporter=junit |
+| x:acceptance | cd web && PLAYWRIGHT_JUNIT_OUTPUT_FILE=../agent_state/phases/$PHASE/junit/acceptance.xml npx playwright test --config tests/acceptance/playwright.config.ts --reporter=list,junit |
 | x:perf | k6 run perf/nfr.js |
 | x:system | ./scripts/system-tests.sh |
 

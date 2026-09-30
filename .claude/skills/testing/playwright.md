@@ -39,6 +39,17 @@ export default defineConfig({
 A developer running locally sets `APP_BASE_URL=http://localhost:<port>` against a stack they started
 themselves.
 
+**Where the JUnit file lands** (verified on Playwright 1.63):
+- `--reporter=junit` on the command line *replaces* the config's reporters. The XML then goes to stdout
+  and no file is written. On the command line use `PLAYWRIGHT_JUNIT_OUTPUT_FILE=<path> npx playwright
+  test --reporter=list,junit`, or leave out `--reporter` and let the config write it.
+- The path is relative to the working directory. In a `web/` sub-project set
+  `PW_JUNIT_FILE=../agent_state/phases/$PHASE/junit/e2e.xml` (or the CLI variable above). The default
+  relative path lands in `web/agent_state/`, which the evidence tools don't exclude, so the tree reads
+  as dirty.
+- A path filter only finds tests under `testDir` (`./e2e`). Acceptance specs under `tests/acceptance/`
+  need their own `--config tests/acceptance/playwright.config.ts`, or the filter matches 0 tests.
+
 ### Flake policy
 
 - `retries: 0`. A test that fails intermittently **fails**. Fix the cause: a selector racing the UI, an

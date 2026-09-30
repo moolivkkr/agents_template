@@ -250,6 +250,39 @@ check("TD01", "LOW", pr.get("TC-E-001"), "a bare mention in a non-inventory tabl
 check("TD02", (1, ["TC-E-002"]), (p.returncode, list(dj["duplicate_in_phase"])), "an ID defined by two inventory rows in one phase is flagged")
 shutil.rmtree(D, ignore_errors=True)
 
+# ─── junit-to-sidecar: Playwright projects, nested suites, Go-style TestTC_ names (verified 2026-09-30) ──
+K = tempfile.mkdtemp(prefix="evidence-pw.")
+subprocess.run(["git", "init", "-q", K], check=True)
+open(f"{K}/pw.xml", "w").write("""<testsuites>
+<testsuite name="api.spec.ts" hostname="chromium"><testcase name="TC-E2E-10101 renders" classname="api.spec.ts"/>
+  <testcase name="TC-E2E-10102 checkout" classname="api.spec.ts"><failure message="x"/></testcase></testsuite>
+<testsuite name="api.spec.ts" hostname="mobile"><testcase name="TC-E2E-10101 renders" classname="api.spec.ts"/>
+  <testcase name="TC-E2E-10102 checkout" classname="api.spec.ts"/></testsuite>
+</testsuites>""")
+subprocess.run([sys.executable, J2S, "--tier", "e2e", "--out", f"{K}/pw.json", "--root", K, "--exit-code", "1", f"{K}/pw.xml"], capture_output=True)
+pw = json.load(open(f"{K}/pw.json"))
+check("JP01", ("FAIL", 4, 1, 0), (pw["verdict"], pw["total"], pw["failed"], pw["flaky"]),
+      "Playwright projects are kept apart: a chromium-only failure is FAIL, not FLAKY, and the total is not halved")
+check("JP02", ["[chromium] api.spec.ts TC-E2E-10102 checkout"], [c["name"] for c in pw["cases"] if c["verdict"] == "FAIL"],
+      "the failing case names its project")
+open(f"{K}/go.xml", "w").write("""<testsuites>
+<testsuite name="pkg/a" hostname="build-host"><testcase name="TestTC_UNIT_10101_Count" classname="pkg/a"/></testsuite>
+<testsuite name="outer" hostname="build-host"><testsuite name="inner" hostname="build-host">
+  <testcase name="testTC_API_20101_creates" classname="inner"/></testsuite></testsuite>
+</testsuites>""")
+subprocess.run([sys.executable, J2S, "--tier", "unit", "--out", f"{K}/go.json", "--root", K, "--exit-code", "0", f"{K}/go.xml"], capture_output=True)
+go = json.load(open(f"{K}/go.json"))
+check("JP03", (2, ["inner testTC_API_20101_creates", "pkg/a TestTC_UNIT_10101_Count"]), (go["total"], sorted(c["name"] for c in go["cases"])),
+      "one machine hostname adds nothing to names; a nested suite's case is counted once")
+check("JP04", [["TC-API-20101"], ["TC-UNIT-10101"]], sorted(c["ids"] for c in go["cases"]),
+      "TestTC_UNIT_10101 / testTC_API_20101 function names carry their IDs")
+os.makedirs(f"{K}/docs/design/phases/1"); os.makedirs(f"{K}/pkg")
+open(f"{K}/docs/design/phases/1/s.md", "w").write("| TC ID | Priority |\n|---|---|\n| TC-UNIT-10101 | HIGH |\n")
+open(f"{K}/pkg/a_test.go", "w").write('package pkg\nimport "testing"\nfunc TestTC_UNIT_10101_Count(t *testing.T) {}\n')
+p = subprocess.run([sys.executable, TCI, "--phase", "1", "--root", K, "--out", f"{K}/inv.json"], capture_output=True, text=True)
+check("JP05", (0, "PASS"), (p.returncode, json.load(open(f"{K}/inv.json"))["verdict"]), "tc-inventory counts a TestTC_… Go test function")
+shutil.rmtree(K, ignore_errors=True)
+
 # ─── commands-table.py ───────────────────────────────────────────────────────────────────────────
 CT = os.path.join(REPO, ".claude", "hooks", "commands-table.py")
 G = tempfile.mkdtemp(prefix="cmdtable.")

@@ -24,7 +24,7 @@ They all run exactly these. When one is wrong, fix the table, not the caller.
 | test:unit | gotestsum --junitfile agent_state/phases/$PHASE/junit/unit.xml -- -count=1 -race ./internal/... |
 | test:integration | gotestsum --junitfile agent_state/phases/$PHASE/junit/integration.xml -- -count=1 -tags=integration ./... |
 | test:ui | npx vitest run --reporter=junit --outputFile=agent_state/phases/$PHASE/junit/ui.xml |
-| test:e2e | npx playwright test --reporter=junit |
+| test:e2e | PLAYWRIGHT_JUNIT_OUTPUT_FILE=agent_state/phases/$PHASE/junit/e2e.xml npx playwright test --reporter=list,junit |
 | test:mobile | maestro test --format junit --output agent_state/phases/$PHASE/junit/mobile.xml .maestro/ |
 | migrate | ./bin/app migrate |
 | seed | ./bin/app seed |

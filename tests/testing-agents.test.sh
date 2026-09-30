@@ -232,6 +232,35 @@ grep -q '§Changing an existing test\|### Changing an existing test' "$S/test-ca
   || bad "test-case-traceability.md lacks the Changing an existing test section"
 grep -q 'test_changes' "$A/core/spec_test_reconciler.md" && ok "spec_test_reconciler reports the why-and-when ledger" || bad "spec_test_reconciler ignores test_changes[]"
 
+echo "── performance_agent's k6 parser fails closed (real k6 v2.3.0 summaries in tests/fixtures/k6) ──"
+K6P="$TMP/k6parse.py"
+awk "/<<'PY'\$/{f=1;next} f&&/^PY\$/{exit} f" "$A/core/performance_agent.md" > "$K6P"
+mkdir -p "$TMP/k6repo" && git -C "$TMP/k6repo" init -q
+# fixture:k6 exit code:expected verdict — nothresholds (--no-thresholds) and tagtypo (tag matches no request)
+# exited 0 with p95 = 405 ms against a 300 ms NFR, and the old parser said PASS
+for row in pass:0:PASS latency:99:FAIL dropped:99:FAIL errors:99:FAIL nothresholds:0:FAIL tagtypo:0:FAIL newsummary:0:FAIL; do
+  fx="${row%%:*}"; rest="${row#*:}"; rc="${rest%%:*}"; want="${rest#*:}"
+  P="$TMP/k6repo/p_$fx"; mkdir -p "$P/perf" "$P/reports"; cp "$ROOT/tests/fixtures/k6/$fx.json" "$P/perf/k6-summary.json"
+  got="$(cd "$TMP/k6repo" && python3 "$K6P" "$P" "$rc" deadbeef http://qa.localhost "k6 run" 2>&1 | tail -1 | awk '{print $1}')"
+  [ "$got" = "$want" ] && ok "k6 $fx summary (exit $rc) → $want" || bad "k6 $fx summary (exit $rc): want $want, got '$got'"
+done
+
+echo "── tool flags verified by running them (2026-09-30) ──"
+if grep -rn 'playwright test[^|]*--reporter=junit' "$ROOT/.claude" >/dev/null; then
+  bad "a Playwright row uses --reporter=junit, which replaces the config reporters and writes no file: $(grep -rn 'playwright test[^|]*--reporter=junit' "$ROOT/.claude" | head -1 | cut -c1-120)"
+else ok "Playwright rows write JUnit to a file (PLAYWRIGHT_JUNIT_OUTPUT_FILE + --reporter=list,junit)"; fi
+if grep -rn 'go-junit-report' "$ROOT/.claude" | grep -v 'parser gojson' >/dev/null; then
+  bad "a go-junit-report recipe lacks -parser gojson (the default parser drops packages that fail to build → PASS)"
+else ok "go-junit-report recipes use -parser gojson and keep go test's exit code"; fi
+grep -q 'races were NOT checked' "$A/core/test_runner.md" && ok "test_runner reports when the race detector was unavailable" \
+  || bad "test_runner can silently drop -race"
+grep -q 'thresholds not evaluated' "$A/core/performance_agent.md" && ok "performance_agent fails a case whose thresholds were not evaluated" \
+  || bad "performance_agent's parser trusts a summary with no thresholds"
+if grep -rn 'min-confidence 80' "$ROOT/.claude" >/dev/null; then bad "vulture --min-confidence 80 hides every unused function (all rated 60%)"
+else ok "vulture runs at --min-confidence 60"; fi
+if grep -rn 'return Specification.where(null)' "$ROOT/.claude" >/dev/null; then bad "Java archetype uses Specification.where(null) (rejected since Spring Data JPA 4.0)"
+else ok "Java archetypes use a no-op predicate, not Specification.where(null)"; fi
+
 echo "────────────────────────────────────────────"
 echo "testing-agents.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

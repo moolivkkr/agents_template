@@ -245,7 +245,7 @@ public final class WidgetSpecs {
      * Filter by exact status match.
      */
     public static Specification<Widget> hasStatus(WidgetStatus status) {
-        if (status == null) return Specification.where(null);
+        if (status == null) return (root, query, cb) -> cb.conjunction(); // no-op; Specification.where(null) is rejected since Spring Data JPA 4.0
         return (root, query, cb) -> cb.equal(root.get("status"), status);
     }
 
@@ -253,7 +253,7 @@ public final class WidgetSpecs {
      * Filter by any of several statuses.
      */
     public static Specification<Widget> hasStatusIn(java.util.Collection<WidgetStatus> statuses) {
-        if (statuses == null || statuses.isEmpty()) return Specification.where(null);
+        if (statuses == null || statuses.isEmpty()) return (root, query, cb) -> cb.conjunction(); // no-op; Specification.where(null) is rejected since Spring Data JPA 4.0
         return (root, query, cb) -> root.get("status").in(statuses);
     }
 
@@ -261,7 +261,7 @@ public final class WidgetSpecs {
      * Case-insensitive name search (LIKE %search%).
      */
     public static Specification<Widget> nameContains(String search) {
-        if (search == null || search.isBlank()) return Specification.where(null);
+        if (search == null || search.isBlank()) return (root, query, cb) -> cb.conjunction(); // no-op; Specification.where(null) is rejected since Spring Data JPA 4.0
         return (root, query, cb) ->
             cb.like(cb.lower(root.get("name")), "%" + search.toLowerCase() + "%");
     }

@@ -147,7 +147,7 @@ verified backup. Record the reason in the file header and in `reports/migrations
   timeout sized to the change, so a blocked `ALTER` fails fast instead of queueing every query behind it.
 - **Concurrent index builds** can't run inside a transaction block. Use your tool's non-transactional mode:
   - goose: `-- +goose NO TRANSACTION` at the top of the file;
-  - golang-migrate: one `CREATE INDEX CONCURRENTLY` statement per file (a multi-statement file runs as one implicit transaction);
+  - golang-migrate: one `CREATE INDEX CONCURRENTLY` statement per file, and nothing else in it. A multi-statement file, *including one that starts with `SET lock_timeout`*, runs as one implicit transaction and fails with "cannot run inside a transaction block" (verified on Postgres 17). To keep the timeout, add `x-multi-statement=true` to the database URL, which runs statements one by one (verified);
   - Flyway: `executeInTransaction=false` in the script's config (`<script>.sql.conf`);
   - Alembic: `with op.get_context().autocommit_block():`;
   - any other tool: check its docs. If it can't run a statement outside a transaction, don't index a large existing table through it; record the lock risk and ask for a D-NNN.

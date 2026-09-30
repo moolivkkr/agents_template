@@ -129,6 +129,10 @@ CMD="$(jq -r '.commands["x:perf"] // empty' agent_state/config/verify-commands.j
 CMD="${CMD:-k6 run --quiet tests/perf/nfr-perf.js}"          # the script is this agent's own artifact
 APP_BASE_URL="$APP_BASE_URL" K6_SUMMARY="$P/perf/k6-summary.json" bash -c "$CMD" > "$P/perf/k6.log" 2>&1; RC=$?   # 99 = a threshold failed
 ```
+Never add `--no-thresholds`, `--summary-mode=disabled` or `--new-machine-readable-summary`. The Step 6
+parser reads k6's default (legacy) `handleSummary` JSON, which was verified on k6 v2.3.0. It fails the
+case if any of the three thresholds was not evaluated, or if no request matched the scenario's
+`tc`/`phase` tags. On an empty sub-metric k6 itself reports p95 = 0 and exits 0.
 While it runs, on lab projects, snapshot resources every 30 s:
 - `kubectl -n <app>-qa top pods`;
 - replicas and CPU/memory requests and limits;
@@ -165,8 +169,15 @@ for name, m in s.get("metrics", {}).items():
         c["measured"].update({k: v.get(k) for k in ("med", "p(95)", "p(99)", "max") if k in v})
     if name.startswith("http_req_failed"):
         c["measured"]["error_rate"] = v.get("rate")
+        c["measured"]["requests"] = v.get("passes", 0) + v.get("fails", 0)
     if name.startswith("dropped_iterations"):
-        c["measured"]["dropped_iterations"] = v.get("count", 0)
+        c["measured"]["dropped_iterations"] = v.get("count")
+for c in cases.values():   # fail closed: every NFR threshold was evaluated, on real samples
+    have = {k.split(" ")[0] for k in c["thresholds"]}
+    missing = [m for m in ("http_req_duration", "http_req_failed", "dropped_iterations") if m not in have]
+    if missing or not c["measured"].get("requests"):
+        c["verdict"] = "FAIL"   # --no-thresholds, or a tc/phase tag that matches no request (k6 then passes p95=0)
+        c["reason"] = f"thresholds not evaluated: {missing}" if missing else "no requests matched the tc/phase tags"
 cl = list(cases.values())
 dirty = bool(subprocess.run(["git", "status", "--porcelain", "--", ".", ":(exclude)agent_state", ":(exclude)docs",
                              ":(exclude).claude", ":(exclude)deploy/k8s/overlays"], capture_output=True, text=True).stdout.strip())
