@@ -1,6 +1,6 @@
 ---
 name: spec_writer
-description: "Writes the technical specification (TRD) for one component or flow in a phase - EARS acceptance criteria, typed API/data contracts, edge cases, and a TC-* test inventory. Use during /plan, one instance per component listed in PHASE_PLAN.md."
+description: "Writes the technical specification (TRD) for one component or flow in a phase - EARS acceptance criteria, typed API/data contracts on the one response envelope, edge cases, and a TC-* inventory with project-unique IDs (unit, integration, abuse cases, failure modes, e2e, one TC-ACC per FR criterion per persona, one TC-PERF per NFR-PERF). In security-merge mode (after threat_model_agent) it writes the phase's TC-SEC rows into the inventory. Use during /plan, one instance per component listed in PHASE_PLAN.md."
 model: opus
 effort: medium
 category: planning
@@ -16,8 +16,17 @@ input:
     - type: prev_manifest
       path: agent_state/phases/{{PHASE-1}}/manifest.json
       description: What was built in previous phase — avoids re-speccing existing work
+    - type: threat_model
+      path: agent_state/phases/{{PHASE}}/reports/threat_model.md
+      description: "Security-merge mode: threats, mitigations and TC-SEC refs to write into the phase inventory"
+    - type: prior_specs
+      path: docs/design/phases/
+      description: "Every phase's inventories — checked so the IDs this spec allocates are project-unique"
 output:
   primary: docs/design/phases/{{PHASE}}/specs/{{COMPONENT}}.md
+  artifacts:
+    - path: docs/design/phases/{{PHASE}}/specs/security-tests.md
+      description: "Security-merge mode only: the phase's TC-SEC inventory rows from the threat model"
 dependencies:
   upstream: [project_planner]
   runs_after: [codebase_mapper]
@@ -29,6 +38,8 @@ skill_packs:
   - "~/.claude/skills/requirements/nfr-patterns.md"
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/core/api-design.md"
+  - "~/.claude/skills/api/response-envelope.md"
+  - "~/.claude/skills/security/secure-coding.md"
   - "~/.claude/skills/testing/test-case-traceability.md"
   - "~/.claude/skills/testing/test-case-generation.md"
 ---
@@ -66,12 +77,19 @@ Only spec what is explicitly assigned to this phase in `PHASE_PLAN.md`. Do NOT s
 
 Express every acceptance criterion in EARS notation — one of the five templates (Ubiquitous / Event-driven / State-driven / Optional / Unwanted). Keep the FR-*/NFR-* ID; suffix (`-a`, `-b`) only when splitting a compound requirement into one clause per behavior. See `~/.claude/skills/requirements/ears-notation.md`.
 
-| Req ID | EARS clause | TC-* ID |
-|--------|-------------|---------|
-| FR-XXX | WHEN <trigger> THE SYSTEM SHALL <response> | TC-XXX-NNN |
-| FR-XXXb | IF <undesired condition> THEN THE SYSTEM SHALL <response> | TC-XXX-NNN |
+| Req ID | EARS clause | Inventory row |
+|--------|-------------|---------------|
+| FR-XXX | WHEN <trigger> THE SYSTEM SHALL <response> | → TC-XXX-<n> |
+| FR-XXXb | IF <undesired condition> THEN THE SYSTEM SHALL <response> | → TC-XXX-<n> |
 
-Each EARS clause maps to **exactly one TC-*** — the trigger (WHEN/WHILE/IF/WHERE) becomes the test precondition, the SHALL becomes the assertion. These Tier-0 TC-* IDs seed the inventory below; the per-tier matrices then add auth/validation/IDOR/shape/state variations.
+Each EARS clause maps to **exactly one TC ID**: the trigger (WHEN/WHILE/IF/WHERE) becomes the test
+precondition, and the SHALL becomes the assertion. These Tier-0 IDs seed the inventory below, and the
+per-tier matrices then add auth, validation, abuse, shape and state variations.
+
+Write the reference with the arrow (`→ TC-API-20301`). `tc-inventory.py` reads any table cell that
+is exactly an ID as an inventory row, and the first occurrence wins. A bare ID here would be read
+without its Priority and Tier, defaulting to MEDIUM with no tier. Only the inventory table holds bare
+IDs.
 
 ## Interface Contracts
 
@@ -99,45 +117,27 @@ Request Body:
 Query Params (GET only):
   ?param=<type>&param=<type>         // include defaults and ranges
 
-Response 2xx:
-  {
-    "data": [ ... ] | { ... },       // ⚠ MUST specify: array [] for list endpoints, object {} for single-resource endpoints
-    "error": null,
-    "meta": {                        // required for list endpoints; omit for single-resource
-      "page": "<number>",
-      "limit": "<number>",
-      "total": "<number>"
-    }
-  }
-
-  // data shape (ONE of):
-  // LIST endpoint — data is ALWAYS an array (even when empty → []):
-  "data": [
-    { "field": "<type>", "field": "<type>" }
-  ]
-
-  // SINGLE endpoint — data is ALWAYS an object (or null if not found → null):
-  "data": {
-    "field": "<type>", "field": "<type>"
-  }
+Response 2xx — the ONE envelope (~/.claude/skills/api/response-envelope.md), no "error" key on success:
+  LIST endpoint (data is ALWAYS an array, [] when empty; cursor pagination, never offset):
+  { "data": [ { "field": "<type>", ... } ],
+    "meta": { "request_id": "<string>", "pagination": { "next_cursor": "<string> | null", "has_more": "<boolean>", "limit": "<number>" } } }
+  SINGLE endpoint (data is ALWAYS an object):
+  { "data": { "field": "<type>", ... }, "meta": { "request_id": "<string>" } }
 
 Empty States:
-  - List endpoint returns empty results:  { "data": [], "error": null, "meta": { "total": 0 } }
-  - Single resource not found:            404 with { "data": null, "error": { "code": "NOT_FOUND", "message": "..." }, "meta": null }
-  - Successful delete/action:             { "data": null, "error": null, "meta": null } (or 204 No Content)
+  - List endpoint with no results:  200 { "data": [], "meta": { "request_id": "...", "pagination": { "next_cursor": null, "has_more": false, "limit": 20 } } }
+  - Successful delete/action:       204 No Content (no body)
 
-Errors:
-  400: { "data": null, "error": { "code": "VALIDATION_ERROR", "message": "...", "details": [...] }, "meta": null }
-  401: { "data": null, "error": { "code": "UNAUTHORIZED", "message": "..." }, "meta": null }
-  403: { "data": null, "error": { "code": "FORBIDDEN", "message": "..." }, "meta": null }
-  404: { "data": null, "error": { "code": "NOT_FOUND", "message": "..." }, "meta": null }
-  409: { "data": null, "error": { "code": "CONFLICT", "message": "..." }, "meta": null }
-  500: { "data": null, "error": { "code": "INTERNAL_ERROR", "message": "..." }, "meta": null }
+Errors — { "error": { code, message, details?, request_id, retryable } }, no "data" key; list every one this endpoint returns:
+  400 VALIDATION_FAILED (details[] per field) · 401 UNAUTHENTICATED · 403 FORBIDDEN
+  404 NOT_FOUND (also for another tenant's/owner's object — never 403) · 409 CONFLICT
+  422 BUSINESS_RULE_VIOLATION · 429 RATE_LIMITED · 500 INTERNAL · 503 UNAVAILABLE
 ```
 
-**Contract rules.** UI code consumes these shapes directly (`.map()`, `.length`, property access), so an array/object mismatch is a runtime crash, not a style issue:
+**Contract rules.** UI code consumes these shapes directly (`.map()`, `.length`, property access), so an array/object mismatch is a runtime crash, not a style issue. The wrapper is fixed by `api/response-envelope.md`; this spec defines the payload inside `data`:
 - List endpoints return `"data": []` (array) - including when empty - never `"data": {}` or `"data": null`
 - Single-resource endpoints return `"data": { ... }` (object), never `"data": [{ ... }]`
+- IDs are strings, timestamps RFC 3339 UTC strings, money integer minor units (`total_cents`)
 - Every field in the response must have an explicit type: `string`, `number`, `boolean`, `string (ISO 8601)`, `string (UUID)`, `string (enum: val1|val2)`, `object`, `array<type>`
 - Nullable fields must be marked: `"field": "<type> | null"`
 - Nested objects must be fully expanded — no `"field": "object"` without showing the shape
@@ -176,34 +176,77 @@ Errors:
 
 ### Test Case Inventory (TC-* IDs)
 
-Every testable behavior in this spec gets a unique TC-* ID. These IDs are tracked through implementation and gated at phase completion. See `~/.claude/skills/testing/test-case-traceability.md` for conventions.
+Every testable behavior in this spec gets a TC ID that is **unique across the whole project**. These
+IDs are tracked through implementation and gated at phase completion: `tc-inventory.py` parses this
+table, and an ID counts only when a test **named** with it ran and passed. See
+`~/.claude/skills/testing/test-case-traceability.md`.
 
-**Format:** `TC-{CATEGORY}-{NNN}` where CATEGORY is a 2-5 char uppercase code (E=Entity, API=API, S=Scope, etc.)
+**Format:** `TC-{CATEGORY}-{NUMBER}`. CATEGORY is one uppercase alphanumeric segment: UNIT, API, DB,
+SEC, REL, E2E, UI, FORM, A11Y, ACC (acceptance), PERF, SYS, and the mobile codes. **NUMBER =
+P·10000 + k·100 + i** (see *Allocating IDs* below).
 
-| TC ID | Category | Test Description | Priority | Tier |
-|-------|----------|-----------------|----------|------|
-| TC-XXX-001 | [category] | [what this test verifies] | HIGH/MEDIUM/LOW | unit/integration/e2e/component |
-| TC-XXX-002 | [category] | [what this test verifies] | HIGH/MEDIUM/LOW | unit/integration/e2e/component |
+| TC ID | Category | Description | Priority | Tier |
+|-------|----------|-------------|----------|------|
+| TC-API-20301 | API | POST /orders valid body → 201, data object + meta.request_id | HIGH | integration |
+| TC-SEC-20301 | SEC | AUTHZ-OBJ: GET /orders/{id} of another user in the same tenant → 404 | HIGH | integration |
+| TC-ACC-20301 | ACC | FR-012 SHALL 1 — Buyer: a placed order is listed with status "open" | HIGH | acceptance |
 | ... | ... | ... | ... | ... |
 
-**Minimum TC-* IDs per spec (from test-case-generation.md matrices):**
+Exactly these five columns, in this order. **Priority** is HIGH, MEDIUM or LOW; anything else is read
+as MEDIUM. **Tier** is one of `unit`, `integration`, `component`, `e2e`, `acceptance`,
+`performance`, `mobile`, `device`, `system`, `manual` (owners: `test-case-traceability.md` §Tiers).
+One ID per row; never a range.
 
-| Tier | What to enumerate | Min TC-* IDs |
+**Allocating IDs (project-unique, collision-free while specs are written in parallel):**
+1. `P` = this phase's number. `k` = this component's position (01–99) in PHASE_PLAN.md's component
+   list. `k = 00` is reserved for the phase's security-merge rows. `i` = 01–99, per category, in
+   document order.
+2. Before writing, scan `docs/design/phases/*/` for every ID in your block, e.g. with
+   `python3 .claude/hooks/tc-inventory.py --phase <n> --spec-only --out /tmp/p<n>.json` for each
+   existing phase. If any is taken (legacy numbering), move to the next spare component index after
+   the last component, and note it in the spec header.
+3. More than 99 IDs in one category: continue in the next spare index the same way.
+4. After writing: `python3 .claude/hooks/tc-inventory.py --phase {{PHASE}} --spec-only --out /tmp/check.json`
+   must list every row you wrote (this proves the table parses), with the priorities you meant.
+
+**Rows to generate (test-case-generation.md matrices):**
+
+| Tier | What to enumerate | Minimum |
 |------|------------------|--------------|
-| EARS (Tier 0) | One TC-* per EARS clause (precondition = trigger, assertion = SHALL) | 1 per EARS clause |
-| Unit | Happy path + error path + edge cases per function | 10+ per spec |
-| Integration | Per-endpoint matrix (11 IDs) + per-entity matrix (6 IDs) | 10/endpoint + 6/entity |
-| E2E | Per-workflow matrix (7 IDs) or per-pipeline matrix (7 IDs) | 5+ per workflow |
-| Acceptance | Per-persona-FR (5 IDs) + permission boundaries + cross-persona | 5+ per persona-FR pair |
+| EARS (Tier 0) | One ID per EARS clause (precondition = trigger, assertion = SHALL) | 1 per EARS clause |
+| Unit | Happy path, boundary, invalid input, domain error, dependency error per behaviour | 10+ per spec |
+| Integration | Per-endpoint matrix + per-entity matrix | 10/endpoint + 6/entity |
+| Abuse cases (TC-SEC) | Every applicable row per endpoint: AUTHZ-OBJ, AUTHZ-TENANT, AUTHZ-FN, MASS-ASSIGN, INJ, SSRF, UPLOAD, TOKEN-TAMPER, TOKEN-EXPIRED, RATE-LIMIT, CORS, ERR-LEAK, SECRET-FAILCLOSED (UI rows XSS-RENDER, SESSION-STORAGE come from ux_designer) | all applicable, HIGH |
+| Failure modes (TC-REL) | DEP-DOWN, DEP-SLOW, TIMEOUT, SOFT-DEP, RECOVERY per dependency; SIGTERM-DRAIN per service | per dependency |
+| E2E | Per-workflow matrix or per-pipeline matrix | 5+ per workflow |
+| Acceptance (TC-ACC) | **One row per FR acceptance criterion (EARS SHALL) per persona**, priority from MoSCoW (MUST → HIGH, SHOULD → MEDIUM, COULD → LOW), plus permission-boundary, cross-persona and lifecycle rows | 1 per criterion × persona |
+| Performance (TC-PERF) | One row per in-scope NFR-PERF target, naming endpoint, arrival rate, percentile limits and error limit | 1 per NFR-PERF, HIGH |
 
 **Rules:**
-- Every edge case row in the "Edge Cases" table above MUST have a corresponding TC-* ID
-- Every API endpoint MUST have integration TC-* IDs covering auth, validation, IDOR, response shape
-- Every user workflow MUST have E2E TC-* IDs covering happy path, validation, error recovery, permission boundary
-- Every persona x FR-* combination MUST have acceptance TC-* IDs covering positive and NEGATIVE (what they CANNOT do)
-- TC-* IDs must be unique within the phase (coordinate with other specs via range allocation)
-- Assign contiguous ranges per entity/component for easy bulk tracking
-- Declare the tier (unit/integration/e2e/component/acceptance) so test agents know ownership
+- Every edge case row in the "Edge Cases" table above MUST have a corresponding TC ID
+- Every row states a **literal expected outcome** (status + code, the value, the message). Tests use it as their oracle
+- Every API endpoint MUST have integration rows for auth, validation, envelope shape, and its applicable abuse-case rows
+- Every user workflow MUST have E2E rows for happy path, validation, error recovery and permission boundary
+- Every persona × in-scope FR criterion MUST have a TC-ACC row, positive and NEGATIVE (what they CANNOT do)
+- Every NFR-PERF target in scope MUST have a TC-PERF row with a rate. A target with no rate is a BRD gap to flag, not a rate to invent
+
+### Security-merge mode (after threat_model_agent)
+
+`/plan` Step 3b runs `threat_model_agent` after the specs are written. When you are spawned in
+**security-merge mode**, read `agent_state/phases/{{PHASE}}/reports/threat_model.md` and write
+`docs/design/phases/{{PHASE}}/specs/security-tests.md`. It is one inventory table in the same five
+columns, with one row per testable mitigation:
+- **TC ID:** keep the threat model's ID if it is in this phase's `k = 00` block. Otherwise allocate
+  from the `00` block, and put the original ref in the description (`T-2-03, was TC-SEC-014`).
+- **Description:** threat id + the mitigation the test proves.
+- **Priority:** HIGH for a threat rated HIGH/BLOCKING, else MEDIUM.
+- **Tier:** `integration` by default. Use `component`/`e2e` for rendering and storage threats, and
+  `system` for deployment ones.
+
+Also add each mitigation that changes behaviour as an EARS acceptance criterion in the owning
+component spec (edit that spec's criteria table and inventory). Without this merge, threat-model tests
+reach no one and the inventory reports 100% while every TC-SEC is missing (board review SEC-06,
+TEST-13).
 
 ### Unit Tests
 - [ ] Happy path for each public function
@@ -224,16 +267,16 @@ Every testable behavior in this spec gets a unique TC-* ID. These IDs are tracke
 - [ ] Each workflow: data persistence (create → refresh → still there)
 - [ ] CLI/pipeline: valid input → output, invalid input → clear error, flag variations
 
-### Acceptance Tests (persona x capability matrix from test-case-generation.md)
-- [ ] Each persona × each in-scope FR-*: positive test (CAN do)
-- [ ] Each persona × each out-of-scope FR-*: negative test (CANNOT do — permission boundary)
+### Acceptance Tests (one TC-ACC per FR criterion per persona — test-case-generation.md Tier 5)
+- [ ] Each persona × each in-scope FR criterion (EARS SHALL): positive row (CAN do), priority from MoSCoW
+- [ ] Each persona × each FR they must not use: negative row (CANNOT do — server-enforced permission boundary)
 - [ ] Cross-persona flows: Admin creates → User sees → Analyst reports
 - [ ] Data lifecycle per entity: create → list → view → edit → verify → delete → verify gone
 
 ## Performance Targets
-- p95 latency: Xms — from NFR-* ID: [exact NFR ID from BRD]
-- Throughput: X req/s — from NFR-* ID: [exact NFR ID from BRD]
-- If no specific NFR: document assumption and flag for BRD update
+One TC-PERF row per target (tier `performance`, HIGH):
+- NFR-PERF-xxx: <endpoint/flow> at <N req/s arrival rate>: p95 < X ms, p99 < Y ms, errors < Z % [, dataset: <rows>]
+- If the BRD gives no rate or percentile: flag it for a BRD update. Don't invent a target
 ```
 
 ## Typed Data Contracts
@@ -251,14 +294,11 @@ interface User {
   created_at: string;     // ISO 8601
 }
 
-// List endpoint — RETURNS ARRAY
-type GetUsersResponse = {
-  data: User[];           // ARRAY — UI uses .map(), .length
-  error: string | null;
-  meta: { total: number; page: number; per_page: number } | null;
-}
+// List endpoint — RETURNS ARRAY, wrapped in the one envelope (api/response-envelope.md)
+type GetUsersResponse = ApiSuccess<User[]>;   // { data: User[]; meta: { request_id; pagination } } — ARRAY: UI uses .map(), .length
 
-// Empty: { data: [], error: null, meta: { total: 0, page: 1, per_page: 20 } }
+// Empty: { data: [], meta: { request_id: "…", pagination: { next_cursor: null, has_more: false, limit: 20 } } }
+// Errors: ApiErrorBody — { error: { code: "NOT_FOUND" | …, message, details?, request_id, retryable } }
 ```
 
 **Rules:**
@@ -284,9 +324,10 @@ type GetUsersResponse = {
 - If DB changes needed: migration is required, not optional
 - Performance targets must cite a specific NFR-* ID — generic targets are not acceptable
 - Do NOT describe UI layout in a backend spec (that belongs in a wireframe)
-- Every spec MUST include a "Test Case Inventory" table with unique TC-* IDs for every testable behavior — see `~/.claude/skills/testing/test-case-traceability.md`
-- Every edge case row MUST map to at least one TC-* ID
-- TC-* ID ranges must be coordinated across specs within the same phase (use contiguous non-overlapping ranges)
+- Every spec MUST include a "Test Case Inventory" table (TC ID | Category | Description | Priority | Tier) with project-unique IDs for every testable behavior — see `~/.claude/skills/testing/test-case-traceability.md`
+- Every edge case row MUST map to at least one TC ID
+- IDs come from this component's block (`P·10000 + k·100 + i`); no ID may exist in any other phase or component (tc-inventory flags cross-phase duplicates as failures)
+- The response wrapper is `api/response-envelope.md`; never restate a different envelope in a spec
 
 ---
 
@@ -301,6 +342,8 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/requirements/nfr-patterns.md`
 - `~/.claude/skills/requirements/requirement-clarity.md`
 - `~/.claude/skills/core/api-design.md`
+- `~/.claude/skills/api/response-envelope.md`
+- `~/.claude/skills/security/secure-coding.md`
 - `~/.claude/skills/testing/test-case-traceability.md`
 - `~/.claude/skills/testing/test-case-generation.md`
 <!-- END reference-packs -->
@@ -328,7 +371,9 @@ Keep it short; the detail belongs in the artifact.
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] TRD written to `docs/design/phases/{{PHASE}}/specs/{{COMPONENT}}.md` (exact frontmatter path) using the Output template.
 - [ ] Every FR-*/NFR-*/OBJ-* ID cited exists verbatim in `docs/BRD.md` — no invented IDs.
-- [ ] Every acceptance criterion is in EARS notation and maps 1:1 to a TC-* ID; the Test Case Inventory table is populated with real, unique, priority+tier-tagged TC-* IDs (not `NNN` placeholders).
+- [ ] Every acceptance criterion is in EARS notation and maps 1:1 to a TC-* ID; the Test Case Inventory table has the five columns (TC ID | Category | Description | Priority | Tier), with real IDs from this component's project-unique block (checked against every phase's inventory), and `tc-inventory.py --spec-only` lists every row.
+- [ ] The inventory includes the applicable abuse-case rows, failure-mode rows, one TC-ACC per FR criterion per persona (priority from MoSCoW) and one TC-PERF per in-scope NFR-PERF; in security-merge mode, every testable threat-model mitigation is a row in `security-tests.md`.
+- [ ] API shapes follow `api/response-envelope.md` (success `{data, meta}`, error `{error}`); no other envelope is restated.
 - [ ] ≥10 meaningful edge cases, each mapped to ≥1 TC-* ID; every API endpoint declares data array-vs-object, empty state, and all 4xx/5xx shapes; a `## Data Contracts` section with typed interfaces exists for any endpoints.
 - [ ] Only in-scope-for-this-phase behavior is spec'd — no later-phase features, no re-speccing existing code.
 - [ ] If the component is under-specified in PHASE_PLAN/BRD (ambiguous scope, missing NFR), I flag it explicitly rather than inventing a contract that reads as complete.

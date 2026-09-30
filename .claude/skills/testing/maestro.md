@@ -17,8 +17,9 @@ maestro --version
 maestro test .maestro/                                  # all flows in the folder
 maestro test .maestro/login.yaml                        # one flow
 maestro test --device <udid-or-emulator-id> .maestro/   # pick a target when several are booted
-maestro test -e EMAIL=qa@example.com -e API_URL=http://10.0.2.2:8080 .maestro/
-maestro test --format junit --output reports/maestro-ios.xml .maestro/   # machine-readable results
+# Backend = APP_BASE_URL (the Wave 3.5 deploy). Android: host → 10.0.2.2, same port, original host in a Host header
+maestro test -e API_URL="$API_URL_ANDROID" -e API_HOST="$API_HOST" .maestro/
+maestro test --format junit --output agent_state/phases/$PHASE/junit/mobile-ios-latest.xml .maestro/   # machine-readable results
 maestro test --include-tags smoke .maestro/             # tag-filtered subset
 ```
 
@@ -27,12 +28,12 @@ The app must already be installed on the target: build it first (see §Builds).
 ## Flow anatomy
 
 ```yaml
-# .maestro/login.yaml
-# TC-ME2E-001: user signs in with valid credentials and lands on Orders
+# .maestro/TC-ME2E-20101-login.yaml
+# TC-ME2E-20101: user signs in with valid credentials and lands on Orders
 appId: com.example.app            # iOS bundle id == Android applicationId keeps one flow for both
+name: "TC-ME2E-20101 user signs in and lands on Orders"   # JUnit testcase name — must start with the TC ID
 tags: [smoke, auth]
-env:
-  EMAIL: qa@example.com
+# EMAIL / PASSWORD come from `maestro test -e EMAIL=… -e PASSWORD=…` (the run's environment) — never committed here
 ---
 - launchApp:
     clearState: true              # order-independent flows
@@ -78,9 +79,13 @@ appId: ${APP_ID}
       - back                       # Android hardware back
 ```
 
-Layout: `.maestro/<workflow>.yaml` per FR-* workflow, `.maestro/platform/*.yaml` for TC-MPLT-*,
-and `.maestro/subflows/` for shared steps. Every flow file starts with a comment line naming its
-TC-* IDs; that comment is the traceability annotation `spec_test_reconciler` greps for.
+Layout: `.maestro/<TC-ID>-<workflow>.yaml` per FR-* workflow, `.maestro/platform/<TC-ID>-<behaviour>.yaml`
+for TC-MPLT-*, and `.maestro/subflows/` for shared steps. **The flow file name starts with its TC
+ID** (`.maestro/TC-ME2E-20101-login.yaml`), **and so does the flow config's `name:`**
+(`name: "TC-ME2E-20101 login"`). Maestro's JUnit report sets each testcase's `id`, `name` and
+`classname` to the flow's `name`, so that is how the ID reaches the results sidecar. The file name is
+what `tc-inventory.py` reads from source. A comment line alone doesn't count
+(`test-case-traceability.md`).
 
 ## Platform behaviour recipes (TC-MPLT-*)
 

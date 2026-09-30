@@ -61,14 +61,13 @@ detox test -c android.emu.release --headless --cleanup
 ## Test anatomy
 
 ```ts
-// e2e/login.test.ts
-// TC-ME2E-001: user signs in with valid credentials and lands on Orders
+// e2e/login.test.ts — the TC ID goes in the test title, where the JUnit report carries it
 describe('Login', () => {
   beforeAll(async () => {
     await device.launchApp({ newInstance: true, delete: true, permissions: { notifications: 'YES' } });
   });
 
-  it('signs in and shows orders', async () => {
+  it('TC-ME2E-20101 signs in and shows orders', async () => {
     await element(by.id('login.email')).typeText('qa@example.com');
     await element(by.id('login.password')).typeText(process.env.E2E_PASSWORD!);
     await element(by.id('login.submit')).tap();

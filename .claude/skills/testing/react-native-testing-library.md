@@ -41,30 +41,34 @@ it as a `TC-MA11Y-*` failure; do not fall back silently to `getByTestId`.
 Every screen is tested in **loading, error, empty and data** states, the same as the web
 `ui_test_agent`.
 
+Mock bodies come from the typed envelope helpers in `msw.md` (`ok`, `page`, `apiError`), so a
+mock that drifts from `api/response-envelope.md` fails to type-check. The TC ID goes in the test
+title, where the JUnit report carries it (`test-case-traceability.md`).
+
 ```tsx
 import { render, screen, userEvent } from '@testing-library/react-native';
-import { http, HttpResponse } from 'msw';
+import { http } from 'msw';
 import { server } from '../test/msw-server';
+import { page, apiError } from '../test/envelope';        // typed helpers (msw.md)
+import { orderFixture } from '../test/fixtures';
 import { OrdersScreen } from './OrdersScreen';
 
-// TC-MCMP-012: Orders screen renders list from GET /api/v1/orders
-test('renders orders from the API (data state)', async () => {
-  server.use(
-    http.get('*/api/v1/orders', () =>
-      HttpResponse.json({ data: [{ id: 'o1', total: 42, status: 'open' }], error: null,
-                          meta: { page: 1, limit: 50, total: 1 } }),  // shape copied from api-contracts.md
-    ),
-  );
+test('TC-MCMP-20112 renders orders from GET /api/v1/orders (data state)', async () => {
+  server.use(http.get('*/api/v1/orders', () => page([orderFixture({ id: 'o1', total_cents: 4200, status: 'open' })])));
   await render(<OrdersScreen />);
   expect(await screen.findByText('Order o1')).toBeOnTheScreen();
 });
 
-// TC-MCMP-013: empty state
-test('shows empty state when data is []', async () => {
-  server.use(http.get('*/api/v1/orders', () =>
-    HttpResponse.json({ data: [], error: null, meta: { page: 1, limit: 50, total: 0 } })));
+test('TC-MCMP-20113 shows the empty state when data is []', async () => {
+  server.use(http.get('*/api/v1/orders', () => page([])));
   await render(<OrdersScreen />);
   expect(await screen.findByText(/no orders yet/i)).toBeOnTheScreen();
+});
+
+test('TC-MCMP-20114 shows a retry on 503 UNAVAILABLE', async () => {
+  server.use(http.get('*/api/v1/orders', () => apiError(503, 'UNAVAILABLE', 'Try again shortly.')));
+  await render(<OrdersScreen />);
+  expect(await screen.findByRole('button', { name: /retry/i })).toBeOnTheScreen();
 });
 ```
 

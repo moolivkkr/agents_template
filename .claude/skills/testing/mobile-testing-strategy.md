@@ -108,14 +108,27 @@ Generate one TC per applicable row. `spec_writer` / `ux_designer` enumerate thes
 
 ## 7. Mocking and test data
 
-- **Component/integration tier:** mock HTTP with MSW v2, using shapes copied verbatim from
-  `docs/design/phases/N/specs/api-contracts.md` (same rule as the web `ui_test_agent`). **Pin
+- **Component/integration tier:** mock HTTP with MSW v2. Bodies are built by the typed envelope
+  helpers in `msw.md`, from the generated contract types (`api/response-envelope.md` +
+  `docs/design/phases/N/specs/api-contracts.md`), never hand-shaped. Same rule as the web
+  `ui_test_agent`. **Pin
   `msw@^2` for React Native.** MSW 3.0.0 (2026-09-28) removed `msw/native` in favour of
   `@msw/react-native`, which could not be found on npm at the time of writing. Mock native modules
   via their official Jest mocks (e.g. `@react-native-async-storage/async-storage/jest/async-storage-mock`).
-- **Device tier:** run against the Wave 3.5 locally deployed backend. From the Android emulator the
-  host is `10.0.2.2`, not `localhost`; the iOS simulator shares the host's `localhost`. Seed data
-  through the API or DB seed script, never through UI steps in every test.
+- **Device tier:** run against `APP_BASE_URL`, the backend Wave 3.5 deployed: qa on lab-cluster
+  projects, the compose stack otherwise. How each device reaches it:
+  - **iOS simulator** shares the Mac's network, so use `APP_BASE_URL` as is. If the app can't resolve
+    `*.localhost`, use `http://127.0.0.1:<port>` and send the original host in the `Host` header.
+  - **Android emulator:** its `localhost` is the emulator itself, and the Mac's loopback is
+    `10.0.2.2`. Rewrite the host to `10.0.2.2`, **keep the port**, and send the original host in the
+    `Host` header. The lab's ingress routes by `Host` (`<app>-qa.localhost`), so without the header
+    the request never reaches the app.
+  - If the app can't set a `Host` header, `kubectl -n <app>-qa port-forward svc/<api> <fixed-port>:<svc-port>`
+    and use `10.0.2.2:<fixed-port>` (Android) / `127.0.0.1:<fixed-port>` (iOS).
+  - The release build's network security config (Android) / ATS exception (iOS) must allow cleartext
+    to exactly that host, and only in the e2e build variant.
+- Seed data through the app's seed command/job and the product API, never through UI steps in every
+  test.
 - Never point a device-tier test at a shared or production backend.
 
 ## 8. Flakiness policy
@@ -123,7 +136,8 @@ Generate one TC per applicable row. `spec_writer` / `ux_designer` enumerate thes
 - Maestro and Detox auto-wait. Adding `sleep`/fixed waits is an anti-pattern. Use
   `extendedWaitUntil` (Maestro) or `waitFor(...).withTimeout()` (Detox) on a specific element.
 - A test that passes only on retry is FLAKY. Report it as such with the retry count. Never report it
-  as PASS, and never add retries to hide it.
+  as PASS, and never add retries to hide it. A flaky count above 0 in the sidecar fails the gate:
+  fix the cause, or quarantine with an issue and an expiry (`test-results-sidecar.md`).
 - Reset app state per flow (`clearState` / `launchApp({ delete: true })`) so flows are order-independent.
 
 ## 9. Evidence the gate expects

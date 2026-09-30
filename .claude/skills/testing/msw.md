@@ -5,57 +5,76 @@
 npm install msw --save-dev
 ```
 
+## Mocks are typed from the envelope — never hand-shaped
+
+Every mocked response uses the one envelope in `api/response-envelope.md`:
+- success is `{ data, meta: { request_id, pagination? } }`;
+- an error is `{ error: { code, message, details?, request_id, retryable } }`.
+
+Build them through typed helpers, and give every handler its response type through MSW's generics.
+A mock that drifts from the contract then fails to **type-check**, instead of quietly testing a shape
+the server never sends. That drift was the board review's DEV-03/ARCH-01 finding: a "✅ CORRECT" mock
+contradicted the API.
+
+```typescript
+// src/mocks/envelope.ts — the only way tests build API bodies
+import { HttpResponse } from "msw"
+import type { ApiSuccess, ApiErrorBody, Pagination } from "../api/types"   // generated from the contract
+
+let seq = 0
+const rid = () => `test-${++seq}`
+
+export const ok = <T>(data: T, status = 200) =>
+  HttpResponse.json<ApiSuccess<T>>({ data, meta: { request_id: rid() } }, { status })
+
+export const page = <T>(items: T[], p: Partial<Pagination> = {}) =>
+  HttpResponse.json<ApiSuccess<T[]>>({
+    data: items,
+    meta: { request_id: rid(), pagination: { next_cursor: null, has_more: false, limit: 20, ...p } },
+  })
+
+export const apiError = (status: number, code: string, message: string, extra: Partial<ApiErrorBody["error"]> = {}) =>
+  HttpResponse.json<ApiErrorBody>(
+    { error: { code, message, request_id: rid(), retryable: status === 429 || status >= 503, ...extra } },
+    { status },
+  )
+```
+
 ## Handler Definitions
 ```typescript
 // src/mocks/handlers.ts
-import { http, HttpResponse } from "msw"
+import { http, HttpResponse, type PathParams } from "msw"
+import type { ApiSuccess, ApiErrorBody } from "../api/types"
+import type { User, CreateUserInput } from "../api/types"
+import { ok, page, apiError } from "./envelope"
+import { userFixture } from "./fixtures"          // typed fixture builders: userFixture({ name: "Alice" })
+
+type Res<T> = ApiSuccess<T> | ApiErrorBody
 
 export const handlers = [
-  // GET with JSON response
-  http.get("/api/users", () => {
-    return HttpResponse.json([
-      { id: "1", name: "Alice" },
-      { id: "2", name: "Bob" },
-    ])
+  // List: data is ALWAYS an array, pagination in meta
+  http.get<PathParams, never, Res<User[]>>("/api/v1/users", () =>
+    page([userFixture({ id: "u1", name: "Alice" }), userFixture({ id: "u2", name: "Bob" })])),
+
+  // Single resource
+  http.get<{ id: string }, never, Res<User>>("/api/v1/users/:id", ({ params }) =>
+    params.id === "missing"
+      ? apiError(404, "NOT_FOUND", "User not found.")
+      : ok(userFixture({ id: params.id }))),
+
+  // Create: request bodies are the payload itself, not wrapped
+  http.post<PathParams, CreateUserInput, Res<User>>("/api/v1/users", async ({ request }) => {
+    const body = await request.json()
+    return ok(userFixture({ id: "u3", name: body.name }), 201)
   }),
 
-  // GET with path parameter
-  http.get("/api/users/:id", ({ params }) => {
-    const { id } = params
-    return HttpResponse.json({ id, name: "Alice", email: "alice@example.com" })
-  }),
-
-  // POST with request body
-  http.post("/api/users", async ({ request }) => {
-    const body = await request.json() as { name: string }
-    return HttpResponse.json(
-      { id: "3", name: body.name },
-      { status: 201 }
-    )
-  }),
-
-  // PATCH / PUT / DELETE
-  http.patch("/api/users/:id", async ({ params, request }) => {
-    const body = await request.json() as Partial<User>
-    return HttpResponse.json({ id: params.id, ...body })
-  }),
-
-  http.delete("/api/users/:id", () => {
-    return new HttpResponse(null, { status: 204 })
-  }),
-
-  // Error response
-  http.get("/api/users/:id", ({ params }) => {
-    if (params.id === "404") {
-      return HttpResponse.json(
-        { error: "User not found" },
-        { status: 404 }
-      )
-    }
-    return HttpResponse.json({ id: params.id, name: "Alice" })
-  }),
+  http.delete("/api/v1/users/:id", () => new HttpResponse(null, { status: 204 })),
 ]
 ```
+
+`src/api/types` is generated from the contract (OpenAPI → `openapi-typescript`, or the types
+`api_developer` publishes with `api-contracts.md`). Hand-written copies drift. If the project has no
+generated types yet, report that instead of inventing a shape.
 
 ## Node Setup (Vitest / Jest)
 ```typescript
@@ -79,27 +98,17 @@ afterAll(() => server.close())
 import { http, HttpResponse } from "msw"
 import { server } from "../mocks/server"
 
-it("shows error message when API fails", async () => {
+it("TC-UI-20102 shows the error state when the API fails", async () => {
   // Override just for this test — resets after each test via resetHandlers
-  server.use(
-    http.get("/api/users", () => {
-      return HttpResponse.json(
-        { error: "Internal server error" },
-        { status: 500 }
-      )
-    })
-  )
+  server.use(http.get("/api/v1/users", () => apiError(503, "UNAVAILABLE", "Try again shortly.")))
 
   render(<UserList />)
-  expect(await screen.findByText(/something went wrong/i)).toBeInTheDocument()
+  expect(await screen.findByRole("alert")).toHaveTextContent(/try again/i)
+  expect(screen.getByRole("button", { name: /retry/i })).toBeVisible()
 })
 
-it("handles empty list", async () => {
-  server.use(
-    http.get("/api/users", () => {
-      return HttpResponse.json([])
-    })
-  )
+it("TC-UI-20103 shows the empty state for an empty list", async () => {
+  server.use(http.get("/api/v1/users", () => page([])))   // data: [] — never null
 
   render(<UserList />)
   expect(await screen.findByText("No users found")).toBeInTheDocument()
@@ -137,10 +146,10 @@ enableMocking().then(() => {
 it("sends correct data on form submit", async () => {
   const createUser = vi.fn()
   server.use(
-    http.post("/api/users", async ({ request }) => {
+    http.post<PathParams, CreateUserInput>("/api/v1/users", async ({ request }) => {
       const body = await request.json()
       createUser(body)
-      return HttpResponse.json({ id: "3", ...body }, { status: 201 })
+      return ok(userFixture({ id: "u3", ...body }), 201)
     })
   )
 
@@ -157,23 +166,25 @@ it("sends correct data on form submit", async () => {
 ## Response Helpers
 ```typescript
 // Delay (simulate slow network)
-http.get("/api/users", async () => {
+http.get("/api/v1/users", async () => {
   await delay(2000)
-  return HttpResponse.json([])
+  return page([])
 })
 
 // Network error (simulate offline)
-http.get("/api/users", () => {
+http.get("/api/v1/users", () => {
   return HttpResponse.error()
 })
 
 // Passthrough (let real request go through)
-http.get("/api/health", () => {
+http.get("/healthz", () => {
   return passthrough()
 })
 ```
 
 ## Rules
+- Every body comes from `ok` / `page` / `apiError` (or `HttpResponse.json<ApiSuccess<T>>`), typed from the generated contract types — never a literal object shape
+- Test both `data: [...]` and `data: []` for lists, a found resource and a 404 `NOT_FOUND` for single resources, and every documented error code
 - Define base handlers in `handlers.ts` — per-test overrides go in `server.use()`
 - Always call `server.resetHandlers()` in `afterEach` — prevents test pollution
 - Use `onUnhandledRequest: "error"` in tests to catch missing handlers early
