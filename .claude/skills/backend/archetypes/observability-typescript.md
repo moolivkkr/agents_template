@@ -292,7 +292,8 @@ export function tracingMiddleware(req: Request, res: Response, next: NextFunctio
     return;
   }
 
-  // Enrich auto-instrumented span with business attributes
+  // Enrich auto-instrumented span with business attributes. req.tenantId comes from the verified
+  // token (requestContextMiddleware copies it from req.auth), never from a client header.
   span.setAttribute('tenant_id', req.tenantId || 'unknown');
   span.setAttribute('request_id', req.id);
   if (req.userId) {
@@ -302,8 +303,9 @@ export function tracingMiddleware(req: Request, res: Response, next: NextFunctio
   // Update span name to include route pattern (more useful than raw URL)
   // This runs after route matching, so req.route is available
   res.on('finish', () => {
-    const routePattern = req.route?.path || req.path;
-    span.updateName(`HTTP ${req.method} ${routePattern}`);
+    // The route template when one matched; never req.path (raw paths make span names unbounded)
+    const routePattern = req.route?.path ? `${req.baseUrl}${req.route.path}` : undefined;
+    span.updateName(routePattern ? `HTTP ${req.method} ${routePattern}` : `HTTP ${req.method}`);
     span.setAttribute('http.status_code', res.statusCode);
 
     if (res.statusCode >= 500) {
@@ -418,10 +420,10 @@ prisma.$on('query', (e) => {
   }
 
   if (e.duration > SLOW_QUERY_THRESHOLD_MS) {
+    // The query shape, never e.params: parameter values can carry PII and secrets
     logger.warn({
       query: e.query,
       duration_ms: e.duration,
-      params: e.params,
       target: e.target,
     }, 'slow query detected');
   }
@@ -595,19 +597,17 @@ import { metrics, ValueType } from '@opentelemetry/api';
 
 const meter = metrics.getMeter('my-service');
 
-// --- HTTP metrics (augment auto-instrumented metrics with business attributes) ---
-
-export const requestTotal = meter.createCounter('http.server.request.total', {
-  description: 'Total HTTP requests',
-  unit: '{request}',
-  valueType: ValueType.INT,
-});
+// --- HTTP server metrics (stable OTel HTTP semantic conventions) ---
+// No request counter: the histogram's count IS the request count. @opentelemetry/instrumentation-http
+// records its own HTTP server duration metric too; build SLIs on ONE source (this one, which
+// carries the Express route template), never both.
 
 export const requestDuration = meter.createHistogram('http.server.request.duration', {
-  description: 'HTTP request duration in seconds',
+  description: 'Duration of HTTP server requests',
   unit: 's',
   advice: {
-    explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+    // OTel semconv buckets; the NFR latency threshold must be one of them
+    explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10],
   },
 });
 
@@ -639,40 +639,56 @@ export const externalRequestDuration = meter.createHistogram('external.request.d
 
 ## Standard Metrics
 
-Express metrics middleware:
+Express metrics middleware. It follows the stable OTel HTTP semantic conventions, and every attribute
+is bounded. **There is no `tenant_id`**: each distinct value is a new time series (see
+`core/observability-patterns.md` §tenant_id). If you really need a per-tenant dimension on a metric,
+the only one allowed is a bounded `tenant.tier` (free/pro/enterprise). Ask per-tenant questions of
+traces and logs.
 
 ```typescript
 // src/middleware/metrics.middleware.ts
 import { Request, Response, NextFunction } from 'express';
-import { requestTotal, requestDuration, activeRequests } from '../lib/metrics';
+import { requestDuration, activeRequests } from '../lib/metrics';
+
+const KNOWN_METHODS = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']);
 
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction): void {
   const start = process.hrtime.bigint();
-  const attrs = {
-    tenant_id: req.tenantId || 'unknown',
-    method: req.method,
+  // The route isn't known until the router has matched, so active_requests has method + scheme only
+  const activeAttrs = {
+    'http.request.method': KNOWN_METHODS.has(req.method) ? req.method : '_OTHER',
+    'url.scheme': req.protocol,
   };
 
-  activeRequests.add(1, attrs);
+  activeRequests.add(1, activeAttrs);
 
   res.on('finish', () => {
-    const durationNs = Number(process.hrtime.bigint() - start);
-    const durationSec = durationNs / 1e9;
-
-    const finalAttrs = {
-      ...attrs,
-      endpoint: req.route?.path || req.path,
-      status_code: res.statusCode,
+    const attrs: Record<string, string | number> = {
+      ...activeAttrs,
+      'http.response.status_code': res.statusCode,
     };
+    // Express: req.baseUrl + req.route.path is the template ("/api/v1/orders/:id"). An unmatched
+    // request has no req.route, so it gets no http.route. NEVER fall back to req.path: raw paths are
+    // unbounded series.
+    if (req.route?.path) attrs['http.route'] = `${req.baseUrl}${req.route.path}`;
+    if (res.statusCode >= 500) attrs['error.type'] = String(res.statusCode);
 
-    requestTotal.add(1, finalAttrs);
-    requestDuration.record(durationSec, finalAttrs);
-    activeRequests.add(-1, attrs);
+    requestDuration.record(Number(process.hrtime.bigint() - start) / 1e9, attrs);
+    activeRequests.add(-1, activeAttrs);
   });
 
   next();
 }
 ```
+
+Test the route template: request `/api/v1/orders/123` and `/api/v1/orders/456`, then assert there is
+exactly one series, with `http.route="/api/v1/orders/:id"`.
+
+**SLIs and alerting.** Don't compute SLIs in-process: no p99, availability or "budget remaining"
+gauges. Percentiles can't be averaged across pods, and an in-memory window resets on every restart.
+Compute SLIs at query time from the `http.server.request.duration` histogram (its 5xx share and its
+bucket counts) and alert with multi-window burn rates. See `core/observability-patterns.md` §SLOs and
+Alerting.
 
 ---
 
@@ -803,9 +819,9 @@ export const activeUsers = meter.createObservableGauge('business.active_users', 
   valueType: ValueType.INT,
 });
 
-// Usage in service:
-// orderTotal.add(order.total, { tenant_id: tenantId, payment_method: 'card' });
-// orderCount.add(1, { tenant_id: tenantId });
+// Usage in service (small enums only, no tenant_id):
+// orderTotal.add(order.total, { payment_method: 'card' });
+// orderCount.add(1, { payment_method: 'card' });
 ```
 
 ---
@@ -890,7 +906,8 @@ export const logger: Logger = pino({
   // ISO timestamp
   timestamp: pino.stdTimeFunctions.isoTime,
 
-  // Redact sensitive fields (see PII Redaction section)
+  // Redact sensitive fields by key (see PII Redaction section). The logger applies this to every
+  // record at every level, so turning DEBUG on during an incident stays safe.
   redact: {
     paths: [
       'req.headers.authorization',
@@ -905,6 +922,8 @@ export const logger: Logger = pino({
       '*.secret',
       '*.ssn',
       '*.creditCard',
+      '*.apiKey',
+      '*.cardNumber',
     ],
     censor: '[REDACTED]',
   },
@@ -915,7 +934,7 @@ export const logger: Logger = pino({
 // debug  — troubleshooting, off in production by default
 // info   — business events (one per state transition)
 // warn   — handled degradation (circuit breaker, retry, fallback)
-// error  — needs investigation, triggers alerts
+// error  — a server-side failure to investigate (alerts come from SLO burn rates, not error lines)
 // fatal  — process is crashing
 ```
 
@@ -929,12 +948,18 @@ import pinoHttp from 'pino-http';
 import { logger } from '../lib/logger';
 import { randomUUID } from 'node:crypto';
 
+// Bounded charset and length: an inbound ID can't inject log lines or bloat every record
+const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
+
 export const httpLogger = pinoHttp({
   logger,
 
-  // Generate request ID if not provided
-  genReqId: (req) => {
-    return (req.headers['x-request-id'] as string) || `req_${randomUUID()}`;
+  // Accept a well-formed inbound request ID, otherwise generate one, and echo it
+  genReqId: (req, res) => {
+    const inbound = req.headers['x-request-id'];
+    const id = typeof inbound === 'string' && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`;
+    res.setHeader('X-Request-ID', id);
+    return id;
   },
 
   // Custom log message
@@ -948,16 +973,15 @@ export const httpLogger = pinoHttp({
   serializers: {
     req: (req) => ({
       method: req.method,
-      url: req.url,
-      query: req.query,
-      // Do NOT log headers or body at info level
+      url: req.url?.split('?')[0], // no query string: it can carry tokens and PII
+      // Never log headers or bodies, at any level
     }),
     res: (res) => ({
       statusCode: res.statusCode,
     }),
   },
 
-  // Add custom attributes to every request log
+  // Add custom attributes to every request log (tenantId comes from the verified token, via req.auth)
   customProps: (req) => ({
     tenant_id: (req as any).tenantId || 'unknown',
     request_id: req.id,
@@ -978,7 +1002,7 @@ export const httpLogger = pinoHttp({
 app.use(httpLogger);
 ```
 
-This automatically logs every request completion with method, URL, status code, response time, and the custom props (tenant_id, request_id).
+This automatically logs every request completion with method, path (without the query string), status code, response time, and the custom props (tenant_id, request_id).
 
 ---
 
@@ -1051,7 +1075,8 @@ export class OrderService {
   ) {}
 
   async createOrder(tenantId: string, req: CreateOrderDto): Promise<Order> {
-    this.logger.info({ tenant_id: tenantId, order: req }, 'creating order');
+    // Allow-listed fields, never the request DTO (a body) itself
+    this.logger.info({ tenant_id: tenantId, item_count: req.items.length }, 'creating order');
     // ...
   }
 }
@@ -1177,6 +1202,7 @@ import { randomUUID } from 'node:crypto';
 declare global {
   namespace Express {
     interface Request {
+      auth?: { tenantId: string; userId: string }; // set by the auth middleware from the verified token
       tenantId: string;
       userId?: string;
       log: pino.Logger;
@@ -1185,27 +1211,30 @@ declare global {
   }
 }
 
+// Bounded charset and length: an inbound ID can't inject log lines or bloat every record
+const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
+
 export function requestContextMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Extract or generate request ID
-  const requestId = (req.headers['x-request-id'] as string) || `req_${randomUUID()}`;
+  // Request ID. pino-http's genReqId already set a validated req.id, so reuse it. Otherwise accept a
+  // well-formed inbound ID, or generate one.
+  const inbound = req.header('x-request-id');
+  const requestId = req.id || (inbound && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`);
   req.id = requestId;
   res.setHeader('X-Request-ID', requestId);
 
-  // Extract tenant
-  const tenantId = req.headers['x-tenant-id'] as string;
-  if (!tenantId) {
-    res.status(400).json({ error: { code: 'MISSING_TENANT_ID', message: 'X-Tenant-ID header is required' } });
+  // Tenant and user come from the VERIFIED token that the auth middleware put on req.auth. Never
+  // from a client header such as X-Tenant-ID: anyone can send one.
+  if (!req.auth?.tenantId) {
+    res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'authentication required', request_id: requestId } });
     return;
   }
-  req.tenantId = tenantId;
-
-  // Extract user (set by auth middleware)
-  req.userId = (req as any).auth?.userId;
+  req.tenantId = req.auth.tenantId;
+  req.userId = req.auth.userId;
 
   // Child logger with request context — all subsequent logs include these fields
   req.log = logger.child({
     request_id: requestId,
-    tenant_id: tenantId,
+    tenant_id: req.tenantId,
     ...(req.userId && { user_id: req.userId }),
   });
 
@@ -1222,7 +1251,10 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
 
 ## PII Redaction
 
-pino's `redact` option removes sensitive fields before serialization. Configure at logger creation:
+pino's `redact` option removes sensitive fields before serialization. You configure it once, at logger
+creation, and it then applies to every record at every level: redaction is enforced by the logger, not
+remembered at each call site. Paths are key paths, and `*.x` matches one level deep, so list top-level
+keys explicitly too. Never log request or response bodies; log an allow-listed set of fields.
 
 ```typescript
 const logger = pino({
@@ -1233,7 +1265,7 @@ const logger = pino({
       'req.headers.cookie',
       'req.headers["x-api-key"]',
 
-      // Common PII field names (at any depth)
+      // Common PII field names (one level below any top-level key)
       '*.password',
       '*.newPassword',
       '*.oldPassword',
@@ -1249,9 +1281,7 @@ const logger = pino({
       '*.email',           // redact if your policy requires it
       '*.phoneNumber',     // redact if your policy requires it
 
-      // Specific paths
-      'body.password',
-      'body.creditCard',
+      // Specific paths (there are no body.* paths: request and response bodies are never logged)
       'user.ssn',
     ],
     censor: '[REDACTED]',
@@ -1359,6 +1389,7 @@ import './lib/runtime-metrics';    // Register Node.js runtime metrics
 import express from 'express';
 import { logger } from './lib/logger';
 import { httpLogger } from './middleware/logging.middleware';
+import { authMiddleware } from './middleware/auth.middleware';
 import { requestContextMiddleware } from './middleware/request-context.middleware';
 import { tracingMiddleware } from './middleware/tracing.middleware';
 import { metricsMiddleware } from './middleware/metrics.middleware';
@@ -1374,25 +1405,29 @@ const port = Number(process.env.PORT) || 3000;
 // 1. Body parsing
 app.use(express.json({ limit: '1mb' }));
 
-// 2. HTTP request/response logging (pino-http)
+// 2. HTTP request/response logging (pino-http; validates or generates the request ID)
 app.use(httpLogger);
 
 // 3. Health checks (before auth/tenant — no tenant_id required)
 app.use(healthRouter);
 
-// 4. Request context (request ID, tenant ID, child logger)
-app.use(requestContextMiddleware);
-
-// 5. Tracing enrichment (adds tenant_id to active span)
-app.use(tracingMiddleware);
-
-// 6. Metrics (request counters, duration histograms)
+// 4. Metrics (duration histogram, active requests). They need nothing from auth, and sitting before it
+//    means 401s are counted too.
 app.use(metricsMiddleware);
 
-// 7. Routes
+// 5. Auth: verifies the bearer token and sets req.auth = { tenantId, userId } from its claims
+app.use(authMiddleware);
+
+// 6. Request context (request ID, tenant ID from req.auth, child logger)
+app.use(requestContextMiddleware);
+
+// 7. Tracing enrichment (adds tenant_id to active span)
+app.use(tracingMiddleware);
+
+// 8. Routes
 app.use('/api/v1/orders', orderRouter);
 
-// 8. Error handler (must be last)
+// 9. Error handler (must be last)
 app.use(errorHandler);
 
 // --- Start server ---
@@ -1635,14 +1670,15 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 ## Critical Rules
 
 1. **`instrumentation.ts` is imported FIRST** — before Express, Prisma, or any other import. OTel must patch modules before they are loaded.
-2. **`tenant_id` on every log, metric, and trace** — zero exceptions. Use child loggers and span attributes.
+2. **`tenant_id` on every log line and trace span, and on no metric** (at most a bounded `tenant.tier`). Use child loggers and span attributes. The tenant comes from the verified token (`req.auth`), never from an `X-Tenant-ID` header.
 3. **JSON logs in production** — `pino-pretty` is for development only. Never enable it in production.
 4. **Redact PII** — configure pino `redact` paths for passwords, tokens, SSNs, credit cards.
 5. **Log-trace correlation** — every log line includes `trace_id` and `span_id` so you can jump from logs to traces.
-6. **ERROR means wake someone up** — do not use `logger.error()` for expected conditions (404, validation failures). Use `warn` for handled degradation.
-7. **Never log request/response bodies at INFO level** — use DEBUG. Bodies can contain PII and are verbose.
+6. **ERROR means a server-side failure someone should look at.** Don't use `logger.error()` for expected conditions (404, validation failures), and use `warn` for handled degradation. Alerts come from SLO burn rates, not from counting error lines.
+7. **Never log request or response bodies, at any level.** DEBUG gets turned on during incidents, and bodies carry PII and secrets. Log allow-listed fields and the path without its query string. Validate an inbound `X-Request-ID` (charset + length) before using it.
 8. **Record errors on spans** — every `catch` block that re-throws must call `span.recordException(err)` and `span.setStatus(ERROR)`.
 9. **Health check endpoints are silent** — `/healthz` and `/readyz` are excluded from request logging to avoid noise.
 10. **Graceful shutdown flushes telemetry** — handle SIGTERM, close server, flush OTel SDK, then exit. Never lose the last batch of traces/metrics.
-11. **Metrics at every boundary** — HTTP handlers, service methods, repository calls, external API calls. Use the standard metric names from `core/observability-patterns.md`.
+11. **Metrics at every boundary** (HTTP handlers, service methods, repository calls, external API calls), using the standard metric names from `core/observability-patterns.md` and bounded labels only. `http.route` is the route template (`req.baseUrl + req.route.path`), never `req.path`. No request counter: the histogram count is the request count.
 12. **Span naming follows convention** — `HTTP {METHOD} {path}`, `{Service}.{method}`, `{system}.{table}.{operation}`. Consistent naming enables cross-service dashboards.
+13. **SLIs come from the histogram at query time.** No in-process SLA gauges. Alert on multi-window burn rates (see Standard Metrics).

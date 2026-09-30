@@ -17,7 +17,7 @@ tags:
 
 # Observability Archetype (Spring Boot)
 
-> **CANONICAL REFERENCE**: This file is the single source of truth for Java/Spring Boot observability patterns. All other Java skill packs that mention tracing, metrics, or structured logging should defer to this file. For language-agnostic concepts (error taxonomy, SLA metrics, log levels), see `observability-patterns.md`.
+> **CANONICAL REFERENCE**: This file is the single source of truth for Java/Spring Boot observability patterns. All other Java skill packs that mention tracing, metrics, or structured logging should defer to this file. For language-agnostic concepts (error taxonomy, SLOs and alerting, log levels), see `observability-patterns.md`.
 
 Complete OpenTelemetry integration for Spring Boot services. Every generated service MUST follow this pattern.
 
@@ -456,6 +456,22 @@ public class TenantSpanProcessor implements SpanProcessor {
 
 Spring Boot Actuator + Micrometer is the standard metrics layer. The OTLP registry exports to the OTel Collector.
 
+**HTTP server metrics: one source, with the stable OTel names.** The OTel Java agent (1a) and the
+starter (1b) record `http.server.request.duration` in seconds, with the stable HTTP semantic-convention
+attributes:
+- `http.request.method` (`_OTHER` for unknown methods);
+- `http.route`, the Spring MVC route **template** (for example `/api/v1/orders/{id}`, never the raw
+  URI);
+- `http.response.status_code`, `url.scheme`, and `error.type` on failures.
+
+Its count is the request count, so don't add a request counter. Spring's Micrometer timer
+`http.server.requests` measures the same thing (its `uri` tag is also the template). Build SLIs on one
+of the two, not both, and give the Micrometer timer the semconv buckets below.
+
+Neither metric carries `tenant_id`, and no tag you add may either: every distinct value is a new time
+series. If you really need a per-tenant dimension, the only one allowed is a bounded `tenant.tier`
+(free/pro/enterprise). Ask per-tenant questions of traces and logs.
+
 ```yaml
 # application.yml
 management:
@@ -468,10 +484,9 @@ management:
       application: ${spring.application.name}
       environment: ${DEPLOY_ENV:local}
     distribution:
-      percentiles-histogram:
-        http.server.requests: true
+      # Explicit buckets = the OTel semconv boundaries; the NFR latency threshold must be one of them
       slo:
-        http.server.requests: 50ms, 100ms, 250ms, 500ms, 1s
+        http.server.requests: 5ms, 10ms, 25ms, 50ms, 75ms, 100ms, 250ms, 500ms, 750ms, 1s, 2500ms, 5s, 7500ms, 10s
   otlp:
     metrics:
       export:
@@ -479,7 +494,7 @@ management:
         step: 30s
 ```
 
-### 2b. Counter — Request and Business Event Counting
+### 2b. Counter — Business Event Counting
 
 ```java
 package com.example.app.metrics;
@@ -497,27 +512,14 @@ public class AppMetrics {
         this.meterRegistry = meterRegistry;
     }
 
-    /**
-     * Increment a request counter with route and status dimensions.
-     * Use for tracking request volume per endpoint.
-     */
-    public void recordRequest(String tenantId, String route, String method, int status) {
-        Counter.builder("http.requests.total")
-                .description("Total HTTP requests")
-                .tag("tenant_id", tenantId)
-                .tag("route", route)
-                .tag("method", method)
-                .tag("status", String.valueOf(status))
-                .register(meterRegistry)
-                .increment();
-    }
+    // No request counter: the http.server.request.duration histogram's count IS the request count.
 
     /**
      * Business event counter — track domain events for KPI dashboards.
+     * Tags are small enums only: no tenant_id, user or entity IDs, or error messages.
      */
-    public void recordBusinessEvent(String tenantId, String eventType, String outcome) {
+    public void recordBusinessEvent(String eventType, String outcome) {
         meterRegistry.counter("business.events.total",
-                "tenant_id", tenantId,
                 "event_type", eventType,
                 "outcome", outcome
         ).increment();
@@ -526,9 +528,8 @@ public class AppMetrics {
     /**
      * Record order value for revenue tracking.
      */
-    public void recordOrderValue(String tenantId, double amount, String paymentMethod) {
+    public void recordOrderValue(double amount, String paymentMethod) {
         meterRegistry.counter("business.order.revenue",
-                "tenant_id", tenantId,
                 "payment_method", paymentMethod
         ).increment(amount);
     }
@@ -593,13 +594,11 @@ public void processPayment(String tenantId, PaymentRequest request) {
     try {
         paymentGateway.charge(request);
         sample.stop(Timer.builder("payment.processing.duration")
-                .tag("tenant_id", tenantId)
-                .tag("method", request.getMethod())
+                .tag("method", request.getMethod()) // payment method: a small enum. No tenant_id.
                 .tag("outcome", "success")
                 .register(meterRegistry));
     } catch (Exception e) {
         sample.stop(Timer.builder("payment.processing.duration")
-                .tag("tenant_id", tenantId)
                 .tag("method", request.getMethod())
                 .tag("outcome", "failure")
                 .register(meterRegistry));
@@ -681,8 +680,9 @@ import io.micrometer.core.instrument.DistributionSummary;
 DistributionSummary responseSizes = DistributionSummary.builder("http.response.size")
         .description("HTTP response body size in bytes")
         .baseUnit("bytes")
-        .tag("tenant_id", tenantId)
-        .tag("endpoint", endpoint)
+        // The route TEMPLATE (request attribute HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE,
+        // e.g. "/api/v1/orders/{id}"), never request.getRequestURI(). No tenant_id.
+        .tag("http.route", routeTemplate)
         .publishPercentileHistogram()
         .register(meterRegistry);
 
@@ -723,17 +723,22 @@ scrape_configs:
 
 ### Key Metrics to Instrument
 
-| Metric | Type | Tags | Purpose |
+| Metric | Type | Tags (all bounded, no tenant_id) | Purpose |
 |--------|------|------|---------|
-| `http.requests.total` | Counter | tenant_id, route, method, status | Request volume, error rates |
-| `http.server.requests` | Timer | (auto by Spring) uri, method, status, outcome | Latency distribution (p50/p95/p99) |
-| `order.create.duration` | Timer | tenant_id, operation | Business operation latency |
-| `business.events.total` | Counter | tenant_id, event_type, outcome | Business KPIs |
-| `business.order.revenue` | Counter | tenant_id, payment_method | Revenue tracking |
+| `http.server.request.duration` | Histogram (s) | (OTel agent/starter) http.request.method, http.route (template), http.response.status_code, url.scheme, error.type | Rate, errors and latency (RED); the count is the request count |
+| `http.server.requests` | Timer | (Spring/Micrometer; the alternative to the row above) uri (template), method, status, outcome | The same data under Spring's names. Build SLIs on one of the two, not both |
+| `order.create.duration` | Timer | operation | Business operation latency |
+| `business.events.total` | Counter | event_type, outcome | Business KPIs |
+| `business.order.revenue` | Counter | payment_method | Revenue tracking |
 | `db.pool.active_connections` | Gauge | pool_name | Connection saturation |
 | `thread_pool.active` | Gauge | pool_name | Thread pool saturation |
 | `thread_pool.queue_size` | Gauge | pool_name | Backpressure indicator |
-| `http.response.size` | Summary | tenant_id, endpoint | Response payload analysis |
+| `http.response.size` | Summary | http.route (template) | Response payload analysis |
+
+**SLIs and alerting.** Don't compute SLIs in-process: no percentile, availability or "budget
+remaining" gauges. Percentiles can't be averaged across pods, and an in-memory window resets on every
+restart. Compute SLIs at query time from the request histogram (its 5xx share and its bucket counts)
+and alert with multi-window burn rates. See `core/observability-patterns.md` §SLOs and Alerting.
 
 ---
 
@@ -793,9 +798,13 @@ scrape_configs:
 </configuration>
 ```
 
-### 3b. MDC Correlation Filter
+### 3b. MDC Correlation Filters
 
-Injects `tenant_id`, `request_id`, `user_id`, `trace_id`, and `span_id` into SLF4J MDC so every log line carries correlation fields automatically.
+Two filters put the correlation fields into SLF4J MDC, so every log line carries them automatically:
+- `CorrelationFilter` runs **before** Spring Security, so even a 401 is logged with its request ID. It
+  sets `request_id`, `trace_id` and `span_id`.
+- `TenantMdcFilter` runs **after** Spring Security. It sets `tenant_id` and `user_id` from the verified
+  credential, never from a client header such as `X-Tenant-ID` or `X-User-ID`, which anyone can send.
 
 ```java
 package com.example.app.filter;
@@ -814,14 +823,18 @@ import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
 /**
- * Populates MDC with correlation IDs for every request.
- * Must run early in the filter chain (low order number).
+ * Populates MDC with request_id and the trace IDs for every request.
+ * Must run early in the filter chain (low order number), before Spring Security.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class CorrelationFilter extends OncePerRequestFilter {
+
+    // Bounded charset and length: an inbound ID can't inject log lines or bloat every record
+    private static final Pattern VALID_REQUEST_ID = Pattern.compile("[A-Za-z0-9._-]{8,128}");
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -830,25 +843,13 @@ public class CorrelationFilter extends OncePerRequestFilter {
             throws ServletException, IOException {
 
         try {
-            // Request ID — from header or generate
+            // Request ID — accept a well-formed inbound ID, otherwise generate one
             String requestId = request.getHeader("X-Request-ID");
-            if (requestId == null || requestId.isBlank()) {
+            if (requestId == null || !VALID_REQUEST_ID.matcher(requestId).matches()) {
                 requestId = "req_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
             }
             MDC.put("request_id", requestId);
             response.setHeader("X-Request-ID", requestId);
-
-            // Tenant ID — from header (validated by auth middleware)
-            String tenantId = request.getHeader("X-Tenant-ID");
-            if (tenantId != null && !tenantId.isBlank()) {
-                MDC.put("tenant_id", tenantId);
-            }
-
-            // User ID — from auth context (set after authentication)
-            String userId = request.getHeader("X-User-ID");
-            if (userId != null && !userId.isBlank()) {
-                MDC.put("user_id", userId);
-            }
 
             // OTel trace/span IDs (if OTel agent is active, these are already in MDC;
             // this is a fallback for non-agent setups)
@@ -862,6 +863,56 @@ public class CorrelationFilter extends OncePerRequestFilter {
 
         } finally {
             MDC.clear();
+        }
+    }
+}
+```
+
+```java
+package com.example.app.filter;
+
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.MDC;
+import org.springframework.boot.autoconfigure.security.SecurityProperties;
+import org.springframework.core.annotation.Order;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+
+/**
+ * Adds tenant_id and user_id to MDC from the VERIFIED credential. It runs just after Spring
+ * Security's filter chain, once the token has been validated.
+ */
+@Component
+@Order(SecurityProperties.DEFAULT_FILTER_ORDER + 1)
+public class TenantMdcFilter extends OncePerRequestFilter {
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                     HttpServletResponse response,
+                                     FilterChain filterChain)
+            throws ServletException, IOException {
+
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth instanceof JwtAuthenticationToken jwt) {
+            String tenantId = jwt.getToken().getClaimAsString("tenant_id"); // claim name per your IdP
+            if (tenantId != null) {
+                MDC.put("tenant_id", tenantId);
+            }
+            MDC.put("user_id", jwt.getToken().getSubject());
+        }
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            MDC.remove("tenant_id");
+            MDC.remove("user_id");
         }
     }
 }
@@ -882,7 +933,8 @@ public class OrderService {
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
 
     public Order createOrder(String tenantId, CreateOrderRequest request) {
-        // MDC fields (tenant_id, request_id, trace_id) are added by CorrelationFilter.
+        // MDC fields (request_id, trace_id; tenant_id, user_id) are added by CorrelationFilter
+        // and TenantMdcFilter.
         // They appear in every log line automatically — no need to repeat them.
 
         log.info("Creating order items={} user={}", request.getItems().size(), request.getUserId());
@@ -945,6 +997,13 @@ otel:
 
 ### 3e. Sensitive Data Masking
 
+Redaction is enforced in the encoder, not remembered at each call site. The decorator is wired into
+`LogstashEncoder` (3a), so every record at every level passes through it. DEBUG gets switched on in
+production during incidents, and redaction has to hold then too. It matches **key names**, so a secret
+passed as a `{}` argument inside the message text isn't caught. Never put secrets, request bodies or
+whole DTOs into a log message, at any level. That also rules out `CommonsRequestLoggingFilter` with
+`setIncludePayload(true)`.
+
 ```java
 package com.example.app.logging;
 
@@ -953,22 +1012,18 @@ import com.fasterxml.jackson.core.JsonStreamContext;
 import net.logstash.logback.decorate.JsonGeneratorDecorator;
 
 import java.io.IOException;
-import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
- * Masks sensitive fields in JSON log output.
- * Fields like "password", "token", "secret", "authorization", "ssn", "credit_card"
- * are replaced with "***MASKED***".
+ * Masks sensitive fields in JSON log output, by key name.
+ * Any field whose name contains "password", "token", "secret", "authorization", "cookie",
+ * "api_key", "session", "card", "ssn" and so on is replaced with "[REDACTED]".
  */
 public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
 
-    private static final Set<String> SENSITIVE_FIELDS = Set.of(
-            "password", "passwd", "secret", "token", "authorization",
-            "api_key", "apikey", "access_token", "refresh_token",
-            "ssn", "social_security", "credit_card", "card_number",
-            "cvv", "pin", "private_key"
-    );
+    private static final Pattern SENSITIVE_KEY = Pattern.compile(
+            "(?i)(pass(word|wd)?|secret|token|authorization|cookie|api[-_]?key|session|card|cvv|iban"
+                    + "|ssn|social_security|private[-_]?key|^pin$)");
 
     private static final Pattern EMAIL_PATTERN =
             Pattern.compile("([a-zA-Z0-9._%+-]+)@([a-zA-Z0-9.-]+\\.[a-zA-Z]{2,})");
@@ -980,7 +1035,7 @@ public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
 
     private static class MaskingJsonGenerator extends JsonGenerator {
         // Delegate pattern — override writeString/writeNumber to check field names
-        // and mask values when the current field name is in SENSITIVE_FIELDS.
+        // and mask values when the current field name matches SENSITIVE_KEY.
         // Full implementation wraps the delegate and intercepts value-writing methods.
 
         private final JsonGenerator delegate;
@@ -992,7 +1047,7 @@ public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
         @Override
         public void writeString(String text) throws IOException {
             if (isSensitiveField()) {
-                delegate.writeString("***MASKED***");
+                delegate.writeString("[REDACTED]");
             } else {
                 delegate.writeString(maskEmail(text));
             }
@@ -1001,7 +1056,7 @@ public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
         private boolean isSensitiveField() {
             JsonStreamContext ctx = delegate.getOutputContext();
             String fieldName = ctx != null ? ctx.getCurrentName() : null;
-            return fieldName != null && SENSITIVE_FIELDS.contains(fieldName.toLowerCase());
+            return fieldName != null && SENSITIVE_KEY.matcher(fieldName).find();
         }
 
         private String maskEmail(String text) {
@@ -1062,10 +1117,9 @@ management:
       application: ${spring.application.name}
       environment: ${DEPLOY_ENV:local}
     distribution:
-      percentiles-histogram:
-        http.server.requests: true
+      # OTel semconv buckets (see 2a); the NFR latency threshold must be one of them
       slo:
-        http.server.requests: 50ms, 100ms, 250ms, 500ms, 1s
+        http.server.requests: 5ms, 10ms, 25ms, 50ms, 75ms, 100ms, 250ms, 500ms, 750ms, 1s, 2500ms, 5s, 7500ms, 10s
   prometheus:
     metrics:
       export:
@@ -1311,14 +1365,15 @@ public class DatabaseHealthIndicator implements HealthIndicator {
 
 ## Critical Rules
 
-- `tenant_id` on every log, metric, and trace span — zero exceptions (see `observability-patterns.md`)
+- `tenant_id` on every log line and trace span, and on **no metric** (at most a bounded `tenant.tier`). See `observability-patterns.md`.
 - Use `@WithSpan` for business methods; use programmatic Tracer for loops and conditional logic
 - Always record exceptions on spans: `span.recordException(e)` + `span.setStatus(StatusCode.ERROR, ...)`
 - Propagate OTel context through `@Async` and `CompletableFuture` with task decorators
-- MDC correlation fields (`tenant_id`, `request_id`, `trace_id`) are set once in the filter and appear on every log line
+- MDC correlation fields are set once by the filters and appear on every log line. `request_id` (validated inbound, or generated) and the trace IDs come from `CorrelationFilter`. `tenant_id` and `user_id` come from the verified credential via `TenantMdcFilter`, never from `X-Tenant-ID`.
 - JSON logs in production, human-readable in local — use `logback-spring.xml` with Spring profiles
-- Never log sensitive data — use `SensitiveDataMaskingDecorator` to catch accidental leaks
+- Never log sensitive data. `SensitiveDataMaskingDecorator` redacts by key name at every level. Never log request or response bodies.
 - Prefer the Java agent for auto-instrumentation — it covers JDBC, Redis, HTTP clients, Kafka, gRPC with zero code
-- Metrics at every boundary — HTTP, service, repository, external calls
+- HTTP server metrics: one `http.server.request.duration` histogram (from the agent or starter, or Micrometer's `http.server.requests`), with `http.route` as the route template. No request counter.
+- Metrics at every boundary — HTTP, service, repository, external calls — with bounded tags only
 - `@Timed` for method-level latency; `Counter` for events; `Gauge` for pool/queue sizes
-- SLA dashboards per service — availability, latency, error rate with alerting (see `observability-patterns.md`)
+- SLIs come from the request histogram at query time, and alerts use multi-window burn rates. No in-process SLA gauges (see `observability-patterns.md` §SLOs and Alerting).
