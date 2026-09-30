@@ -15,6 +15,7 @@ tags:
 # Dockerfile Archetype — TypeScript / Node.js
 
 > TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, Prisma 7.10 (the health route; its /healthz, /readyz and /api/version were also run against Postgres 16) (tests/archetype-compile/typescript/run.sh).
+> The npm and pnpm Dockerfiles were built and run once on 2026-09-30 (not part of run.sh): `node:26-slim` from `.nvmrc`, npm 11 / pnpm 12.8.1, a service made of these archetypes (migration-pattern-typescript.md's schema and `prisma.config.ts`, this health router). The image loads the generated client, runs as uid 65532 on a read-only root filesystem, answers `/healthz` 200 with the Docker HEALTHCHECK `healthy`, runs `prisma migrate deploy` itself, and `/readyz` turns 200 after it against Postgres 16.
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/dockerfile.md` (Go, if it exists). Covers multi-stage builds for npm, pnpm, and Bun runtimes.
 
@@ -27,67 +28,69 @@ Complete, production-optimized Dockerfile templates for TypeScript/Node.js appli
 ```dockerfile
 # Dockerfile — TypeScript/Node.js with npm
 # Multi-stage build: build → production
+#   docker build --build-arg NODE_VERSION="$(cat .nvmrc)" --build-arg GIT_SHA="$(git rev-parse HEAD)" .
+
+# The Node major from the project's version file (.nvmrc / engines) — the same value as
+# IMPLEMENTATION_GUIDELINES §Commands and versions. No default: a missing build arg fails the build.
+ARG NODE_VERSION
 
 # =============================================================================
 # Stage 1: Build
 # =============================================================================
-FROM node:22-alpine AS builder
+FROM node:${NODE_VERSION}-slim AS builder
 
-# Set working directory
 WORKDIR /app
 
-# Copy dependency manifests first (leverage Docker layer caching)
+# Dependency manifests first (layer caching); lifecycle scripts off
 COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts
 
-# Install ALL dependencies (including devDependencies for build)
-RUN npm ci
-
-# Copy source code
-COPY tsconfig.json ./
-COPY src/ ./src/
-
-# Copy Prisma schema if using Prisma (generate client during build)
-COPY prisma/ ./prisma/ 2>/dev/null || true
-RUN npx prisma generate 2>/dev/null || true
+# Prisma client: generate from the schema + prisma.config.ts, no DATABASE_URL needed at build time
+# (prisma.config.ts reads process.env, not env() — see migration-pattern-typescript.md). No `|| true`:
+# a failed generate must fail the build, not ship an image without a client.
+COPY prisma.config.ts ./
+COPY prisma/ ./prisma/
+RUN npx prisma generate
 
 # Build TypeScript → JavaScript
+COPY tsconfig.json ./
+COPY src/ ./src/
 RUN npm run build
 
-# Remove devDependencies after build
-RUN npm ci --omit=dev && npm cache clean --force
+# Drop devDependencies IN PLACE. Never `npm ci --omit=dev` here: re-installing deletes node_modules/.prisma,
+# the client generated above, and the image then fails at startup ("Cannot find module '.prisma/client/default'").
+RUN npm prune --omit=dev && npm cache clean --force
 
 # =============================================================================
 # Stage 2: Production
 # =============================================================================
-FROM node:22-alpine AS production
+FROM node:${NODE_VERSION}-slim AS production
 
-# Security: non-root user
-# node:22-alpine includes 'node' user (uid 1000)
-USER node
+ENV NODE_ENV=production
+ENV PORT=3000
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
 
 WORKDIR /app
 
-# Copy production dependencies and built output from builder
-COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-COPY --from=builder --chown=node:node /app/dist ./dist
-COPY --from=builder --chown=node:node /app/package.json ./package.json
+# Root-owned and read-only for the app user: the image works with a read-only root filesystem
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+# prisma/migrations: /readyz waits for the newest one. prisma.config.ts: the migrate Job runs this image
+# (`npx prisma migrate deploy`), which needs "prisma" and "dotenv" in dependencies, not devDependencies.
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
 
-# Copy Prisma client if present
-COPY --from=builder --chown=node:node /app/prisma ./prisma 2>/dev/null || true
-COPY --from=builder --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma 2>/dev/null || true
+# Numeric non-root user (runAsNonRoot needs a numeric UID); no trailing comment on this line
+USER 65532:65532
 
-# Environment
-ENV NODE_ENV=production
-ENV PORT=3000
-
-# Expose the application port
 EXPOSE 3000
 
-# Health check — verify the app responds
+# Liveness only (the runtime contract's /healthz). node:*-slim has no wget/curl, so node probes itself.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/healthz || exit 1
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 
-# Start the application
 CMD ["node", "dist/index.js"]
 ```
 
@@ -98,56 +101,62 @@ CMD ["node", "dist/index.js"]
 ```dockerfile
 # Dockerfile — TypeScript/Node.js with pnpm
 # Multi-stage build: build → production
+#   docker build --build-arg NODE_VERSION="$(cat .nvmrc)" --build-arg GIT_SHA="$(git rev-parse HEAD)" .
+
+# The Node major from the project's version file (.nvmrc / engines). No default: a missing build arg fails.
+ARG NODE_VERSION
 
 # =============================================================================
 # Stage 1: Build
 # =============================================================================
-FROM node:22-alpine AS builder
-
-# Install pnpm globally
-RUN corepack enable && corepack prepare pnpm@latest --activate
+FROM node:${NODE_VERSION}-slim AS builder
 
 WORKDIR /app
 
-# Copy dependency manifests (pnpm uses pnpm-lock.yaml)
-COPY package.json pnpm-lock.yaml ./
+# pnpm at the version package.json "packageManager" pins (Node 25+ images ship no corepack)
+COPY package.json pnpm-*.yaml ./
+RUN npm install -g "pnpm@$(node -p "require('./package.json').packageManager.split('@')[1].split('+')[0]")"
 
-# Install all dependencies (frozen lockfile for reproducibility)
-RUN pnpm install --frozen-lockfile
+# Install all dependencies (frozen lockfile; lifecycle scripts off — prisma generate runs explicitly below)
+RUN pnpm install --frozen-lockfile --ignore-scripts
 
-# Copy source
-COPY tsconfig.json ./
-COPY src/ ./src/
-COPY prisma/ ./prisma/ 2>/dev/null || true
-RUN npx prisma generate 2>/dev/null || true
+# Prisma client: generated from the schema + prisma.config.ts, no DATABASE_URL at build time. No `|| true`.
+COPY prisma.config.ts ./
+COPY prisma/ ./prisma/
+RUN pnpm exec prisma generate
 
 # Build
+COPY tsconfig.json ./
+COPY src/ ./src/
 RUN pnpm run build
 
-# Remove devDependencies
-RUN pnpm prune --prod
+# Drop devDependencies in place (the generated client lives in the virtual store and survives this)
+RUN pnpm prune --prod --ignore-scripts
 
 # =============================================================================
 # Stage 2: Production
 # =============================================================================
-FROM node:22-alpine AS production
-
-USER node
-WORKDIR /app
-
-COPY --from=builder --chown=node:node /app/node_modules ./node_modules
-COPY --from=builder --chown=node:node /app/dist ./dist
-COPY --from=builder --chown=node:node /app/package.json ./package.json
-COPY --from=builder --chown=node:node /app/prisma ./prisma 2>/dev/null || true
-COPY --from=builder --chown=node:node /app/node_modules/.prisma ./node_modules/.prisma 2>/dev/null || true
+FROM node:${NODE_VERSION}-slim AS production
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
+WORKDIR /app
+
+COPY --from=builder /app/package.json ./package.json
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/prisma ./prisma
+COPY --from=builder /app/prisma.config.ts ./prisma.config.ts
+
+USER 65532:65532
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/healthz || exit 1
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 
 CMD ["node", "dist/index.js"]
 ```
@@ -370,7 +379,7 @@ services:
         delay: 5s
         max_attempts: 3
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/healthz"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -454,11 +463,12 @@ export function createHealthRouter(deps: {
 # 3. Use --mount=type=cache for npm/pnpm cache (BuildKit)
 
 # BuildKit cache mount example:
-FROM node:22-alpine AS builder
+ARG NODE_VERSION
+FROM node:${NODE_VERSION}-slim AS builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci
+    npm ci --ignore-scripts
 COPY . .
 RUN npm run build
 
@@ -484,14 +494,18 @@ RUN npm run build
 - Multi-stage builds are MANDATORY — never ship devDependencies or source TypeScript in production images
 - Use `npm ci` (not `npm install`) for reproducible builds from lockfile
 - Use `--frozen-lockfile` (pnpm) or `--frozen-lockfile` (bun) for reproducibility
-- Non-root user is MANDATORY — use the built-in `node` user (Alpine images include it)
+- Non-root user is MANDATORY — a numeric `USER 65532:65532` on its own line (a named user fails `runAsNonRoot`)
+- The Node base image is `node:${NODE_VERSION}-slim`, with `NODE_VERSION` from the project's version file (`.nvmrc` / `engines`), passed as a build arg — never a hard-coded tag
 - `NODE_ENV=production` MUST be set — frameworks use it for optimizations and security
 - Health check is MANDATORY — Docker and orchestrators need it for container lifecycle
 - `.dockerignore` MUST exclude: `node_modules/`, `.git/`, `.env*`, `dist/`, test files
 - NEVER copy `.env` files into the image — use environment variables at runtime
 - Copy `package.json` + lockfile BEFORE source code to leverage Docker layer caching
-- Prisma Client MUST be generated during build (`npx prisma generate`) if using Prisma
+- Prisma Client MUST be generated during build (`npx prisma generate`) with `prisma.config.ts` copied in, and never behind `|| true` — a failed generate must fail the build
+- Remove devDependencies with `npm prune --omit=dev` / `pnpm prune --prod`, never a second `npm ci --omit=dev`: re-installing deletes the generated client (`node_modules/.prisma`) and the image crashes at startup
+- If the migrate Job runs the app image (`npx prisma migrate deploy`), `prisma` and `dotenv` are `dependencies`, and the image carries `prisma/` and `prisma.config.ts`
+- `COPY` takes no shell syntax — `COPY x ./ 2>/dev/null || true` treats `2>/dev/null`, `||` and `true` as source paths and fails the build
 - `read_only: true` in production compose prevents filesystem writes (use `tmpfs` for temp files)
 - Resource limits MUST be set in production — prevent OOM and CPU starvation
-- Use `wget` (not `curl`) for health checks in Alpine images — `wget` is pre-installed, `curl` is not
+- `node:*-slim` has neither `wget` nor `curl`: the HEALTHCHECK runs `node -e "fetch(…/healthz)"` against the runtime contract's liveness path
 - Bun variant runs TypeScript directly — no transpilation step needed
