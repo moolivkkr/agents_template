@@ -564,7 +564,7 @@ services:
     environment:
       DATABASE_URL: postgres://calc:calc@postgres-west:5432/calc?sslmode=disable
       APP_ENV: development
-      SESSION_SECRET: dev-secret-west
+      SESSION_SECRET: ${SESSION_SECRET_WEST:?generate into .env (gitignored)}
       OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
       CORS_ALLOWED_ORIGINS: http://localhost:3001
     depends_on:

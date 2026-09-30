@@ -270,7 +270,8 @@ services:
       - "8080:8080"
     environment:
       - DATABASE_URL=postgres://postgres:postgres@db:5432/yourapp
-      - JWT_SECRET=dev-secret-change-in-production
+      # generated once into a gitignored .env:  printf 'JWT_SECRET=%s\n' "$(openssl rand -hex 32)" >> .env
+      - JWT_SECRET=${JWT_SECRET:?generate JWT_SECRET into .env (gitignored)}
       - RUST_LOG=yourapp=debug,tower_http=debug
       - REDIS_URL=redis://redis:6379
     depends_on:
@@ -338,7 +339,7 @@ services:
         --exec 'run --bin yourapp'
     environment:
       - DATABASE_URL=postgres://postgres:postgres@db:5432/yourapp
-      - JWT_SECRET=dev-secret-change-in-production
+      - JWT_SECRET=${JWT_SECRET:?generate JWT_SECRET into .env (gitignored)}
       - RUST_LOG=yourapp=debug,tower_http=debug,sqlx=warn
 
 volumes:

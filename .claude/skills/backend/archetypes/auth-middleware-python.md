@@ -573,7 +573,9 @@ def create_app() -> FastAPI:
     # ---------------------------------------------------------------------------
 
     configure_jwt(JWTConfig(
-        secret_key="your-secret-key",  # load from env in production
+        # From the environment, never a literal. Settings refuses to start without it unless
+        # APP_ENV is exactly local/dev/test (security/secure-coding.md §5 — fail closed).
+        secret_key=settings.jwt_secret_key,
         algorithm="HS256",
         issuer="widget-api",
         audience="widget-api",
