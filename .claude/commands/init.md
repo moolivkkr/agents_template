@@ -18,6 +18,15 @@ arguments:
 
 # /init — Project Initialization
 
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
+
 Bootstraps a new project from scratch. Reads `./requirements/`, produces `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md`, generates project-specific agents, and writes `CLAUDE.md`.
 
 **Run once at project start. Use `/plan` to begin phase work.**

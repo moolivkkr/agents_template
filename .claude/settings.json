@@ -1,12 +1,12 @@
 {
-  "$comment": "Claude Code harness settings for the SDLC framework. Framework CONFIG (models, gates, paths) lives in sdlc-config.json — this file is only for harness behavior like hooks. Shipped/committed so every project gets ground-truth injection. verify-gate.sh runs on Stop and on writes to a phase manifest.json: it re-verifies the execution-guarantee contract (roster.json completeness + report integrity + no dangling failures + gate.passed honesty) in CODE, not prose — this is what makes the phase gate UN-BYPASSABLE by an agent that merely claims it passed. Its non-zero exit blocks the turn from ending / the manifest write from being trusted. The Stop hook takes no phase arg, so verify-gate.sh auto-detects the latest agent_state/phases/<N> dir.",
+  "$comment": "Claude Code harness settings for the SDLC framework. Framework CONFIG (models, gates, paths) lives in sdlc-config.json \u2014 this file is only for harness behavior like hooks. Shipped/committed so every project gets ground-truth injection. verify-gate.sh runs on Stop and on writes to a phase manifest.json: it re-verifies the execution-guarantee contract (roster.json completeness + report integrity + no dangling failures + gate.passed honesty) in CODE, not prose \u2014 this is what makes the phase gate UN-BYPASSABLE by an agent that merely claims it passed. Its non-zero exit blocks the turn from ending / the manifest write from being trusted. The Stop hook takes no phase arg, so verify-gate.sh auto-detects the latest agent_state/phases/<N> dir. autonomous-continue.sh (Stop) blocks ending the turn while agent_state/autonomous/run.json says a /autonomous run is 'running', so the pipeline doesn't stall between sub-commands; it yields on awaiting_human/paused/complete/failed or when no progress is made. Hook paths use $CLAUDE_PROJECT_DIR; new-project.sh and /autonomous Step 0 copy .claude/hooks into the project.",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/inject-project-facts.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/inject-project-facts.sh"
           }
         ]
       }
@@ -16,7 +16,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": ".claude/hooks/verify-gate.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/verify-gate.sh"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/autonomous-continue.sh"
           }
         ]
       }
@@ -27,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in */agent_state/phases/*/manifest.json) p=$(printf '%s' \"$f\" | sed -E 's#.*/agent_state/phases/([0-9]+)/manifest.json#\\1#'); .claude/hooks/verify-gate.sh \"$p\" ;; *) exit 0 ;; esac"
+            "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in */agent_state/phases/*/manifest.json) p=$(printf '%s' \"$f\" | sed -E 's#.*/agent_state/phases/([0-9]+)/manifest.json#\\1#'); \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/verify-gate.sh \"$p\" ;; *) exit 0 ;; esac"
           }
         ]
       }

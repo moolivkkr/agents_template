@@ -5,9 +5,22 @@ arguments:
   - name: phase
     required: false
     description: "Phase number. Omit to auto-detect."
+  - name: auto
+    required: false
+    default: false
+    description: "Autonomous mode (set by /autonomous or an active run.json): escalations auto-resolve with the recommended option and are logged; no user prompts."
 ---
 
 # /develop Orchestrator — Wave-by-Wave Execution
+
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
 
 **This command runs in the parent session itself, not in a subagent.**
 
@@ -570,7 +583,7 @@ When tests fail and the test agent or a subsequent fix agent attempts auto-remed
 
 **Confidence-based escalation:**
 - If root cause is clear (missing import, typo, wrong return type, obvious logic error) → auto-fix
-- If root cause is unclear after reading the full failure output → escalate to user: "Test failure in [component] — root cause unclear. Options: [A] [B] [C]"
+- If root cause is unclear after reading the full failure output → escalate to user (in **auto mode**: pick the most conservative option, log it to auto-resolved.jsonl, and continue): "Test failure in [component] — root cause unclear. Options: [A] [B] [C]"
 - Maximum 3 auto-fix attempts per failing test → then escalate (do NOT loop indefinitely)
 
 **CI log sanitization (before feeding test output to any agent):**

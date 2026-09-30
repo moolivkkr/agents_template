@@ -12,6 +12,10 @@ arguments:
     required: false
     default: false
     description: "Force re-seed even if seed data exists from per-phase runs"
+  - name: auto
+    required: false
+    default: false
+    description: "Autonomous mode (set by /autonomous): no prompts; ambiguous results are logged and reported, never waited on."
   - name: force_accept
     required: false
     default: false
@@ -19,6 +23,15 @@ arguments:
 ---
 
 # /accept — Global Acceptance Testing
+
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
 
 Full-product acceptance testing. Validates the complete system against ALL BRD personas and ALL FR-* use cases — not just those scoped to a single phase. This is the final human-readable proof that the product delivers its promises.
 

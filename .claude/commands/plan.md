@@ -21,6 +21,15 @@ arguments:
 
 # /plan — Phase Specification Generation
 
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
+
 Generates detailed technical specifications (TRDs), typed data contracts, and component-level UI specs for a phase. The output of `/plan` is the contract that `/develop` implements.
 
 **Prerequisites:** `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md` must exist (run `/init` first).
@@ -177,7 +186,7 @@ Wave 3 (sequential): [tasks]
 5. "What Already Exists" section matches previous manifest (if PHASE > 1)
 6. Escalation pointers section present
 
-**On failure:** Re-run `project_planner` with specific gap identified. Max 1 retry → surface to user.
+**On failure:** Re-run `project_planner` with specific gap identified. Max 1 retry → surface to user (auto mode: proceed with the best plan, log the gap as `category: planning`).
 
 ---
 
@@ -303,7 +312,7 @@ Each UI spec contains:
 10. Data Contract Cross-Reference — every wireframe field verified against the contract field map
 11. Design-System Adherence — semantic tokens (not hardcoded colors) + reuse of the shared component library (if a project design system exists, e.g. `~/.claude/skills/ui/vertix-portal-design-system.md`)
 
-BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked.
+BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked (auto mode: downgrade to WARN, log `category: ux`, carry to the checkpoint).
 
 ---
 
@@ -374,10 +383,10 @@ If MISSING coverage: **auto-fix loop** before blocking:
 1. Identify which FR-* is missing spec coverage
 2. Route to `spec_writer` with the specific FR-* as input → agent writes the missing spec
 3. Re-run `brd_spec_reconciler` to verify the gap is closed
-4. Max 2 auto-fix cycles → if still MISSING after 2 cycles: block `/develop` and surface to user
+4. Max 2 auto-fix cycles → if still MISSING after 2 cycles: block `/develop` and surface to user (auto mode: log each MISSING item as `category: architecture` in auto-resolved.jsonl, mark them `deferred` in phase_context.md, and continue; the checkpoint shows them)
 5. This prevents the common case where a spec_writer simply forgot one FR-* from its assignment
 
-If INVENTED behaviors: surface to user — may be valid technical decisions or may be scope creep.
+If INVENTED behaviors: surface to user — may be valid technical decisions or may be scope creep (auto mode: keep them, and log each as `category: architecture` for review at the checkpoint).
 
 ---
 
@@ -410,7 +419,7 @@ Writes: `agent_state/phases/${PHASE}/plan_check.md`
 **Verdicts:**
 - **PASS** → continue to Step 4c
 - **WARN** → display warnings, continue to Step 4c (warnings carry into phase_context.md)
-- **BLOCK** → STOP. Display gaps. Route specific gaps back to spec_writer for amendment (max 1 cycle). If still BLOCK after amendment: surface to user.
+- **BLOCK** → STOP. Display gaps. Route specific gaps back to spec_writer for amendment (max 1 cycle). If still BLOCK after amendment: surface to user (auto mode: downgrade to WARN, log `category: architecture`, continue; this is the behaviour `/autonomous` Step 2b relies on).
 
 ```
 plan_goal_verifier → agent_state/phases/${PHASE}/plan_check.md

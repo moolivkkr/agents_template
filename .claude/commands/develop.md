@@ -29,6 +29,15 @@ arguments:
 
 # /develop — Autonomous Phase Implementation
 
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
+
 Fully autonomous phase implementation. Detects where you are, implements all specs, tests, reviews, and writes the phase gate.
 
 **One decision point:** at the end — advance to the next phase or not.
@@ -318,7 +327,7 @@ Before skipping ANY step, shortcutting ANY gate, or accepting partial results, r
 |---|---|
 | "Tests pass, so the implementation is correct" | Tests verify what the test author thought to check. Specs define what MUST exist. Run reconciliation. |
 | "This is a simple phase, I can skip the audit step" | Simple phases are where assumptions hide. Run the audit. |
-| "The gate has only one minor blocker, I'll pass it" | A blocker is a blocker. Fix it or use `--force_gate` with explicit user approval. |
+| "The gate has only one minor blocker, I'll pass it" | A blocker is a blocker. Fix it or use `--force_gate` with explicit user approval. Under `/autonomous`, that approval is `agent_state/autonomous/approved.json` `"force_gate_policy":"approved"` (given at its human checkpoint), and it applies only after 3 fix cycles, with every remaining blocker written to `gate.forced`. |
 | "I already reviewed this code when I wrote it" | You are the author. Authors don't find their own bugs. The reviewers are separate agents for a reason. |
 | "Optimization isn't needed this phase — there's barely any code" | Optimization runs every phase. Even 5 lines of dead code compound over 10 phases. |
 | "The previous phase tests still pass, no need for regression check" | Run them anyway. Silent import breakage is the #1 cross-phase regression. |

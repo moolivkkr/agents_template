@@ -28,15 +28,59 @@ Phase 0:  Environment pre-flight
 Phase 1:  /init --auto (research all decisions)
 Phase 1b: /map (persistent codebase knowledge base)
 Phase 2:  /discuss --auto --phase=1 (surface assumptions)
-Phase 2a: /design --phase=1 --source=stitch --auto (UI design contract + design gate, if frontend phase; auto-falls back to pure-agent if Stitch MCP absent)
-Phase 2b: /plan --auto --phase=1
+Phase 2b: /plan --auto --phase=1 (PHASE_PLAN + specs + data-contracts)
+Phase 2c: /design --phase=1 --source=stitch --auto (UI/mobile phases only; needs 2b's PHASE_PLAN + data-contracts; falls back to pure-agent if Stitch is absent)
 Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions + UI designs)
 Phase 4:  /develop --auto --phase=1 (includes Wave 3.5: local deploy + health check)
-Phase 5:  Repeat discuss→design→plan→develop for remaining phases
+Phase 5:  Repeat discuss→plan→design→develop for remaining phases
 Phase 5b: Local deploy (build + migrate + health check for final acceptance)
 Phase 6:  /accept --auto (global acceptance + pipeline completeness)
 Phase 7:  Final report + /health check
 ```
+
+---
+
+## How this command runs — READ FIRST (this is what keeps the run from stopping)
+
+`/autonomous` is ONE continuous turn that executes many other commands. Runs used to stall
+between steps for three reasons, and the rules below remove each one.
+
+**1. Sub-commands are executed by you, not typed by the user.** Every "run `/x --flag`" below means:
+invoke the Skill tool with `skill: "startup:x"` and `args: "--flag ..."` (inside the framework repo
+itself the name has no `startup:` prefix). If the Skill tool isn't available, Read
+`~/.claude/commands/startup/x.md` and follow it inline. Never tell the user to run the next
+command; that is the stall this command exists to remove.
+
+**2. A sub-command's closing "▶ Next: /y" line is for standalone use.** When a sub-command
+finishes, don't print its "Next" hint and end the turn. Update the run state (below) and continue
+immediately with the next step of THIS file, in the same turn.
+
+**3. The run state is enforced by a Stop hook.** Keep `agent_state/autonomous/run.json` current:
+```json
+{"active": true, "status": "running", "phase": 1, "step": "plan_complete", "next_step": "design",
+ "updated": "<iso8601>", "started": "<iso8601>", "args": "<the /autonomous args>"}
+```
+Write it at Step 0 and after EVERY step: bump `updated`, and set `step` and `next_step` from the
+step list in *Resume Mode*. While `status` is `running`, `.claude/hooks/autonomous-continue.sh`
+blocks the turn from ending and tells you the next step. It yields only when `status` is one of:
+- `awaiting_human` — the Step 3 checkpoint, `--confirm_each_phase`, or a security PAUSE;
+- `paused` — with a `reason`: escalation limit exceeded, catastrophic failure, or the user said stop;
+- `failed` — unrecoverable;
+- `complete` — Step 7 done.
+
+If the hook reports the run `stalled` (no progress across repeated stops), set `paused` with the
+real reason rather than looping.
+
+**Every sub-command runs in `--auto` mode.** Pass `--auto` where a command defines it. Every command
+also treats an active `run.json` (status `running`) as `--auto`, even if the flag was lost. In auto
+mode a sub-command never waits for the user. Its "surface to user" points become: auto-resolve with
+the recommended option, log to `agent_state/autonomous/auto-resolved.jsonl`, and carry forward to
+the next human checkpoint or the final report. The exceptions are security decisions with no
+hardened default, which set `awaiting_human`.
+
+**Long runs and context.** A full run can exceed one context window. Claude Code compacts
+automatically; after compaction, re-read `run.json` + `checkpoint.json` and continue from
+`next_step`. If the session itself ends, `/autonomous --resume` picks up from the same place.
 
 ---
 
@@ -66,6 +110,21 @@ if [ ! -d "requirements/" ] || [ -z "$(ls requirements/)" ]; then
   exit 1
 fi
 
+# 5. Framework hooks present in THIS project (Stop hook keeps the run going; SessionStart injects facts)
+if [ ! -x ".claude/hooks/autonomous-continue.sh" ] && [ -d "$HOME/.claude/hooks/startup" ]; then
+  mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/"*.sh .claude/hooks/ && chmod +x .claude/hooks/*.sh
+  [ -f .claude/settings.json ] || cp "$HOME/.claude/hooks/startup/project-settings.json" .claude/settings.json
+  echo "✅ Installed framework hooks into .claude/ (takes effect for Stop checks from the next turn)"
+fi
+[ -x ".claude/hooks/autonomous-continue.sh" ] || echo "⚠ autonomous-continue hook missing — run ./install.sh in the framework repo; continuing without it"
+
+# 6. Start (or resume) the run state
+mkdir -p agent_state/autonomous
+NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+if [ "${ARG_RESUME:-false}" != "true" ] || [ ! -f agent_state/autonomous/run.json ]; then
+  jq -n --arg now "$NOW" '{active:true,status:"running",phase:0,step:"preflight_complete",next_step:"init",started:$now,updated:$now}' > agent_state/autonomous/run.json
+fi
+
 echo "✅ Pre-flight passed"
 ```
 
@@ -93,13 +152,9 @@ Run `/init` with auto-research protocol:
 
 **Run once after /init.** Creates persistent codebase knowledge base consumed by all downstream agents.
 
-```bash
-# Only run if project has existing code (not greenfield)
-if [ -n "$(find . -name '*.go' -o -name '*.ts' -o -name '*.py' -o -name '*.java' | head -1)" ]; then
-  # Run /map to produce agent_state/codebase/
-  echo "▶ Mapping codebase..."
-fi
-```
+If the project has existing code (any `*.go`, `*.ts`, `*.tsx`, `*.py` or `*.java` outside
+`node_modules`), run `/map` (Skill `startup:map`) now. That step was previously only an `echo`,
+so the codebase knowledge base was never built.
 
 Produces: `agent_state/codebase/` (tech-stack.md, architecture.md, quality.md, concerns.md, SUMMARY.md)
 
@@ -123,31 +178,6 @@ Output: `agent_state/phases/1/DISCUSSION.md` (consumed by `/plan`)
 
 **Checkpoint:** Write checkpoint with assumption count and auto-resolved decision count.
 
-### Step 2a.5 — UI Design Contract (if frontend phase)
-
-Detect if the phase has frontend indicators (UI, interface, component, screen, dashboard, widget, chat, graph):
-
-```bash
-# Check phase scope for frontend keywords
-echo "$PHASE_GOAL" | grep -iE "UI|interface|frontend|component|screen|dashboard|widget|chat|graph" > /dev/null 2>&1
-HAS_UI=$?
-```
-
-**If frontend phase detected (`HAS_UI == 0`):**
-
-Run `/design --phase=N --source=stitch --auto` to produce the UI design contract BEFORE `/plan`. The command:
-
-1. `wireframe_generator` maps each screen to a page archetype (`specs/archetype-mapping.md`)
-2. `ux_designer` produces the per-screen wireframe contract — `<screen>.wireframe.html` (self-contained visual reference, both themes + breakpoints, all 4 states) + `<screen>.wireframe.md` (component/API bindings against `data-contracts.md`, design tokens, accessibility, `TC-UI-*` inventory)
-3. **`--source=stitch` (enrichment):** when the Stitch MCP is available, `/design` drives it directly per `~/.claude/skills/ui/stitch-design.md`: reuse or create the product's Stitch project (`docs/design/stitch.json`), set up the house-style design system once, and generate each screen with `deviceType` (MOBILE for React Native, DESKTOP for web) and `designSystem`, polling rather than retrying. `ux_designer` then normalizes each render back into the SAME two-file wireframe contract, so `ui_developer` / `mobile_developer` consume one format regardless of source
-4. **`design_quality_reviewer` runs the BLOCKING 11-dimension design gate** (`DESIGN_REVIEW.md`) — `ui_developer` must not start until this is PASS/FLAG
-
-**Fallback (no Stitch):** `/design` probes the Stitch MCP only because `--source=stitch` was passed. If the MCP is unavailable, times out, or errors, `/design` auto-falls back to the pure-agent path (`ux_designer` + `wireframe_generator`, HTML wireframes) — it never blocks on the external MCP. The fallback is logged to `agent_state/autonomous/auto-resolved.jsonl` (`"category":"ux"`).
-
-**`--auto` design gate:** in auto mode, a BLOCK verdict triggers `/design`'s own auto-fix loop (route gaps to `ux_designer`, max 2 cycles). If still BLOCK, `/design` downgrades to WARN, logs it, and surfaces it at the Step 3 HUMAN CHECKPOINT — the pipeline does not halt here.
-
-**Checkpoint:** Write checkpoint with wireframe count, design-gate verdict, design source (agent vs stitch), and any Stitch fallback.
-
 ### Step 2b — Plan Phase 1 (`/plan --auto --phase=1`)
 
 Run `/plan` with auto scope assignment:
@@ -159,6 +189,36 @@ Run `/plan` with auto scope assignment:
 **plan_goal_verifier in auto mode:** If BLOCK persists after auto-fix cycle, downgrade to WARN and log to `agent_state/autonomous/auto-resolved.jsonl` with `"category": "architecture"`. Do NOT halt the pipeline — surface in the HUMAN CHECKPOINT instead.
 
 **Checkpoint:** Write checkpoint with phase plan summary.
+
+---
+
+### Step 2c — UI Design Contract (UI / mobile phases) — AFTER /plan
+
+**Runs after `/plan`, never before.** `/design` hard-stops without `PHASE_PLAN.md` and
+`specs/data-contracts.md`, and only `/plan` produces them. The old order (design, then plan)
+failed every UI phase with "run /plan first".
+
+```bash
+# UI phase = a web frontend or React Native app is enabled AND this phase's plan has UI scope
+APPS_UI=$(jq -r '(.tech_profile.frontend.enabled // false) or (.tech_profile.mobile.enabled // false)' agent_state/agent_registry.json 2>/dev/null)
+grep -qiE "screen|page|UI|interface|dashboard|form|component|mobile|app" "docs/design/phases/${PHASE}/PHASE_PLAN.md" 2>/dev/null && SCOPE_UI=true || SCOPE_UI=false
+[ "$APPS_UI" = "true" ] && [ "$SCOPE_UI" = "true" ] && HAS_UI=0 || HAS_UI=1
+```
+
+**If frontend phase detected (`HAS_UI == 0`):**
+
+Run `/design --phase=N --source=stitch --auto` to produce the UI design contract. `/develop`'s `ui_developer` / `mobile_developer` build from it. The command:
+
+1. `wireframe_generator` maps each screen to a page archetype (`specs/archetype-mapping.md`)
+2. `ux_designer` produces the per-screen wireframe contract — `<screen>.wireframe.html` (self-contained visual reference, both themes + breakpoints, all 4 states) + `<screen>.wireframe.md` (component/API bindings against `data-contracts.md`, design tokens, accessibility, `TC-UI-*` inventory)
+3. **`--source=stitch` (enrichment):** when the Stitch MCP is available, `/design` drives it directly per `~/.claude/skills/ui/stitch-design.md`: reuse or create the product's Stitch project (`docs/design/stitch.json`), set up the house-style design system once, and generate each screen with `deviceType` (MOBILE for React Native, DESKTOP for web) and `designSystem`, polling rather than retrying. `ux_designer` then normalizes each render back into the SAME two-file wireframe contract, so `ui_developer` / `mobile_developer` consume one format regardless of source
+4. **`design_quality_reviewer` runs the BLOCKING 11-dimension design gate** (`DESIGN_REVIEW.md`) — `ui_developer` must not start until this is PASS/FLAG
+
+**Fallback (no Stitch):** `/design` probes the Stitch MCP only because `--source=stitch` was passed. If the MCP is unavailable, times out, or errors, `/design` auto-falls back to the pure-agent path (`ux_designer` + `wireframe_generator`, HTML wireframes) — it never blocks on the external MCP. The fallback is logged to `agent_state/autonomous/auto-resolved.jsonl` (`"category":"ux"`).
+
+**`--auto` design gate:** in auto mode, a BLOCK verdict triggers `/design`'s own auto-fix loop (route gaps to `ux_designer`, max 2 cycles). If still BLOCK, `/design` downgrades to WARN, logs it, and surfaces it at the next HUMAN CHECKPOINT — the pipeline does not halt here.
+
+**Checkpoint:** Write checkpoint with wireframe count, design-gate verdict, design source (agent vs stitch), and any Stitch fallback.
 
 ---
 
@@ -213,9 +273,16 @@ To stop: type "stop"
 ────────────────────────────────────────
 ```
 
+Before presenting it, set `run.json` `status` to `awaiting_human` (`next_step: "develop"`); this is
+the one place the run is supposed to stop. The review must also state the **gate policy** the user
+is approving: *"In autonomous mode, a phase gate that still fails after 3 fix cycles is
+force-gated with full logging, except a structurally incomplete roster (a required agent never ran),
+which pauses the run."* Approving the checkpoint is the explicit user approval that `/develop
+--force_gate` requires; record it in `approved.json` as `"force_gate_policy": "approved"`.
+
 **Wait for explicit user approval.** Do NOT proceed without it.
 
-After approval:
+After approval (set `run.json` back to `status: running` and continue in the same turn):
 - Lock all decisions as APPROVED
 - Any LOW confidence items the user didn't modify: mark as "USER_ACCEPTED"
 - Write `agent_state/autonomous/approved.json` with timestamp
@@ -227,7 +294,7 @@ After approval:
 Fully autonomous — no more human prompts.
 
 > **Execution path:** each `/develop --auto --phase=N` in this command MUST be run via
-> the `/develop-orchestrator` wave-by-wave pattern (parent spawns a separate agent per wave with
+> the `/develop-orchestrator` wave-by-wave pattern (Skill `startup:develop-orchestrator`, args `--phase=N --auto`) (parent spawns a separate agent per wave with
 > verification between each). Do NOT delegate a whole phase to a single agent — that is the exact
 > "reviews/acceptance get dropped" failure the orchestrator exists to prevent (see the orchestration protocol at
 > the top of `develop.md`). Autonomous mode makes this MORE important, not less: there is no human
@@ -241,7 +308,10 @@ Fully autonomous — no more human prompts.
   - Cycle 1: Agent fixes → re-test specific failure
   - Cycle 2: Re-run with fresh context → re-test
   - Cycle 3: Simplify/skip problematic item → log as deferred
-  - After 3 cycles: Force-gate with full logging → continue to next phase
+  - After 3 cycles: force-gate with full logging → continue to next phase. Run `/develop`'s gate
+    with `--force_gate`, citing `approved.json` `force_gate_policy`, and write `gate.forced` with the
+    remaining blockers. `verify-gate.sh` still refuses to force past a roster whose required agent
+    never ran. That case is a real STOP: set `run.json` `paused` with the missing agent named.
 - **Test failures:** Fix implementation, not tests (max 3 retries per test agent)
 
 ### Escalation Circuit Breaker
@@ -315,13 +385,16 @@ Log failure report → continue to next phase if independent, or STOP if blockin
 For each phase N (2, 3, ... max_phases):
   1. /map --incremental (update codebase knowledge with changes from previous phase)
   2. /discuss --auto --phase=N (surface assumptions for THIS phase)
-  2a. /design --phase=N --source=stitch --auto (if frontend phase detected; BLOCKING design gate, auto-falls back to pure-agent if Stitch MCP absent)
   3. /plan --auto --phase=N
-  4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3)
+  3a. /design --phase=N --source=stitch --auto (UI/mobile phases only, per Step 2c; BLOCKING design gate; pure-agent fallback if Stitch is absent)
+  4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3; run.json → awaiting_human)
   5. /develop --auto --phase=N   (via /develop-orchestrator wave pattern — see Step 4 MANDATORY note)
   6. plan_goal_verifier: goal-level verification (VERIFICATION.md)
-  7. Checkpoint
+  7. Checkpoint + run.json (next_step = next phase's "discuss", or "deploy" after the last phase)
 ```
+
+Each numbered item is a Skill invocation (see *How this command runs*). Continue from one to the
+next in the same turn.
 
 ### Post-Phase Auto-Resolution Review
 
@@ -379,7 +452,7 @@ If the deploy is unhealthy, `/accept` still runs (to document failures) but caps
 
 ---
 
-## Step 6 — Global Acceptance (`/accept --auto`)
+## Step 6 — Global Acceptance (`/accept --auto`) — Skill `startup:accept`, args `--auto`
 
 Run full acceptance testing across ALL completed phases:
 - All personas exercised
@@ -400,6 +473,9 @@ The pipeline completeness validator (`pipeline_completeness_agent`) runs automat
 ---
 
 ## Step 7 — Final Report
+
+After writing the report, set `run.json` to `{"active": false, "status": "complete", ...}`. The
+Stop hook then lets the turn end.
 
 ```markdown
 # Autonomous Run Report
@@ -478,11 +554,18 @@ Traceability matrix: agent_state/accept/traceability_matrix.md
 If the pipeline was interrupted (context exhaustion, crash, timeout):
 
 ```bash
-# Read last checkpoint
-CHECKPOINT=$(cat agent_state/autonomous/checkpoint.json)
-RESUME_PHASE=$CHECKPOINT.phase
-RESUME_STEP=$CHECKPOINT.next_step
+RUN=agent_state/autonomous/run.json
+RESUME_PHASE=$(jq -r '.phase' "$RUN")
+RESUME_STEP=$(jq -r '.next_step' "$RUN")
+# re-arm the run (it may be paused / awaiting_human / stalled)
+tmp=$(mktemp); jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.active=true | .status="running" | .updated=$now | del(.nudges,.last_nudged_update,.stalled_reason)' "$RUN" > "$tmp" && mv "$tmp" "$RUN"
 ```
+
+**Step ids** (`step` = last completed, `next_step` = what runs next):
+`preflight` → `init` → `map` → `discuss` → `plan` → `design` → `checkpoint` → `develop` →
+(per phase N ≥ 2: `map` → `discuss` → `plan` → `design` → [`checkpoint`] → `develop` → `verify`) →
+`deploy` → `accept` → `report`. Resuming at `checkpoint` re-presents the review, and never assumes
+approval.
 
 - Resume from exactly where it stopped
 - All previous state preserved in `agent_state/`

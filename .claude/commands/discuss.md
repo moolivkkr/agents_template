@@ -16,6 +16,15 @@ arguments:
 
 # /discuss — Pre-Planning Context Gathering
 
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
+
 Surfaces assumptions, risks, and open questions about a phase BEFORE `/plan` runs. The output feeds directly into `/plan` as optional context — turning guesses into documented decisions.
 
 **Why this exists:** Planners make assumptions about the codebase, tech stack, and requirements. Most assumptions are correct. The dangerous ones are the 5-10% that seem obvious but are wrong. `/discuss` forces those into the open before they become specs, then code, then bugs.

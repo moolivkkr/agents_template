@@ -59,6 +59,11 @@ for h in _sync-deps.py _add-packs.py; do
   cp "$REPO_DIR/.claude/agents/$h" "$DEST_AGENTS_CORE/$h" && chmod +x "$DEST_AGENTS_CORE/$h"
 done
 echo "  ✅ _sync-deps.py + _add-packs.py installed (dependency-graph maintenance)"
+# ── Hooks (copied into each project by new-project.sh / /autonomous Step 0; settings reference $CLAUDE_PROJECT_DIR/.claude/hooks) ──
+mkdir -p "$CLAUDE_DIR/hooks/startup"
+cp "$REPO_DIR/.claude/hooks/"*.sh "$CLAUDE_DIR/hooks/startup/" && chmod +x "$CLAUDE_DIR/hooks/startup/"*.sh
+cp "$REPO_DIR/.claude/settings.json" "$CLAUDE_DIR/hooks/startup/project-settings.json"
+echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by new-project.sh / /autonomous)"
 
 # ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"

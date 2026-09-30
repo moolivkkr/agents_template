@@ -19,6 +19,15 @@ arguments:
 
 # /design — Phase UI Design Contract
 
+> **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
+> command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
+> user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended
+> option, is logged to `agent_state/autonomous/auto-resolved.jsonl` (full question, options, choice,
+> rationale, category; `"category":"security","security_flag":true` for security topics), and is
+> carried forward to the next human checkpoint. The exception is a security decision with no
+> hardened default, which sets `run.json` `status` to `awaiting_human`. The closing "▶ Next: …" line
+> is for standalone use only; under `/autonomous`, return control to it without ending the turn.
+
 Generates the **UI design contract** for a phase: per-screen wireframes (visual + behavioral), typed API bindings, design tokens, and the `TC-UI-*` test-case inventory. The output of `/design` is the contract that `ui_developer` implements during `/develop` — it stands to the frontend exactly as `/plan`'s TRDs stand to the backend.
 
 `/design` is a **first-class, standalone command**. It is invoked directly, by `/plan` Step 3 for UI phases, and by `/autonomous` (Step 2a.5 / Step 5) before implementation begins. Running it standalone lets you regenerate the design contract after a data-contract change without re-running the whole plan.

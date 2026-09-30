@@ -34,6 +34,11 @@ mkdir -p "$PROJECT_DIR/docs"
 mkdir -p "$PROJECT_DIR/agent_state/phases"
 mkdir -p "$PROJECT_DIR/agent_state/reconciliation"
 mkdir -p "$PROJECT_DIR/.claude/agents/generated"
+# Hooks + project settings: ground-truth injection (SessionStart), gate verification and
+# /autonomous continuation (Stop). Paths in settings.json resolve via $CLAUDE_PROJECT_DIR.
+mkdir -p "$PROJECT_DIR/.claude/hooks"
+cp "$REPO_DIR/.claude/hooks/"*.sh "$PROJECT_DIR/.claude/hooks/" && chmod +x "$PROJECT_DIR/.claude/hooks/"*.sh
+[ -f "$PROJECT_DIR/.claude/settings.json" ] || cp "$REPO_DIR/.claude/settings.json" "$PROJECT_DIR/.claude/settings.json"
 
 # Rule board specialists (vertix security-rule boards) — only when asked for with --rule-board;
 # the /rules-board* commands read these project-relative
