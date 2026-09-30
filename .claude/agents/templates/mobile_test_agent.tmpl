@@ -15,6 +15,9 @@ input:
     - type: phase_spec
       path: docs/design/phases/{{PHASE}}/specs/
       description: "Screen specs + mobile TC-M* inventory (CMP, INT, E2E, PLT, A11Y) and each screen's testIDs"
+    - type: mobile_manifest
+      path: agent_state/phases/{{PHASE}}/mobile_developer/manifest.json
+      description: "Screens, routes/deep links, testIDs, permissions built this phase — the surface to test"
   optional:
     - type: prev_manifest
       path: agent_state/phases/{{PHASE-1}}/manifest.json
@@ -39,7 +42,7 @@ quality_gates:
   every_fr_workflow_has_device_flow: true
   every_device_flow_runs_on_both_platforms: true
 dependencies:
-  upstream: [api_developer]
+  upstream: [api_developer, mobile_developer]
   downstream: [mobile_e2e_orchestrator, test_runner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/typescript.md"
@@ -95,7 +98,8 @@ emulators. Hand those flows over complete and runnable, not as sketches.
 2. `docs/design/phases/{{PHASE}}/specs/` — screen specs, testIDs, and the mobile TC-M* inventory assigned to you.
 3. `docs/IMPLEMENTATION_GUIDELINES.md` §Mobile — device matrix, min OS versions, local backend URL per platform, build commands.
 4. `{{MOBILE_APP_DIR}}/package.json` — confirm the actual RN, RNTL, Jest and MSW versions before writing. RNTL v14 needs `await render(...)`; see `react-native-testing-library.md`.
-5. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing flows you must not break.
+5. `agent_state/phases/{{PHASE}}/mobile_developer/manifest.json` — the screens, testIDs, deep links and permissions actually built. Cross-check against the specs; a spec'd testID missing from the build is reported, not worked around.
+6. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing flows you must not break.
 
 **STOP CONDITIONS**
 - `api-contracts.md` missing → write no integration-tier tests; report `⛔ Blocked: api-contracts.md missing — cannot derive mock shapes.`

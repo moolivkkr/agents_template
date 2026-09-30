@@ -72,10 +72,12 @@ got="$(printf 'x TC-E2E-001 TC-A11Y-002 TC-ME2E-003 TC-UI-004\n' | grep -oE 'TC-
 for a in mobile_e2e_orchestrator mobile_platform_auditor; do
   [ -f "$ROOT/.claude/agents/core/$a.md" ] && ok "core agent $a exists" || bad "core agent $a missing"
 done
-[ -f "$ROOT/.claude/agents/templates/mobile_test_agent.tmpl" ] && ok "template mobile_test_agent exists" || bad "template mobile_test_agent.tmpl missing"
-grep -q "mobile_test_agent.tmpl" "$FACTORY" && ok "agent_factory generates mobile_test_agent" || bad "agent_factory never generates mobile_test_agent"
-for a in mobile_test_agent mobile_e2e_orchestrator mobile_platform_auditor; do
-  grep -q "subagent_type: $a\|Agent: $a" "$ROOT/.claude/commands/develop-orchestrator.md" \
+for t in mobile_developer mobile_test_agent; do
+  [ -f "$ROOT/.claude/agents/templates/$t.tmpl" ] && ok "template $t exists" || bad "template $t.tmpl missing"
+  grep -q "$t.tmpl" "$FACTORY" && ok "agent_factory generates $t" || bad "agent_factory never generates $t"
+done
+for a in mobile_developer mobile_test_agent mobile_e2e_orchestrator mobile_platform_auditor; do
+  grep -qE "subagent_type: $a|Agent: $a|2A\.[0-9]+ +$a" "$ROOT/.claude/commands/develop-orchestrator.md" \
     && ok "develop-orchestrator spawns $a" || bad "develop-orchestrator never spawns $a"
 done
 grep -q "mobile_e2e_orchestrator" "$ROOT/.claude/commands/test.md" && ok "/test spawns mobile_e2e_orchestrator" || bad "/test never spawns mobile_e2e_orchestrator"

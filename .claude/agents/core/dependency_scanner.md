@@ -16,7 +16,7 @@ input:
 output:
   primary: agent_state/phases/{{PHASE}}/reports/dependency_scan.md
 dependencies:
-  upstream: [backend_developer, ui_developer]
+  upstream: [backend_developer, ui_developer, mobile_developer]
   downstream: [security_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"

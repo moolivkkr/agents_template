@@ -43,6 +43,7 @@ Complete index of all agents in the SDLC pipeline.
 | Validate specs match tests | `spec_test_reconciler` | `/develop` Step 5 |
 | Run acceptance tests | `acceptance_test_agent` | `/develop` Step 5 |
 | Run e2e tests | `e2e_orchestrator` | `/test --e2e` |
+| Build React Native screens (iOS + Android) | `mobile_developer` (generated) | `/develop` Wave 2A.6 |
 | Write React Native tests (iOS + Android) | `mobile_test_agent` (generated) | `/develop` Wave 3d |
 | Run mobile device flows on simulators/emulators | `mobile_e2e_orchestrator` | `/develop` Wave 3d, `/test --mobile` |
 | Audit mobile a11y/permissions/parity | `mobile_platform_auditor` | `/develop` Wave 4 |
@@ -153,6 +154,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `api_developer` | opus/high | guidelines, phase specs | API layer code | Template: .claude/agents/generated/ |
 | `database_agent` | opus/high | guidelines, phase specs | schema design | Template: .claude/agents/generated/ |
 | `migration_agent` | opus/high | guidelines, database design | migration files | Template: .claude/agents/generated/ |
+| `mobile_developer` | opus/high | screen specs, data/api contracts, guidelines §24 | React Native app + mobile_developer/manifest.json | Template: .claude/agents/generated/ — iOS + Android, testID contract, both platforms built |
 
 ### Testing
 
@@ -283,7 +285,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 
 /develop pipeline (canonical executor: /develop-orchestrator — wave numbers match it):
   W1  backend_audit_agent [+ ui_audit_agent]
-  W2  database_agent → migration_agent → backend_developer → api_developer (publishes api-contracts.md) → [ui_developer]
+  W2  database_agent → migration_agent → backend_developer → api_developer (publishes api-contracts.md) → [ui_developer] ∥ [mobile_developer]
   W3  parallel tracks:
         unit_test_agent
         integration_test_agent
@@ -344,7 +346,7 @@ debate team (on-demand, any pipeline):
 | `/discuss` | phase_assumptions_analyzer -> decision_researcher (parallel, one per question) |
 | `/map` | codebase_mapper (parallel: tech + architecture + quality + concerns) |
 | `/plan` | project_planner -> spec_writer (parallel) -> ux_designer -> design_quality_reviewer -> spec_verifier -> brd_spec_reconciler -> plan_goal_verifier -> adr_agent |
-| `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
+| `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer ∥ mobile_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
 | `/test` | test_runner, e2e_orchestrator, mobile_e2e_orchestrator (--mobile), performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
 | `/review` | code_reviewer_I -> code_reviewer_II -> security_reviewer + dependency_scanner |
 | `/optimize` | code_optimizer + ui_code_optimizer (parallel) |
@@ -365,9 +367,9 @@ debate team (on-demand, any pipeline):
 | Location | Count |
 |---|---|
 | Core agents (`.claude/agents/core/`) | 68 |
-| Generation templates (`~/.claude/agents/templates/`) | 9 |
+| Generation templates (`~/.claude/agents/templates/`) | 10 |
 | Generated agents (`.claude/agents/generated/`) | 0 in repo — populated at `/init` by `agent_factory` (gitignored) |
-| **Total agents (repo)** | **77** |
+| **Total agents (repo)** | **78** |
 
 | Category | Count |
 |---|---|
@@ -376,7 +378,7 @@ debate team (on-demand, any pipeline):
 | Product Workflow Intelligence | 5 |
 | Planning | 6 |
 | Design | 8 (incl. `eagle_diagram_agent` — 10,000-ft strategic overview) |
-| Implementation (generated) | 4 |
+| Implementation (generated) | 5 (incl. `mobile_developer` — React Native iOS + Android) |
 | Testing | 7 (+ `mobile_test_agent` template) |
 | Review & Security | 11 (incl. `mobile_platform_auditor`, `breaking_change_reviewer`, `migration_safety_reviewer`, `threat_model_agent` STRIDE, `accessibility_auditor` WCAG-AA) |
 | Reconciliation | 6 |

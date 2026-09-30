@@ -135,7 +135,7 @@ WAVE = {
     "backend_audit_agent": 1, "ui_audit_agent": 1,
     # Wave 2A is sequenced (develop-orchestrator 2A.1–2A.5), so its steps get sub-wave numbers.
     "database_agent": 2.1, "migration_agent": 2.2, "backend_developer": 2.3, "api_developer": 2.4,
-    "ui_developer": 2.5,
+    "ui_developer": 2.5, "mobile_developer": 2.5,
     "solution_selector": 2.5,
     "unit_test_agent": 3, "integration_test_agent": 3, "ui_test_agent": 3, "mobile_test_agent": 3,
     "e2e_orchestrator": 3.2, "mobile_e2e_orchestrator": 3.2, "test_runner": 3.4,

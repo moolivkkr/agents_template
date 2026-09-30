@@ -154,8 +154,8 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - web UI: ADD ui_developer, ui_test_agent, accessibility_auditor (WCAG-AA against the built UI),
 #    and design_quality_reviewer if used, to the array.
 #  - React Native mobile app (agent_registry.json tech_profile.mobile.enabled = true) and the phase
-#    touches mobile screens: ADD mobile_test_agent, mobile_e2e_orchestrator, mobile_platform_auditor.
-#    All three are required whenever a mobile screen changed: device flows on BOTH iOS and Android are
+#    touches mobile screens: ADD mobile_developer, mobile_test_agent, mobile_e2e_orchestrator,
+#    mobile_platform_auditor. All four are required whenever a mobile screen changed: device flows on BOTH iOS and Android are
 #    the only proof a native app works. (Web e2e_orchestrator never covers native screens.)
 #  - touches auth/PII/trust-boundary: ADD threat_model_agent (design-time STRIDE; usually run in /plan
 #    but list it here if the phase itself introduces the security-relevant surface).
@@ -284,6 +284,7 @@ Wave 2A (sequenced — each step waits for the previous; skip a step whose agent
   2A.3  backend_developer  → impl/backend_progress.md           (services/repositories on the schema)
   2A.4  api_developer      → impl/api_progress.md + specs/api-contracts.md   (handlers + the contract every UI/mobile test mocks from)
   2A.5  ui_developer       → impl/ui_progress.md                (needs 2A.4's api-contracts.md)
+  2A.6  mobile_developer   → impl/mobile_progress.md + mobile_developer/manifest.json  (React Native; needs 2A.4; may run in parallel with 2A.5)
 ```
 
 Each spawn prompt (prepend the GROUND TRUTH line):
@@ -296,11 +297,10 @@ literal Unicode, table-driven Go tests, document spec deviations.
 Implement your layer. Commit after each logical unit. Log your completion line to execution.jsonl."
 ```
 
-> **Mobile app code:** there is no generated mobile implementation agent yet. If the phase changes
-> React Native screens, implement them in step 2A.5 with a general agent that reads
-> `~/.claude/skills/frameworks/react-native.md` and gives every interactive element a `testID` per
-> the testID contract in `~/.claude/skills/testing/mobile-testing-strategy.md` §4. The mobile Wave
-> 3/4 agents still run in full.
+> **Mobile app code (2A.6):** `mobile_developer` builds the React Native screens from the screen specs,
+> with the spec's testIDs, a typed client generated from `data-contracts.md`, and both platforms built.
+> Its manifest (screens, testIDs, deep links, permissions) is the surface `mobile_test_agent` and
+> `mobile_platform_auditor` work from. 2A.5 and 2A.6 are independent and may run in parallel.
 
 ### Wave 2B — Candidate Selection (conditional — hard phases only)
 

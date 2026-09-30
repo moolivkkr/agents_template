@@ -20,7 +20,7 @@ output:
 dependencies:
   upstream: [impl_guidelines_agent, brd_agent]
   runs_after: [brd_writer, product_manager]
-  downstream: [adr_agent, api_developer, backend_developer, c4_diagram_agent, deployment_diagram_agent, eagle_diagram_agent, project_planner, sequence_diagram_agent, threat_model_agent, ui_developer]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [adr_agent, api_developer, backend_developer, c4_diagram_agent, deployment_diagram_agent, eagle_diagram_agent, mobile_developer, project_planner, sequence_diagram_agent, threat_model_agent, ui_developer]  # derived by _sync-deps.py — do not hand-edit
 subagents: [c4_diagram_agent, sequence_diagram_agent, deployment_diagram_agent, adr_agent, eagle_diagram_agent]
 skill_packs:
   - "~/.claude/skills/core/software-architecture.md"

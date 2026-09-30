@@ -82,7 +82,8 @@ mobile:                      # React Native app targeting iOS + Android (omit or
   enabled: <true | false>
   framework: react-native
   app_dir: <e.g. apps/mobile or mobile>     # -> {{MOBILE_APP_DIR}}
-  workflow: <expo | bare>                   # -> {{MOBILE_WORKFLOW}}    # expo = Expo SDK / EAS; bare = react-native CLI with ios/ + android/ checked in
+  workflow: <expo | bare>                   # -> {{MOBILE_WORKFLOW}}
+  navigation: <expo-router | react-navigation>  # -> {{MOBILE_NAVIGATION}}; Expo Router >= v56 imports from expo-router/react-navigation    # expo = Expo SDK / EAS; bare = react-native CLI with ios/ + android/ checked in
   rn_version: <e.g. 0.87>                   # -> {{RN_VERSION}}
   platforms: [ios, android]
   unit_test_framework: jest  # RN's documented runner; preset @react-native/jest-preset (RN >= 0.85)
@@ -151,6 +152,7 @@ For each template in `~/.claude/agents/templates/`, determine if it applies to t
 | `integration_test_agent.tmpl` | Always (cache_tech = "none" if no cache) |
 | `ui_developer.tmpl` | frontend.enabled = true |
 | `ui_test_agent.tmpl` | frontend.enabled = true |
+| `mobile_developer.tmpl` | mobile.enabled = true |
 | `mobile_test_agent.tmpl` | mobile.enabled = true |
 
 When `mobile.enabled = true`, the core agents `mobile_e2e_orchestrator` and `mobile_platform_auditor`

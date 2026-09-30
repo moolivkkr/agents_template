@@ -16,6 +16,9 @@ input:
     - type: mobile_test_manifest
       path: agent_state/phases/{{PHASE}}/mobile_test_agent/manifest.json
       description: "deferred_to_auditor — touch-target/contrast IDs the component tier could not check"
+    - type: mobile_manifest
+      path: agent_state/phases/{{PHASE}}/mobile_developer/manifest.json
+      description: "Permissions, deep links and native deps the app declares — the inventory Checks 3–5 audit"
     - type: mobile_e2e_results
       path: agent_state/phases/{{PHASE}}/reports/mobile_e2e_results.json
       description: "Per-platform flow results + screenshots to audit against"
@@ -24,7 +27,7 @@ output:
   artifacts:
     - path: agent_state/phases/{{PHASE}}/reports/mobile_platform_audit.json
 dependencies:
-  upstream: [mobile_e2e_orchestrator]
+  upstream: [mobile_e2e_orchestrator, mobile_developer]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/frameworks/react-native.md"

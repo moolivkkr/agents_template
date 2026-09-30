@@ -30,7 +30,7 @@ quality_gates:
 dependencies:
   upstream: [architecture_orchestrator, project_planner]
   runs_after: [backend_audit_agent, codebase_mapper]
-  downstream: [breaking_change_reviewer, code_optimizer, code_quality_verifier, code_reviewer_I, code_reviewer_II, documentation_agent, integration_test_agent, mobile_test_agent, observability_agent, performance_agent, security_reviewer, solution_selector, spec_impl_reconciler, tenant_isolation_verifier, ui_developer, unit_test_agent]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [breaking_change_reviewer, code_optimizer, code_quality_verifier, code_reviewer_I, code_reviewer_II, documentation_agent, integration_test_agent, mobile_developer, mobile_test_agent, observability_agent, performance_agent, security_reviewer, solution_selector, spec_impl_reconciler, tenant_isolation_verifier, ui_developer, unit_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{FRAMEWORK}}.md"

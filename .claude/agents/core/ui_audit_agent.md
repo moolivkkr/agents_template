@@ -20,7 +20,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/audit_report_ui.md
 dependencies:
   upstream: [project_planner]
-  downstream: [ui_developer, ui_test_agent]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [mobile_developer, ui_developer, ui_test_agent]  # derived by _sync-deps.py — do not hand-edit
 trigger:
   condition: "frontend.enabled = true in IMPLEMENTATION_GUIDELINES"
 skill_packs:

@@ -15,7 +15,7 @@ input:
 output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/specs_vs_impl.md
 dependencies:
-  upstream: [backend_developer, api_developer, ui_developer]
+  upstream: [backend_developer, api_developer, ui_developer, mobile_developer]
   runs_after: [brd_spec_reconciler]
   downstream: [spec_test_reconciler]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:

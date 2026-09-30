@@ -26,7 +26,7 @@ output:
     - path: agent_state/phases/{{PHASE}}/reports/quality_gate_evidence.json
       description: Machine-readable PASS/FAIL per gate item with file:line evidence
 dependencies:
-  upstream: [backend_developer, api_developer, ui_developer]
+  upstream: [backend_developer, api_developer, ui_developer, mobile_developer]
   downstream: [acceptance_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"

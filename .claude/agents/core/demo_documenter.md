@@ -16,7 +16,7 @@ output:
     - path: docs/demos/phase-{{PHASE}}/demo-script.md
     - path: docs/demos/phase-{{PHASE}}/test-data.md
 dependencies:
-  upstream: [backend_developer, ui_developer]
+  upstream: [backend_developer, ui_developer, mobile_developer]
   downstream: [demo_executor]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/testing/test-case-generation.md"
