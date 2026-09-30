@@ -11,15 +11,19 @@
 # It BLOCKS (exit non-zero) unless ALL of these hold for the phase under test:
 #   (a)  roster completeness — every name in roster.required has a status:"completed" line.
 #   (a2) roster FLOOR        — deterministic, NOT model-authored: if the phase ran any implementation
-#                             agent (backend_developer/api_developer/ui_developer/backend_audit_agent),
-#                             its roster.required MUST also carry the review floor (code_reviewer_I/II,
-#                             security_reviewer, code_quality_verifier). Closes the "thin roster drops
-#                             review" hole where the model picks its own bar.
+#                             agent, roster.required MUST also carry the review floor (code_reviewer_I/II,
+#                             security_reviewer, code_quality_verifier) AND the verification floor
+#                             (test_runner, spec_test_reconciler, acceptance_test_agent unless the manifest
+#                             records acceptance.not_applicable with a reason; deploy_dev + deploy_qa on
+#                             projects with deploy/k8s/app.env).
 #   (b)  report integrity    — every completed line with a non-null "report" points to a file that
-#                             EXISTS and is non-stub. Preferred path: a `<report>.json` sidecar is
-#                             checked with jq NUMERIC assertions (blocking/findings/total/failed).
-#                             Fallback (no sidecar): test reports rejected on "total: 0"/"SKIPPED";
-#                             ANY report rejected on an unresolved "BLOCKING".
+#                             EXISTS. TEST agents (unit/integration/ui/mobile/e2e/acceptance/performance,
+#                             test_runner, spec_test_reconciler, deploy_dev/qa) must have an
+#                             sdlc.test-results/v1 sidecar: verdict PASS, total>0, failed=0, flaky=0, no
+#                             HIGH/MEDIUM case FAIL/BLOCKED/UNTESTED, no expired quarantine, and — on an
+#                             explicit gate — code_sha == the current code commit and not dirty
+#                             (skills/testing/test-results-sidecar.md). Reviewers: their count line or a
+#                             sidecar; prose fallback rejects an unresolved "BLOCKING".
 #   (e)  execution-grounded  — OPT-IN: if a verify-commands config exists, the hook RUNS the project's
 #                             test/lint/typecheck and blocks on non-zero (real execution, not self-
 #                             report). Only on an explicit-phase gate; advisory-skip when unconfigured.
@@ -30,7 +34,8 @@
 # FORCED OVERRIDE: a well-formed gate.forced ({blockers:[...non-empty], user_rationale:"..."}) turns
 #   the FINDING failures (b/c/d) into a loud WARNING and exits 0 (the --force_gate escape hatch). It
 #   does NOT override a structurally incomplete/thin roster (a/a2) — you cannot "force" past agents
-#   that never ran.
+#   that never ran — and it overrides security findings only with one security_acknowledged[] entry
+#   per finding.
 #
 # Missing roster.json or execution.jsonl => BLOCK with an explanatory message (never silently pass).
 #
@@ -178,6 +183,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "── (a) roster completeness ──"
 REQUIRED_AGENTS=()
+COMPLETED_SET=""
 if jq -e 'has("required")' "$ROSTER" >/dev/null 2>&1; then
   while IFS= read -r a; do
     [ -n "$a" ] && REQUIRED_AGENTS+=("$a")
@@ -211,26 +217,52 @@ fi
 #     / trivial phase (no implementation agent) is unaffected.
 # ---------------------------------------------------------------------------
 echo "── (a2) mandatory roster floor ──"
-in_roster() { printf '%s\n' "${REQUIRED_AGENTS[@]}" | grep -qxF "$1"; }
-IMPL_AGENTS=(backend_developer api_developer ui_developer backend_audit_agent)
+in_roster() { printf '%s\n' ${REQUIRED_AGENTS[@]+"${REQUIRED_AGENTS[@]}"} | grep -qxF "$1"; }
+IMPL_AGENTS=(backend_developer api_developer ui_developer mobile_developer database_agent migration_agent backend_audit_agent)
 REVIEW_FLOOR=(code_reviewer_I code_reviewer_II security_reviewer code_quality_verifier)
+# Independent verification (board review 2026-09-30, TEST-04): the only independent test re-run and the
+# TC reconciler are no longer optional, and acceptance runs for every implementation phase unless the
+# manifest records why it can't apply.
+VERIFY_FLOOR=(test_runner spec_test_reconciler)
+if [ -f "$MANIFEST" ] && jq -e '.acceptance.not_applicable == true and ((.acceptance.reason // "") | length >= 20)' "$MANIFEST" >/dev/null 2>&1; then
+  echo "  ! acceptance not applicable for this phase: $(jq -r '.acceptance.reason' "$MANIFEST")"
+else
+  VERIFY_FLOOR+=(acceptance_test_agent)
+fi
+# Projects on the k8s lab cluster: the phase's code must actually have been deployed to dev and promoted
+# to qa (scripts/k8s/deploy.sh logs deploy_dev / deploy_qa into execution.jsonl with --phase).
+[ -f "deploy/k8s/app.env" ] && VERIFY_FLOOR+=(deploy_dev deploy_qa)
 PHASE_HAS_IMPL="false"
 for a in "${IMPL_AGENTS[@]}"; do in_roster "$a" && PHASE_HAS_IMPL="true" && break; done
 if [ "$PHASE_HAS_IMPL" = "true" ]; then
   FLOOR_MISSING=0
-  for a in "${REVIEW_FLOOR[@]}"; do
+  for a in "${REVIEW_FLOOR[@]}" "${VERIFY_FLOOR[@]}"; do
     if in_roster "$a"; then
       ok "floor agent present in roster: $a"
     else
-      fail "roster FLOOR violation — implementation phase omits required reviewer '$a' from roster.required (a thin roster cannot silently drop review)."
+      fail "roster FLOOR violation — implementation phase omits required agent '$a' from roster.required (a thin roster cannot silently drop review or verification)."
       ROSTER_INCOMPLETE="true"   # a missing floor agent is structural, NOT a forceable finding
       FLOOR_MISSING=$((FLOOR_MISSING + 1))
     fi
   done
-  [ "$FLOOR_MISSING" -eq 0 ] && ok "review floor satisfied (implementation phase)"
+  [ "$FLOOR_MISSING" -eq 0 ] && ok "review + verification floor satisfied (implementation phase)"
 else
   ok "no implementation agent in roster — review floor not required for this phase"
 fi
+
+# Code state the evidence must describe: the last commit touching code, ignoring paths that change with
+# every wave. Explicit-phase gates only (the passive Stop sweep doesn't judge freshness).
+CODE_EXCL=(':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude' ':(exclude)deploy/k8s/overlays')
+CUR_CODE_SHA=""; CODE_DIRTY="false"
+if [ "$AUTODETECT" = "false" ] && git rev-parse --verify -q HEAD >/dev/null 2>&1; then
+  CUR_CODE_SHA="$(git log -1 --format=%H -- . "${CODE_EXCL[@]}" 2>/dev/null)"
+  [ -n "$(git status --porcelain -- . "${CODE_EXCL[@]}" 2>/dev/null)" ] && CODE_DIRTY="true"
+fi
+TEST_AGENTS=(unit_test_agent integration_test_agent ui_test_agent mobile_test_agent e2e_orchestrator mobile_e2e_orchestrator acceptance_test_agent test_runner performance_agent spec_test_reconciler deploy_dev deploy_qa)
+SECURITY_AGENTS=(security_reviewer tenant_isolation_verifier dependency_scanner)
+is_test_agent() { printf '%s\n' "${TEST_AGENTS[@]}" | grep -qxF "$1"; }
+is_security_agent() { printf '%s\n' "${SECURITY_AGENTS[@]}" | grep -qxF "$1"; }
+SECURITY_FAILS=0
 
 # ---------------------------------------------------------------------------
 # 4. Check (c): no dangling failure.
@@ -271,8 +303,38 @@ if [ -z "$REPORTS" ]; then
 fi
 
 REPORT_ISSUES=0
-while IFS=$'\t' read -r agent report; do
-  [ -z "$report" ] && continue
+check_results_sidecar() {  # $1 agent, $2 sidecar — the sdlc.test-results/v1 rules
+  local a="$1" s="$2" bad=0 v t f fl n names q sha d sel
+  v="$(jq -r '.verdict // "MISSING"' "$s")"; t="$(jq -r '.total // 0' "$s")"
+  f="$(jq -r '.failed // 0' "$s")"; fl="$(jq -r '.flaky // 0' "$s")"
+  [ "$v" = "PASS" ] || { fail "'$a' results verdict is $v ($s)"; bad=1; }
+  [ "$t" -gt 0 ] 2>/dev/null || { fail "'$a' results report total=$t — nothing ran ($s)"; bad=1; }
+  if [ "$f" -gt 0 ] 2>/dev/null; then fail "'$a' results report failed=$f ($s)"; bad=1; fi
+  if [ "$fl" -gt 0 ] 2>/dev/null; then fail "'$a' results report flaky=$fl — a pass on retry is a failure: fix it, or quarantine with an issue and an expiry ($s)"; bad=1; fi
+  sel='[.cases[]? | select(((.priority // "") | ascii_upcase) as $p | $p == "HIGH" or $p == "MEDIUM") | select(((.verdict // "") | ascii_upcase) as $x | $x == "FAIL" or $x == "BLOCKED" or $x == "UNTESTED" or $x == "FLAKY")]'
+  n="$(jq -r "$sel | length" "$s")"
+  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+    names="$(jq -r "$sel | map(\"\\(.name)=\\(.verdict)\") | .[:5] | join(\"; \")" "$s")"
+    fail "'$a' has $n HIGH/MEDIUM case(s) not passing: $names ($s)"; bad=1
+  fi
+  q="$(jq -r --arg today "$(date -u +%Y-%m-%d)" '[.quarantined[]? | select((.issue // "") == "" or (.expires // "") < $today)] | length' "$s")"
+  if [ "${q:-0}" -gt 0 ] 2>/dev/null; then fail "'$a' has $q quarantined test(s) past expiry or without an issue link ($s)"; bad=1; fi
+  if [ -n "$CUR_CODE_SHA" ]; then
+    sha="$(jq -r '.code_sha // ""' "$s")"; d="$(jq -r '.dirty // false' "$s")"
+    if [ -z "$sha" ]; then
+      fail "'$a' results carry no code_sha — can't tell which code they describe ($s)"; bad=1
+    elif [ "${CUR_CODE_SHA#"$sha"}" = "$CUR_CODE_SHA" ] && [ "${sha#"$CUR_CODE_SHA"}" = "$sha" ]; then
+      fail "'$a' results are STALE: produced at code ${sha:0:12}, code is now ${CUR_CODE_SHA:0:12} — re-run after the last code change ($s)"; bad=1
+    fi
+    if [ "$d" = "true" ]; then fail "'$a' results were produced from uncommitted code ($s)"; bad=1; fi
+  fi
+  [ "$bad" -eq 0 ] && ok "results OK: $s ('$a': $v, $t tests)"
+  return "$bad"
+}
+
+check_report() {  # $1 agent, $2 report path from execution.jsonl
+  local agent="$1" report="$2" candidate sidecar sc_bad ub total failed COUNT_LINE nb UNRESOLVED
+  [ -z "$report" ] && return 0
   # Resolve report path: allow it to be relative to project root or to the phase dir.
   candidate="$report"
   if [ ! -f "$candidate" ] && [ -f "$PHASE_DIR/$report" ]; then
@@ -281,18 +343,28 @@ while IFS=$'\t' read -r agent report; do
   if [ -d "$candidate" ] || [ -d "$PHASE_DIR/$report" ]; then
     fail "report referenced by '$agent' is a directory, not a report file: $report (log the results file, e.g. ${report%/}/results.md)"
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
-    continue
+    return
   fi
   if [ ! -f "$candidate" ]; then
     fail "report referenced by '$agent' does not exist: $report"
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
-    continue
+    return
+  fi
+
+  # Test agents: only the machine-readable sidecar counts (board review 2026-09-30, TEST-01).
+  sidecar="${candidate%.*}.json"
+  if is_test_agent "$agent"; then
+    if [ ! -f "$sidecar" ] || ! jq -e '.schema == "sdlc.test-results/v1"' "$sidecar" >/dev/null 2>&1; then
+      fail "test evidence for '$agent' has no sdlc.test-results/v1 sidecar ($sidecar) — prose results are not evidence (skills/testing/test-results-sidecar.md)."
+      REPORT_ISSUES=$((REPORT_ISSUES + 1)); return
+    fi
+    check_results_sidecar "$agent" "$sidecar" || REPORT_ISSUES=$((REPORT_ISSUES + 1))
+    return
   fi
 
   # A2 — machine-checkable JSON sidecar preferred. If a `<report>.json` sits beside the markdown
   # report and parses, use jq NUMERIC assertions (robust) instead of the grep/awk heuristics below.
   # Schema (progressive; any subset): {blocking:N, findings:[{severity,resolved}], total,passed,failed}.
-  sidecar="${candidate%.*}.json"
   if [ -f "$sidecar" ] && jq -e . "$sidecar" >/dev/null 2>&1; then
     sc_bad=0
     if [ "$(jq -r 'has("findings")' "$sidecar" 2>/dev/null)" = "true" ]; then
@@ -311,7 +383,7 @@ while IFS=$'\t' read -r agent report; do
       if [ "$failed" -gt 0 ] 2>/dev/null; then fail "report sidecar '$sidecar' (agent '$agent') reports failed=$failed."; sc_bad=1; fi
     fi
     if [ "$sc_bad" -eq 0 ]; then ok "report OK (json sidecar): $sidecar (agent '$agent')"; else REPORT_ISSUES=$((REPORT_ISSUES + 1)); fi
-    continue
+    return
   fi
 
   # The report's own machine-readable count line is authoritative when present: every Track-A/C
@@ -327,7 +399,7 @@ while IFS=$'\t' read -r agent report; do
     else
       ok "report OK (count line ${COUNT_LINE}): $report (agent '$agent')"
     fi
-    continue
+    return
   fi
 
   # Stub detection for test reports: a "Total: 0" results line or a bare "SKIPPED". Only lines that
@@ -336,12 +408,12 @@ while IFS=$'\t' read -r agent report; do
   if grep -Eiq '^[[:space:]|*_-]*total[[:space:]*_]*[:=|][[:space:]*_|]*0([^0-9]|$)' "$candidate"; then
     fail "report '$report' (agent '$agent') is a stub — contains 'total: 0' (no tests ran)."
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
-    continue
+    return
   fi
   if grep -Eq '(^|[^A-Za-z])SKIPPED([^A-Za-z]|$)' "$candidate"; then
     fail "report '$report' (agent '$agent') contains 'SKIPPED' — evidence not produced."
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
-    continue
+    return
   fi
 
   # Unresolved BLOCKING detection (one-pass, line-oriented — awk so no fragile multi-count math).
@@ -374,11 +446,31 @@ while IFS=$'\t' read -r agent report; do
   if [ "$UNRESOLVED" -gt 0 ]; then
     fail "report '$report' (agent '$agent') has $UNRESOLVED unresolved BLOCKING finding(s)."
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
-    continue
+    return
   fi
 
   ok "report OK: $report (agent '$agent')"
+}
+
+while IFS=$'\t' read -r agent report; do
+  before=${#FAILURES[@]}
+  check_report "$agent" "$report"
+  if is_security_agent "$agent" && [ "${#FAILURES[@]}" -gt "$before" ]; then SECURITY_FAILS=$((SECURITY_FAILS + ${#FAILURES[@]} - before)); fi
 done <<< "$REPORTS"
+
+# A required test agent that "completed" without logging its results can't be checked at all.
+for agent in ${REQUIRED_AGENTS[@]+"${REQUIRED_AGENTS[@]}"}; do
+  is_test_agent "$agent" || continue
+  has_report="$(jq -r --arg a "$agent" 'select(.agent==$a and .status=="completed") | .report // "" | select(. != "" and (ascii_downcase) != "null" and (ascii_downcase) != "none")' "$EXEC" 2>/dev/null | head -1)"
+  if printf '%s\n' "$COMPLETED_SET" | grep -qxF "$agent" && [ -z "$has_report" ]; then
+    fail "test agent '$agent' completed without logging a report/sidecar — its results can't be verified."
+  fi
+done
+
+# Evidence can only be bound to committed code (explicit-phase gate).
+if [ "$CODE_DIRTY" = "true" ]; then
+  fail "uncommitted code changes — commit them, re-run the final verification (Wave 5v), then gate; evidence can't describe uncommitted code."
+fi
 
 # ---------------------------------------------------------------------------
 # 5b. Check (e): EXECUTION-GROUNDED verification. Rather than trust a report that CLAIMS tests passed,
@@ -414,7 +506,8 @@ else
     [ -z "$cmd" ] && continue
     ran_any=1
     echo "  → running $key: $cmd"
-    if $TO bash -c "$cmd" >"/tmp/verify-gate-$key.log" 2>&1; then
+    mkdir -p "$PHASE_DIR/junit"   # commands write JUnit under agent_state/phases/$PHASE/junit/
+    if PHASE="$PHASE" $TO bash -o pipefail -c "$cmd" >"/tmp/verify-gate-$key.log" 2>&1; then
       ok "$key passed: $cmd"
     else
       rc=$?
@@ -452,6 +545,16 @@ fi
 FORCED_VALID="false"
 if [ -f "$FORCED" ] && jq -e '(.blockers | type=="array" and length>0) and (.user_rationale // "" | length>0)' "$FORCED" >/dev/null 2>&1; then
   FORCED_VALID="true"
+fi
+# Security findings can't ride a blanket override (board review 2026-09-30, SEC-01): each one needs its
+# own entry in gate.forced.security_acknowledged ([{finding, approved_by, reason}]) — written by the
+# human who read it, never by a fix loop.
+if [ "$FORCED_VALID" = "true" ] && [ "$SECURITY_FAILS" -gt 0 ]; then
+  ACKS="$(jq -r '[.security_acknowledged[]? | select((.finding // "") != "" and (.approved_by // "") != "" and (.reason // "") != "")] | length' "$FORCED" 2>/dev/null || echo 0)"
+  if [ "${ACKS:-0}" -lt "$SECURITY_FAILS" ]; then
+    echo "  ✗ gate.forced cannot override $SECURITY_FAILS security finding(s) with ${ACKS:-0} per-finding acknowledgement(s) (security_acknowledged[])."
+    FORCED_VALID="false"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

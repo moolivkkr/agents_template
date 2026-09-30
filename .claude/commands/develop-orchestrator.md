@@ -178,6 +178,11 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - declares schema changes (new/changed tables in the specs or a data-model section): ADD database_agent
 #    (Wave 2A.1 schema design — it is NOT in the base list, so without this rule 2A.1 never ran).
 #  - has DB migrations: ADD migration_agent AND migration_safety_reviewer (adversarial migration review).
+#  - project has deploy/k8s/app.env (lab cluster): ADD deploy_dev AND deploy_qa. They are not spawned
+#    agents: scripts/k8s/deploy.sh logs them (PHASE set) in Wave 3.5 and again in Wave 5v, and the gate
+#    requires both, bound to the current code commit.
+#  - the phase has NFR-PERF-* targets in scope: ADD performance_agent (Wave 4 Track D, a gated load test
+#    on qa). With an availability/SLO target also ADD reliability_agent (Track D code checks).
 #  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
 #  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
 #  - candidate-selection will run this phase (Wave 2 mode N>=2 — PLATFORM / high-complexity /
@@ -208,7 +213,27 @@ jq -nc --arg a "${AGENT_NAME}" --argjson p "${PHASE}" --arg r "${REPORT_PATH:-}"
 If you deliberately skip an agent (e.g. not multi-tenant, trivial phase), **omit it from
 `roster.required`** and record the skip + reason in the phase manifest (`skipped_agents[]`) — an
 explicit, documented omission is auditable; leaving it `required` and never running it is the exact
-bug this roster exists to catch.
+bug this roster exists to catch. (`test_runner`, `spec_test_reconciler` and — unless the manifest
+records `acceptance.not_applicable` with a reason — `acceptance_test_agent` can't be skipped in an
+implementation phase: `verify-gate.sh` enforces them as a floor.)
+
+### Wave 0c — Commands, base commit, evidence directories
+
+```bash
+P="agent_state/phases/${PHASE}"; mkdir -p "$P/junit" "$P/reports" agent_state/config
+# 1. The project's real commands (IMPLEMENTATION_GUIDELINES §Commands and versions) as JSON. Every agent,
+#    test_runner and the gate's execution check (verify-gate.sh (e)) run exactly these — nobody guesses.
+python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json \
+  || echo "⛔ BLOCKED: IMPLEMENTATION_GUIDELINES has no usable '## Commands and versions' table (skills/core/commands-and-versions.md) — add it before Wave 2"
+# 2. The commit this phase starts from: test-weakening diff (tc-inventory.py --diff-base) and scope for reviewers.
+[ -f "$P/base_sha" ] || git rev-parse HEAD > "$P/base_sha"
+# 3. Spec TC priorities for the results converters.
+python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"
+```
+
+Evidence rules for every test tier are in `~/.claude/skills/testing/test-results-sidecar.md`: JUnit XML
+under `$P/junit/`, converted by `.claude/hooks/junit-to-sidecar.py`, **committed code only**. The gate
+rejects evidence that doesn't match the current code commit.
 
 ---
 
@@ -234,10 +259,10 @@ The wave prompts below omit this line only for brevity — you must add it to ea
 
 ## Wave 1: ORIENT + AUDIT
 
-Spawn a single agent (remember to prepend the GROUND TRUTH line):
+Spawn `backend_audit_agent` (and `ui_audit_agent` in parallel for UI phases), prepending the GROUND TRUTH line:
 
 ```
-Agent prompt: "[GROUND TRUTH line] You are running Wave 1 (Orient + Audit) for Phase ${PHASE}.
+Agent prompt (subagent_type: backend_audit_agent): "[GROUND TRUTH line] You are running Wave 1 (Orient + Audit) for Phase ${PHASE}.
 WORKING DIRECTORY: ${PROJECT_DIR}
 Read: docs/PROJECT_FACTS.md (ground truth), docs/design/phases/${PHASE}/phase_context.md, IMPLEMENTATION_GUIDELINES.md
 Produce: agent_state/phases/${PHASE}/audit_report.md
@@ -303,18 +328,44 @@ Wave 2A (sequenced — each step waits for the previous; skip a step whose agent
   2A.2  migration_agent    → migrations/                        (needs 2A.1's schema)
   2A.3  backend_developer  → impl/backend_progress.md           (services/repositories on the schema)
   2A.4  api_developer      → impl/api_progress.md + specs/api-contracts.md   (handlers + the contract every UI/mobile test mocks from)
-  2A.5  ui_developer       → impl/ui_progress.md                (needs 2A.4's api-contracts.md)
+  2A.5  ui_developer       → impl/ui_progress.md + ui_developer/manifest.json   (needs 2A.4's api-contracts.md; the manifest lists screens, routes, testIDs — ui_test_agent's input)
   2A.6  mobile_developer   → impl/mobile_progress.md + mobile_developer/manifest.json  (React Native; needs 2A.4; may run in parallel with 2A.5)
 ```
 
 Each spawn prompt (prepend the GROUND TRUTH line):
 ```
 Agent prompt (subagent_type: <role>): "[GROUND TRUTH] You are <role> running Wave 2 step 2A.<n> for Phase ${PHASE}.
-Read: phase specs in docs/design/phases/${PHASE}/specs/ and IMPLEMENTATION_GUIDELINES.md.
-Read the outputs of the earlier 2A steps listed above.
-HARDENING RULES: interfaces not concrete types, repository pattern, wired metrics,
-literal Unicode, table-driven Go tests, document spec deviations.
+Read FIRST: agent_state/phases/${PHASE}/audit_report.md (what already exists: extend it, don't rebuild it)
+and agent_state/codebase/ (conventions). Then the phase specs in docs/design/phases/${PHASE}/specs/,
+IMPLEMENTATION_GUIDELINES.md (incl. §Runtime contract and §Commands and versions), and the outputs of
+the earlier 2A steps listed above.
+RULES (each one is checked later by a named reviewer or the gate):
+  - Existing code: read before you edit, follow its conventions, keep diffs minimal, never reformat or
+    rewrite code outside your task.
+  - Ownership: write only your layer (your agent file's Ownership section). Needs in another layer go in
+    your progress file for its owner.
+  - Contract: every HTTP response uses ~/.claude/skills/api/response-envelope.md — no other shape.
+  - Security: ~/.claude/skills/security/secure-coding.md — authorize every handler (deny by default,
+    object-level ownership), validate at the boundary, parameterized queries only, no secrets in
+    code/logs/errors, fail closed unless APP_ENV is local|dev|test, threat-model mitigations in scope.
+  - Runtime contract (IMPLEMENTATION_GUIDELINES §Runtime contract): entry points, health/readiness,
+    config from env, numeric non-root user, graceful shutdown.
+  - No stubs, TODOs, placeholder returns or fake implementations; interfaces not concrete types;
+    literal Unicode; document every spec deviation.
+BUILD GATE: before logging completion, run build, typecheck, lint and the unit tests of the packages you
+touched using agent_state/config/verify-commands.json, and paste each command's exit code into your
+progress file. Any non-zero exit means you are not done.
 Implement your layer. Commit after each logical unit. Log your completion line to execution.jsonl."
+```
+
+**Parent build gate after EACH 2A step** — the next step never starts on a broken build:
+```bash
+V=agent_state/config/verify-commands.json
+for k in build typecheck lint; do
+  CMD="$(jq -r --arg k "$k" '.commands[$k] // empty' "$V")"; [ -n "$CMD" ] || continue
+  PHASE="${PHASE}" bash -o pipefail -c "$CMD" >"agent_state/phases/${PHASE}/junit/2A-$k.log" 2>&1 \
+    || { echo "⛔ BLOCKED after 2A.<n>: $k failed (exit $?) — respawn the same role with the log; do not start the next step"; tail -20 "agent_state/phases/${PHASE}/junit/2A-$k.log"; }
+done
 ```
 
 > **Mobile app code (2A.6):** `mobile_developer` builds the React Native screens from the screen specs,
@@ -341,12 +392,12 @@ git worktree list
 strategy for diversity (round-robin: c1=interface-first, c2=test-first, c3=data-model-first). Each MUST
 write its own tests. Prepend the GROUND TRUTH line to each:
 ```
-Agent prompt: "[GROUND TRUTH] You are candidate implementer c${i} for Phase ${PHASE}.
+Agent prompt (subagent_type: general-purpose — deliberately generic; the adopt pass in step 5b brings the role artifacts back): "[GROUND TRUTH] You are candidate implementer c${i} for Phase ${PHASE}.
 WORKING DIRECTORY: ${PROJECT_DIR}/agent_state/phases/${PHASE}/candidates/c${i}  (your OWN git worktree — commit ONLY here)
 STARTING STRATEGY: ${STRATEGY}  (interface-first | test-first | data-model-first)
 Read the SAME specs as Wave 2A: docs/design/phases/${PHASE}/specs/ + IMPLEMENTATION_GUIDELINES.md.
 Implement ALL in-scope components AND write your own tests (unit + this surface's TC-* IDs).
-HARDENING RULES apply. Do NOT read/merge from sibling candidate worktrees. Commit in THIS worktree only.
+The Wave 2A RULES and BUILD GATE apply (read them above). Do NOT read/merge from sibling candidate worktrees. Commit in THIS worktree only.
 Return: files created + one line on how your strategy shaped the design."
 ```
 
@@ -357,7 +408,7 @@ pass + cross pass rate per candidate; mark non-comparable pairs `N/A` — never 
 
 **4. Spawn `solution_selector` (Signal B + combine):**
 ```
-Agent prompt: "[GROUND TRUTH] You are solution_selector for Phase ${PHASE}.
+Agent prompt (subagent_type: solution_selector): "[GROUND TRUTH] You are solution_selector for Phase ${PHASE}.
 Read ~/.claude/skills/core/candidate-selection.md, docs/design/phases/${PHASE}/specs/,
 and agent_state/phases/${PHASE}/candidates/cross_test_matrix.md.
 Score EACH candidate on the fixed rubric (R1 coverage, R2 test, R3 quality, R4 arch, R5 risk).
@@ -378,6 +429,14 @@ for i in $(seq 1 "${N}"); do
 done
 git worktree prune
 ```
+
+**5b. Adopt pass — the winner must leave the same artifacts as Wave 2A.** Candidates are generic
+implementers, so the role agents' outputs don't exist yet. Spawn each role in the roster, in 2A order,
+with `subagent_type: <role>` and this task: "Adopt the merged candidate code for your layer: do NOT
+rewrite it. Fix only what violates your agent file's rules; publish your artifacts (api_developer:
+specs/api-contracts.md; ui_developer/mobile_developer: their manifest.json; migration_agent: the
+migration registry); run your BUILD GATE; log your completion line." The roster's role agents then
+complete honestly instead of being satisfied by fabricated lines.
 
 **6. Log the decision** to `execution.jsonl`:
 ```bash
@@ -410,6 +469,24 @@ fi
 skill packs (the stack's test framework, mock tool, Playwright/Maestro, traceability). A generic
 "write tests" prompt loads none of them. Prepend the GROUND TRUTH line to every prompt.
 
+### Order — every test runs against the build the gate certifies
+
+```
+Wave 3a unit_test_agent ─┐  (parallel; no running app needed)
+Wave 3b integration_test_agent ─┘
+      ↓
+Wave 3.5 DEPLOY — k8s: dev → promote the same digests to qa · compose: up · CLI: build   ⇒ APP_BASE_URL
+      ↓
+Wave 3c ui_test_agent → e2e_orchestrator (web) | e2e_orchestrator (non-web) ─┐ against APP_BASE_URL
+Wave 3d mobile_test_agent → mobile_e2e_orchestrator                          ─┘ (parallel)
+      ↓
+Wave 3v test_runner — independent re-run of every tier at the committed code
+```
+
+Browser and device tests never run against a dev server or a leftover stack. They run after Wave 3.5,
+against `APP_BASE_URL`, which is the **qa** namespace on lab-cluster projects: byte-identical to what
+dev verified.
+
 ### Which tracks run
 
 | Project shape (from `agent_registry.json` tech_profile) | Tracks |
@@ -419,193 +496,53 @@ skill packs (the stack's test framework, mock tool, Playwright/Maestro, traceabi
 | React Native mobile (`mobile.enabled`) and the phase touched mobile screens | add 3d (`mobile_test_agent` → `mobile_e2e_orchestrator`) |
 | Web + mobile | all of the above |
 
+### Evidence every test agent leaves (the gate reads nothing else)
+
+Every test-agent prompt below includes this block verbatim:
+
+```
+EVIDENCE (skills/testing/test-results-sidecar.md):
+  1. Commit your tests (evidence binds to the code commit; uncommitted code can't be evidence).
+  2. Run the tier with the command in agent_state/config/verify-commands.json (commands."test:<tier>"),
+     JUnit XML to agent_state/phases/${PHASE}/junit/<tier>.xml. No retries to green; flaky = failing.
+  3. python3 .claude/hooks/junit-to-sidecar.py --tier <tier> --command "<cmd>" --exit-code $RC \
+       --env <local|dev|qa> --base-url "${APP_BASE_URL}" --priorities agent_state/phases/${PHASE}/tc_priorities.json \
+       --out agent_state/phases/${PHASE}/reports/<report>.json agent_state/phases/${PHASE}/junit/<tier>.xml
+  4. TC IDs go in test NAMES (titles, t.Run names, parametrize ids, flow names): comments don't count.
+  5. Log completion with report = agent_state/phases/${PHASE}/reports/<report>.md (the .json beside it is the evidence).
+```
+
 ### Wave 3a — Unit Tests  (`subagent_type: unit_test_agent`)
 
 ```
-Agent prompt: "[GROUND TRUTH] You are unit_test_agent running Wave 3a (Unit Tests) for Phase ${PHASE}.
-Read docs/design/phases/${PHASE}/phase_context.md for context.
-Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: unit.
-Write unit tests for ALL business logic. Annotate each test with its TC-* ID.
-Coverage target: 80% per package. Table-driven tests mandatory.
-Self-check: verify all responsible TC-* IDs are covered before completing.
-Produce: agent_state/phases/${PHASE}/reports/unit_tests.md"
+Agent prompt (subagent_type: unit_test_agent): "[GROUND TRUTH] You are unit_test_agent running Wave 3a for Phase ${PHASE}.
+Read docs/design/phases/${PHASE}/phase_context.md, then the specs' TC-* IDs with tier: unit.
+Derive each test's expected values from the SPEC (acceptance criteria, contracts, edge cases), not
+from the implementation: a test that restates the code proves nothing. For every behaviour, include
+at least one negative/boundary case. Mock only true external boundaries.
+[EVIDENCE block] report: unit_tests"
 ```
 
 ### Wave 3b — Integration Tests  (`subagent_type: integration_test_agent`)
 
 ```
-Agent prompt: "[GROUND TRUTH] You are integration_test_agent running Wave 3b (Integration Tests) for Phase ${PHASE}.
-Read docs/design/phases/${PHASE}/phase_context.md for context.
-Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: integration.
-Write integration tests against REAL database and cache (Testcontainers where the stack runs them in Docker).
-Test: repository CRUD, cache behavior, API contract shapes (vs specs/api-contracts.md), cross-tenant IDOR.
-Self-check: verify all responsible TC-* IDs are covered before completing.
-Produce: agent_state/phases/${PHASE}/reports/integration_tests.md"
+Agent prompt (subagent_type: integration_test_agent): "[GROUND TRUTH] You are integration_test_agent running Wave 3b for Phase ${PHASE}.
+Read phase_context.md and the specs' TC-* IDs with tier: integration.
+Against REAL dependencies (Testcontainers / the stack's versions from §Commands and versions):
+repository CRUD, cache behaviour, the response envelope for every endpoint
+(~/.claude/skills/api/response-envelope.md §What tests assert), the abuse-case matrix
+(testing/test-case-generation.md §Abuse cases: object/tenant authz, function authz, mass
+assignment, token tampering, injection, rate limits), every TC-SEC-* from the threat model, and failure
+modes (dependency down or slow → the documented error/timeout, no hang).
+[EVIDENCE block] report: integration_tests"
 ```
 
-### Wave 3c — E2E Tests (project-type-aware)
+## Wave 3.5: DEPLOY + HEALTH CHECK (before any browser or device test)
 
-**Web UI — TWO separate agents** (component + browser tests were previously bundled into one
-e2e agent, so the component tier got dropped whenever the e2e work filled its context):
-
-```
-Agent prompt (subagent_type: ui_test_agent): "[GROUND TRUTH] You are ui_test_agent running Wave 3c-web
-(UI tests) for Phase ${PHASE}. Read docs/design/phases/${PHASE}/specs/api-contracts.md FIRST.
-Write component tests for every implemented screen (4 states: loading/error/empty/data), API-mocked
-integration tests (mock shapes copied from api-contracts.md), responsive and a11y assertions, and the
-Playwright specs for each in-scope workflow. Annotate TC-UI-* / TC-E2E-* IDs.
-Produce: agent_state/phases/${PHASE}/reports/ui_test_results.md"
-
-Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave
-3c-web for Phase ${PHASE}, AFTER ui_test_agent. Run the browser E2E suite for every
-e2e_workflows_unlocked entry across all completed phase manifests (this phase + regression) against
-the full stack. Never invent scenarios. Produce: agent_state/phases/${PHASE}/reports/e2e_results.md"
-```
-
-**CLI tool, library, or non-web backend — pipeline E2E:**
-```
-Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave
-3c-pipeline (E2E Tests — Pipeline/CLI) for Phase ${PHASE}.
-Read docs/design/phases/${PHASE}/phase_context.md for context.
-Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: e2e.
-Write end-to-end pipeline tests that exercise the FULL product flow:
-  - CLI invocation with real inputs → processing → output verification
-  - Multi-step pipelines (e.g., compile → validate → deploy)
-  - Error scenarios (malformed input → graceful error message)
-  - WASM parity tests if applicable (same config, same output across runtimes)
-These are NOT browser tests — they are process-level integration tests.
-Self-check: verify all responsible TC-* IDs are covered before completing.
-Produce: agent_state/phases/${PHASE}/reports/e2e_results.md"
-```
-
-### Wave 3d — Mobile (React Native, iOS + Android) — only when mobile screens changed
-
-Two agents in sequence: the writer, then the device runner. Full strategy:
-`~/.claude/skills/testing/mobile-testing-strategy.md`.
-
-```
-Agent prompt (subagent_type: mobile_test_agent): "[GROUND TRUTH] You are mobile_test_agent running
-Wave 3d for Phase ${PHASE}. Read docs/design/phases/${PHASE}/specs/api-contracts.md FIRST, then the
-mobile TC-M* inventory in the specs and IMPLEMENTATION_GUIDELINES §Mobile.
-Write Jest + RNTL component tests (4 states per screen), MSW-mocked integration tests (shapes from
-api-contracts.md), device flows for every unlocked FR-* workflow and every applicable platform
-behaviour (permissions, deep links, lifecycle, offline, back, keyboard, text scale). Every flow must
-run on BOTH iOS and Android. Run the Node tiers.
-Produce: agent_state/phases/${PHASE}/reports/mobile_test_results.md + mobile_test_agent/manifest.json"
-
-Agent prompt (subagent_type: mobile_e2e_orchestrator): "[GROUND TRUTH] You are mobile_e2e_orchestrator
-running Wave 3d for Phase ${PHASE}, AFTER mobile_test_agent. Build release binaries for the iOS
-simulator and Android emulator, boot the device matrix, and run every flow in the mobile_test_agent
-manifest plus earlier phases' mobile flows (regression), per platform and per slot. Backend URL: the
-Wave 3.5 local deploy (Android uses 10.0.2.2). A platform you could not run is BLOCKED with a reason,
-never PASS. Produce: agent_state/phases/${PHASE}/reports/mobile_e2e_results.md + .json"
-```
-
-> Wave 3d's device run needs the backend up. If Wave 3.5 hasn't run yet, bring the backend up first
-> (the same compose command Wave 3.5 uses), or run `mobile_e2e_orchestrator` right after Wave 3.5.
-> Either order is fine; record which one you used in the Wave-3 checkpoint.
-
-### Parallelism and ordering
-
-```
-Wave 3 (parallel tracks; arrows are in-track ordering):
-  ├─ unit_test_agent                           → reports/unit_tests.md
-  ├─ integration_test_agent                    → reports/integration_tests.md
-  ├─ ui_test_agent → e2e_orchestrator          → reports/ui_test_results.md, reports/e2e_results.md   (web)
-  │   (or e2e_orchestrator alone)              → reports/e2e_results.md                              (non-web)
-  └─ mobile_test_agent → mobile_e2e_orchestrator → reports/mobile_test_results.md, reports/mobile_e2e_results.md (mobile)
-then
-  └─ Wave 3v: test_runner (independent re-run) → reports/test_results.md
-```
-
-Log each agent's completion line with `AGENT_NAME=<role>` exactly as it appears in `roster.required`.
-
-### Wave 3v — Independent verification  (`subagent_type: test_runner`)
-
-The writers ran their own suites, so their counts are self-graded. `test_runner` re-runs every Node
-tier the phase touched in a clean process and compares its numbers with each writer's report:
-
-```
-Agent prompt (subagent_type: test_runner): "[GROUND TRUTH] You are test_runner running Wave 3v for
-Phase ${PHASE}. Using the commands from IMPLEMENTATION_GUIDELINES, run unit, integration, web UI
-component and React Native Jest suites (whichever exist). Do NOT run device flows or browser E2E: their
-runners already produced evidence. Fill the Writer-vs-Independent table against reports/unit_tests.md,
-integration_tests.md, ui_test_results.md and mobile_test_results.md. Any mismatch is BLOCKING.
-Produce: agent_state/phases/${PHASE}/reports/test_results.md + test_results.json"
-```
-
-### Wave 3 Verification (every scheduled track must pass)
-
-```bash
-R="agent_state/phases/${PHASE}/reports"
-in_roster() { jq -e --arg a "${1}" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
-
-# Reports required for this phase = base tiers + one per conditional agent in the roster
-REQ="unit_tests.md integration_tests.md e2e_results.md test_results.md"
-in_roster ui_test_agent           && REQ="$REQ ui_test_results.md"
-in_roster mobile_test_agent       && REQ="$REQ mobile_test_results.md"
-in_roster mobile_e2e_orchestrator && REQ="$REQ mobile_e2e_results.md"
-
-for REPORT in $REQ; do
-  FILE="$R/${REPORT}"
-  if [ ! -f "$FILE" ]; then echo "⛔ BLOCKED: ${REPORT} missing — its agent did not run"; continue; fi
-  # Content validation — reports must contain actual test results, not just headers
-  if ! grep -qiE '(pass|fail|total|test.*[0-9]+|[0-9]+[[:space:]]*(pass|fail|test))' "$FILE"; then
-    echo "⛔ BLOCKED: ${REPORT} exists but contains no test results — likely a stub"
-  fi
-  if grep -qiE '^[[:space:]|*_-]*total[[:space:]*_]*[:=|][[:space:]*_|]*0([^0-9]|$)|(^|[^0-9])0[[:space:]]+tests?[[:space:]]+run|no tests' "$FILE"; then
-    echo "⚠ WARNING: ${REPORT} reports zero tests — verify this is correct for the project type"
-  fi
-done
-
-# Independent re-run must agree with the writers
-jq -e '.blocking == 0' "$R/test_results.json" >/dev/null 2>&1 \
-  || echo "⛔ BLOCKED: test_runner found writer-vs-independent count discrepancies (see test_results.md)"
-
-# Mobile: both platforms must have actually run (BLOCKED platforms need a recorded decision to proceed)
-if in_roster mobile_e2e_orchestrator; then
-  for P in ios android; do
-    jq -e --arg p "$P" '.platforms[$p].blocked == false and (.platforms[$p].passed + .platforms[$p].failed) > 0' \
-      "$R/mobile_e2e_results.json" >/dev/null 2>&1 \
-      || echo "⛔ BLOCKED: mobile ${P} device tier did not run (see mobile_e2e_results.md)"
-  done
-fi
-```
-
-**Auto-checkpoint:** Write `checkpoints/wave-3.json` with `tests_passing: true|false` and `artifacts_produced: [<every report in $REQ>]`.
-
-### Test Failure Recovery Guardrails
-
-When tests fail and the test agent or a subsequent fix agent attempts auto-remediation, these guardrails are **absolute constraints** — they cannot be overridden by any agent:
-
-**NEVER do these to make tests pass:**
-- Delete, `.skip`, or comment out an existing test assertion or test function
-- Reduce test coverage threshold to pass a gate
-- Downgrade a dependency version to fix a build (may reintroduce CVEs)
-- Modify test expectations to match buggy behavior instead of fixing the bug
-- Remove a test file to reduce failure count
-- Add `// @ts-ignore`, `//nolint`, or equivalent to suppress test-adjacent type errors
-
-**Confidence-based escalation:**
-- If root cause is clear (missing import, typo, wrong return type, obvious logic error) → auto-fix
-- If root cause is unclear after reading the full failure output → escalate to user (in **auto mode**: pick the most conservative option, log it to auto-resolved.jsonl, and continue): "Test failure in [component] — root cause unclear. Options: [A] [B] [C]"
-- Maximum 3 auto-fix attempts per failing test → then escalate (do NOT loop indefinitely)
-
-**CI log sanitization (before feeding test output to any agent):**
-Strip these patterns from test/build output before including in any agent prompt:
-- Environment variables (`KEY=value`, `export VAR=`)
-- Connection strings (`postgres://`, `redis://`, `mongodb://`, `mysql://`)
-- Token-like strings (`sk-*`, `ghp_*`, `gho_*`, `Bearer *`, `token=*`)
-- File paths containing `/secrets/`, `/.env`, `/credentials`, `/private/`
-- Stack traces that include home directory paths (`/Users/`, `/home/`)
-
----
-
-## Wave 3.5: LOCAL DEPLOY + HEALTH CHECK
-
-**CRITICAL: Acceptance tests run against a LIVE app. This wave ensures the app is actually built, deployed locally, and healthy before Wave 4 tests against it.**
-
-Without this step, acceptance tests either fail silently (nothing listening) or test against a stale build from a previous session. This was a gap in the original pipeline — acceptance tests claimed to validate "live behavior" but never ensured the app was running.
+**Browser, device and acceptance tests run against a LIVE app.** This wave builds and deploys what was
+committed, and produces the `APP_BASE_URL` every later tier uses. Without it, tests pass against a
+dev server or a stale stack from an earlier session. That was the state of the pipeline before the
+2026-09-30 board review (TEST-09, OPS-02).
 
 ### Determine project type
 
@@ -634,7 +571,7 @@ if [ -f "deploy/k8s/app.env" ]; then
   HEALTHY=false
   if PHASE="${PHASE}" scripts/k8s/deploy.sh dev && PHASE="${PHASE}" scripts/k8s/deploy.sh qa; then HEALTHY=true; fi
   . deploy/k8s/app.env
-  export APP_BASE_URL="http://${APP}-qa.localhost:${INGRESS_PORT}"     # hand this to test agents
+  export APP_BASE_URL="http://${APP}-qa.localhost:${INGRESS_PORT}"     # every later test tier targets qa
   echo "  deploy: $(python3 -c 'import json; d=json.load(open("agent_state/deploy/last-deploy-status.json")); print(d["target"], d["status"], d.get("failing",""))')"
   # UNHEALTHY → read the script's log lines (it names the failing pod/job and reason), fix, re-run.
   # If a namespace is missing the script says so: that is a human step (app-namespaces.sh), BLOCK.
@@ -653,7 +590,8 @@ elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
 
   # Health check with retry (up to 60s)
   echo "  Health checking..."
-  HEALTH_URL="http://localhost:${APP_PORT:-8080}/health"
+  export APP_BASE_URL="http://localhost:${APP_PORT:-8080}"
+  HEALTH_URL="${APP_BASE_URL}/healthz"   # the runtime contract's liveness path (IMPLEMENTATION_GUIDELINES §Runtime contract)
   HEALTHY=false
   for i in $(seq 1 12); do
     if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then
@@ -712,7 +650,129 @@ if [ -f "go.mod" ] && [ ! -f "$(ls bin/* cmd/*/main.go 2>/dev/null | head -1)" ]
 fi
 ```
 
-**Auto-checkpoint:** Write `checkpoints/wave-3.5.json` with `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: k8s|docker|cli|library|mobile` (k8s adds `app_base_url` = the qa URL and `digests` from `agent_state/deploy/qa/history.jsonl`), and for mobile `mobile_binaries: {ios: built|failed|blocked, android: built|failed|blocked}`.
+**Auto-checkpoint — this is how the URL reaches every test agent:** write `checkpoints/wave-3.5.json` with `app_base_url: "$APP_BASE_URL"` (the parent substitutes it literally into every Wave 3c/3d/3v/4-B/4-D prompt), and `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: k8s|docker|cli|library|mobile` (k8s adds `app_base_url` = the qa URL and `digests` from `agent_state/deploy/qa/history.jsonl`), and for mobile `mobile_binaries: {ios: built|failed|blocked, android: built|failed|blocked}`.
+
+### Wave 3c — E2E Tests (project-type-aware, after Wave 3.5)
+
+**Web UI — TWO separate agents:**
+
+```
+Agent prompt (subagent_type: ui_test_agent): "[GROUND TRUTH] You are ui_test_agent running Wave 3c-web for Phase ${PHASE}.
+BASE URL: ${APP_BASE_URL}. Read docs/design/phases/${PHASE}/specs/api-contracts.md and
+agent_state/phases/${PHASE}/ui_developer/manifest.json FIRST.
+Write component tests for every implemented screen (4 states: loading/error/empty/data) with mocks
+generated from the envelope types (never hand-shaped), responsive assertions, the XSS-RENDER and
+SESSION-STORAGE abuse rows, and the Playwright specs for every TC-E2E-* in scope (baseURL = BASE URL).
+Run the component tier. [EVIDENCE block] report: ui_test_results"
+
+Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave 3c-web for Phase ${PHASE}, AFTER ui_test_agent.
+BASE URL: ${APP_BASE_URL} (verify GET <BASE URL>/healthz is 200 first; if not, verdict BLOCKED).
+Scope = every TC-E2E-* in this phase's spec inventory plus all earlier phases' committed e2e specs
+(regression). Never invent scenarios. Run once with retries 0; a pass-on-retry is FLAKY (a failure).
+Write screenshots/traces for failures. [EVIDENCE block] report: e2e_results"
+```
+
+**CLI tool, library, or non-web backend — pipeline E2E:**
+```
+Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave 3c-pipeline for Phase ${PHASE}.
+Read phase_context.md and the specs' TC-* IDs with tier: e2e. Write and run process-level tests of the
+full product flow: real inputs → processing → output verification; multi-step pipelines; malformed
+input → graceful error; WASM parity where applicable. Not browser tests.
+[EVIDENCE block] report: e2e_results"
+```
+
+### Wave 3d — Mobile (React Native, iOS + Android) — only when mobile screens changed
+
+Full strategy: `~/.claude/skills/testing/mobile-testing-strategy.md`.
+
+```
+Agent prompt (subagent_type: mobile_test_agent): "[GROUND TRUTH] You are mobile_test_agent running Wave 3d for Phase ${PHASE}.
+Read api-contracts.md FIRST, then the mobile TC-M* inventory and IMPLEMENTATION_GUIDELINES §Mobile.
+Write Jest + RNTL component tests (4 states per screen), MSW-mocked integration tests (handlers typed
+from the envelope), and device flows for every unlocked FR-* workflow and applicable platform
+behaviour. Flow file names start with their TC ID. Every flow runs on BOTH iOS and Android. Run the
+Node tiers. [EVIDENCE block] report: mobile_test_results (+ mobile_test_agent/manifest.json)"
+
+Agent prompt (subagent_type: mobile_e2e_orchestrator): "[GROUND TRUTH] You are mobile_e2e_orchestrator running Wave 3d for Phase ${PHASE}, AFTER mobile_test_agent.
+BACKEND: ${APP_BASE_URL} (iOS simulator uses it as is; the Android emulator reaches the Mac's loopback
+as 10.0.2.2 — rewrite the host, keep the port and Host header). Build release binaries, boot the device
+matrix, run every flow in the manifest plus earlier phases' flows, per platform and slot. A platform
+that could not run is BLOCKED with a reason, never PASS. [EVIDENCE block] report: mobile_e2e_results
+(per-platform JUnit merged; cases carry the platform in their name)"
+```
+
+### Wave 3v — Independent verification  (`subagent_type: test_runner`)
+
+The writers ran their own suites, so their numbers are self-graded. `test_runner` re-runs **every** tier
+the phase has (unit, integration, UI component, browser e2e against `APP_BASE_URL`, RN Jest) from a clean
+process, using only `verify-commands.json`. Device flows stay with `mobile_e2e_orchestrator`, whose
+per-platform JUnit is already runner evidence.
+
+```
+Agent prompt (subagent_type: test_runner): "[GROUND TRUTH] You are test_runner running Wave 3v for Phase ${PHASE}.
+BASE URL: ${APP_BASE_URL}. Using ONLY agent_state/config/verify-commands.json, run every test:* command
+that applies (Go with -count=1 so nothing is cached). Convert each JUnit with junit-to-sidecar.py.
+Write reports/test_results.json (tier: all — every case from every tier) and REFRESH each writer's tier
+sidecar from your own run (reports/unit_tests.json, integration_tests.json, ui_test_results.json,
+e2e_results.json, mobile_test_results.json) so the gate reads runner output, not self-reports.
+Fill the Writer-vs-Independent table; any mismatch in totals or failures is BLOCKING.
+Produce: agent_state/phases/${PHASE}/reports/test_results.md + test_results.json"
+```
+
+### Wave 3 Verification (every scheduled track must pass)
+
+```bash
+R="agent_state/phases/${PHASE}/reports"
+in_roster() { jq -e --arg a "${1}" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
+SIDE="unit_tests integration_tests e2e_results test_results"
+in_roster ui_test_agent           && SIDE="$SIDE ui_test_results"
+in_roster mobile_test_agent       && SIDE="$SIDE mobile_test_results"
+in_roster mobile_e2e_orchestrator && SIDE="$SIDE mobile_e2e_results"
+for S in $SIDE; do
+  F="$R/$S.json"
+  if [ ! -f "$F" ]; then echo "⛔ BLOCKED: $S.json missing — its agent did not run or wrote no evidence"; continue; fi
+  jq -e '.schema == "sdlc.test-results/v1" and .verdict == "PASS" and .total > 0 and .failed == 0 and (.flaky // 0) == 0' "$F" >/dev/null \
+    || echo "⛔ BLOCKED: $S — $(jq -r '"verdict \(.verdict), total \(.total), failed \(.failed), flaky \(.flaky // 0)"' "$F")"
+done
+# Mobile: both platforms must have run (a BLOCKED platform needs a recorded decision)
+if in_roster mobile_e2e_orchestrator; then
+  for P in ios android; do
+    jq -e --arg p "$P" '[.cases[] | select(.name | ascii_downcase | contains($p))] | length > 0' "$R/mobile_e2e_results.json" >/dev/null 2>&1 \
+      || echo "⛔ BLOCKED: mobile ${P} device tier did not run (see mobile_e2e_results.md)"
+  done
+fi
+```
+The same rules run again, deterministically, in `verify-gate.sh` at Wave 6.
+
+**Auto-checkpoint:** write `checkpoints/wave-3.json` with `tests_passing: true|false`, `code_sha`, and `artifacts_produced`.
+
+### Test Failure Recovery Guardrails
+
+When tests fail and the test agent or a subsequent fix agent attempts auto-remediation, these guardrails are **absolute constraints** — they cannot be overridden by any agent:
+
+**NEVER do these to make tests pass** (the test-diff check `tc-inventory.py --diff-base` flags each one
+at the gate; a genuine refactor records it in `agent_state/phases/${PHASE}/test-changes.json` with a reason):
+- Delete, `.skip`, or comment out an existing test assertion or test function
+- Reduce test coverage threshold to pass a gate
+- Downgrade a dependency version to fix a build (may reintroduce CVEs)
+- Modify test expectations to match buggy behavior instead of fixing the bug
+- Remove a test file to reduce failure count
+- Add `// @ts-ignore`, `//nolint`, or equivalent to suppress test-adjacent type errors
+- Add retries, longer sleeps or looser assertions to turn a flaky test green (flaky = failing)
+- Add `.only`, `.skip`, `t.Skip`, `@pytest.mark.skip`, `xit` or quarantine without an issue + expiry
+
+**Confidence-based escalation:**
+- If root cause is clear (missing import, typo, wrong return type, obvious logic error) → auto-fix
+- If root cause is unclear after reading the full failure output → escalate to user (in **auto mode**: pick the most conservative option, log it to auto-resolved.jsonl, and continue): "Test failure in [component] — root cause unclear. Options: [A] [B] [C]"
+- Maximum 3 auto-fix attempts per failing test → then escalate (do NOT loop indefinitely)
+
+**CI log sanitization (before feeding test output to any agent):**
+Strip these patterns from test/build output before including in any agent prompt:
+- Environment variables (`KEY=value`, `export VAR=`)
+- Connection strings (`postgres://`, `redis://`, `mongodb://`, `mysql://`)
+- Token-like strings (`sk-*`, `ghp_*`, `gho_*`, `Bearer *`, `token=*`)
+- File paths containing `/secrets/`, `/.env`, `/credentials`, `/private/`
+- Stack traces that include home directory paths (`/Users/`, `/home/`)
 
 ---
 
@@ -725,8 +785,10 @@ reconcilers, and the dependency scan get dropped from a run. Spawn each reviewer
 SEPARATE, NAMED agent. Every agent below maps 1:1 to an entry in the Wave-0 roster and every one
 must produce its named report; Wave 6 blocks if any is missing.
 
-Spawn Track A (reviewers, parallel), Track C (reconcilers, parallel with A), and Track B
-(acceptance) — all concurrently where independent.
+Spawn Track A (reviewers, parallel), Track C (reconcilers, parallel with A), Track B (acceptance) and
+Track D (reliability/performance, when in the roster) — all concurrently where independent. First
+record the commit the reviewers see, so Wave 5v can re-review exactly what changed after them:
+`git rev-parse HEAD > agent_state/phases/${PHASE}/wave4_sha`.
 
 ### Track A — Code Review (SEPARATE agents per dimension, parallel)
 
@@ -755,7 +817,7 @@ finishes its own pass, II de-duplicates against it (a soft `runs_after`, not a h
 
 Each spawn prompt (prepend the GROUND TRUTH line):
 ```
-Agent prompt: "[GROUND TRUTH] You are <agent_name> running Wave 4 Track A for Phase ${PHASE}.
+Agent prompt (subagent_type: <agent_name>): "[GROUND TRUTH] You are <agent_name> running Wave 4 Track A for Phase ${PHASE}.
 Review ALL source changed/added in this phase against IMPLEMENTATION_GUIDELINES and the phase specs.
 Use the Unified Severity Model (~/.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
 Every finding MUST cite file:line. Produce your named report at the exact path above.
@@ -790,7 +852,12 @@ esac; }
 
 Each spawn prompt (prepend GROUND TRUTH):
 ```
-Agent prompt: "[GROUND TRUTH] You are <reconciler> running Wave 4 Track C for Phase ${PHASE}.
+Agent prompt (subagent_type: <reconciler>): "[GROUND TRUTH] You are <reconciler> running Wave 4 Track C for Phase ${PHASE}.
+spec_test_reconciler: FIRST run the deterministic inventory — it is your evidence, your prose explains it:
+  python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/test_results.json \
+    --diff-base $(cat agent_state/phases/${PHASE}/base_sha) --out agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json
+  (an ID counts only when a test NAMED with it ran and passed; skipped/comment-only/duplicate IDs and
+  unacknowledged test weakening fail it). Then write specs_vs_tests.md around that JSON.
 Perform bidirectional reconciliation. Report every MISSING (spec item with no code/test) and every
 EXTRA (code/test with no spec). Classify each: BLOCKING (in-scope FR-* unbuilt/untested) vs
 DEFERRED (explicitly out-of-scope, list the ID). Produce your named report.
@@ -801,17 +868,32 @@ report ends with the one-line count 'BLOCKING:N WARNING:N INFO:N' (the gate read
 ### Track B — Acceptance Tests
 
 ```
-Agent prompt: "[GROUND TRUTH] You are running Wave 4 Track B (Acceptance Tests) for Phase ${PHASE}.
-PREREQUISITE: Wave 3.5 deployed the app locally. Verify it is running before testing:
-  - For web apps: curl -sf http://localhost:PORT/health must return 200
-  - For CLI tools: the built binary must exist and respond to --version or --help
-If the app is NOT running, report BLOCKED immediately — do NOT write fake PASS results.
+Agent prompt (subagent_type: acceptance_test_agent): "[GROUND TRUTH] You are acceptance_test_agent running Wave 4 Track B for Phase ${PHASE}.
+BASE URL: ${APP_BASE_URL} (qa on lab-cluster projects). PREREQUISITE: GET <BASE URL>/healthz returns 200
+(CLI: the built binary answers --version). If not, verdict BLOCKED — never fake PASS.
+Every FR-* acceptance criterion in scope, per persona, as COMMITTED runnable specs under
+tests/acceptance/ (Playwright/API tests named 'TC-ACC-nnn …'; device flows for RN-delivered FRs on
+BOTH platforms) — never ad-hoc curl. Also verify API contracts against the envelope and that traces
+exist for each flow.
+[EVIDENCE block] report: acceptance_report — cases carry priority (HIGH for any FR marked MUST)
+and verdict PASS|FAIL|BLOCKED|UNTESTED per use case; any HIGH/MEDIUM case not PASS blocks the gate."
+```
 
-Test against the LIVE running app. Validate every FR-* acceptance criterion.
-For FR-* delivered through the React Native app, execute the persona flows on the device tier
-(the mobile_e2e_orchestrator's tool, on BOTH iOS and Android) and report per-platform results.
-Test per persona. Verify OTEL traces, API contracts, accessibility.
-Produce: agent_state/phases/${PHASE}/reports/acceptance_report.md"
+### Track D — Reliability + performance (only the agents the roster lists)
+
+```
+Agent prompt (subagent_type: reliability_agent): "[GROUND TRUTH] You are reliability_agent running Wave 4 Track D for Phase ${PHASE}.
+Check the CODE changed this phase (git diff $(cat agent_state/phases/${PHASE}/base_sha)..HEAD) against
+your Checks 3, 4 and 6 and the phase SLOs: timeouts on every outbound call/query, retries only on
+idempotent operations with backoff+jitter, readiness vs liveness semantics, graceful shutdown with
+drain, bounded pools against the DB connection budget, metric label cardinality.
+Report every violation with file:line. Produce reports/reliability_review.md ending with 'BLOCKING:N WARNING:N INFO:N'."
+
+Agent prompt (subagent_type: performance_agent): "[GROUND TRUTH] You are performance_agent running Wave 4 Track D for Phase ${PHASE}.
+BASE URL: ${APP_BASE_URL} (qa). RUN (don't recommend) an open-model load test (k6 constant-arrival-rate)
+for every NFR-PERF-* in scope at its target rate, with thresholds = the NFR targets. Warm up first,
+and record p50/p95/p99, error rate and saturation. Each NFR becomes a case (priority HIGH) that PASSes only
+if its threshold held. Produce reports/performance_results.md + performance_results.json (sdlc.test-results/v1)."
 ```
 
 ### Wave 4 Verification — every named report must exist AND carry a verdict
@@ -832,6 +914,8 @@ in_roster mobile_platform_auditor   && REQUIRED_W4="$REQUIRED_W4 mobile_platform
 in_roster ui_standards_auditor      && REQUIRED_W4="$REQUIRED_W4 ui_standards_audit.md"
 in_roster migration_safety_reviewer && REQUIRED_W4="$REQUIRED_W4 migration_safety.md"
 in_roster breaking_change_reviewer  && REQUIRED_W4="$REQUIRED_W4 breaking_change_review.md"
+in_roster reliability_agent         && REQUIRED_W4="$REQUIRED_W4 reliability_review.md"
+in_roster performance_agent         && REQUIRED_W4="$REQUIRED_W4 performance_results.md"
 for R in $REQUIRED_W4; do
   F="$(report_path "$R")"
   if [ ! -f "$F" ]; then
@@ -857,8 +941,13 @@ For each report with BLOCKING findings:
      ui_standards_stitch_requests.json (Stitch design gaps and missing baselines, then ux_designer,
      then the design gate), and code drift goes to ui_developer / mobile_developer. Unapproved
      reconstructed baselines are carried forward, not code-fixed.
-  1. Spawn a scoped fix agent for that report's findings.
-  2. Re-spawn ONLY the reviewer/reconciler that raised them.
+  1. Spawn the OWNING ROLE agent for the files involved (subagent_type: api_developer for handlers,
+     backend_developer for services, migration_agent for migrations, ui_developer/mobile_developer for
+     screens, the tier's test agent for tests) with the findings, the Test Failure Recovery
+     Guardrails and the Wave 2A RULES + BUILD GATE. Never a generic "fix it" agent: it has no skill
+     packs and no guardrails (board review DEV-08).
+  2. Re-spawn ONLY the reviewer/reconciler that raised them. Code changed, so the test evidence is
+     now stale; Wave 5v refreshes it before the gate (the gate rejects stale evidence).
   3. Repeat max 2 rounds per report. If still BLOCKING after 2 rounds → carry to Wave 5 as a
      classified failure, or escalate to debate_moderator if architectural.
 Anti-rationalization: "the fix looks right, no need to re-run" is WRONG — always re-run the agent.
@@ -908,9 +997,10 @@ Before spawning the fix agent, **classify each failure** using the adaptive repl
 
 If multiple categories → take the UNION of re-test scopes. If any is SCHEMA/CONFIG → ALL tiers.
 
-Spawn fix agent with classification:
+Spawn the fix as the OWNING ROLE agent (see the Track A/C loop above) with the classification:
 ```
-Agent prompt: "Fix these items from collective feedback:
+Agent prompt (subagent_type: <owning role>): "[GROUND TRUTH] Fix these items from collective feedback.
+The Wave 2A RULES, BUILD GATE and the Test Failure Recovery Guardrails apply.
 
 FAILURE CLASSIFICATION: ${CATEGORY}
 ROOT CAUSE: ${ROOT_CAUSE_DESCRIPTION}
@@ -958,6 +1048,37 @@ if ! grep -qiE '(re-run|rerun|re.ran).*(unit|integration|e2e|acceptance)' \
 fi
 ```
 
+### Wave 5v — Final verification at the committed code (always, right before Wave 6)
+
+Every fix after Wave 3 changed code the evidence describes. The gate rejects evidence whose `code_sha`
+isn't the current code commit, so refresh it once here, after the last fix:
+
+```bash
+P="agent_state/phases/${PHASE}"
+git add -A -- . ':(exclude)agent_state' && git commit -qm "phase ${PHASE}: fixes before final verification" || true
+CODE_SHA="$(git log -1 --format=%H -- . ':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude' ':(exclude)deploy/k8s/overlays')"
+STALE="$(for f in "$P"/reports/*.json agent_state/reconciliation/phase-${PHASE}/*.json; do
+  [ -f "$f" ] && jq -e '.schema == "sdlc.test-results/v1"' "$f" >/dev/null 2>&1 \
+    && [ "$(jq -r '.code_sha // ""' "$f")" != "$CODE_SHA" ] && echo "$f"; done)"
+echo "stale evidence:"; echo "${STALE:-  none}"
+```
+
+When anything is stale, in this order:
+1. **Redeploy.** On k8s run `PHASE=${PHASE} scripts/k8s/deploy.sh dev && PHASE=${PHASE} scripts/k8s/deploy.sh qa`,
+   which gives fresh `deploy_dev`/`deploy_qa` evidence. On compose, rebuild and restart.
+2. **Re-run the tests.** Spawn `test_runner` (subagent_type: test_runner): every tier at `CODE_SHA`,
+   refreshing each tier sidecar (the Wave 3v prompt).
+3. **Re-run the runtime tiers if the code under them changed.** Re-spawn `mobile_e2e_orchestrator`
+   if mobile code changed, and `acceptance_test_agent` if any code changed since its run.
+4. **Re-run the inventory.** Re-spawn `spec_test_reconciler` for `tc-inventory.py --results … --diff-base`.
+5. **Re-review security** (SEC-07) when code changed after Wave 4. Re-spawn `security_reviewer`
+   (subagent_type: security_reviewer) scoped to
+   `git diff $(cat $P/wave4_sha)..HEAD -- . ':(exclude)agent_state'`, then re-run its fix loop if it
+   finds anything.
+
+Then Wave 6. If Wave 6 routes failures back to Wave 5, Wave 5v runs again: the gate never sees
+evidence from before the last fix.
+
 ---
 
 ## Wave 6: GATE
@@ -972,6 +1093,15 @@ refutation of high-stakes claims) before writing `gate.passed`.
 **Order:** Layer 0 (below) → Layer 0b roster + debate dispatch → Layer 1 re-verification → Layer 2
 score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_score.md` → only then
 `gate.passed`.
+
+0a. **What the hook enforces** (since the 2026-09-30 board review), so you don't re-implement it:
+    - **Floor:** review floor, plus `test_runner`, `spec_test_reconciler` and `acceptance_test_agent`
+      (and `deploy_dev`/`deploy_qa` on k8s projects) in every implementation phase.
+    - **Test evidence:** every test agent's `sdlc.test-results/v1` sidecar must show verdict PASS,
+      total > 0, 0 failed, 0 flaky, and no HIGH/MEDIUM case FAIL/BLOCKED/UNTESTED.
+    - **Freshness:** evidence `code_sha` equals the current code commit, and the tree is clean.
+    - **Commands:** `verify-commands.json` typecheck/lint/test really run.
+    - **Security:** security findings can't be forced without per-finding acknowledgements.
 
 0b. **Agent-roster completeness (execution guarantee) — run FIRST, via the shared hook.** The single
     source of truth for this check is `.claude/hooks/verify-gate.sh`. It passes iff (1) every
@@ -1098,7 +1228,10 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    done
    ```
 
-2. Run regression test suite using **change-impact analysis** (see `~/.claude/skills/core/change-impact-analysis.md`):
+2. **Regression is Wave 5v's full re-run.** `test_runner` runs every tier of every phase's committed
+   tests at the current code commit, and its sidecars are what `verify-gate.sh` checks. Change-impact
+   analysis (below) only chooses what to run *earlier*, during fix loops, for speed; it never replaces
+   the Wave 5v run (see `~/.claude/skills/core/change-impact-analysis.md`):
 
    ```bash
    # Determine regression scope based on what this phase changed

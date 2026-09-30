@@ -25,6 +25,7 @@ dependencies:
   upstream: [brd_agent]
   downstream: [agent_factory, architecture_orchestrator, ci_cd_agent, product_manager, project_planner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
+  - "~/.claude/skills/core/commands-and-versions.md"
   - "~/.claude/skills/core/auto-research.md"
 ---
 
@@ -225,6 +226,7 @@ Write `agent_state/impl_guidelines/decisions.yaml` with all answers and their so
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/core/commands-and-versions.md`
 - `~/.claude/skills/core/auto-research.md`
 <!-- END reference-packs -->
 

@@ -38,13 +38,15 @@ Reuse the Evidence Grading Protocol (`backend_audit_agent.md`):
 
 Concrete re-verifications the parent runs itself (do not delegate):
 ```bash
-# Tests actually exist and run (not just a report claiming they do)
-<test_cmd> 2>&1 | tee /tmp/gate_unit.log        # real exit code + counts
-grep -c "func Test" <test_dir>/*_test.go         # test functions physically present
-# Each claimed TC-* ID is annotated in a real test file
-for id in $(claimed_tc_ids); do grep -rq "$id" <test_dir> || echo "⛔ $id claimed but not found"; done
-# No suppression sneaked in to force a pass
-grep -rE '(\.skip\(|//\s*nolint|@ts-ignore|t\.Skip\()' <changed_test_files> && echo "⚠ suppression present"
+# Tests actually run — the project's own command, exit code kept (a bare `| tee` would report tee's 0)
+set -o pipefail
+CMD="$(jq -r '.commands["test:unit"]' agent_state/config/verify-commands.json)"
+PHASE="${PHASE}" bash -o pipefail -c "$CMD" 2>&1 | tee /tmp/gate_unit.log; echo "exit=${PIPESTATUS[0]:-$?}"
+# TC coverage the deterministic way (names of tests that ran and passed; not grep)
+python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results agent_state/phases/${PHASE}/reports/test_results.json \
+  --diff-base "$(cat agent_state/phases/${PHASE}/base_sha)" --out /tmp/gate_tc.json
+# No suppression sneaked in to force a pass (tc-inventory's weakening list covers skip/only/removed asserts)
+grep -rE '(//\s*nolint|@ts-ignore|eslint-disable)' <changed_files> && echo "⚠ suppression present"
 ```
 
 If a claimed item cannot be Confirmed by the parent's own command, the gate **blocks** — the
@@ -71,10 +73,23 @@ Default weighted rubric (tune per project in `sdlc-config.json`):
 ```
 gate_score = Σ (dimension_score × weight)
 PASS if gate_score ≥ 0.90 AND no dimension with weight ≥ 0.15 scored 0
+       AND no hard failure (below)
 ```
 
-The second clause prevents a high aggregate from masking a fully-failed critical dimension
-(e.g. zero acceptance tests). Write `gate_score` + the per-dimension breakdown into
+The second clause prevents a high aggregate from masking a fully failed critical dimension, for
+example zero acceptance tests.
+
+**Hard failures cap the score at 0, whatever the weights say.** Before the board review, one failing
+acceptance case out of eight still scored 0.98 and passed (TEST-05). The weights grade *quality among
+passing phases*. They never trade a failure for points elsewhere. The hard failures are:
+- any failed or flaky test in any tier;
+- any HIGH/MEDIUM acceptance case that is FAIL, BLOCKED or UNTESTED;
+- any HIGH/MEDIUM TC ID missing or failing in `tc-inventory`;
+- any open BLOCKING review finding;
+- a deploy that isn't HEALTHY;
+- stale evidence.
+
+`verify-gate.sh` enforces the same list deterministically, so Layer 2 can only ever be *stricter*. Write `gate_score` + the per-dimension breakdown into
 `agent_state/phases/${PHASE}/reports/gate_score.md`.
 
 ---

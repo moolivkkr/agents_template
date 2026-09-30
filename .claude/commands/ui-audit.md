@@ -47,7 +47,7 @@ mkdir -p "agent_state/phases/${PHASE}/reports" "agent_state/ui-audit/phase-${PHA
 ## Step 1 — Audit  (`subagent_type: ui_standards_auditor`)
 
 ```
-Agent prompt: "[GROUND TRUTH line] You are ui_standards_auditor. Audit EVERY page of the running app
+Agent prompt (subagent_type: ui_standards_auditor): "[GROUND TRUTH line] You are ui_standards_auditor. Audit EVERY page of the running app
 (app scope: ${ARG_APP:-all}${ARG_PAGE:+, page: $ARG_PAGE}) against the design standards and each
 page's Stitch baseline, per your agent file and ~/.claude/skills/ui/stitch-design.md §8.
 Write reports/ui_standards_audit.md + .json and reports/ui_standards_stitch_requests.json under

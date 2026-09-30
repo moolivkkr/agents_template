@@ -45,6 +45,7 @@ dependencies:
   upstream: [api_developer, mobile_developer]
   downstream: [mobile_e2e_orchestrator, test_runner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
+  - "~/.claude/skills/testing/test-results-sidecar.md"
   - "~/.claude/skills/languages/typescript.md"
   - "~/.claude/skills/frameworks/react-native.md"
   - "~/.claude/skills/core/testing-principles.md"
@@ -214,6 +215,7 @@ Total: N tests, N passed, N failed
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/testing/test-results-sidecar.md`
 - `~/.claude/skills/languages/typescript.md`
 - `~/.claude/skills/frameworks/react-native.md`
 - `~/.claude/skills/core/testing-principles.md`

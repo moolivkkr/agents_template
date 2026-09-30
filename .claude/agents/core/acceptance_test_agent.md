@@ -37,6 +37,7 @@ quality_gates:
   all_in_scope_use_cases_pass: true
   all_personas_exercised: true
 skill_packs:
+  - "~/.claude/skills/testing/test-results-sidecar.md"
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/core/api-design.md"
   - "~/.claude/skills/core/testing-principles.md"
@@ -393,6 +394,7 @@ CONTRACT_VIOLATION = **BLOCKER** — same severity as a failing acceptance crite
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/testing/test-results-sidecar.md`
 - `~/.claude/skills/languages/{{LANG}}.md`
 - `~/.claude/skills/core/api-design.md`
 - `~/.claude/skills/core/testing-principles.md`

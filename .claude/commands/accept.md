@@ -422,30 +422,27 @@ Acceptance criteria:
 ### Algorithm
 
 ```bash
-# 1. Collect ALL TC-* IDs from ALL phase specs
-ALL_SPEC_IDS=""
-for PHASE_DIR in docs/design/phases/*/; do
-  PHASE_NUM=$(basename "$PHASE_DIR")
-  SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$PHASE_DIR/specs/" 2>/dev/null | sort -u)
-  ALL_SPEC_IDS="$ALL_SPEC_IDS\n$SPEC_IDS"
+# One deterministic inventory per phase, against THIS acceptance run's results when present.
+RES="agent_state/accept/test_results.json"   # written by the Step 0b regression (test_runner, all phases)
+mkdir -p agent_state/accept/tc
+for PD in docs/design/phases/*/; do
+  N=$(basename "$PD")
+  python3 .claude/hooks/tc-inventory.py --phase "$N" $( [ -f "$RES" ] && echo --results "$RES") \
+    --out "agent_state/accept/tc/phase-$N.json" >/dev/null || true
 done
-ALL_SPEC_IDS=$(echo -e "$ALL_SPEC_IDS" | grep 'TC-' | sort -u)
-TOTAL_SPEC=$(echo "$ALL_SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
-
-# 2. Collect ALL TC-* IDs from ALL test files
-ALL_IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
-  --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
-TOTAL_IMPL=$(echo "$ALL_IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
-
-# 3. Reconcile
-MISSING=$(comm -23 <(echo "$ALL_SPEC_IDS") <(echo "$ALL_IMPL_IDS"))
-MISSING_COUNT=$(echo "$MISSING" | grep -c 'TC-' 2>/dev/null || echo 0)
-COVERAGE_PCT=$(( TOTAL_IMPL * 100 / TOTAL_SPEC ))
-
-echo "Global TC-* Inventory: ${TOTAL_IMPL}/${TOTAL_SPEC} (${COVERAGE_PCT}%)"
-if [ "$MISSING_COUNT" -gt 0 ]; then
-  echo "MISSING: $MISSING_COUNT TC-* IDs never implemented across any phase"
-fi
+python3 - <<'PY'
+import glob, json
+inv = [json.load(open(f)) for f in sorted(glob.glob("agent_state/accept/tc/phase-*.json"))]
+total = sum(i["total"] for i in inv); covered = sum(i["passed"] for i in inv)
+missing = sorted({m for i in inv for m in i["missing"] + i["failing"]})
+dups = sorted({d for i in inv for d in i["duplicate_ids"]})
+print(f"Global TC-* Inventory: {covered}/{total} HIGH+MEDIUM covered ({100 * covered // max(total, 1)}%)")
+if missing: print(f"MISSING/FAILING: {len(missing)} — " + ", ".join(missing[:40]))
+if dups: print(f"IDs defined by more than one phase (ambiguous coverage): {', '.join(dups)}")
+json.dump({"covered": [c["name"] for i in inv for c in i["cases"] if c["verdict"] == "PASS"]},
+          open("agent_state/accept/tc/covered.json", "w"))
+PY
+ALL_IMPL_IDS="$(jq -r '.covered[]' agent_state/accept/tc/covered.json)"   # used by the deferred-ID check below
 ```
 
 ### Check per-phase deferred IDs
@@ -549,7 +546,7 @@ Write `agent_state/accept/cleanup.md`:
 ### Execution
 
 ```
-Agent prompt: "You are running the Pipeline Completeness Validator.
+Agent prompt (subagent_type: pipeline_completeness_agent): "You are running the Pipeline Completeness Validator.
 Read: requirements/, docs/BRD.md, docs/IMPLEMENTATION_GUIDELINES.md
 Read: ALL agent_state/reconciliation/ reports (one phase at a time)
 Read: ALL agent_state/phases/*/manifest.json (one phase at a time)

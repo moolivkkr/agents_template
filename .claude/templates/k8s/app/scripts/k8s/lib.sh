@@ -27,6 +27,9 @@ env_setup() {  # $1 = dev|qa
 kc() { kubectl -n "$NS" "$@"; }
 
 git_sha() { git -C "$ROOT" rev-parse --short=12 HEAD 2>/dev/null || echo nogit; }
+# The commit the gate binds evidence to: last commit touching code (same pathspec as verify-gate.sh).
+CODE_EXCL=(':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude' ':(exclude)deploy/k8s/overlays')
+code_sha() { git -C "$ROOT" log -1 --format=%H -- . "${CODE_EXCL[@]}" 2>/dev/null || true; }
 
 # The real kubectl behind sdlc-guard's PATH shim. Used ONLY by env-reset.sh for its namespaced bulk
 # delete, which the shim refuses (as it should at the prompt). RBAC still confines it to this app's

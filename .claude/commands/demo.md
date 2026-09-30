@@ -32,7 +32,7 @@ Prepend the GROUND TRUTH line from `develop-orchestrator.md` to every agent prom
 Skip if `--validate-only`.
 
 ```
-Agent prompt: "[GROUND TRUTH] You are demo_documenter for Phase ${PHASE}. From docs/BRD.md and
+Agent prompt (subagent_type: demo_documenter): "[GROUND TRUTH] You are demo_documenter for Phase ${PHASE}. From docs/BRD.md and
 agent_state/phases/${PHASE}/manifest.json, write docs/demos/phase-${PHASE}/demo-script.md and
 test-data.md: the persona-driven story, each step's action and expected on-screen/API result, and
 the seed data it needs. For a React Native app, name the platform (iOS simulator / Android emulator)
@@ -42,7 +42,7 @@ for each step."
 ## Step 2 — Stand up the environment  (`subagent_type: demo_executor`)
 
 ```
-Agent prompt: "[GROUND TRUTH] You are demo_executor for Phase ${PHASE}. Following
+Agent prompt (subagent_type: demo_executor): "[GROUND TRUTH] You are demo_executor for Phase ${PHASE}. Following
 docs/demos/phase-${PHASE}/demo-script.md and IMPLEMENTATION_GUIDELINES, start the services, seed the
 test data, and confirm the environment is ready. Write agent_state/demos/phase-${PHASE}/."
 ```
@@ -50,7 +50,7 @@ test data, and confirm the environment is ready. Write agent_state/demos/phase-$
 ## Step 3 — Rehearse every step  (`subagent_type: demo_validator`)
 
 ```
-Agent prompt: "[GROUND TRUTH] You are demo_validator for Phase ${PHASE}. Walk every step of
+Agent prompt (subagent_type: demo_validator): "[GROUND TRUTH] You are demo_validator for Phase ${PHASE}. Walk every step of
 docs/demos/phase-${PHASE}/demo-script.md against the running environment and verify each produces
 its expected result. Write agent_state/demos/phase-${PHASE}/validation_report.md with PASS/FAIL per step."
 ```

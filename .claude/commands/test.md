@@ -187,44 +187,19 @@ Output: `agent_state/phases/N/reports/manual_test_plan.md`
 Runs the TC-* ID inventory reconciliation without running any tests. Useful for checking test coverage gaps before a full test run.
 
 ```bash
-SPEC_DIR="docs/design/phases/${PHASE}/specs"
-SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
-SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
-
-if [ "$SPEC_COUNT" -eq 0 ]; then
-  echo "No TC-* IDs found in phase specs — nothing to check"
-  exit 0
-fi
-
-IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
-  --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
-IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
-MISSING=$(comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS"))
-MISSING_COUNT=$(echo "$MISSING" | grep -c 'TC-' 2>/dev/null || echo 0)
-COVERAGE_PCT=$(( IMPL_COUNT * 100 / SPEC_COUNT ))
-
-echo "TC-* Inventory — Phase ${PHASE}"
-echo "  Spec IDs:        $SPEC_COUNT"
-echo "  Implemented:     $IMPL_COUNT"
-echo "  Missing:         $MISSING_COUNT"
-echo "  Coverage:        ${COVERAGE_PCT}%"
-
-if [ "$MISSING_COUNT" -gt 0 ]; then
-  echo ""
-  echo "  Missing TC-* IDs:"
-  echo "$MISSING" | head -30
-  [ "$MISSING_COUNT" -gt 30 ] && echo "  ... and $((MISSING_COUNT - 30)) more"
-fi
-
-# Per-category breakdown
-echo ""
-echo "  Per-Category:"
-for CAT in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z0-9]+' | sort -u); do
-  CAT_SPEC=$(echo "$SPEC_IDS" | grep -c "TC-${CAT}-")
-  CAT_IMPL=$(echo "$IMPL_IDS" | grep -c "TC-${CAT}-" 2>/dev/null || echo 0)
-  CAT_PCT=$(( CAT_IMPL * 100 / CAT_SPEC ))
-  echo "    ${CAT}: ${CAT_IMPL}/${CAT_SPEC} (${CAT_PCT}%)"
-done
+# Deterministic inventory (skills/testing/test-case-traceability.md): an ID counts only when a test NAMED
+# with it exists and isn't skipped; with --results, only when that test ran and PASSED.
+OUT="agent_state/reconciliation/phase-${PHASE}/test_case_inventory.json"
+RES="agent_state/phases/${PHASE}/reports/test_results.json"
+python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" ${RES:+$( [ -f "$RES" ] && echo --results "$RES")} --out "$OUT"
+jq -r '"TC-* Inventory — Phase \(.tier) (\(.mode) mode): \(.passed)/\(.total) HIGH+MEDIUM covered",
+       "  missing:        \(.missing | join(", "))",
+       "  failing:        \(.failing | join(", "))",
+       "  skipped-only:   \(.skipped_only | join(", "))",
+       "  comment-only:   \(.comment_only | join(", "))   (IDs in comments don\u0027t count — put them in test names)",
+       "  duplicate IDs:  \(.duplicate_ids | keys | join(", "))"' "$OUT"
+jq -r '.cases | group_by(.name | capture("TC-(?<c>[A-Z0-9]+)-").c) | .[] |
+       "    \(.[0].name | capture("TC-(?<c>[A-Z0-9]+)-").c): \(map(select(.verdict=="PASS")) | length)/\(length)"' "$OUT"
 ```
 
 Output: `agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md`

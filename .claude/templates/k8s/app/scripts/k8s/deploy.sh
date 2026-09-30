@@ -14,7 +14,8 @@
 # Verdict: HEALTHY (all steps + smoke + digest parity pass) | DEGRADED (deployed, checks failed) |
 # FAILED (apply/migrate/rollout failed). Exit 0 only when HEALTHY. Evidence (deploylib.py record):
 # agent_state/deploy/<env>/history.jsonl, agent_state/deploy/last-deploy-status.json, and with
-# PHASE=<n> set, agent_state/phases/<n>/reports/deploy_verification.json for the phase gate.
+# PHASE=<n> set, agent_state/phases/<n>/reports/deploy_<env>.{json,md} plus a deploy_<env> line in that
+# phase's execution.jsonl — the evidence verify-gate.sh requires on k8s projects.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
 MODE=build; [ "$ENV_NAME" = qa ] && MODE=promote
@@ -44,14 +45,15 @@ if [ ! -f "$OVERLAY/secrets.env" ]; then
 fi
 
 # ── images ───────────────────────────────────────────────────────────────────────────────────────
-SHA="$(git_sha)"
+SHA="$(git_sha)"; CODE_SHA="$(code_sha)"; DIRTY=false
 case "$MODE" in
   build)
     curl -sf -m 5 "http://$REGISTRY/v2/" >/dev/null || die "registry $REGISTRY not reachable (lab cluster forward down?)"
     # "-dirty" only when what goes INTO an image differs from HEAD: the build contexts, tracked or not
     CTXS=(); while read -r name ctx _; do case "$name" in ''|'#'*) ;; *) CTXS+=("$ctx") ;; esac; done < "$K8S_DIR/images.txt"
-    [ -z "$(git -C "$ROOT" status --porcelain -- ${CTXS[@]+"${CTXS[@]}"} 2>/dev/null)" ] \
-      || { SHA="$SHA-dirty"; log "uncommitted changes in a build context: tagging $SHA"; }
+    # (agent_state/, docs/, .claude/ and the overlay digest blocks change every wave: never "source")
+    [ -z "$(git -C "$ROOT" status --porcelain -- ${CTXS[@]+"${CTXS[@]}"} "${CODE_EXCL[@]}" 2>/dev/null)" ] \
+      || { SHA="$SHA-dirty"; DIRTY=true; log "uncommitted changes in a build context: tagging $SHA"; }
     while read -r name ctx dockerfile; do
       case "$name" in ''|'#'*) continue ;; esac
       ref="$REGISTRY/$APP/$name:$SHA"
@@ -67,19 +69,25 @@ case "$MODE" in
     DEV_HIST="$ROOT/agent_state/deploy/dev/history.jsonl"
     SRC="$(python3 "$DL" pick "$DEV_HIST")" || die "no HEALTHY dev deploy to promote (run deploy.sh dev first)"
     SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["git_sha"])')"
+    CODE_SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("code_sha") or "")')"
+    DIRTY="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("dirty", False)).lower())')"
     while IFS= read -r l; do IMAGES+=("$l"); done < <(printf '%s' "$SRC" | python3 -c 'import json,sys; [print(f"{k}={v}") for k,v in json.load(sys.stdin)["images"].items()]')
-    [ "$SHA" = "$(git_sha)" ] || log "note: promoting dev-verified $SHA (HEAD is $(git_sha))"
+    [ "$SHA" = "$(git_sha)" ] || log "note: promoting dev-verified $SHA (HEAD is $(git_sha)) — the gate will call this stale until dev is rebuilt"
     ;;
   reuse)
     while IFS= read -r l; do IMAGES+=("$l"); done < <(python3 "$DL" get-images "$OVERLAY/kustomization.yaml")
     [ "${#IMAGES[@]}" -gt 0 ] || die "no pinned digests in $OVERLAY to reuse"
     SRC="$(python3 "$DL" pick "$HIST" 2>/dev/null || true)"
-    [ -n "$SRC" ] && SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["git_sha"])')"
+    if [ -n "$SRC" ]; then
+      SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["git_sha"])')"
+      CODE_SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("code_sha") or "")')"
+    fi
     ;;
   rollback)
     CUR=(); while IFS= read -r l; do CUR+=("$l"); done < <(python3 "$DL" get-images "$OVERLAY/kustomization.yaml")
     SRC="$(python3 "$DL" pick "$HIST" --differs ${CUR[@]+"${CUR[@]}"})" || die "no earlier HEALTHY $ENV_NAME deploy with different images"
     SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["git_sha"])')"
+    CODE_SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("code_sha") or "")')"
     while IFS= read -r l; do IMAGES+=("$l"); done < <(printf '%s' "$SRC" | python3 -c 'import json,sys; [print(f"{k}={v}") for k,v in json.load(sys.stdin)["images"].items()]')
     log "rolling back $NS to $SHA"
     ;;
@@ -142,7 +150,7 @@ if [ "$VERDICT" = HEALTHY ]; then
 fi
 
 # ── evidence ─────────────────────────────────────────────────────────────────────────────────────
-python3 "$DL" record --root "$ROOT" --env "$ENV_NAME" --ns "$NS" --sha "$SHA" --url "$BASE_URL" \
+python3 "$DL" record --root "$ROOT" --env "$ENV_NAME" --ns "$NS" --sha "$SHA" --code-sha "$CODE_SHA" --dirty "$DIRTY" --url "$BASE_URL" \
   --verdict "$VERDICT" --mode "$MODE" --steps "{$STEPS}" --smoke "$SMOKE" \
   ${PHASE:+--phase "$PHASE"} --images "${IMAGES[@]}"
 log "$NS: $VERDICT ($MODE, $SHA) — $BASE_URL"

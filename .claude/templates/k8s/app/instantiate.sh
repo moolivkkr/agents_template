@@ -19,3 +19,7 @@ find deploy scripts -type f -not -path '*/__pycache__/*' | sort | while read -r 
 done
 GI="$PROJECT/.gitignore"
 grep -qxF 'deploy/k8s/overlays/*/secrets.env' "$GI" 2>/dev/null || echo 'deploy/k8s/overlays/*/secrets.env' >> "$GI"
+# Keep pipeline state and agent config out of any build context rooted at the repo (they change every
+# wave, which would otherwise make every root-context image "-dirty" and bake agent notes into images).
+DI="$PROJECT/.dockerignore"
+for p in agent_state/ .claude/ docs/ '**/secrets.env'; do grep -qxF "$p" "$DI" 2>/dev/null || echo "$p" >> "$DI"; done

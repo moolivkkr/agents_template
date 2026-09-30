@@ -20,6 +20,7 @@ dependencies:
   runs_after: [e2e_orchestrator, mobile_test_agent, ui_test_agent]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
+  - "~/.claude/skills/testing/test-results-sidecar.md"
   - "~/.claude/skills/core/testing-principles.md"
   - "~/.claude/skills/core/change-impact-analysis.md"
   - "~/.claude/skills/testing/targeted-testing.md"
@@ -105,6 +106,7 @@ By component: [if available]
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/testing/test-results-sidecar.md`
 - `~/.claude/skills/core/testing-principles.md`
 - `~/.claude/skills/core/change-impact-analysis.md`
 - `~/.claude/skills/testing/targeted-testing.md`

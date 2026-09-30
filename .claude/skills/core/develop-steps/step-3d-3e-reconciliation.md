@@ -49,25 +49,13 @@ If specs contain TC-* IDs (pattern `TC-[A-Z0-9]+-\d+`):
 6. **GATE DECISION:** missing HIGH or MEDIUM TC-* IDs = HARD BLOCK
 
 ```bash
-# Quick TC-* inventory check (runs before behavior-level reconciliation)
-SPEC_DIR="docs/design/phases/${PHASE}/specs"
-SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
-SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
-
-if [ "$SPEC_COUNT" -gt 0 ]; then
-  IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
-    --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
-  IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
-  MISSING_COUNT=$(comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS") | grep -c 'TC-' 2>/dev/null || echo 0)
-  COVERAGE_PCT=$(( IMPL_COUNT * 100 / SPEC_COUNT ))
-
-  echo "TC-* Inventory: ${IMPL_COUNT}/${SPEC_COUNT} implemented (${COVERAGE_PCT}%)"
-  if [ "$MISSING_COUNT" -gt 0 ]; then
-    echo "  MISSING: $MISSING_COUNT TC-* IDs not implemented"
-    comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS") | head -20
-    echo "  Route to Wave 5 feedback loop for remediation"
-  fi
-fi
+# Deterministic TC inventory — names of tests that ran and passed, not grep (board review TEST-02):
+python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" \
+  --results "agent_state/phases/${PHASE}/reports/test_results.json" \
+  --diff-base "$(cat agent_state/phases/${PHASE}/base_sha 2>/dev/null || git rev-parse HEAD~20)" \
+  --out "agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"
+# exit 1 = a HIGH/MEDIUM ID is missing/failing, an ID is defined by two phases, a range annotation,
+# or unacknowledged test weakening — each listed in the JSON. The gate reads this file.
 ```
 
 Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md` + `agent_state/reconciliation/phase-N/test_case_inventory.md`

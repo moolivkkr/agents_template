@@ -41,16 +41,37 @@ new_phase() {
   local d="$FIXROOT/$1"; mkdir -p "$d/agent_state/phases/1/reports"; ( cd "$d" && git init -q 2>/dev/null ); echo "$d"
 }
 
-# --- 1. Clean, complete gate → PASS (exit 0) ---
-D=$(new_phase clean)
-cat > "$D/agent_state/phases/1/roster.json" <<'J'
-{"phase":1,"required":["backend_developer","code_reviewer_I","code_reviewer_II","security_reviewer","code_quality_verifier"]}
-J
-for a in backend_developer code_reviewer_I code_reviewer_II security_reviewer code_quality_verifier; do
-  echo "{\"agent\":\"$a\",\"phase\":1,\"status\":\"completed\",\"report\":\"reports/$a.md\",\"ts\":\"t\"}" >> "$D/agent_state/phases/1/execution.jsonl"
-  printf 'Report for %s\ntotal: 5\nBLOCKING: 0\n' "$a" > "$D/agent_state/phases/1/reports/$a.md"
-done
-echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+
+# Board review 2026-09-30: evidence helpers. sidecar <file> <verdict> <total> <failed> [extra-json-fields]
+sidecar() { printf '{"schema":"sdlc.test-results/v1","tier":"t","verdict":"%s","total":%s,"passed":%s,"failed":%s,"flaky":0%s}\n' "$2" "$3" "$(( $3 - $4 ))" "$4" "${5:-}" > "$1"; }
+code_sha() { git -C "$1" log -1 --format=%H -- . ':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude' ':(exclude)deploy/k8s/overlays'; }
+commit_code() {  # commit_code <fixture> <file> <content>
+  mkdir -p "$(dirname "$1/$2")"; printf '%s\n' "$3" > "$1/$2"
+  git -C "$1" add "$2" && git -C "$1" -c user.email=t@t -c user.name=t commit -qm "code $2"
+}
+# A complete implementation phase: implementer, review floor, verification floor, fresh sidecars.
+full_phase() {  # full_phase <fixture> [extra roster agents...]
+  local d="$1" p="$1/agent_state/phases/1" sha; shift
+  commit_code "$d" src/app.go "package app"
+  sha="$(code_sha "$d")"
+  local agents=(backend_developer code_reviewer_I code_reviewer_II security_reviewer code_quality_verifier test_runner spec_test_reconciler acceptance_test_agent "$@")
+  printf '{"phase":1,"required":[%s]}\n' "$(printf '"%s",' "${agents[@]}" | sed 's/,$//')" > "$p/roster.json"
+  : > "$p/execution.jsonl"
+  for a in "${agents[@]}"; do
+    case "$a" in
+      backend_developer) echo "{\"agent\":\"$a\",\"phase\":1,\"status\":\"completed\",\"report\":null,\"ts\":\"t\"}" >> "$p/execution.jsonl" ;;
+      test_runner|spec_test_reconciler|acceptance_test_agent|deploy_dev|deploy_qa|unit_test_agent|e2e_orchestrator)
+        echo "{\"agent\":\"$a\",\"phase\":1,\"status\":\"completed\",\"report\":\"reports/$a.md\",\"ts\":\"t\"}" >> "$p/execution.jsonl"
+        echo "results for $a" > "$p/reports/$a.md"
+        sidecar "$p/reports/$a.json" PASS 10 0 ",\"code_sha\":\"$sha\",\"dirty\":false" ;;
+      *) echo "{\"agent\":\"$a\",\"phase\":1,\"status\":\"completed\",\"report\":\"reports/$a.md\",\"ts\":\"t\"}" >> "$p/execution.jsonl"
+         printf 'Review for %s\nBLOCKING:0 WARNING:0 INFO:0\n' "$a" > "$p/reports/$a.md" ;;
+    esac
+  done
+  echo '{"gate":{"passed":true}}' > "$p/manifest.json"
+}
+# --- 1. Clean, complete gate (implementer + review floor + verification floor, fresh evidence) → PASS ---
+D=$(new_phase clean); full_phase "$D"
 LAST_OUT="$(run_hook "$D" 1)"; check "clean complete gate PASSes" 0 "$?"
 
 # --- 2. Missing required agent (security_reviewer never completed) → BLOCK naming it (T-004 core) ---
@@ -104,11 +125,23 @@ D=$(new_phase forced_ok)
 cat > "$D/agent_state/phases/1/roster.json" <<'J'
 {"phase":1,"required":["security_reviewer"]}
 J
-echo '{"agent":"security_reviewer","phase":1,"status":"completed","report":"reports/security_review.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
-printf 'Findings\nBLOCKING: accepted risk\n' > "$D/agent_state/phases/1/reports/security_review.md"
+echo '{"agent":"code_reviewer_I","phase":1,"status":"completed","report":"reports/cr1.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+sed -i.bak 's/security_reviewer/code_reviewer_I/' "$D/agent_state/phases/1/roster.json"
+printf 'Findings\nBLOCKING: accepted style risk\n' > "$D/agent_state/phases/1/reports/cr1.md"
 echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
-echo '{"phase":1,"blockers":[{"gate_item":"security_review","details":"x"}],"user_rationale":"accepted, tracked"}' > "$D/agent_state/phases/1/gate.forced"
+echo '{"phase":1,"blockers":[{"gate_item":"code_review","details":"x"}],"user_rationale":"accepted, tracked"}' > "$D/agent_state/phases/1/gate.forced"
 LAST_OUT="$(run_hook "$D" 1)"; check "valid gate.forced → FORCED PASS" 0 "$?" "FORCED PASS"
+
+# --- 7b/7c. A security finding needs a per-finding acknowledgement to be forced (SEC-01) ---
+D=$(new_phase forced_security)
+echo '{"phase":1,"required":["security_reviewer"]}' > "$D/agent_state/phases/1/roster.json"
+echo '{"agent":"security_reviewer","phase":1,"status":"completed","report":"reports/security_review.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+printf 'Findings\nBLOCKING: IDOR in GET /orders/:id\n' > "$D/agent_state/phases/1/reports/security_review.md"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+echo '{"phase":1,"blockers":[{"gate_item":"security_review"}],"user_rationale":"ship it"}' > "$D/agent_state/phases/1/gate.forced"
+LAST_OUT="$(run_hook "$D" 1)"; check "blanket gate.forced cannot override a security finding" 2 "$?" "security finding"
+echo '{"phase":1,"blockers":[{"gate_item":"security_review"}],"user_rationale":"ship it","security_acknowledged":[{"finding":"IDOR in GET /orders/:id","approved_by":"owner","reason":"endpoint disabled by flag until fix"}]}' > "$D/agent_state/phases/1/gate.forced"
+LAST_OUT="$(run_hook "$D" 1)"; check "security finding forced only with a per-finding acknowledgement" 0 "$?" "FORCED PASS"
 
 # --- 8. gate.forced must NOT override a structurally incomplete roster → still BLOCK ---
 D=$(new_phase forced_incomplete)
@@ -149,7 +182,7 @@ cat > "$D/agent_state/phases/1/roster.json" <<'J'
 J
 echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":"reports/unit_tests.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
 echo 'unit test report' > "$D/agent_state/phases/1/reports/unit_tests.md"
-echo '{"agent":"unit_test_agent","blocking":0,"findings":[],"total":42,"passed":42,"failed":0}' > "$D/agent_state/phases/1/reports/unit_tests.json"
+sidecar "$D/agent_state/phases/1/reports/unit_tests.json" PASS 42 0
 echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 LAST_OUT="$(run_hook "$D" 1)"; check "JSON sidecar clean+tests-pass PASSes" 0 "$?"
 
@@ -160,16 +193,16 @@ cat > "$D/agent_state/phases/1/roster.json" <<'J'
 J
 echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":"reports/unit_tests.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
 echo 'unit test report' > "$D/agent_state/phases/1/reports/unit_tests.md"
-echo '{"agent":"unit_test_agent","total":42,"passed":40,"failed":2}' > "$D/agent_state/phases/1/reports/unit_tests.json"
+sidecar "$D/agent_state/phases/1/reports/unit_tests.json" FAIL 42 2
 echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 LAST_OUT="$(run_hook "$D" 1)"; check "JSON sidecar failed>0 BLOCKs" 2 "$?" "failed=2"
 
 # --- 13. Execution-grounded (e): failing test command → BLOCK (explicit phase, config present) ---
 D=$(new_phase exec_fail)
 cat > "$D/agent_state/phases/1/roster.json" <<'J'
-{"phase":1,"required":["unit_test_agent"]}
+{"phase":1,"required":["documentation_agent"]}
 J
-echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo '{"agent":"documentation_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
 echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 echo '{"test":"exit 1"}' > "$D/sdlc-verify.json"
 LAST_OUT="$(run_hook "$D" 1)"; check "exec-grounded failing test BLOCKs" 2 "$?" "test FAILED"
@@ -177,9 +210,9 @@ LAST_OUT="$(run_hook "$D" 1)"; check "exec-grounded failing test BLOCKs" 2 "$?" 
 # --- 14. Execution-grounded (e): passing test command → PASS ---
 D=$(new_phase exec_pass)
 cat > "$D/agent_state/phases/1/roster.json" <<'J'
-{"phase":1,"required":["unit_test_agent"]}
+{"phase":1,"required":["documentation_agent"]}
 J
-echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo '{"agent":"documentation_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
 echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 echo '{"test":"true","lint":"true"}' > "$D/sdlc-verify.json"
 LAST_OUT="$(run_hook "$D" 1)"; check "exec-grounded passing test PASSes" 0 "$?"
@@ -187,9 +220,9 @@ LAST_OUT="$(run_hook "$D" 1)"; check "exec-grounded passing test PASSes" 0 "$?"
 # --- 15. Execution-grounded honors VERIFY_GATE_SKIP_EXEC=1 (failing cmd skipped) → PASS ---
 D=$(new_phase exec_skip)
 cat > "$D/agent_state/phases/1/roster.json" <<'J'
-{"phase":1,"required":["unit_test_agent"]}
+{"phase":1,"required":["documentation_agent"]}
 J
-echo '{"agent":"unit_test_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+echo '{"agent":"documentation_agent","phase":1,"status":"completed","report":null,"ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
 echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 echo '{"test":"exit 1"}' > "$D/sdlc-verify.json"
 LAST_OUT="$(VERIFY_GATE_SKIP_EXEC=1 run_hook "$D" 1)"; check "exec-grounded skip env honored" 0 "$?"
@@ -221,7 +254,7 @@ printf '| Copyleft (BLOCKING) | 0 |\nAll findings are non-blocking.\n' > "$D/age
 LAST_OUT="$(run_hook "$D" 1)"; check "zero-count BLOCKING table row + non-blocking prose PASSes (no count line)" 0 "$?"
 D=$(new_phase total_zero); one_agent "$D" unit_test_agent '"reports/unit_tests.md"'
 printf '# Unit tests\nTotal: 0 | Passed: 0 | Failed: 0\n' > "$D/agent_state/phases/1/reports/unit_tests.md"
-LAST_OUT="$(run_hook "$D" 1)"; check "a real 'Total: 0' results line still BLOCKs" 2 "$?" "stub"
+LAST_OUT="$(run_hook "$D" 1)"; check "a markdown-only test report ('Total: 0') BLOCKs — no sidecar" 2 "$?" "sidecar"
 # B2: legacy "null" string and directory reports
 D=$(new_phase null_string); one_agent "$D" documentation_agent '"null"'
 LAST_OUT="$(run_hook "$D" 1)"; check "report \"null\" string treated as no report → PASS" 0 "$?"
@@ -236,6 +269,54 @@ D=$(new_phase sweep_file); touch "$D/agent_state/phases/1/gate.passed"
 LAST_OUT="$(run_hook "$D")"; check "Stop sweep verifies a claimed gate.passed file (no contract → BLOCK)" 2 "$?"
 D=$(new_phase sweep_quiet)
 LAST_OUT="$(run_hook "$D")"; check "Stop sweep stays silent when nothing is claimed" 0 "$?"
+
+
+# --- Board review 2026-09-30: the gate must see test failures and stale evidence ---
+# TEST-01 reproduction: markdown-only e2e/acceptance reports saying FAIL / BLOCKED used to PASS.
+D=$(new_phase md_fail); one_agent "$D" e2e_orchestrator '"reports/e2e_results.md"'
+printf '# E2E\n| Workflow | Result |\n|---|---|\n| checkout | FAIL |\n' > "$D/agent_state/phases/1/reports/e2e_results.md"
+LAST_OUT="$(run_hook "$D" 1)"; check "markdown-only e2e report with FAIL BLOCKs (no sidecar)" 2 "$?" "sidecar"
+D=$(new_phase md_blocked); one_agent "$D" acceptance_test_agent '"reports/acceptance_report.md"'
+printf '# Acceptance\nVerdict: BLOCKED / UNTESTED\n' > "$D/agent_state/phases/1/reports/acceptance_report.md"
+LAST_OUT="$(run_hook "$D" 1)"; check "markdown-only acceptance BLOCKED/UNTESTED BLOCKs" 2 "$?" "sidecar"
+# per-case verdicts: a HIGH case UNTESTED blocks even when failed=0
+D=$(new_phase case_untested); one_agent "$D" acceptance_test_agent '"reports/acceptance.md"'; echo x > "$D/agent_state/phases/1/reports/acceptance.md"
+sidecar "$D/agent_state/phases/1/reports/acceptance.json" PASS 8 0 ',"cases":[{"name":"UC-3 admin exports","priority":"HIGH","verdict":"UNTESTED"}]'
+LAST_OUT="$(run_hook "$D" 1)"; check "HIGH acceptance case UNTESTED BLOCKs" 2 "$?" "UC-3 admin exports=UNTESTED"
+D=$(new_phase flaky); one_agent "$D" e2e_orchestrator '"reports/e2e.md"'; echo x > "$D/agent_state/phases/1/reports/e2e.md"
+printf '{"schema":"sdlc.test-results/v1","verdict":"PASS","total":5,"passed":5,"failed":0,"flaky":1}\n' > "$D/agent_state/phases/1/reports/e2e.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "flaky>0 BLOCKs (pass on retry is a failure)" 2 "$?" "flaky=1"
+D=$(new_phase quarantine); one_agent "$D" unit_test_agent '"reports/unit.md"'; echo x > "$D/agent_state/phases/1/reports/unit.md"
+sidecar "$D/agent_state/phases/1/reports/unit.json" PASS 5 0 ',"quarantined":[{"name":"TestX","issue":"#9","expires":"2000-01-01"}]'
+LAST_OUT="$(run_hook "$D" 1)"; check "expired quarantine BLOCKs" 2 "$?" "quarantined"
+D=$(new_phase verdict_error); one_agent "$D" unit_test_agent '"reports/unit.md"'; echo x > "$D/agent_state/phases/1/reports/unit.md"
+sidecar "$D/agent_state/phases/1/reports/unit.json" ERROR 5 0
+LAST_OUT="$(run_hook "$D" 1)"; check "verdict ERROR (runner crashed) BLOCKs" 2 "$?" "verdict is ERROR"
+D=$(new_phase null_report_test); one_agent "$D" unit_test_agent 'null'
+LAST_OUT="$(run_hook "$D" 1)"; check "test agent completed with no report BLOCKs" 2 "$?" "without logging a report"
+# floor: verification agents are mandatory for implementation phases, and can't be forced past
+D=$(new_phase floor_verify); full_phase "$D"
+sed -i.bak 's/"test_runner",//' "$D/agent_state/phases/1/roster.json"
+echo '{"phase":1,"blockers":[{"x":1}],"user_rationale":"skip tests"}' > "$D/agent_state/phases/1/gate.forced"
+LAST_OUT="$(run_hook "$D" 1)"; check "implementation phase without test_runner BLOCKs on FLOOR (not forceable)" 2 "$?" "'test_runner'"
+D=$(new_phase floor_acc_na); full_phase "$D"
+sed -i.bak 's/,"acceptance_test_agent"//' "$D/agent_state/phases/1/roster.json"
+echo '{"gate":{"passed":true},"acceptance":{"not_applicable":true,"reason":"internal refactor phase with no FR in scope"}}' > "$D/agent_state/phases/1/manifest.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "acceptance may be dropped only with a recorded reason" 0 "$?" "acceptance not applicable"
+D=$(new_phase floor_k8s); full_phase "$D"; mkdir -p "$D/deploy/k8s"; echo "APP=x" > "$D/deploy/k8s/app.env"
+git -C "$D" add deploy && git -C "$D" -c user.email=t@t -c user.name=t commit -qm k8s
+LAST_OUT="$(run_hook "$D" 1)"; check "k8s project without deploy_dev/deploy_qa BLOCKs on FLOOR" 2 "$?" "'deploy_qa'"
+D=$(new_phase k8s_ok); mkdir -p "$D/deploy/k8s"; echo "APP=x" > "$D/deploy/k8s/app.env"
+git -C "$D" add deploy && git -C "$D" -c user.email=t@t -c user.name=t commit -qm k8s; full_phase "$D" deploy_dev deploy_qa
+LAST_OUT="$(run_hook "$D" 1)"; check "k8s project with fresh deploy_dev/deploy_qa evidence PASSes" 0 "$?"
+# freshness: evidence must describe the committed code being gated
+D=$(new_phase stale); full_phase "$D"; commit_code "$D" src/fix.go "package app // fix after tests"
+LAST_OUT="$(run_hook "$D" 1)"; check "evidence from before the last code commit BLOCKs as STALE" 2 "$?" "STALE"
+D=$(new_phase dirty); full_phase "$D"; echo "// wip" >> "$D/src/app.go"
+LAST_OUT="$(run_hook "$D" 1)"; check "uncommitted code at gate time BLOCKs" 2 "$?" "uncommitted code"
+D=$(new_phase docs_after); full_phase "$D"; mkdir -p "$D/docs"; echo notes > "$D/docs/n.md"
+git -C "$D" add docs && git -C "$D" -c user.email=t@t -c user.name=t commit -qm docs
+LAST_OUT="$(run_hook "$D" 1)"; check "a docs-only commit after testing does not make evidence stale" 0 "$?"
 
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"

@@ -53,7 +53,9 @@ esac
 
 - **Evidence (written by the script, not by prose):** `agent_state/deploy/<env>/history.jsonl`,
   `agent_state/deploy/last-deploy-status.json` (read by `/accept` and `/status`), and with `--phase=N`
-  `agent_state/phases/N/reports/deploy_verification.json` for the phase gate.
+  `agent_state/phases/N/reports/deploy_<env>.{json,md}` plus a `deploy_<env>` line in that phase's
+  `execution.jsonl`. On k8s projects the gate requires both `deploy_dev` and `deploy_qa`, bound to the
+  current code commit.
 - **Reset** (approved, no prompt): `scripts/k8s/env-reset.sh <env>` wipes workloads and volumes, keeps
   the namespace, redeploys (dev: same digests; qa: re-promote) and re-seeds.
 - **Rollback:** `scripts/k8s/deploy.sh <env> --rollback` (newest earlier HEALTHY digests; schema is

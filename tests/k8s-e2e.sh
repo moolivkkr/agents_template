@@ -40,9 +40,11 @@ done
 PHASE=1 bash scripts/k8s/deploy.sh dev >/dev/null 2>"$L/dev1.log" && ok "deploy.sh dev exit 0" || { bad "deploy.sh dev: $(tail -5 "$L/dev1.log")"; }
 [ "$(last dev 'e["verdict"]')" = HEALTHY ] && ok "dev verdict HEALTHY" || bad "dev verdict $(last dev 'e["verdict"]')"
 [ "$(items dev)" = "alpha,beta,gamma" ] && ok "dev serves seeded items via ingress" || bad "dev items: '$(items dev)'"
-V=agent_state/phases/1/reports/deploy_verification.json
-python3 -c "import json; d=json.load(open('$V')); assert d['verdict']=='PASS' and d['failed']==0 and d['total']>0" 2>/dev/null \
-  && ok "phase sidecar deploy_verification.json PASS" || bad "phase sidecar missing or not PASS"
+V=agent_state/phases/1/reports/deploy_dev.json
+python3 -c "import json; d=json.load(open('$V')); assert d['schema']=='sdlc.test-results/v1' and d['verdict']=='PASS' and d['failed']==0 and d['total']>0 and len(d['code_sha'])==40 and not d['dirty']" 2>/dev/null \
+  && ok "gate evidence deploy_dev.json: v1 schema, PASS, bound to the code commit" || bad "deploy_dev.json missing or not a clean PASS"
+grep -q '"agent": "deploy_dev".*"status": "completed"' agent_state/phases/1/execution.jsonl \
+  && ok "deploy logged itself to the phase's execution.jsonl (the gate reads it)" || bad "no deploy_dev line in execution.jsonl"
 DEV1="$(last dev 'e["images"]["api"]')"
 
 echo "== 2 promote to qa"

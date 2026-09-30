@@ -42,6 +42,7 @@ dependencies:
   runs_after: [ui_audit_agent]
   downstream: [e2e_orchestrator, test_runner, ui_code_optimizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
+  - "~/.claude/skills/testing/test-results-sidecar.md"
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{UI_FRAMEWORK}}.md"
   - "~/.claude/skills/core/testing-principles.md"
@@ -359,6 +360,7 @@ On completion, write `agent_state/phases/{{PHASE}}/ui_test_agent/manifest.json`:
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/testing/test-results-sidecar.md`
 - `~/.claude/skills/languages/{{LANG}}.md`
 - `~/.claude/skills/frameworks/{{UI_FRAMEWORK}}.md`
 - `~/.claude/skills/core/testing-principles.md`
