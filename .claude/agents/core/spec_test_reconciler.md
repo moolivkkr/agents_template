@@ -46,7 +46,7 @@ Scan ALL spec documents in `docs/design/phases/${PHASE}/specs/` for TC-* IDs:
 
 ```bash
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
-SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
+SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
 SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 ```
 
@@ -60,8 +60,8 @@ Scan ALL test files for TC-* ID annotations:
 
 ```bash
 # Adapt paths per project — search all test directories
-IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
-  --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
+  --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
 IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 ```
 
@@ -79,7 +79,7 @@ COVERAGE_PCT=$(( COVERED_COUNT * 100 / SPEC_COUNT ))
 ### 0d: Per-Category Breakdown
 
 ```bash
-for CATEGORY in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z]+' | sort -u); do
+for CATEGORY in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z0-9]+' | sort -u); do
   CAT_SPEC=$(echo "$SPEC_IDS" | grep "TC-${CATEGORY}-" | wc -l)
   CAT_IMPL=$(echo "$IMPL_IDS" | grep "TC-${CATEGORY}-" | wc -l)
   CAT_MISSING=$(comm -23 \

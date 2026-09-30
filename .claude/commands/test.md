@@ -158,7 +158,7 @@ Runs the TC-* ID inventory reconciliation without running any tests. Useful for 
 
 ```bash
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
-SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
+SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
 SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 
 if [ "$SPEC_COUNT" -eq 0 ]; then
@@ -166,8 +166,8 @@ if [ "$SPEC_COUNT" -eq 0 ]; then
   exit 0
 fi
 
-IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
-  --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
+  --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
 IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 MISSING=$(comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS"))
 MISSING_COUNT=$(echo "$MISSING" | grep -c 'TC-' 2>/dev/null || echo 0)
@@ -189,7 +189,7 @@ fi
 # Per-category breakdown
 echo ""
 echo "  Per-Category:"
-for CAT in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z]+' | sort -u); do
+for CAT in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z0-9]+' | sort -u); do
   CAT_SPEC=$(echo "$SPEC_IDS" | grep -c "TC-${CAT}-")
   CAT_IMPL=$(echo "$IMPL_IDS" | grep -c "TC-${CAT}-" 2>/dev/null || echo 0)
   CAT_PCT=$(( CAT_IMPL * 100 / CAT_SPEC ))

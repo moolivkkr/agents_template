@@ -153,6 +153,10 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - no web UI: use e2e_orchestrator (not ui_test_agent); DROP ui_developer/ui_test_agent/design_quality_reviewer.
 #  - web UI: ADD ui_developer, ui_test_agent, accessibility_auditor (WCAG-AA against the built UI),
 #    and design_quality_reviewer if used, to the array.
+#  - React Native mobile app (agent_registry.json tech_profile.mobile.enabled = true) and the phase
+#    touches mobile screens: ADD mobile_test_agent, mobile_e2e_orchestrator, mobile_platform_auditor.
+#    All three are required whenever a mobile screen changed: device flows on BOTH iOS and Android are
+#    the only proof a native app works. (Web e2e_orchestrator never covers native screens.)
 #  - touches auth/PII/trust-boundary: ADD threat_model_agent (design-time STRIDE; usually run in /plan
 #    but list it here if the phase itself introduces the security-relevant surface).
 #  - adds/changes a service with an NFR-PERF-*/availability target: ADD reliability_agent.
@@ -163,7 +167,7 @@ mkdir -p "agent_state/phases/${PHASE}"
 #    prev-failure / --candidates=N): ADD solution_selector. It is a REQUIRED agent whenever N>=2, so
 #    its completed line + candidate_selection.md report are proven by the Wave-6 roster check. When
 #    N==1 (single implementation), OMIT it (record candidate_selection:skipped in the manifest).
-REQUIRED='["backend_audit_agent","backend_developer","api_developer","unit_test_agent","integration_test_agent","e2e_orchestrator","code_reviewer_I","code_reviewer_II","security_reviewer","dependency_scanner","code_quality_verifier","spec_impl_reconciler","spec_test_reconciler","acceptance_test_agent","tenant_isolation_verifier"]'
+REQUIRED='["backend_audit_agent","backend_developer","api_developer","unit_test_agent","integration_test_agent","e2e_orchestrator","test_runner","code_reviewer_I","code_reviewer_II","security_reviewer","dependency_scanner","code_quality_verifier","spec_impl_reconciler","spec_test_reconciler","acceptance_test_agent","tenant_isolation_verifier"]'
 python3 - "$REQUIRED" "${PHASE}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "agent_state/phases/${PHASE}/roster.json" << 'PY'
 import json, sys
 required = json.loads(sys.argv[1])
@@ -269,16 +273,34 @@ records `candidate_selection: skipped (class=${CLASS}, no trigger)`.
 
 ### Wave 2A — Single Implementation (default)
 
-Spawn implementation agent(s):
+Spawn the generated implementation agents **by role name** (`subagent_type` = the role; the generated
+file in `.claude/agents/generated/` carries that `name:`), so each loads its own skill packs. Their
+hard `upstream` dependencies force this order: each step consumes the previous step's output.
 
 ```
-Agent prompt: "You are running Wave 2 (Implementation) for Phase ${PHASE}.
-Read: phase specs in docs/design/phases/${PHASE}/specs/
-Read: IMPLEMENTATION_GUIDELINES.md for coding conventions
+Wave 2A (sequenced — each step waits for the previous; skip a step whose agent is not in the roster):
+  2A.1  database_agent     → docs/design/database.md            (schema design)
+  2A.2  migration_agent    → migrations/                        (needs 2A.1's schema)
+  2A.3  backend_developer  → impl/backend_progress.md           (services/repositories on the schema)
+  2A.4  api_developer      → impl/api_progress.md + specs/api-contracts.md   (handlers + the contract every UI/mobile test mocks from)
+  2A.5  ui_developer       → impl/ui_progress.md                (needs 2A.4's api-contracts.md)
+```
+
+Each spawn prompt (prepend the GROUND TRUTH line):
+```
+Agent prompt (subagent_type: <role>): "[GROUND TRUTH] You are <role> running Wave 2 step 2A.<n> for Phase ${PHASE}.
+Read: phase specs in docs/design/phases/${PHASE}/specs/ and IMPLEMENTATION_GUIDELINES.md.
+Read the outputs of the earlier 2A steps listed above.
 HARDENING RULES: interfaces not concrete types, repository pattern, wired metrics,
 literal Unicode, table-driven Go tests, document spec deviations.
-Implement all components. Commit after each logical unit."
+Implement your layer. Commit after each logical unit. Log your completion line to execution.jsonl."
 ```
+
+> **Mobile app code:** there is no generated mobile implementation agent yet. If the phase changes
+> React Native screens, implement them in step 2A.5 with a general agent that reads
+> `~/.claude/skills/frameworks/react-native.md` and gives every interactive element a `testID` per
+> the testID contract in `~/.claude/skills/testing/mobile-testing-strategy.md` §4. The mobile Wave
+> 3/4 agents still run in full.
 
 ### Wave 2B — Candidate Selection (conditional — hard phases only)
 
@@ -363,10 +385,24 @@ fi
 
 **CRITICAL: Spawn SEPARATE agents for each test tier.** A single agent cannot reliably write unit + integration + E2E tests — it exhausts context on the first tier and silently drops the rest. This was proven in dlp_composer where a single test agent produced unit tests but ZERO integration, ZERO E2E, ZERO component tests.
 
-### Wave 3a — Unit Tests
+**Spawn each tier by ROLE name** (`subagent_type: <role>`). The generated agents in
+`.claude/agents/generated/` carry the bare role as their `name:`, so the spawn loads that agent's own
+skill packs (the stack's test framework, mock tool, Playwright/Maestro, traceability). A generic
+"write tests" prompt loads none of them. Prepend the GROUND TRUTH line to every prompt.
+
+### Which tracks run
+
+| Project shape (from `agent_registry.json` tech_profile) | Tracks |
+|---|---|
+| Backend only / CLI / library | 3a, 3b, 3c-pipeline, then 3v |
+| Web UI (`frontend.enabled`) | 3a, 3b, 3c-web (`ui_test_agent` + `e2e_orchestrator`), then 3v |
+| React Native mobile (`mobile.enabled`) and the phase touched mobile screens | add 3d (`mobile_test_agent` → `mobile_e2e_orchestrator`) |
+| Web + mobile | all of the above |
+
+### Wave 3a — Unit Tests  (`subagent_type: unit_test_agent`)
 
 ```
-Agent prompt: "You are running Wave 3a (Unit Tests) for Phase ${PHASE}.
+Agent prompt: "[GROUND TRUTH] You are unit_test_agent running Wave 3a (Unit Tests) for Phase ${PHASE}.
 Read docs/design/phases/${PHASE}/phase_context.md for context.
 Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: unit.
 Write unit tests for ALL business logic. Annotate each test with its TC-* ID.
@@ -375,38 +411,41 @@ Self-check: verify all responsible TC-* IDs are covered before completing.
 Produce: agent_state/phases/${PHASE}/reports/unit_tests.md"
 ```
 
-### Wave 3b — Integration Tests
+### Wave 3b — Integration Tests  (`subagent_type: integration_test_agent`)
 
 ```
-Agent prompt: "You are running Wave 3b (Integration Tests) for Phase ${PHASE}.
+Agent prompt: "[GROUND TRUTH] You are integration_test_agent running Wave 3b (Integration Tests) for Phase ${PHASE}.
 Read docs/design/phases/${PHASE}/phase_context.md for context.
 Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: integration.
-Write integration tests against REAL database and cache.
-Test: repository CRUD, cache behavior, API contract shapes, cross-tenant IDOR.
+Write integration tests against REAL database and cache (Testcontainers where the stack runs them in Docker).
+Test: repository CRUD, cache behavior, API contract shapes (vs specs/api-contracts.md), cross-tenant IDOR.
 Self-check: verify all responsible TC-* IDs are covered before completing.
 Produce: agent_state/phases/${PHASE}/reports/integration_tests.md"
 ```
 
 ### Wave 3c — E2E Tests (project-type-aware)
 
-Determine E2E strategy from `docs/IMPLEMENTATION_GUIDELINES.md`:
+**Web UI — TWO separate agents** (component + browser tests were previously bundled into one
+e2e agent, so the component tier got dropped whenever the e2e work filled its context):
 
-**If project has a web UI (frontend.enabled = true):**
 ```
-Agent prompt: "You are running Wave 3c (E2E Tests — Browser) for Phase ${PHASE}.
-Read docs/design/phases/${PHASE}/phase_context.md for context.
-Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: e2e or tier: component.
-Write Playwright E2E tests for all in-scope user workflows.
-Write component tests for all implemented UI screens (4-state: loading/error/empty/data).
-Mock API responses must match data-contracts.md shapes exactly.
-Self-check: verify all responsible TC-* IDs are covered before completing.
-Produce: agent_state/phases/${PHASE}/reports/e2e_results.md
-         agent_state/phases/${PHASE}/reports/ui_test_results.md"
+Agent prompt (subagent_type: ui_test_agent): "[GROUND TRUTH] You are ui_test_agent running Wave 3c-web
+(UI tests) for Phase ${PHASE}. Read docs/design/phases/${PHASE}/specs/api-contracts.md FIRST.
+Write component tests for every implemented screen (4 states: loading/error/empty/data), API-mocked
+integration tests (mock shapes copied from api-contracts.md), responsive and a11y assertions, and the
+Playwright specs for each in-scope workflow. Annotate TC-UI-* / TC-E2E-* IDs.
+Produce: agent_state/phases/${PHASE}/reports/ui_test_results.md"
+
+Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave
+3c-web for Phase ${PHASE}, AFTER ui_test_agent. Run the browser E2E suite for every
+e2e_workflows_unlocked entry across all completed phase manifests (this phase + regression) against
+the full stack. Never invent scenarios. Produce: agent_state/phases/${PHASE}/reports/e2e_results.md"
 ```
 
-**If project is a CLI tool, library, or non-web application:**
+**CLI tool, library, or non-web backend — pipeline E2E:**
 ```
-Agent prompt: "You are running Wave 3c (E2E Tests — Pipeline/CLI) for Phase ${PHASE}.
+Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave
+3c-pipeline (E2E Tests — Pipeline/CLI) for Phase ${PHASE}.
 Read docs/design/phases/${PHASE}/phase_context.md for context.
 Read docs/design/phases/${PHASE}/specs/ for TC-* IDs assigned to tier: e2e.
 Write end-to-end pipeline tests that exercise the FULL product flow:
@@ -419,42 +458,101 @@ Self-check: verify all responsible TC-* IDs are covered before completing.
 Produce: agent_state/phases/${PHASE}/reports/e2e_results.md"
 ```
 
-**Spawn all 3 agents in PARALLEL** (they are independent). The E2E agent is `e2e_orchestrator`
-(web) — log its completion line with `AGENT_NAME=e2e_orchestrator` so it matches `roster.required`
-(non-web projects that add a `ui_test_agent` for browser tests still log e2e as `e2e_orchestrator`):
+### Wave 3d — Mobile (React Native, iOS + Android) — only when mobile screens changed
+
+Two agents in sequence: the writer, then the device runner. Full strategy:
+`~/.claude/skills/testing/mobile-testing-strategy.md`.
 
 ```
-Wave 3 (parallel):
-  ├─ Agent: unit_test_agent        → reports/unit_tests.md       (log AGENT_NAME=unit_test_agent)
-  ├─ Agent: integration_test_agent → reports/integration_tests.md (log AGENT_NAME=integration_test_agent)
-  └─ Agent: e2e_orchestrator       → reports/e2e_results.md       (log AGENT_NAME=e2e_orchestrator; + ui_test_results.md if web)
+Agent prompt (subagent_type: mobile_test_agent): "[GROUND TRUTH] You are mobile_test_agent running
+Wave 3d for Phase ${PHASE}. Read docs/design/phases/${PHASE}/specs/api-contracts.md FIRST, then the
+mobile TC-M* inventory in the specs and IMPLEMENTATION_GUIDELINES §Mobile.
+Write Jest + RNTL component tests (4 states per screen), MSW-mocked integration tests (shapes from
+api-contracts.md), device flows for every unlocked FR-* workflow and every applicable platform
+behaviour (permissions, deep links, lifecycle, offline, back, keyboard, text scale). Every flow must
+run on BOTH iOS and Android. Run the Node tiers.
+Produce: agent_state/phases/${PHASE}/reports/mobile_test_results.md + mobile_test_agent/manifest.json"
+
+Agent prompt (subagent_type: mobile_e2e_orchestrator): "[GROUND TRUTH] You are mobile_e2e_orchestrator
+running Wave 3d for Phase ${PHASE}, AFTER mobile_test_agent. Build release binaries for the iOS
+simulator and Android emulator, boot the device matrix, and run every flow in the mobile_test_agent
+manifest plus earlier phases' mobile flows (regression), per platform and per slot. Backend URL: the
+Wave 3.5 local deploy (Android uses 10.0.2.2). A platform you could not run is BLOCKED with a reason,
+never PASS. Produce: agent_state/phases/${PHASE}/reports/mobile_e2e_results.md + .json"
 ```
 
-### Wave 3 Verification (ALL THREE must pass)
+> Wave 3d's device run needs the backend up. If Wave 3.5 hasn't run yet, bring the backend up first
+> (the same compose command Wave 3.5 uses), or run `mobile_e2e_orchestrator` right after Wave 3.5.
+> Either order is fine; record which one you used in the Wave-3 checkpoint.
+
+### Parallelism and ordering
+
+```
+Wave 3 (parallel tracks; arrows are in-track ordering):
+  ├─ unit_test_agent                           → reports/unit_tests.md
+  ├─ integration_test_agent                    → reports/integration_tests.md
+  ├─ ui_test_agent → e2e_orchestrator          → reports/ui_test_results.md, reports/e2e_results.md   (web)
+  │   (or e2e_orchestrator alone)              → reports/e2e_results.md                              (non-web)
+  └─ mobile_test_agent → mobile_e2e_orchestrator → reports/mobile_test_results.md, reports/mobile_e2e_results.md (mobile)
+then
+  └─ Wave 3v: test_runner (independent re-run) → reports/test_results.md
+```
+
+Log each agent's completion line with `AGENT_NAME=<role>` exactly as it appears in `roster.required`.
+
+### Wave 3v — Independent verification  (`subagent_type: test_runner`)
+
+The writers ran their own suites, so their counts are self-graded. `test_runner` re-runs every Node
+tier the phase touched in a clean process and compares its numbers with each writer's report:
+
+```
+Agent prompt (subagent_type: test_runner): "[GROUND TRUTH] You are test_runner running Wave 3v for
+Phase ${PHASE}. Using the commands from IMPLEMENTATION_GUIDELINES, run unit, integration, web UI
+component and React Native Jest suites (whichever exist). Do NOT run device flows or browser E2E: their
+runners already produced evidence. Fill the Writer-vs-Independent table against reports/unit_tests.md,
+integration_tests.md, ui_test_results.md and mobile_test_results.md. Any mismatch is BLOCKING.
+Produce: agent_state/phases/${PHASE}/reports/test_results.md + test_results.json"
+```
+
+### Wave 3 Verification (every scheduled track must pass)
 
 ```bash
-# All three report files must exist
-test -f agent_state/phases/${PHASE}/reports/unit_tests.md || echo "⛔ BLOCKED: unit tests missing"
-test -f agent_state/phases/${PHASE}/reports/integration_tests.md || echo "⛔ BLOCKED: integration tests missing"
-test -f agent_state/phases/${PHASE}/reports/e2e_results.md || echo "⛔ BLOCKED: e2e tests missing"
+R="agent_state/phases/${PHASE}/reports"
+in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
 
-# Content validation — reports must contain actual test results, not just headers
-for REPORT in unit_tests.md integration_tests.md e2e_results.md; do
-  FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
-  if [ -f "$FILE" ]; then
-    # Check for test count indicators (passed, failed, total, PASS, FAIL)
-    if ! grep -qiP '(pass|fail|total|test.*\d+|\d+\s*(pass|fail|test))' "$FILE"; then
-      echo "⛔ BLOCKED: ${REPORT} exists but contains no test results — likely a stub"
-    fi
-    # Check for zero-test reports
-    if grep -qiP '(total.*:\s*0|0\s+tests?\s+run|no tests|SKIPPED|not applicable)' "$FILE"; then
-      echo "⚠ WARNING: ${REPORT} reports zero tests — verify this is correct for the project type"
-    fi
+# Reports required for this phase = base tiers + one per conditional agent in the roster
+REQ="unit_tests.md integration_tests.md e2e_results.md test_results.md"
+in_roster ui_test_agent           && REQ="$REQ ui_test_results.md"
+in_roster mobile_test_agent       && REQ="$REQ mobile_test_results.md"
+in_roster mobile_e2e_orchestrator && REQ="$REQ mobile_e2e_results.md"
+
+for REPORT in $REQ; do
+  FILE="$R/${REPORT}"
+  if [ ! -f "$FILE" ]; then echo "⛔ BLOCKED: ${REPORT} missing — its agent did not run"; continue; fi
+  # Content validation — reports must contain actual test results, not just headers
+  if ! grep -qiP '(pass|fail|total|test.*\d+|\d+\s*(pass|fail|test))' "$FILE"; then
+    echo "⛔ BLOCKED: ${REPORT} exists but contains no test results — likely a stub"
+  fi
+  if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+run|no tests)' "$FILE"; then
+    echo "⚠ WARNING: ${REPORT} reports zero tests — verify this is correct for the project type"
   fi
 done
+
+# Independent re-run must agree with the writers
+jq -e '.blocking == 0' "$R/test_results.json" >/dev/null 2>&1 \
+  || echo "⛔ BLOCKED: test_runner found writer-vs-independent count discrepancies (see test_results.md)"
+
+# Mobile: both platforms must have actually run (BLOCKED platforms need a recorded decision to proceed)
+if in_roster mobile_e2e_orchestrator; then
+  for P in ios android; do
+    jq -e --arg p "$P" '.platforms[$p].blocked == false and (.platforms[$p].passed + .platforms[$p].failed) > 0' \
+      "$R/mobile_e2e_results.json" >/dev/null 2>&1 \
+      || echo "⛔ BLOCKED: mobile ${P} device tier did not run (see mobile_e2e_results.md)"
+  done
+fi
 ```
 
-**Auto-checkpoint:** Write `checkpoints/wave-3.json` with `tests_passing: true|false`, `artifacts_produced: ["reports/unit_tests.md", "reports/integration_tests.md", "reports/e2e_results.md"]`.
+**Auto-checkpoint:** Write `checkpoints/wave-3.json` with `tests_passing: true|false` and `artifacts_produced: [<every report in $REQ>]`.
 
 ### Test Failure Recovery Guardrails
 

@@ -19,6 +19,10 @@ output:
   primary: "{{SOURCE_ROOT}}/{{API_COMPONENT}}/"
   artifacts:
     - agent_state/phases/{{PHASE}}/impl/api_progress.md
+    - path: docs/design/phases/{{PHASE}}/specs/api-contracts.md
+      description: "As-built response shapes per route, derived from data-contracts.md. Every UI, mobile and integration test mocks from this file."
+    - path: agent_state/phases/{{PHASE}}/api_developer/manifest.json
+      description: "Implemented routes. step-2-5 API contract validation checks each has an api-contracts.md entry."
 quality_gates:
   all_routes_implemented: true
   openapi_spec_matches: true
@@ -26,7 +30,7 @@ quality_gates:
 dependencies:
   upstream: [architecture_orchestrator, project_planner]
   runs_after: [backend_audit_agent, codebase_mapper]
-  downstream: [breaking_change_reviewer, code_optimizer, code_quality_verifier, code_reviewer_I, code_reviewer_II, documentation_agent, integration_test_agent, observability_agent, performance_agent, security_reviewer, solution_selector, spec_impl_reconciler, tenant_isolation_verifier, ui_developer, unit_test_agent]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [breaking_change_reviewer, code_optimizer, code_quality_verifier, code_reviewer_I, code_reviewer_II, documentation_agent, integration_test_agent, mobile_test_agent, observability_agent, performance_agent, security_reviewer, solution_selector, spec_impl_reconciler, tenant_isolation_verifier, ui_developer, unit_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{FRAMEWORK}}.md"
@@ -106,6 +110,16 @@ For each endpoint:
 3. Add examples and descriptions to the spec
 4. Wire OpenAPI documentation endpoint (e.g., /docs, /swagger)
 
+### Phase 6b: Publish `api-contracts.md` (downstream test agents block without it)
+Write `docs/design/phases/{{PHASE}}/specs/api-contracts.md`: one section per implemented route with
+method + path, auth, request schema, and the EXACT response envelope for success (`data` as array vs
+object vs null, spelled out), every error status, and a literal example body. Derive it from
+`data-contracts.md`. If the as-built shape differs from `data-contracts.md`, that is a BLOCKER: fix the
+code or record the deviation for `spec_impl_reconciler`. Never quietly publish the drifted shape.
+`ui_test_agent`, `mobile_test_agent` and `integration_test_agent` copy their mocks from this file, and
+stop if it is missing. Also write `agent_state/phases/{{PHASE}}/api_developer/manifest.json` listing
+every route (`{"routes":[{"method":"GET","path":"/api/v1/orders"}]}`).
+
 ### Phase 7: Completion checklist
 Before marking the task complete, check each item with a tool where one exists (tests, linter, type checker / LSP diagnostics, grep) and fix only what fails:
 - [ ] All endpoints from data contracts are implemented
@@ -119,6 +133,7 @@ Before marking the task complete, check each item with a tool where one exists (
 - [ ] Request ID propagated through context
 - [ ] Structured logging with tenant_id on all handler log lines
 - [ ] OpenAPI spec matches implementation
+- [ ] `api-contracts.md` has an entry for every route in the manifest, with literal example bodies
 
 ---
 
@@ -233,6 +248,7 @@ Keep it short; the detail belongs in the artifact.
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Route/handler code written to the frontmatter `output.primary` path; progress recorded at `agent_state/phases/{{PHASE}}/impl/api_progress.md`.
 - [ ] Every assigned route is REAL, complete code — no TODOs or stubs; OpenAPI spec matches the implemented routes.
+- [ ] `docs/design/phases/{{PHASE}}/specs/api-contracts.md` and `agent_state/phases/{{PHASE}}/api_developer/manifest.json` written, one contract entry per route.
 - [ ] Reported counts (routes) are REAL. If I could not implement something, I say so explicitly with the reason — I do NOT report success on partial work.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 

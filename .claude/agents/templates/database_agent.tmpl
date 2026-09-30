@@ -1,5 +1,5 @@
 ---
-name: "database_agent_{{PROJECT_NAME}}"
+name: database_agent
 description: "Designs schema, indexes, query patterns, and connection pooling for {{PROJECT_NAME}} on {{DB_TECH}} ({{DB_TYPE}}). Use in /plan or /develop when a phase changes the data model."
 model: opus
 effort: high
@@ -172,5 +172,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
 
 ```json
-{"agent":"database_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"docs/design/database.md","ts":"<iso8601>"}
+{"agent":"database_agent","phase":{{PHASE}},"status":"completed","report":"docs/design/database.md","ts":"<iso8601>"}
 ```

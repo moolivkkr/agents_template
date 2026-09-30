@@ -13,15 +13,30 @@ input:
       path: docs/IMPLEMENTATION_GUIDELINES.md
 output:
   primary: agent_state/phases/{{PHASE}}/reports/test_results.md
+  artifacts:
+    - path: agent_state/phases/{{PHASE}}/reports/test_results.json
 dependencies:
   upstream: [unit_test_agent, integration_test_agent]
+  runs_after: [e2e_orchestrator, mobile_test_agent, ui_test_agent]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/core/testing-principles.md"
+  - "~/.claude/skills/core/change-impact-analysis.md"
+  - "~/.claude/skills/testing/targeted-testing.md"
+  - "~/.claude/skills/testing/test-case-traceability.md"
 ---
 
 # Agent: Test Runner
 
 ## Role
 Executes tests and reports results. Lightweight — does not write tests, only runs them and formats results. Called by `/develop` and `/test` commands.
+
+**Why a separate runner exists: independent verification.** Test-writing agents run their own suites
+and report counts, which means they grade their own work. In `/develop-orchestrator` Wave 3v this
+agent re-runs every tier the phase touched, in a clean process, AFTER the writers finish, and
+compares its parsed counts with what each writer reported. A writer claiming `42 passed` when the
+independent run shows `38 passed, 4 failed` is a BLOCKING discrepancy: the independent number wins,
+and the writer's report is flagged as unreliable in `collective_feedback.md`.
 
 ## Required Reading
 
@@ -44,6 +59,13 @@ Executes tests and reports results. Lightweight — does not write tests, only r
 | Python | `pytest` | `pytest --integration` |
 | TypeScript/Node | `npm test` | `npm run test:integration` |
 | Java | `./mvnw test` | `./mvnw verify` |
+| Rust | `cargo test` | `cargo test --features integration` |
+| Web UI (vitest/jest) | `npm test -- --run` (in the UI dir) | — |
+| React Native (Jest + RNTL) | `npx jest --ci --coverage` (in `{{MOBILE_APP_DIR}}`) | — (device flows are run by `mobile_e2e_orchestrator`, not here) |
+
+Scope: in `/develop` Wave 3v run every tier the phase touched. In a fix re-run, run the tiers
+selected by `change-impact-analysis.md` plus one safety tier above. Device-tier mobile flows need
+booted simulators, so they belong to `mobile_e2e_orchestrator`; this agent runs the Node tiers only.
 
 ## Output: `agent_state/phases/N/reports/test_results.md`
 
@@ -68,10 +90,26 @@ Total: X | Passed: X | Failed: X | Skipped: X
 ## Failures
 | Test Name | Error | File:Line |
 
+## Writer-vs-Independent Count Check
+| Tier | Writer report | Writer said (pass/fail) | Independent run (pass/fail) | Match |
+|------|---------------|-------------------------|-----------------------------|-------|
+| unit | reports/unit_tests.md | 42/0 | 38/4 | ❌ DISCREPANCY |
+
 ## Coverage
 Overall: X%
 By component: [if available]
 ```
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/testing-principles.md`
+- `~/.claude/skills/core/change-impact-analysis.md`
+- `~/.claude/skills/testing/targeted-testing.md`
+- `~/.claude/skills/testing/test-case-traceability.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent
@@ -100,6 +138,9 @@ Keep it short; the detail belongs in the artifact.
       means no tests ran (wrong command, build failure, empty suite); investigate and report it as a
       failure, never as "PASS".
 - [ ] Every failure lists the test name + error + file:line.
+- [ ] The Writer-vs-Independent table compares every writer report present this phase
+      (`unit_tests.md`, `integration_tests.md`, `ui_test_results.md`, `mobile_test_results.md`); any
+      mismatch is listed as BLOCKING in `test_results.json` (`{"blocking": N, "tiers": {...}}`).
 - [ ] On fix-triggered re-runs, I re-ran ALL affected tiers per the change-impact scope, not just the
       one that failed (CLAUDE.md "fixes trigger re-run of ALL tiers").
 - [ ] Logged a completion line to `agent_state/phases/${PHASE}/execution.jsonl`.

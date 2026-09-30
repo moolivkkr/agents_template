@@ -75,7 +75,64 @@ testing:
   ext: <go | py | ts | js | java | rs>  # file extension for backend test files
   test_framework: <e.g. testify, pytest, jest, junit>
   mock_framework: <e.g. mockery, unittest.mock, jest.mock, mockito>
+mobile:                      # React Native app targeting iOS + Android (omit or enabled:false otherwise)
+  enabled: <true | false>
+  framework: react-native
+  app_dir: <e.g. apps/mobile or mobile>     # -> {{MOBILE_APP_DIR}}
+  workflow: <expo | bare>                   # -> {{MOBILE_WORKFLOW}}    # expo = Expo SDK / EAS; bare = react-native CLI with ios/ + android/ checked in
+  rn_version: <e.g. 0.87>                   # -> {{RN_VERSION}}
+  platforms: [ios, android]
+  unit_test_framework: jest  # RN's documented runner; preset @react-native/jest-preset (RN >= 0.85)
+  component_test_lib: rntl   # @testing-library/react-native
+  e2e_tool: <maestro | detox | appium>      # -> {{MOBILE_E2E_TOOL}}; default maestro (see testing/mobile-testing-strategy.md §3)
+  api_mock_tool: <msw | none>
+  min_ios: <e.g. 15.1>                      # -> {{MIN_IOS}}
+  min_android_api: <e.g. 24>                # -> {{MIN_ANDROID_API}}
+  device_matrix: [<e.g. "iPhone 16 / iOS 26", "iPhone SE (3rd gen) / iOS min", "Pixel 8 / API 36", "Pixel 4a / API min">]
+  ci_build: <eas | github-actions | other>
 ```
+
+## Step 1.5 — Resolve Skill Packs from the Profile (no dangling paths)
+
+Templates reference packs by placeholder (`~/.claude/skills/testing/{{MOCK_FRAMEWORK}}.md`). A raw stack
+value is NOT a filename — `mockery` has no `mockery.md`, `shadcn/ui` has no `shadcn/ui.md` — so
+substituting it verbatim produces a skill path that silently does not exist and the agent loses its
+tool knowledge. Resolve every placeholder through this table; `tests/agent-registry.test.sh` verifies
+every pack named here exists.
+
+<!-- BEGIN skill-resolution -->
+| Placeholder | Stack value(s) | Skill pack |
+|-------------|----------------|------------|
+| `{{TEST_FRAMEWORK}}` | testify, go test | `testing/testify.md` |
+| `{{TEST_FRAMEWORK}}` | pytest | `testing/pytest.md` |
+| `{{TEST_FRAMEWORK}}` | vitest | `testing/vitest.md` |
+| `{{TEST_FRAMEWORK}}` | jest | `testing/vitest.md` (API-compatible patterns; note Jest-specific config in the agent) |
+| `{{TEST_FRAMEWORK}}` | junit, junit5 | `testing/junit-mockito.md` |
+| `{{TEST_FRAMEWORK}}` | cargo test, rust | `testing/rust-test.md` |
+| `{{MOCK_FRAMEWORK}}` | mockery, gomock, go.uber.org/mock | `testing/gomock.md` |
+| `{{MOCK_FRAMEWORK}}` | mockito | `testing/junit-mockito.md` |
+| `{{MOCK_FRAMEWORK}}` | unittest.mock, pytest-mock | `testing/pytest.md` |
+| `{{MOCK_FRAMEWORK}}` | jest.mock, vi.mock | `testing/vitest.md` |
+| `{{E2E_TOOL}}` | playwright | `testing/playwright.md` |
+| `{{API_MOCK_TOOL}}` | msw | `testing/msw.md` |
+| `{{UI_COMPONENTS}}` | shadcn/ui, shadcn | `ui/shadcn.md` |
+| `{{UI_COMPONENTS}}` | tailwind | `ui/tailwind.md` |
+| `{{STATE_MANAGEMENT}}` | react-query, tanstack-query | `frameworks/tanstack-query.md` |
+| `{{DB_TECH}}` | postgres, postgresql | `databases/postgres.md` |
+| `{{MOBILE_E2E_TOOL}}` | maestro | `testing/maestro.md` |
+| `{{MOBILE_E2E_TOOL}}` | detox | `testing/detox.md` |
+| `{{MOBILE_E2E_TOOL}}` | appium | `testing/appium-mobile.md` |
+| `{{MOBILE_COMPONENT_LIB}}` | rntl, @testing-library/react-native | `testing/react-native-testing-library.md` |
+| `{{MOBILE_FRAMEWORK}}` | react-native, expo | `frameworks/react-native.md` |
+<!-- END skill-resolution -->
+
+Values that are directly a filename (`go` → `languages/go.md`, `gin` → `frameworks/gin.md`,
+`nebula` → `databases/nebula.md`) need no row. If a value has neither a row nor a same-named file
+(e.g. `cypress`, `pgx`), DROP that `skill_packs:` line from the generated agent and list the value in
+`agent_registry.json` → `missing_skill_packs` — never leave an unresolved path in a generated agent.
+Always add `testing/testcontainers.md` to the integration test agent when the database or cache runs
+in Docker, and `testing/property-based.md` to the unit test agent when the phase has parsers,
+serializers, or numeric/financial logic.
 
 ## Step 2 — Select and Populate Templates
 
@@ -91,10 +148,22 @@ For each template in `~/.claude/agents/templates/`, determine if it applies to t
 | `integration_test_agent.tmpl` | Always (cache_tech = "none" if no cache) |
 | `ui_developer.tmpl` | frontend.enabled = true |
 | `ui_test_agent.tmpl` | frontend.enabled = true |
+| `mobile_test_agent.tmpl` | mobile.enabled = true |
 
-For each applicable template, replace ALL `{{PLACEHOLDER}}` occurrences with extracted values. Generate the output file name by replacing `{{PROJECT_NAME}}` with the actual project name (snake_case) and removing `.tmpl` from the extension.
+When `mobile.enabled = true`, the core agents `mobile_e2e_orchestrator` and `mobile_platform_auditor`
+are also active for this project — record them in `agent_registry.json` → `active_core_agents` so
+`/develop` adds them to the roster (see develop-orchestrator Wave 0b).
+
+For each applicable template, replace ALL `{{PLACEHOLDER}}` occurrences with extracted values (skill-pack placeholders via the Step 1.5 table). Generate the output FILE name by replacing `{{PROJECT_NAME}}` with the actual project name (snake_case) and removing `.tmpl` from the extension.
 
 Example: `backend_developer.tmpl` → `go_backend_developer_myproject.md`
+
+**Agent identity is the ROLE name, not the file name.** The `name:` frontmatter of every generated
+agent stays the bare role (`unit_test_agent`, `ui_test_agent`, `mobile_test_agent` — exactly as in the
+template). That one name is (a) what `/develop-orchestrator` passes as `subagent_type`, (b) what the
+agent writes as `"agent"` in `execution.jsonl`, and (c) what `roster.json` requires. A project-suffixed
+`name:` breaks all three at once: the orchestrator cannot spawn it by role and the roster gate reports
+the role as "never completed".
 
 ## Step 2.5 — Inject Shared Blocks (agent-common contract) — MANDATORY
 
@@ -132,15 +201,15 @@ When I hit something a FUTURE phase should know, append a tagged lesson to `agen
 Only write a lesson when there IS one — zero lessons is valid for a clean run.
 ```
 
-4. **Completion Log line** (roster check) — the agent's REAL generated name (matching its `name:` frontmatter / filename) and its report path:
+4. **Completion Log line** (roster check) — the agent's ROLE name (its `name:` frontmatter — the bare role, not the project-suffixed filename) and its report path:
 ```
 ## Completion Log (roster check — see agent-common Block 2)
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl`:
 
-{"agent":"<this agent's real name>","phase":{{PHASE}},"status":"completed","report":"<this agent's output.primary path>","ts":"<iso8601>"}
+{"agent":"<this agent's role name>","phase":{{PHASE}},"status":"completed","report":"<this agent's output.primary path>","ts":"<iso8601>"}
 ```
 
-The `agent` value MUST equal the generated agent's real name (the `name:` in its frontmatter), because the develop-orchestrator roster gate checks `roster.required ⊆ {agents with completed lines}` by real name. A mismatch = a false gate failure.
+The `agent` value MUST equal the generated agent's `name:` (the bare role, e.g. `integration_test_agent`), because the develop-orchestrator roster gate checks `roster.required ⊆ {agents with completed lines}` by exact name. A mismatch = a false gate failure.
 
 ## Step 3 — Activate Skill Packs
 

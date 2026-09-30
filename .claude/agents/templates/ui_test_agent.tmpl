@@ -1,5 +1,5 @@
 ---
-name: "ui_test_agent_{{PROJECT_NAME}}"
+name: ui_test_agent
 description: "Writes UI tests for {{PROJECT_NAME}} across component, API-mocked integration, e2e, responsive, and visual regression tiers with {{TEST_FRAMEWORK}} + {{E2E_TOOL}}. Use in /develop after UI implementation."
 model: opus
 effort: medium
@@ -40,7 +40,7 @@ quality_gates:
 dependencies:
   upstream: [ui_developer]
   runs_after: [ui_audit_agent]
-  downstream: [e2e_orchestrator, ui_code_optimizer]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [e2e_orchestrator, test_runner, ui_code_optimizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{UI_FRAMEWORK}}.md"
@@ -415,5 +415,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
 
 ```json
-{"agent":"ui_test_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/ui_test_results.md","ts":"<iso8601>"}
+{"agent":"ui_test_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/ui_test_results.md","ts":"<iso8601>"}
 ```

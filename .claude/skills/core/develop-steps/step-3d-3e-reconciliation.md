@@ -40,7 +40,7 @@ Validates both directions:
 - **Reverse:** tests that test behaviors not in any spec
 
 **TC-* ID Inventory Reconciliation (runs FIRST within this step):**
-If specs contain TC-* IDs (pattern `TC-[A-Z]+-\d+`):
+If specs contain TC-* IDs (pattern `TC-[A-Z0-9]+-\d+`):
 1. Extract all TC-* IDs from `docs/design/phases/${PHASE}/specs/` (the spec inventory)
 2. Extract all TC-* IDs from test files (the implementation inventory)
 3. Compute: missing, orphaned, covered, coverage percentage
@@ -51,12 +51,12 @@ If specs contain TC-* IDs (pattern `TC-[A-Z]+-\d+`):
 ```bash
 # Quick TC-* inventory check (runs before behavior-level reconciliation)
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
-SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
+SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort -u)
 SPEC_COUNT=$(echo "$SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 
 if [ "$SPEC_COUNT" -gt 0 ]; then
-  IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
-    --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+  IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
+    --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
   IMPL_COUNT=$(echo "$IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
   MISSING_COUNT=$(comm -23 <(echo "$SPEC_IDS") <(echo "$IMPL_IDS") | grep -c 'TC-' 2>/dev/null || echo 0)
   COVERAGE_PCT=$(( IMPL_COUNT * 100 / SPEC_COUNT ))

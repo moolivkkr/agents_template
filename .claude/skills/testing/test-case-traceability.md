@@ -47,6 +47,22 @@ Where:
 | `PERF` | Performance tests | TC-PERF-001 |
 | `ACC` | Accessibility tests | TC-ACC-001 |
 | `WASM` | WASM parity tests | TC-WASM-001 |
+| `A11Y` | Accessibility audit checks (accessibility_auditor) | TC-A11Y-001 |
+| `MCMP` | Mobile component tests (Jest + RNTL) | TC-MCMP-001 |
+| `MINT` | Mobile integration tests (screen + MSW) | TC-MINT-001 |
+| `ME2E` | Mobile device E2E flows — run on iOS AND Android | TC-ME2E-001 |
+| `MPLT` | Mobile platform behaviour (permissions, deep links, lifecycle) | TC-MPLT-001 |
+| `MA11Y` | Mobile accessibility (roles, touch targets, text scale) | TC-MA11Y-001 |
+| `MVIS` | Mobile visual regression per device slot | TC-MVIS-001 |
+| `MPERF` | Mobile performance (cold start, frame rate, render count) | TC-MPERF-001 |
+
+**Category codes may contain digits** (`E2E`, `A11Y`, `ME2E`). Every scanner must use
+`TC-[A-Z0-9]+-[0-9]+`. The older `TC-[A-Z]+-\d+` silently skipped every E2E and A11Y ID;
+`tests/agent-registry.test.sh` now fails the build if that pattern comes back.
+
+**Mobile annotation:** Maestro flows are YAML, so the TC annotation is the first comment line
+(`# TC-ME2E-001, TC-ME2E-002`). Scanners must include `*.yaml` under the mobile app's `.maestro/`
+directory in their test-file globs.
 
 Projects MAY define custom categories in their TEST-SUITE.md. The category code must be unique within the project.
 
@@ -185,7 +201,7 @@ def test_pattern_validation(tc_id, input, expected):
 
 1. **Every test function/case MUST include its TC-* ID** in a comment, test name, or metadata field
 2. **One TC-* ID per test case** (a table-driven test may cover multiple IDs, one per row)
-3. **TC-* IDs are grep-able** — the pattern `TC-[A-Z]+-\d+` must match in the test file
+3. **TC-* IDs are grep-able** — the pattern `TC-[A-Z0-9]+-\d+` must match in the test file
 4. **Cross-file mapping is allowed** — a TC-* ID can appear in unit OR integration OR e2e (wherever it's implemented)
 
 ---
@@ -202,7 +218,7 @@ SPEC_DIR="docs/design/phases/${PHASE}/specs"
 TEST_SUITE="${SPEC_DIR}/TEST-SUITE.md"
 
 # Sources: individual specs + standalone TEST-SUITE.md
-SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" | sort -u)
+SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" | sort -u)
 SPEC_COUNT=$(echo "$SPEC_IDS" | wc -l | tr -d ' ')
 
 echo "Spec inventory: $SPEC_COUNT unique TC-* IDs"
@@ -214,8 +230,8 @@ Scan all test files for TC-* ID annotations:
 
 ```bash
 # Extract all TC-* IDs from test files
-TEST_DIRS=("tests/" "src/" "test/")  # adapt per project
-IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "${TEST_DIRS[@]}" --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+TEST_DIRS=("tests/" "src/" "test/" "e2e/" "apps/" "mobile/")  # adapt per project; apps/ + mobile/ hold RN tests and .maestro/ flows
+IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "${TEST_DIRS[@]}" --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
 IMPL_COUNT=$(echo "$IMPL_IDS" | wc -l | tr -d ' ')
 
 echo "Implementation inventory: $IMPL_COUNT unique TC-* IDs"
@@ -244,7 +260,7 @@ echo "Coverage: $COVERAGE_PCT% ($COVERED_COUNT / $SPEC_COUNT)"
 
 ```bash
 # Group by category for granular tracking
-for CATEGORY in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z]+' | sort -u); do
+for CATEGORY in $(echo "$SPEC_IDS" | grep -oP 'TC-\K[A-Z0-9]+' | sort -u); do
   CAT_SPEC=$(echo "$SPEC_IDS" | grep "TC-${CATEGORY}-" | wc -l | tr -d ' ')
   CAT_IMPL=$(echo "$IMPL_IDS" | grep "TC-${CATEGORY}-" | wc -l | tr -d ' ')
   CAT_PCT=$(( CAT_IMPL * 100 / CAT_SPEC ))
@@ -428,11 +444,11 @@ Before any test agent marks its task as complete, it MUST run this self-check:
 
 ```bash
 # Count TC-* IDs this agent was responsible for (from spec)
-RESPONSIBLE_IDS=$(grep -oP 'TC-[A-Z]+-\d+' spec_files | sort -u)
+RESPONSIBLE_IDS=$(grep -oP 'TC-[A-Z0-9]+-\d+' spec_files | sort -u)
 RESPONSIBLE_COUNT=$(echo "$RESPONSIBLE_IDS" | wc -l)
 
 # Count TC-* IDs in test files this agent wrote
-IMPLEMENTED_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' test_files | sort -u)
+IMPLEMENTED_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' test_files | sort -u)
 IMPLEMENTED_COUNT=$(echo "$IMPLEMENTED_IDS" | wc -l)
 
 # Compare

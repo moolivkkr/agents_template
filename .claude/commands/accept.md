@@ -400,15 +400,15 @@ Acceptance criteria:
 ALL_SPEC_IDS=""
 for PHASE_DIR in docs/design/phases/*/; do
   PHASE_NUM=$(basename "$PHASE_DIR")
-  SPEC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$PHASE_DIR/specs/" 2>/dev/null | sort -u)
+  SPEC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$PHASE_DIR/specs/" 2>/dev/null | sort -u)
   ALL_SPEC_IDS="$ALL_SPEC_IDS\n$SPEC_IDS"
 done
 ALL_SPEC_IDS=$(echo -e "$ALL_SPEC_IDS" | grep 'TC-' | sort -u)
 TOTAL_SPEC=$(echo "$ALL_SPEC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 
 # 2. Collect ALL TC-* IDs from ALL test files
-ALL_IMPL_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' tests/ src/ test/ 2>/dev/null \
-  --include="*_test.*" --include="*.test.*" --include="*.spec.*" | sort -u)
+ALL_IMPL_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' tests/ src/ test/ e2e/ apps/ mobile/ 2>/dev/null \
+  --include="*_test.*" --include="*.test.*" --include="*.spec.*" --include="*.yaml" --include="*.yml" --exclude-dir=node_modules --exclude-dir=Pods --exclude-dir=build | sort -u)
 TOTAL_IMPL=$(echo "$ALL_IMPL_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 
 # 3. Reconcile

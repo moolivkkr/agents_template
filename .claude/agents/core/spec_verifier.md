@@ -73,7 +73,7 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 
 ### TC-* ID Inventory Validation
 - Every spec's "Test Coverage Required" section SHOULD include a "Test Case Inventory" table with TC-* IDs
-- If TC-* IDs are present: validate format matches `TC-[A-Z]+-\d+` pattern
+- If TC-* IDs are present: validate format matches `TC-[A-Z0-9]+-\d+` pattern
 - If TC-* IDs are present: validate no duplicate IDs within the phase (across all specs)
 - If TC-* IDs are present: validate each edge case row maps to at least one TC-* ID
 - If TC-* IDs are present: validate each TC-* ID has a declared priority (HIGH/MEDIUM/LOW) and tier (unit/integration/e2e/component)
@@ -83,7 +83,7 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 ```bash
 # Quick TC-* ID validation
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
-ALL_TC_IDS=$(grep -rhoP 'TC-[A-Z]+-\d+' "$SPEC_DIR" 2>/dev/null | sort)
+ALL_TC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort)
 UNIQUE_TC_IDS=$(echo "$ALL_TC_IDS" | sort -u)
 TOTAL=$(echo "$ALL_TC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 UNIQUE=$(echo "$UNIQUE_TC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)

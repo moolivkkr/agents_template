@@ -1,5 +1,5 @@
 ---
-name: "migration_agent_{{PROJECT_NAME}}"
+name: migration_agent
 description: "Creates versioned UP/DOWN migration files for {{PROJECT_NAME}} with {{MIGRATION_TOOL}} on {{DB_TECH}}. Use in /develop whenever a phase changes the schema."
 model: opus
 effort: high
@@ -288,5 +288,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
 
 ```json
-{"agent":"migration_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"migrations/","ts":"<iso8601>"}
+{"agent":"migration_agent","phase":{{PHASE}},"status":"completed","report":"migrations/","ts":"<iso8601>"}
 ```

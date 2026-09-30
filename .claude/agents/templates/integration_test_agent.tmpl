@@ -1,5 +1,5 @@
 ---
-name: "integration_test_agent_{{PROJECT_NAME}}"
+name: integration_test_agent
 description: "Writes and runs integration tests for {{PROJECT_NAME}} - service-DB, service-cache, and API endpoint behavior against real {{DB_TECH}} and {{CACHE_TECH}}, not mocks. Use in /develop after implementation."
 model: opus
 effort: medium
@@ -307,5 +307,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
 
 ```json
-{"agent":"integration_test_agent_{{PROJECT_NAME}}","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/integration_tests.md","ts":"<iso8601>"}
+{"agent":"integration_test_agent","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/integration_tests.md","ts":"<iso8601>"}
 ```

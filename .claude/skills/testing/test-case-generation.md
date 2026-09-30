@@ -197,6 +197,62 @@ TC-COMP-{N+4}: Accessibility — table has proper ARIA roles and labels
 
 ---
 
+## Tier 4M: Mobile Test Cases — React Native iOS + Android (ux_designer generates; only when mobile.enabled)
+
+A web page matrix doesn't cover a native app: there is no DOM, and platform behaviour diverges.
+For every mobile screen and every mobile workflow, enumerate the IDs below. Each device-tier ID
+(`TC-ME2E`, `TC-MPLT`, `TC-MVIS`) is executed on BOTH platforms. The inventory row gives one ID, and
+the results carry separate iOS and Android columns. Strategy: `mobile-testing-strategy.md`.
+
+### Per-Mobile-Screen Matrix
+
+```
+For screen: OrdersScreen   (testIDs: orders.list, orders.row.<id>, orders.refresh, orders.empty)
+
+TC-MCMP-{N+0}: Renders without crash inside real providers
+TC-MCMP-{N+1}: Loading state
+TC-MCMP-{N+2}: Error state — API error → message + retry
+TC-MCMP-{N+3}: Empty state — data: [] → empty copy + CTA
+TC-MCMP-{N+4}: Data state — items render with correct content
+TC-MCMP-{N+5}: Primary interaction (press row → detail screen rendered via real navigator)
+TC-MCMP-{N+6}: Pull-to-refresh / end-reached pagination (if the screen has a list)
+TC-MINT-{N+0}: Screen + MSW mock (shape from api-contracts.md) → data displayed
+TC-MINT-{N+1}: 401 mid-session → login → returns to this screen
+TC-MINT-{N+2}: Network failure (HttpResponse.error) → offline/error state
+TC-MA11Y-{N+0}: Every interactive element found by role + accessible name
+TC-MA11Y-{N+1}: Touch targets ≥ 44pt / 48dp (device — mobile_platform_auditor)
+TC-MA11Y-{N+2}: Largest text scale — nothing clipped, primary action reachable (device)
+TC-MVIS-{N+0}: Final-state screenshot per device slot matches baseline
+```
+
+### Per-Mobile-Workflow Matrix
+
+```
+For workflow: Place order (FR-012)
+
+TC-ME2E-{N+0}: Happy path — launch → sign in → create → confirmation   [iOS + Android]
+TC-ME2E-{N+1}: Validation error surfaces on the field                   [iOS + Android]
+TC-ME2E-{N+2}: Server error → recoverable message                        [iOS + Android]
+TC-ME2E-{N+3}: Kill mid-flow → relaunch → state/draft behaviour as spec'd [iOS + Android]
+TC-ME2E-{N+4}: Android back / iOS swipe-back at each step → no data loss, no unexpected exit
+```
+
+### Per-App Platform Matrix (once per app, re-checked each phase that touches it)
+
+```
+TC-MPLT-{N+0}: Cold start → first screen, no red screen / native crash
+TC-MPLT-{N+1}: Auth persists across kill + relaunch (token in Keychain/Keystore)
+TC-MPLT-{N+2}: Background → foreground preserves state; Android process death restores
+TC-MPLT-{N+3..}: One per deep-link route × {cold, warm} × {logged-in, logged-out}
+TC-MPLT-{..}:  One per requested permission × {granted, denied, permanently denied}
+TC-MPLT-{..}:  Offline → offline state; reconnect → recovery
+TC-MPLT-{..}:  Keyboard never hides the focused field or submit on the smallest device
+TC-MPLT-{..}:  Push notification tap routes correctly from killed and background (if in scope)
+TC-MPERF-{N+0}: Cold start median ≤ NFR-PERF target (per platform)
+```
+
+---
+
 ## Tier 5: Acceptance Test Cases (spec_writer generates)
 
 Acceptance tests validate that the system delivers what the BRD promised, from each persona's perspective.
@@ -262,6 +318,8 @@ Before finalizing the wireframe, verify:
 - [ ] **Every form** has at least 8 UI TC-* IDs (fields + validation + submit + errors + dirty state + cancel)
 - [ ] **Every reusable component** has at least 4 UI TC-* IDs (render + props + callbacks + accessibility)
 - [ ] **Navigation** has TC-* IDs for every route transition
+- [ ] **Mobile (if mobile.enabled):** every mobile screen has ≥ 14 IDs (7 TC-MCMP + 3 TC-MINT + 3 TC-MA11Y + 1 TC-MVIS), every mobile workflow ≥ 5 TC-ME2E, and the per-app TC-MPLT matrix covers every deep-link route and every requested permission
+- [ ] **Mobile:** every screen spec lists the testID of each interactive element and assertion target (the testID contract in `mobile-testing-strategy.md` §4). A TC with no addressable element cannot be automated.
 
 ---
 
@@ -273,6 +331,7 @@ Before finalizing the wireframe, verify:
 | CLI tool | 10/spec | 6/entity | 7/pipeline | N/A | 3/use-case | ~50+ per phase |
 | Library/SDK | 10/spec | 6/entity | 5/API-surface | N/A | 3/consumer-scenario | ~40+ per phase |
 | Full-stack SaaS | 10/spec | 10/endpoint + 6/entity | 7/workflow | 13/page + 9/form | 5/persona-FR | ~150+ per phase |
+| React Native mobile (add to the above) | — | — | 5/workflow × 2 platforms | 14/screen + TC-MPLT matrix | 5/persona-FR on device | ~60+ per phase |
 
 ---
 

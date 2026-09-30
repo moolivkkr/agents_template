@@ -1,0 +1,144 @@
+# React Native Testing Library (RNTL) — component and integration tier
+
+Jest + `@testing-library/react-native` for testing RN screens and components in Node, with no
+device. This is where most mobile coverage belongs. Strategy and tier map: `mobile-testing-strategy.md`.
+
+> **Version note (verified 2026-09-29).** RNTL v14 (June 2026) requires React 19+ and makes `render`,
+> `fireEvent` and `act` **async**: you must `await` them. It removed `renderAsync`, `update`,
+> `getQueriesForElement` and the `UNSAFE_*` queries. Queries return host elements only, and text must
+> be inside `<Text>`. On RNTL v13 or earlier the same tests work without the `await` on `render`, so
+> check `package.json` before writing tests. Codemods exist for v13 → v14.
+
+## Setup
+
+```js
+// jest.config.js — RN >= 0.85 uses the extracted preset
+module.exports = {
+  preset: '@react-native/jest-preset',   // Expo projects: preset: 'jest-expo'
+  setupFilesAfterEnv: ['./jest.setup.ts'],
+  transformIgnorePatterns: [
+    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo|react-navigation|@react-navigation)/)',
+  ],
+};
+```
+
+Matchers such as `toBeOnTheScreen`, `toHaveTextContent`, `toBeVisible`, `toHaveAccessibleName`,
+`toBeDisabled`, `toBeChecked` and `toHaveStyle` are built into RNTL v12.4+. Do not add
+`@testing-library/jest-native`.
+
+## Query priority (accessibility-first)
+
+1. `getByRole('button', { name: 'Save' })`: proves the element is reachable by screen readers too.
+2. `getByLabelText('Email')`: form inputs.
+3. `getByText('Welcome back')`: non-interactive content.
+4. `getByTestId('orders.list')`: only when there is no accessible name. Use the testID contract.
+
+If you cannot find an interactive element with `getByRole`, that is an accessibility defect. Record
+it as a `TC-MA11Y-*` failure; do not fall back silently to `getByTestId`.
+
+## Component test — the 4 states (TC-MCMP-*)
+
+Every screen is tested in **loading, error, empty and data** states, the same as the web
+`ui_test_agent`.
+
+```tsx
+import { render, screen, userEvent } from '@testing-library/react-native';
+import { http, HttpResponse } from 'msw';
+import { server } from '../test/msw-server';
+import { OrdersScreen } from './OrdersScreen';
+
+// TC-MCMP-012: Orders screen renders list from GET /api/v1/orders
+test('renders orders from the API (data state)', async () => {
+  server.use(
+    http.get('*/api/v1/orders', () =>
+      HttpResponse.json({ data: [{ id: 'o1', total: 42, status: 'open' }], error: null,
+                          meta: { page: 1, limit: 50, total: 1 } }),  // shape copied from api-contracts.md
+    ),
+  );
+  await render(<OrdersScreen />);
+  expect(await screen.findByText('Order o1')).toBeOnTheScreen();
+});
+
+// TC-MCMP-013: empty state
+test('shows empty state when data is []', async () => {
+  server.use(http.get('*/api/v1/orders', () =>
+    HttpResponse.json({ data: [], error: null, meta: { page: 1, limit: 50, total: 0 } })));
+  await render(<OrdersScreen />);
+  expect(await screen.findByText(/no orders yet/i)).toBeOnTheScreen();
+});
+```
+
+## Interactions — prefer `userEvent`
+
+```tsx
+jest.useFakeTimers();                       // press() waits ~130ms of real time, so fake timers keep tests fast
+const user = userEvent.setup();
+await render(<LoginScreen />);
+await user.type(screen.getByLabelText('Email'), 'a@b.co');
+await user.press(screen.getByRole('button', { name: 'Sign in' }));
+expect(await screen.findByText('Welcome')).toBeOnTheScreen();
+```
+
+`userEvent` runs the full press/type event sequence (pressIn → press → pressOut, focus, change).
+`fireEvent` fires one handler and misses bugs in the others. Use `fireEvent` only for events
+`userEvent` doesn't cover (e.g. `fireEvent.scroll` with a custom payload).
+
+## MSW for React Native
+
+```ts
+// test/msw-server.ts — Jest runs in Node, so use msw/node here
+import { setupServer } from 'msw/node';
+export const server = setupServer();
+// jest.setup.ts
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+```
+
+Jest tests run in Node, so `msw/node` is the correct entry point for the component and integration
+tiers. The separate `msw/native` entry (for mocking inside the running app, e.g. for demos) was
+removed in MSW 3.0.0. **Pin `msw@^2`** if the app itself uses in-app mocking. `onUnhandledRequest:
+'error'` makes an un-mocked call fail the test instead of hitting a real server.
+
+## Navigation
+
+Render the screen inside a real `NavigationContainer` with the real navigator, and assert on the
+destination screen's content. Do not assert on mocked `navigate` calls: that tests your mock, not
+the navigation.
+
+```tsx
+await render(<NavigationContainer><RootStack /></NavigationContainer>);
+await user.press(screen.getByRole('button', { name: 'View order o1' }));
+expect(await screen.findByRole('header', { name: 'Order o1' })).toBeOnTheScreen();
+```
+
+## Native modules
+
+Use each library's official Jest mock (AsyncStorage, react-native-reanimated/mock,
+@react-native-community/netinfo/jest). Anything that needs a real native implementation, such as
+camera, biometrics, push or secure storage, belongs in the device tier (`TC-MPLT-*`).
+
+## Accessibility assertions in the component tier (TC-MA11Y-*)
+
+```tsx
+const save = screen.getByRole('button', { name: 'Save order' });
+expect(save).toHaveAccessibleName('Save order');
+expect(save).not.toBeDisabled();
+```
+
+Also enforce at lint time with `eslint-plugin-react-native-a11y`. RNTL can't measure touch-target
+size or contrast (Node has no layout engine), so those are checked on the device by
+`mobile_platform_auditor`.
+
+## Render performance (optional, TC-MPERF-*)
+
+`reassure` (Callstack) measures render count and duration against a baseline branch. Use it for list
+screens and anything the BRD has an NFR-PERF target for.
+
+## Anti-patterns
+
+- Snapshot tests as the only assertion: they pass whatever is rendered. Assert on behaviour.
+- `getByTestId` everywhere: it hides missing accessible names.
+- Asserting `jest.fn()` navigation mocks were called: prove the destination rendered instead.
+- Forgetting `await` on `render` / `userEvent` with RNTL v14: the test passes vacuously before the UI settles.
+- Inventing mock response shapes: copy them from `api-contracts.md`.
