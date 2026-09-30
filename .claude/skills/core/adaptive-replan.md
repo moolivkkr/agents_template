@@ -30,7 +30,7 @@ When reading Wave 3+4 reports, classify each failure into one of these categorie
 | **SCHEMA** | Migration error, DB constraint violation | Migration/model | Fix migration → re-run ALL (schema affects everything) |
 | **UI** | Component test render failure, Playwright selector miss | UI component | Fix component → re-run UI + E2E (if UI phase) |
 | **CONFIG** | Health check fail, connection refused, env var missing | Docker/config/env | Fix config → re-deploy → re-run integration + E2E + acceptance |
-| **FLAKY** | Test passes on retry, timing-dependent | Test setup, race condition | Fix test → re-run ONLY that tier |
+| **FLAKY** | Failed, then passed on retry — counts as FAILING at the gate | Shared state, time, ordering, unawaited async, racing selectors | Race triage; re-run the tier 3× (`-race`, `--repeat-each`); quarantine only with issue + expiry (`quarantined[]` in the sidecar) |
 
 ## Decision Tree
 
@@ -59,7 +59,7 @@ Failure detected
 | SCHEMA | ALL | nothing | N/A |
 | UI | UI component tests | unit, integration (if unchanged) | + E2E |
 | CONFIG | integration, E2E, acceptance | unit | (already broad) |
-| FLAKY | failing tier only | all others | none |
+| FLAKY | the flaky tier, repeated 3× | none — a flake is a failure until proven fixed | none |
 
 **Safety tier rule:** Always re-run one tier ABOVE the affected tier. A unit fix that passes unit tests may break integration. An integration fix may break E2E. The +1 tier catches ripple effects without running everything.
 

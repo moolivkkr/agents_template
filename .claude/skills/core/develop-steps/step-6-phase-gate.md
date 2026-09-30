@@ -47,8 +47,8 @@ SAST + secret scanning       agent_state/phases/${PHASE}/reports/quality_gate.md
 Migration safety             agent_state/phases/${PHASE}/reports/migration_safety.md   WHEN phase adds/changes DB migrations → Zero CRITICAL findings, DOWN coverage ≥ 90%. Else: not_applicable.
 Visual validation            agent_state/phases/${PHASE}/reports/visual_validation.md  WHEN *.wireframe.html files exist for this phase → Mismatch < 10%. Else: not_applicable.
 Tenant isolation             agent_state/phases/${PHASE}/reports/tenant_isolation.md   WHEN project is multi-tenant (roster marks tenant_isolation_verifier required) → No cross-tenant leak. Else: not_applicable.
-UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimization.md  WHEN frontend.enabled → post-optimization tests PASS. Else: not_applicable.
-Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     Always → post-optimization tests PASS (CLEAN or PARTIAL accepted).
+UI code optimization         agent_state/phases/${PHASE}/reports/ui_code_optimization.md  ONLY if /optimize ran (not part of /develop)
+Code optimization            agent_state/phases/${PHASE}/reports/code_optimization.md     ONLY if /optimize ran (not part of /develop)
 ```
 
 > **Spec compliance** is covered by the spec↔impl reconciliation report (`specs_vs_impl.md`) above —
@@ -349,7 +349,7 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
       "total": 3,
       "passed": 3,
       "failed": 0,
-      "report": "agent_state/e2e/results.md"
+      "report": "agent_state/phases/N/reports/e2e_results.md"
     }
   },
   "optimization": {
@@ -366,7 +366,7 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
       "optimizations_applied": 0,
       "report": "agent_state/phases/N/reports/ui_code_optimization.md"
     },
-    "post_optimization_tests": "PASS | PASS_WITH_REVERTS | not_run"
+    "post_optimization_tests": "not_applicable unless /optimize ran | PASS | PASS_WITH_REVERTS"
   },
   "test_case_inventory": {
     "spec_count": 0,

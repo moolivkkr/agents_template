@@ -41,21 +41,14 @@ When a test agent retries (attempt > 1), track ALL retry information for visibil
 
 ### Flaky Test Quarantine
 
-When a test appears in `flaky_tests[]` across 2+ consecutive phases:
-
-1. **Detect:** Check previous phase manifest's `flaky_tests[]`. If current phase has the same test name: it's chronically flaky.
-2. **Quarantine:** Mark with `@flaky` tag/annotation (language-specific):
-   - Go: `t.Skip("QUARANTINED: flaky across phases N-1, N")`
-   - Python: `@pytest.mark.skip(reason="QUARANTINED: flaky")`
-   - TypeScript: `test.skip('QUARANTINED: flaky')`
-   - Java: `@Disabled("QUARANTINED: flaky")`
-   - Rust: `#[ignore]`
-3. **Log:** Add to manifest: `"quarantined_tests": ["TestName (flaky since phase N-1)"]`
-4. **Track:** Quarantined tests appear in gate report as: `⚠ QUARANTINED: N tests skipped (flaky across 2+ phases)`
-5. **Escalate:** If quarantined count > 5: surface to user as `⚠ Too many quarantined tests — investigate root cause`
-6. **Unquarantine:** If a quarantined test passes 3 consecutive phases: auto-remove quarantine
-
-This prevents flaky tests from blocking every phase while maintaining visibility.
+A test that fails and then passes on retry is **FLAKY**. It counts as a failure (`flaky` in the
+sidecar, and the gate blocks on it). See `~/.claude/skills/testing/test-results-sidecar.md` §Flakes.
+1. **Fix it first.** Look for shared state, time, ordering, unawaited async, or selectors that race
+   the UI. Re-run the tier 3× (`-race`, `--repeat-each=3`) to prove the fix.
+2. **Quarantine only if the fix outlasts the phase.** Exclude the test from the run and list it in the
+   tier sidecar's `quarantined[]` with an `issue` link and an `expires` date ≤ 14 days out. Never use
+   a bare `t.Skip` / `test.skip`: the test-diff check (`tc-inventory.py --diff-base`) flags new skips,
+   and a skip has no expiry. When `expires` passes, the gate blocks again.
 
 ### Step 3a.5 — Cross-Phase Regression (Smart, if PHASE > 1)
 

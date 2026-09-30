@@ -831,7 +831,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 ### 11.1 Docker
 
-- **Base image:** {{DOCKER_BASE_IMAGE}} (e.g., golang:1.22-alpine, node:20-slim)
+- **Base image:** {{DOCKER_BASE_IMAGE}} — the toolchain major version comes from §Commands and versions (never a hard-coded older tag: `golang:<old>` with `GOTOOLCHAIN=local` fails against a newer go.mod)
 - **Multi-stage builds:** Yes — build stage + minimal runtime stage
 - **Image naming:** {{DOCKER_IMAGE_NAMING}} (e.g., `{{PROJECT}}-api:{{VERSION}}`)
 - **Health check:** `HEALTHCHECK CMD {{HEALTH_CHECK_CMD}}`
@@ -1461,3 +1461,43 @@ Every section should reference applicable BRD requirements:
 ```
 
 This ensures traceability between requirements and implementation decisions.
+
+---
+
+## Technology stack
+
+| Layer | Choice | Version |
+|---|---|---|
+| {{LAYER}} | {{TECH}} | {{VERSION}} |
+
+## Commands and versions
+
+Exact format — parsed by `.claude/hooks/commands-table.py` (see `~/.claude/skills/core/commands-and-versions.md`).
+
+| Purpose | Command |
+|---|---|
+| build | {{BUILD_COMMAND}} |
+| lint | {{LINT_COMMAND}} |
+| test:unit | {{UNIT_TEST_COMMAND}} |
+| test:integration | {{INTEGRATION_TEST_COMMAND}} |
+| test:e2e | {{E2E_TEST_COMMAND}} |
+| migrate | {{MIGRATE_COMMAND}} |
+| seed | {{SEED_COMMAND}} |
+| run | {{RUN_COMMAND}} |
+| x:acceptance | {{ACCEPTANCE_TEST_COMMAND}} |
+
+| Component | Version |
+|---|---|
+| {{RUNTIME}} | {{RUNTIME_VERSION}} |
+| {{DATABASE}} | {{DATABASE_VERSION}} |
+
+## Runtime contract
+
+- Entry points: `serve`, `migrate`, `seed` (or the commands above); `$PORT` from env.
+- `GET /healthz` — cheap liveness, never touches dependencies. `GET /readyz` — ready only when hard
+  dependencies the release needs are reachable (DB + schema version), never optional ones (cache).
+  `GET /api/version` — `{"git_sha": "...", "env": "..."}`. All three are plain JSON, outside the envelope.
+- Config from env only; secrets fail closed unless `APP_ENV` is `local|dev|test`.
+- DB connection retried at startup/migrate/seed for ~60s; auth errors are fatal immediately.
+- Container: numeric non-root `USER`, read-only root filesystem friendly, SIGTERM → stop accepting →
+  drain in-flight → close pools (k8s adds a preStop sleep).
