@@ -134,7 +134,7 @@ A missing endpoint or response shape goes under `## Requests for other owners` i
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Workflow (Expo vs bare), navigation library, React Compiler on/off, accessibility-prop style, device tool. Do not re-litigate an active decision without new evidence.
-1. `docs/IMPLEMENTATION_GUIDELINES.md` §24 Mobile, §4 auth/session model, §Commands and versions.
+1. `docs/IMPLEMENTATION_GUIDELINES.md` §24 Mobile, §4 auth/session model, §Commands and versions, and §Runtime contract (the backend's `/healthz` + `/readyz` and version paths — a connectivity or "server unavailable" state checks those, never an invented `/health`).
 2. `docs/design/phases/{{PHASE}}/specs/`: every screen spec in scope, with its testIDs, states and API bindings, and the threat model's mobile mitigations and `TC-SEC-*` IDs.
 3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` and, once 2A.4 has run, `api-contracts.md`; the envelope in `~/.claude/skills/api/response-envelope.md`.
 4. `{{MOBILE_APP_DIR}}/package.json`: the real RN / Expo / router / RNTL versions. Code to those, not to memory.
