@@ -258,23 +258,32 @@ Every requirement change from Step 4 changes which acceptance tests should exist
 finished until they do. (Background and the full table: `/recon` § Acceptance changes.)
 
 ```bash
-python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json || true
-jq '.delta' agent_state/reconciliation/acceptance_map.json
+# The working phase: the phase in progress (base_sha, no gate.passed), else --phase. If both exist and
+# differ, there is none, and removals are reported only.
+INPROG=$(for d in agent_state/phases/*/; do [ -f "$d/base_sha" ] && [ ! -f "$d/gate.passed" ] && basename "$d"; done | sort -n | tail -1)
+WP="${INPROG:-${ARG_PHASE:-}}"; [ -n "$INPROG" ] && [ -n "${ARG_PHASE:-}" ] && [ "$INPROG" != "$ARG_PHASE" ] && WP=""
+PRE_SHA=$(git rev-parse HEAD)
+python3 .claude/hooks/acceptance-map.py ${WP:+--working-phase $WP} --out agent_state/reconciliation/acceptance_map.json || true
+jq '.delta' agent_state/reconciliation/acceptance_map.json   # add / update / retire_rows / retire_tests / retire_needs_decision
 ```
 `delta.add` lists the new FRs (UNSPEC backfills) and FRs missing a SHALL's rows. `delta.update` lists
-the FRs whose text changed since their tests were recorded (DRIFT-DOC). `delta.retire_rows` lists rows
-for FRs that were dropped or marked Won't, and `delta.retire_tests` lists test code whose row is gone.
+the FRs whose text changed since their tests were recorded (DRIFT-DOC). `delta.retire_rows` and
+`delta.retire_tests` list the working phase's own rows and tests for requirements that went away.
+`delta.retire_needs_decision` lists every other phase's: **never remove those here** (`/recon`
+§ Acceptance changes, "Removal is limited to the working phase").
 
 With `--apply`:
-1. Spawn `spec_writer` (subagent_type: spec_writer), `MODE: acceptance-amend`, with the add, update and
-   retire-row lines. It edits the TC-ACC rows in each FR's owning phase. For a backfilled FR in no phase,
+1. Spawn `spec_writer` (subagent_type: spec_writer), `MODE: acceptance-amend`, `WORKING_PHASE: $WP`, with
+   the add, update and `retire_rows` lines. It edits the TC-ACC rows in each FR's owning phase. For a backfilled FR in no phase,
    that's the phase whose code implements it: match the FR's `Source` file against the phase
    manifests' `artifacts`, else the latest gated phase.
-2. Spawn `acceptance_test_agent` (subagent_type: acceptance_test_agent), `MODE: amend-tests`, with the
-   same list plus the retire-test lines. It writes, updates and deletes the test code; no deployed
-   build is needed.
-3. Re-run the map. Done when `add`, `retire_rows` and `retire_tests` are empty and every `update`
-   entry has `rows_amended: true`. Anything left goes in the report under `## Acceptance changes not done`.
+2. Spawn `acceptance_test_agent` (subagent_type: acceptance_test_agent), `MODE: amend-tests`,
+   `WORKING_PHASE: $WP`, with the same list plus the `retire_tests` lines. It writes and updates test
+   code and deletes only the listed tests; no deployed build is needed.
+3. Re-run the map with `${WP:+--working-phase $WP} --diff-base $PRE_SHA`. Done when `add`,
+   `retire_rows`, `retire_tests` and `removed_outside_phase` are empty and every `update` entry has
+   `rows_amended: true`. Restore anything in `removed_outside_phase`. Anything left, plus every
+   `retire_needs_decision` item, goes in the report under `## Acceptance changes not done`.
 
 Without `--apply`, write the list to `31-acceptance-changes.md` as a table: action, FR/TC ID, phase,
 and the recon finding that caused it.
@@ -307,7 +316,8 @@ Write two documents per product:
 |--------|-------------|-------|---------|
 | add rows + tests | FR-045 | 3 | UNSPEC backfill |
 | update rows + tests | FR-012 (TC-ACC-20101..03) | 2 | DRIFT-DOC |
-| retire row + tests | TC-ACC-10199 | 1 | FR-099 dropped (D-014) |
+| retire row + tests | TC-ACC-30199 | 3 (working) | FR-099 dropped (D-014) |
+| needs decision (not removed) | TC-ACC-10301 | 1 | FR-010 dropped; phase 1's row, not the working phase's |
 ```
 
 ### `agent_state/reconciliation/COMPLETION_ACTION_PLAN.md`

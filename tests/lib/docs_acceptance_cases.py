@@ -245,17 +245,104 @@ check("AM-36", ["TC-ACC-10777"], [t["id"] for t in d.get("retire_tests", [])], "
 check("AM-37", ["FR-001"], [u["fr"] for u in d.get("update", [])], "delta.update lists CHANGED FRs with their rows")
 check("AM-37b", False, (d.get("update") or [{}])[0].get("rows_amended"), "…and says the rows haven't been rewritten yet (what /recon --apply must do)")
 rc, out, F, M = amap()
-check("AM-38", (False, 0), (M.get("retire_blocks"), M["summary"]["blocking"] - sum(f["blocking"] for f in F.values())),
-      "an unscoped run (bare /recon) reports retire items without blocking on them")
+check("AM-38", (None, 0, 3), (M.get("working_phase"), M["summary"]["blocking"] - sum(f["blocking"] for f in F.values()),
+                               len(M["delta"]["retire_needs_decision"])),
+      "an unscoped run (bare /recon) has no working phase: it removes nothing, lists 3 for a decision, blocks on none")
 rc, out, F, M = amap("--all")
-check("AM-39", 1, rc, "--all blocks while rows/tests for removed requirements remain")
+check("AM-39", (0, 0, 3), (len(M["delta"]["retire_rows"]), len(M["delta"]["retire_tests"]), len(M["delta"]["retire_needs_decision"])),
+      "/accept (--all, no working phase) removes nothing: the 3 candidates wait for a decision")
+rc, out, F, M = amap("--all", "--working-phase", "1")
+check("AM-39b", 3, len(M["delta"]["retire_rows"]) + len(M["delta"]["retire_tests"]), "--working-phase 1 may remove phase 1's own rows/tests")
 write("docs/design/phases/1/specs/orders.md", SPEC.replace("| TC-ACC-10199 | ACC | FR-099 SHALL 1 — removed requirement | HIGH | acceptance |\n", ""))
 write("docs/design/phases/1/specs/amend.md", open(os.path.join(W, "docs/design/phases/1/specs/amend.md")).read()
       .replace("| TC-ACC-10902 | ACC | FR-005 SHALL 1 — dark mode toggle | LOW | acceptance |\n", ""))
 os.remove(os.path.join(W, "tests/acceptance/stale.spec.ts"))
 rc, out, F, M = amap("--all")
 d = M.get("delta", {})
-check("AM-40", (0, 0), (len(d.get("retire_rows", [])), len(d.get("retire_tests", []))), "once the rows and the test are removed, nothing is left to retire")
+check("AM-40", (0, 0, 0), (len(d.get("retire_rows", [])), len(d.get("retire_tests", [])), len(d.get("retire_needs_decision", []))),
+      "once the rows and the test are removed, nothing is left to retire")
+
+# ─── removals are limited to the phase being worked on ────────────────────────────────────────────
+shutil.rmtree(W, ignore_errors=True)
+W = tempfile.mkdtemp(prefix="docs-acceptance-scope.")
+git("init", "-q"); git("config", "user.email", "t@t"); git("config", "user.name", "t")
+write("docs/BRD.md", """# BRD
+## 4. Functional Requirements
+| ID | Requirement | Priority | Source |
+|----|-------------|----------|--------|
+| FR-001 | Buyers place orders | Must | r.md |
+| FR-002 | Buyers cancel orders | Must | r.md |
+| FR-004 | Orders sync to ERP | Should | r.md |
+""")
+write("docs/design/phases/1/PHASE_PLAN.md", "# Phase 1\n## Scope\n- FR-001, FR-002\n")
+PLAN2 = "# Phase 2\n## Scope\n- FR-004\n"
+write("docs/design/phases/2/PHASE_PLAN.md", PLAN2)
+HDR = "| TC ID | Category | Description | Priority | Tier |\n|---|---|---|---|---|\n"
+P1 = (HDR + "| TC-ACC-10101 | ACC | FR-001 SHALL 1 — place | HIGH | acceptance |\n"
+      "| TC-ACC-10102 | ACC | FR-002 SHALL 1 — cancel | HIGH | acceptance |\n"
+      "| TC-ACC-10301 | ACC | FR-010 SHALL 1 — dropped requirement, phase 1's row | HIGH | acceptance |\n")
+write("docs/design/phases/1/specs/orders.md", P1)
+P2 = (HDR + "| TC-ACC-20101 | ACC | FR-004 SHALL 1 — sync | MEDIUM | acceptance |\n"
+      "| TC-ACC-20102 | ACC | FR-011 SHALL 1 — dropped requirement, phase 2's own row | HIGH | acceptance |\n")
+write("docs/design/phases/2/specs/erp.md", P2)
+T1 = ("test('TC-ACC-10101 FR-001 SHALL 1 — place', async () => {})\n"
+      "test('TC-ACC-10102 FR-002 SHALL 1 — cancel', async () => {})\n"
+      "test('TC-ACC-10301 FR-010 SHALL 1 — dropped', async () => {})\n"
+      "test('TC-ACC-10555 FR-001 — phase 1 test whose row is gone', async () => {})\n"
+      "test('TC-ACC-014 legacy-numbered test whose row is gone', async () => {})\n")
+write("tests/acceptance/p1.spec.ts", T1)
+T2 = ("test('TC-ACC-20101 FR-004 SHALL 1 — sync', async () => {})\n"
+      "test('TC-ACC-20102 FR-011 SHALL 1 — dropped', async () => {})\n"
+      "test('TC-ACC-20555 FR-004 — phase 2 test whose row is gone', async () => {})\n")
+write("tests/acceptance/p2.spec.ts", T2)
+git("add", "-A"); git("commit", "-qm", "base")
+BASE2 = subprocess.run(["git", "-C", W, "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
+
+rc, out, F, M = amap("--phase", "2")
+d = M["delta"]
+nd = {x["id"]: x for x in d["retire_needs_decision"]}
+check("SC-01", ["TC-ACC-20102"], [r["id"] for r in d["retire_rows"]], "working phase 2 may retire only its OWN row for a dropped FR")
+check("SC-02", True, "TC-ACC-10301" in nd and nd["TC-ACC-10301"]["owner"] == 1, "phase 1's row for a dropped FR is left in place: needs a decision (owner 1)")
+check("SC-03", ["TC-ACC-20555"], [t["id"] for t in d["retire_tests"]], "working phase 2 may delete only stale tests from its own ID block")
+check("SC-04", True, "TC-ACC-10555" in nd and "TC-ACC-014" in nd, "phase 1's stale test and a legacy-numbered one are left in place")
+check("SC-05", None, nd.get("TC-ACC-014", {}).get("owner", "x"), "a legacy ID has no provable owner, so it's never removed automatically")
+check("SC-06", 2, M["summary"]["blocking"], "only the working phase's own 2 retire items block its gate; the other phase's don't")
+write("agent_state/p2.json", json.dumps({"schema": "sdlc.test-results/v1", "verdict": "PASS", "cases": []}))
+amap("--phase", "2", "--merge-into", "agent_state/p2.json")
+names = " ".join(c["name"] for c in json.load(open(os.path.join(W, "agent_state/p2.json")))["cases"])
+check("SC-07", (True, False, False), ("TC-ACC-20102" in names, "TC-ACC-10301" in names, "TC-ACC-10555" in names),
+      "the gate's sidecar carries only the working phase's retire items")
+
+write("docs/design/phases/2/PHASE_PLAN.md", PLAN2 + "- Retires FR-010 (replaced by FR-004)\n")
+rc, out, F, M = amap("--phase", "2")
+check("SC-08", True, "TC-ACC-10301" in [r["id"] for r in M["delta"]["retire_rows"]],
+      "a phase-1 row becomes removable by phase 2 only when phase 2's PHASE_PLAN names its FR")
+write("docs/design/phases/2/PHASE_PLAN.md", PLAN2)
+
+# the guard: what did the working phase actually delete since it started?
+write("docs/design/phases/1/specs/orders.md", P1.replace("| TC-ACC-10102 | ACC | FR-002 SHALL 1 — cancel | HIGH | acceptance |\n", ""))
+write("tests/acceptance/p1.spec.ts", T1.replace("test('TC-ACC-10102 FR-002 SHALL 1 — cancel', async () => {})\n", ""))
+write("docs/design/phases/2/specs/erp.md", P2.replace("| TC-ACC-20102 | ACC | FR-011 SHALL 1 — dropped requirement, phase 2's own row | HIGH | acceptance |\n", ""))
+write("tests/acceptance/p2.spec.ts", T2.replace("test('TC-ACC-20102 FR-011 SHALL 1 — dropped', async () => {})\n", ""))
+rc, out, F, M = amap("--phase", "2", "--diff-base", BASE2)
+outside = {x["id"]: x for x in M["removed_outside_phase"]}
+check("SC-09", ["TC-ACC-10102"], sorted(outside), "deleting phase 1's row + test while working on phase 2 is flagged; deleting phase 2's own is not")
+check("SC-10", [1], outside.get("TC-ACC-10102", {}).get("owner"), "…with the owning phase")
+check("SC-11", 1, rc, "…and it blocks the working phase's gate")
+write("agent_state/p2.json", json.dumps({"schema": "sdlc.test-results/v1", "verdict": "PASS", "cases": []}))
+amap("--phase", "2", "--diff-base", BASE2, "--merge-into", "agent_state/p2.json")
+check("SC-12", True, any("REMOVED OUTSIDE PHASE" in c["name"] and "TC-ACC-10102" in c["name"]
+                         for c in json.load(open(os.path.join(W, "agent_state/p2.json")))["cases"]),
+      "the removal lands in the sidecar as a blocking case (restore it)")
+write("docs/design/phases/1/specs/orders.md", P1)
+write("tests/acceptance/p1.spec.ts", T1.replace("test('TC-ACC-014 legacy-numbered test whose row is gone', async () => {})\n", ""))
+rc, out, F, M = amap("--phase", "2", "--diff-base", BASE2)
+check("SC-13", ["TC-ACC-014"], [x["id"] for x in M["removed_outside_phase"]], "deleting a test with no provable owner is flagged too")
+write("tests/acceptance/p1.spec.ts", T1.replace("test('TC-ACC-10301 FR-010 SHALL 1 — dropped', async () => {})\n", ""))
+write("docs/design/phases/1/specs/orders.md", P1.replace("| TC-ACC-10301 | ACC | FR-010 SHALL 1 — dropped requirement, phase 1's row | HIGH | acceptance |\n", ""))
+write("docs/design/phases/2/PHASE_PLAN.md", PLAN2 + "- Retires FR-010 (replaced by FR-004)\n")
+rc, out, F, M = amap("--phase", "2", "--diff-base", BASE2)
+check("SC-14", [], [x["id"] for x in M["removed_outside_phase"]], "removing a phase-1 row + test is allowed when phase 2's plan names its FR")
 
 shutil.rmtree(W, ignore_errors=True)
 print("─" * 44)

@@ -90,38 +90,56 @@ the BRD says, those rows and tests change with it.
 | Recon finding | Requirement change | Acceptance change |
 |---|---|---|
 | UNSPEC (built, not in the docs) → FR backfilled, `Source: as-built` | new FR | **add** TC-ACC rows (in the phase whose code implements it) + tests |
-| DRIFT-DOC (built differently from the docs) → FR text updated | changed FR | **update** its rows (keep IDs whose SHALL survives, add new ones, retire removed ones) + tests |
+| DRIFT-DOC (built differently from the docs) → FR text updated | changed FR | **update** its rows (keep IDs whose SHALL survives, add new ones) + tests; rows for a removed SHALL are deleted only if the working phase owns them |
 | New SHALL on an existing FR | changed FR | **add** the missing rows + tests |
-| INVENTED, human ruled "drop" → FR removed / marked Won't | removed FR | **retire** its rows and **delete** their tests |
-| Test code whose TC-ACC ID no spec row defines | — (left behind) | **delete** the test |
+| INVENTED, human ruled "drop" → FR removed / marked Won't | removed FR | **retire** its rows and **delete** their tests, **only those the working phase owns**; the rest are listed for a decision |
+| Test code whose TC-ACC ID no spec row defines | — (left behind) | **delete** the test **if its ID is from the working phase's block**; else listed for a decision |
 | GAP-IMPL (documented, not built; `--fix=code`) | none | **add** rows if the FR has none; the tests come with the `/develop` catch-up |
+
+**Removal is limited to the working phase.** A phase may remove only acceptance rows and tests it
+owns: rows in its own spec, test IDs from its own block (TC-ACC-P····), or rows/tests for an FR its
+own PHASE_PLAN names (e.g. "Retires FR-010"). Every other candidate (another phase's row for a dropped
+FR, another phase's stale test, a legacy-numbered test with no provable owner) lands in
+`delta.retire_needs_decision`. It is **left in place**, listed in the report for the owning phase's
+work or a human, and blocks nothing. Adding and updating rows or tests is allowed in any phase.
 
 `acceptance-map.py` computes the list from the BRD, every phase's spec rows and the test code:
 ```bash
-python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json || true
-jq '.delta' agent_state/reconciliation/acceptance_map.json    # add / update / retire_rows / retire_tests
+# The working phase: the phase in progress (base_sha, no gate.passed), else --phase. If both exist and
+# differ, there is none, and removals are reported only.
+INPROG=$(for d in agent_state/phases/*/; do [ -f "$d/base_sha" ] && [ ! -f "$d/gate.passed" ] && basename "$d"; done | sort -n | tail -1)
+WP="${INPROG:-${ARG_PHASE:-}}"; [ -n "$INPROG" ] && [ -n "${ARG_PHASE:-}" ] && [ "$INPROG" != "$ARG_PHASE" ] && WP=""
+PRE_SHA=$(git rev-parse HEAD)
+python3 .claude/hooks/acceptance-map.py ${WP:+--working-phase $WP} --out agent_state/reconciliation/acceptance_map.json || true
+jq '.delta' agent_state/reconciliation/acceptance_map.json   # add / update / retire_rows / retire_tests / retire_needs_decision
 ```
 
 **Bare `/recon` (report only):** the drift report gets an `## Acceptance changes` table: the map's
 `delta`, plus the changes the doc findings imply once applied (each DRIFT-DOC FR → update, each UNSPEC
-→ add, each INVENTED → retire if the human drops it). Nothing is written.
+→ add, each INVENTED → retire if the human drops it), with each removal marked as either the working
+phase's or needing a decision. Nothing is written.
 
 **`--fix=docs --apply`:** after the BRD/TRD edits (`/reconcile` Step 4), apply the acceptance changes
 (`/reconcile` Step 4b):
-1. `spec_writer` (`MODE: acceptance-amend`) with the map's add / update / retire-row lines: writes,
-   rewrites or deletes the TC-ACC rows in the owning phase's spec, with an `## Amendments` line each.
-2. `acceptance_test_agent` (`MODE: amend-tests`) with the same list plus retire-test lines: writes the
-   tests for new rows, updates the tests for changed rows, deletes the tests for retired rows and the
-   stale ones. It writes the test code and doesn't need a deployed build. Running the tests is the
-   next gate's or `/accept`'s job.
-3. Re-run the map. Done when `add`, `retire_rows` and `retire_tests` are empty and every `update`
-   entry has `rows_amended: true`. The CHANGED status itself clears when the next green gate or
+1. `spec_writer` (`MODE: acceptance-amend`, `WORKING_PHASE: $WP`) with the map's add, update and
+   `retire_rows` lines (never the `retire_needs_decision` ones): writes or rewrites TC-ACC rows in the
+   owning phase's spec and deletes only the working phase's retired rows, with an `## Amendments` line each.
+2. `acceptance_test_agent` (`MODE: amend-tests`, `WORKING_PHASE: $WP`) with the same list plus the
+   `retire_tests` lines: writes the tests for new rows, updates the tests for changed rows, deletes
+   only the listed tests. It writes the test code and doesn't need a deployed build. Running the tests
+   is the next gate's or `/accept`'s job.
+3. Re-run the map with the guard:
+   `acceptance-map.py ${WP:+--working-phase $WP} --diff-base $PRE_SHA`. Done when `add`,
+   `retire_rows`, `retire_tests` and `removed_outside_phase` are empty and every `update` entry has
+   `rows_amended: true`. Anything in `removed_outside_phase` was deleted outside the working phase:
+   restore it before committing. The CHANGED status itself clears when the next green gate or
    `/accept` records the new baseline.
 4. Commit the rows and tests with the doc edits:
    `docs(recon): … — acceptance: +N rows, ~N updated, -N retired`.
 
 **`--fix=code --apply`:** the specs win, so the requirements don't change. Recon adds rows for any FR
-that has none and retires rows and tests for FRs the BRD no longer has, both through step 1 above.
+that has none, and retires the working phase's own rows and tests for FRs the BRD no longer has, both
+through steps 1–3 above.
 The tests for the catch-up work are written by `/develop`'s acceptance agent when it builds the gap.
 
 ## Where each path starts

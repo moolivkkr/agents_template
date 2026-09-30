@@ -893,28 +893,42 @@ phase is every FR delivered so far plus this phase's, so a BRD change since an e
 `product_manager` change request, `/recon --fix=docs --apply`, a hand edit) is handled here, not
 discovered at release:
 ```bash
-python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --out agent_state/phases/${PHASE}/reports/acceptance_map.json || true
+python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --diff-base "$(cat agent_state/phases/${PHASE}/base_sha)" \
+  --out agent_state/phases/${PHASE}/reports/acceptance_map.json || true
 jq -r '(.delta.add[] | "\(.fr) \(.status) phases=\(.phases|join(",")) \(.detail)"),
        (.delta.update[] | "\(.fr) CHANGED phases=\(.phases|join(",")) \(.detail)"),
        (.delta.retire_rows[] | "retire row \(.id) (\(.reason))"),
        (.delta.retire_tests[] | "retire test \(.id) (\(.reason))")' agent_state/phases/${PHASE}/reports/acceptance_map.json
+jq -r '.delta.retire_needs_decision[] | "needs decision: \(.kind) \(.id) (phase \(.owner // "?")) \(.reason)"' \
+  agent_state/phases/${PHASE}/reports/acceptance_map.json   # NOT this phase's: never removed here
 ```
+**This phase never removes another phase's acceptance rows or tests.** The `retire` lines are only
+Phase ${PHASE}'s own: rows in its spec, test IDs from its block, or FRs its PHASE_PLAN names. The
+"needs decision" lines belong to other phases: copy them into the phase report under "Acceptance
+removals awaiting their owning phase", and never pass them to an agent. They don't block this gate.
+`--diff-base` makes the map (and so the gate) block on any TC-ACC row or test this phase deleted but
+doesn't own.
 If any FR or `retire row` line prints, spawn `spec_writer` (subagent_type: spec_writer) with
-`MODE: acceptance-amend` and those lines. It rewrites those FRs' TC-ACC rows to the current BRD text
-in the phase that owns each FR (this phase for NEW/PARTIAL rows of this phase's FRs), and deletes the
-retired rows. Wait for it, then pass every printed line (retire-test lines too) to Track B as
-`CHANGED_FRS`. Nothing printed → `CHANGED_FRS: none`. Retire items block this gate, like missing tests.
+`MODE: acceptance-amend`, `WORKING_PHASE: ${PHASE}` and those lines. It rewrites those FRs' TC-ACC rows to the current BRD text
+in the phase that owns each FR (this phase for NEW/PARTIAL rows of this phase's FRs), and deletes this
+phase's retired rows. Wait for it, then pass the printed FR and `retire` lines (not the "needs
+decision" ones) to Track B as `CHANGED_FRS`. Nothing printed → `CHANGED_FRS: none`. This phase's own
+retire items block its gate, like missing tests.
 
 ```
 Agent prompt (subagent_type: acceptance_test_agent): "[GROUND TRUTH] You are acceptance_test_agent running Wave 4 Track B for Phase ${PHASE}.
 CHANGED_FRS: <the pre-step list, or none> — update (or add, or retire) the tests for these FRs' amended
-TC-ACC rows, whatever phase wrote them, and delete the tests on 'retire' lines (test-changes.json entry);
-each changed pre-existing test gets its TEST-CHANGE comment citing spec: the row.
+TC-ACC rows, whatever phase wrote them, and delete ONLY the tests on 'retire' lines (test-changes.json
+entry). WORKING_PHASE is ${PHASE}: never delete, skip or weaken another phase's acceptance test. For
+another phase's CHANGED FR you add and update only. Each changed pre-existing test gets its TEST-CHANGE
+comment citing spec: the row.
 After the run, merge the requirement map into your sidecar (every FR delivered so far + this phase's):
-  python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/acceptance_report.json \
+  python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --diff-base \"$(cat agent_state/phases/${PHASE}/base_sha)\" \
+    --results agent_state/phases/${PHASE}/reports/acceptance_report.json \
     --merge-into agent_state/phases/${PHASE}/reports/acceptance_report.json --out agent_state/phases/${PHASE}/reports/acceptance_map.json
-  (a Must/Should FR with no TC-ACC row, a SHALL with no row, a changed FR, or a failing FR becomes an
-  UNTESTED case the gate blocks on).
+  (a Must/Should FR with no TC-ACC row, a SHALL with no row, a changed FR, a failing FR, this phase's
+  own leftover retire items, and any row/test this phase removed but doesn't own become UNTESTED cases
+  the gate blocks on).
 BASE URL: ${APP_BASE_URL} (qa on lab-cluster projects). PREREQUISITE: GET <BASE URL>/healthz returns 200
 (CLI: the built binary answers --version). If not, verdict BLOCKED — never fake PASS.
 Every FR-* acceptance criterion in scope, per persona, as COMMITTED runnable specs under

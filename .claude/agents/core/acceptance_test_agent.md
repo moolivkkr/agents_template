@@ -167,9 +167,11 @@ fi
 5. **Changed requirements (`CHANGED_FRS` in your prompt).** A requirement changed after its tests
    were written, and `spec_writer` amended its TC-ACC rows (see the spec's `## Amendments`). Your scope
    includes those FRs, whatever phase wrote their tests: update each test to its amended row (a
-   `TEST-CHANGE` comment citing `spec:` the row), add tests for new rows, and delete tests for retired
-   IDs with an entry in `agent_state/phases/{{PHASE}}/test-changes.json`. A test that still passes
-   against the old criterion is not evidence for the new one.
+   `TEST-CHANGE` comment citing `spec:` the row), add tests for new rows, and delete only the tests
+   on `retire` lines, with an entry in `agent_state/phases/{{PHASE}}/test-changes.json`. A test that
+   still passes against the old criterion is not evidence for the new one. **Never delete, skip or
+   weaken another phase's acceptance test**, even one whose row was marked `pending retirement`. The
+   gate's `--diff-base` check blocks any TC-ACC test removed outside this phase.
 
 ## Step 2 — Test data, the safe way
 
@@ -278,8 +280,9 @@ Your prompt carries the `acceptance-map.py` delta:
 | Line | Do |
 |---|---|
 | `add FR-xxx` | write one test per new TC-ACC row of the FR, as in Step 3 (named with the ID, asserting the SHALL literally, envelope/contract checks, persona boundaries) |
-| `update FR-xxx` | read the spec's `## Amendments` line; update each kept row's test to the amended row, add tests for new rows, delete tests for retired IDs |
-| `retire row TC-ACC-…` / `retire test TC-ACC-…` | delete the test (the whole file if it held only retired IDs) |
+| `update FR-xxx` | read the spec's `## Amendments` line; update each kept row's test to the amended row, add tests for new rows. A row marked `pending retirement` keeps its test |
+| `retire row TC-ACC-…` / `retire test TC-ACC-…` | delete the test (the whole file if it held only retired IDs). These lines are only ever the working phase's own |
+| anything else (another phase's test, a "needs decision" item) | **don't touch it** |
 
 Rules:
 - A changed pre-existing test gets its one-line `TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <row>)`
@@ -289,8 +292,9 @@ Rules:
 - If the runner can list tests without executing them (`npx playwright test --list`, `go test -list .`,
   `pytest --collect-only -q`), list them to prove the new files parse and the new IDs are named.
   Don't start the app.
-- Finish with `acceptance-map.py` in source mode: every added or updated row has a named test, and
-  `retire_tests` is empty. Commit: `test(acceptance): follow requirement changes — +N ~N -N (TC-ACC-…)`.
+- Finish with `acceptance-map.py ${WORKING_PHASE:+--working-phase $WORKING_PHASE} --diff-base <sha from before you
+  started>` in source mode: every added or updated row has a named test, and `retire_tests` and
+  `removed_outside_phase` are empty. Commit: `test(acceptance): follow requirement changes — +N ~N -N (TC-ACC-…)`.
 - Never weaken a kept assertion to match the code. If the as-built behaviour contradicts the amended
   row, the test asserts the row. The failure shows up at the next run, where it belongs.
 

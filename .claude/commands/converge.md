@@ -116,15 +116,18 @@ complexity class per `scale-adaptive-depth.md` so `/develop` picks the right wav
 The spec wins here, so the requirements don't change, but the acceptance inventory must still match
 them:
 ```bash
-python3 .claude/hooks/acceptance-map.py ${ARG_PHASE:+--phase $ARG_PHASE} --out agent_state/convergence/acceptance_map.json || true
-jq '.delta | {add, retire_rows, retire_tests}' agent_state/convergence/acceptance_map.json
+# working phase as in /recon § Acceptance changes: the phase in progress, else --phase
+python3 .claude/hooks/acceptance-map.py ${ARG_PHASE:+--phase $ARG_PHASE} ${WP:+--working-phase $WP} --out agent_state/convergence/acceptance_map.json || true
+jq '.delta | {add, retire_rows, retire_tests, retire_needs_decision}' agent_state/convergence/acceptance_map.json
 ```
 - **An FR with a catch-up task and no TC-ACC rows** (`delta.add`): the task's "Tests owed" includes
   "TC-ACC rows for FR-xxx", and with `--apply` `spec_writer` (`MODE: acceptance-amend`) writes the rows
   now. Their tests come from `/develop`'s acceptance agent when it builds the gap.
-- **Rows or tests for FRs the BRD no longer has** (`delta.retire_rows`, `delta.retire_tests`): list
-  them under `## Acceptance to retire`. With `--apply`, `spec_writer` deletes the rows and
-  `acceptance_test_agent` (`MODE: amend-tests`) deletes the tests.
+- **Rows or tests for FRs the BRD no longer has:** only the working phase's own (`delta.retire_rows`,
+  `delta.retire_tests`) are removed with `--apply` (`spec_writer` deletes the rows,
+  `acceptance_test_agent` `MODE: amend-tests` deletes the tests, then the `--diff-base` guard must show
+  nothing `removed_outside_phase`). Other phases' (`delta.retire_needs_decision`) are listed under
+  `## Acceptance to retire — needs a decision` and left in place.
 - `delta.update` (CHANGED FRs) is a docs-side change. Leave it to `/recon --fix=docs` or the next gate.
 
 ## Step 4 — Write the delta file
@@ -150,7 +153,8 @@ DELTA-... (as above, dependency-ordered)
 - FR-018: code returns 200 where spec says 202 — spec stale? confirm before building.
 
 ## Acceptance rows (Step 3b)
-- to add: FR-031 (no TC-ACC rows) · to retire: TC-ACC-10199 (FR-099 not in the BRD)
+- to add: FR-031 (no TC-ACC rows) · to retire (working phase 3): TC-ACC-30199 (FR-099 not in the BRD)
+- needs a decision, left in place: TC-ACC-10301 (phase 1's row; FR-010 not in the BRD)
 ```
 
 ## Step 5 — Report / Apply

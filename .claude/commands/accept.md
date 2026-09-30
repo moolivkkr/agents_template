@@ -344,18 +344,23 @@ jq -r '(.delta.add[] | "\(.fr) \(.status) phases=\(.phases|join(",")) \(.detail)
        (.delta.update[] | "\(.fr) CHANGED phases=\(.phases|join(",")) \(.detail)"),
        (.delta.retire_rows[] | "retire row \(.id) (\(.reason))"),
        (.delta.retire_tests[] | "retire test \(.id) (\(.reason))")' agent_state/accept/acceptance_map.json
+jq -r '.delta.retire_needs_decision[] | "needs decision: \(.kind) \(.id) (phase \(.owner // "?")) \(.reason)"' agent_state/accept/acceptance_map.json
 ```
+`/accept` has no working phase, so `retire_rows`/`retire_tests` are always empty here: **it never
+removes an acceptance row or test**. Candidates for removal (rows and tests for requirements that were
+dropped or marked Won't, or stale tests) print as "needs decision" with their owning phase.
 
 | Status | What it means | What `/accept` does now |
 |---|---|---|
 | CHANGED | the FR's text changed after its tests were recorded; they check the old criteria | `spec_writer` `MODE: acceptance-amend` rewrites its TC-ACC rows in the owning phase; Step 3 updates the tests |
 | NEW / PARTIAL, as-built or in a gated phase | behaviour exists, rows are missing | same: amend rows, then Step 3 writes the tests |
 | NEW, in no phase, not as-built | a requirement nobody has built yet | not fixable here: it stays blocking; the report says "run `/plan`" |
-| retire row / retire test | the FR was dropped or marked Won't, or a test's row is gone | `spec_writer` deletes the row; Step 3's agent deletes the test |
+| needs decision (removal candidate) | the FR was dropped or marked Won't, or a test's row is gone | **nothing is removed.** The report lists each with its owning phase under "Acceptance rows/tests awaiting a removal decision"; release readiness is at most `CONDITIONAL` while any remain |
 
-Spawn `spec_writer` (subagent_type: spec_writer) once with `MODE: acceptance-amend` and the fixable
-FR and retire-row lines, wait for it, and pass every line (retire-test lines too) to Step 3's
-`acceptance_test_agent` as `CHANGED_FRS`. The `--all` check after the run blocks READY on anything left.
+Spawn `spec_writer` (subagent_type: spec_writer) once with `MODE: acceptance-amend`, no
+`WORKING_PHASE`, and the fixable FR lines (add/update only), wait for it, and pass the same lines to
+Step 3's `acceptance_test_agent` as `CHANGED_FRS`. Neither deletes anything in `/accept`. For a CHANGED
+FR whose SHALL was removed, the old row and test stay, noted as pending retirement.
 
 ---
 
@@ -454,6 +459,8 @@ MAP_RC=$?   # 0 = every Must/Should FR in the BRD has current, passing acceptanc
 ```
 `agent_state/accept/acceptance_map.md` is the live requirement → test matrix (it replaces the old
 `docs/traceability-matrix.md`). `MAP_RC != 0` caps release readiness at `NOT READY` and lists the FRs.
+Any `delta.retire_needs_decision` item caps it at `CONDITIONAL` (a removal the owning phase or a human
+has to decide).
 When the release verdict is READY, record the baseline so the next requirement change is detected:
 ```bash
 python3 .claude/hooks/acceptance-map.py --all --results "$S" --record --out agent_state/accept/acceptance_map.json

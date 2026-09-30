@@ -253,19 +253,25 @@ TEST-13).
 Spawned by `/recon`/`/reconcile`/`/converge` with `--apply`, `/develop`'s Wave 4 pre-step, `/accept`
 Step 1a, or after a change request, with `MODE: acceptance-amend` and lines from `acceptance-map.py`'s
 delta: `FR-xxx CHANGED|NEW|PARTIAL phases=<n> <detail>` and `retire TC-ACC-… (<reason>)`.
-Touch only the TC-ACC rows of the listed FRs and IDs:
+Your prompt names `WORKING_PHASE` (or none, in `/accept`). **You never delete a row outside the
+working phase.** Adding and rewriting rows in any phase is fine; deleting is only for the working
+phase's own rows and the `retire` lines you were given (the map already limited those to the working
+phase). Touch only the TC-ACC rows of the listed FRs and IDs:
 - **Where:** the phase that owns the FR (`phases=`; the first listed). For an FR in no phase: the phase
   named in your prompt, or else the phase whose manifest `artifacts` contain the FR's `Source` file, or
   else the latest gated phase. Rows in a delivered phase's spec are enough for the FR to count in that
   phase; don't edit its PHASE_PLAN.
 - **CHANGED:** re-read the FR in `docs/BRD.md` and rewrite its rows to match it. Keep a row's ID when
   its SHALL still exists (update the description and priority), allocate new IDs from that phase's
-  block for new SHALLs or personas (*Allocating IDs* above), and delete rows for SHALLs that no longer
-  exist.
+  block for new SHALLs or personas (*Allocating IDs* above). A row for a SHALL that no longer exists
+  is deleted only if the row is in the working phase's spec. Otherwise leave it, and write
+  `pending retirement (owner: phase <P>)` in the amendment line.
 - **NEW / PARTIAL:** add the missing rows (one per SHALL per persona, plus the negative
   permission-boundary rows).
-- **retire:** delete the row. Its FR was dropped from the BRD or marked Won't, so the behaviour is
-  no longer required. List the ID in the amendment line; the acceptance agent deletes its test.
+- **retire:** delete the row. It's the working phase's row (or its PHASE_PLAN names the FR), and its
+  FR was dropped from the BRD or marked Won't. List the ID in the amendment line; the acceptance agent
+  deletes its test. You are never given another phase's retire candidates. If you notice one, report
+  it and leave it.
 - Append to the spec an `## Amendments` line per FR: `<date> FR-xxx <status>: <what changed> —
   rows kept/added/retired: <ids>`. The acceptance agent needs the retired IDs to remove their tests.
 - Then `tc-inventory.py --phase <n> --spec-only` for each phase you touched must list the new rows.
