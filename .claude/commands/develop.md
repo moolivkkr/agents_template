@@ -408,8 +408,8 @@ The detailed procedure for each step lives in its own file so a session - or a w
 | Step 2.5 — API Contract Validation (UI phases only) | `~/.claude/skills/core/develop-steps/step-2-5-api-contract-validation.md` |
 | Step 3 — Tests | `~/.claude/skills/core/develop-steps/step-3-tests.md` |
 | Step 3d + 3e — Reconciliation (SEQUENTIAL — 3d before 3e) | `~/.claude/skills/core/develop-steps/step-3d-3e-reconciliation.md` |
-| Step 3f — Code Optimization (MANDATORY) | `~/.claude/skills/core/develop-steps/step-3f-code-optimization.md` |
-| Step 3g — Post-Optimization Test Re-run (CONDITIONAL SAFETY GATE) | `~/.claude/skills/core/develop-steps/step-3g-post-optimization-test-re-run.md` |
+| Step 3f — Code Optimization (NOT part of /develop — run `/optimize`; kept for reference) | `~/.claude/skills/core/develop-steps/step-3f-code-optimization.md` |
+| Step 3g — Post-Optimization Test Re-run (only after `/optimize`) | `~/.claude/skills/core/develop-steps/step-3g-post-optimization-test-re-run.md` |
 | Step 4 — Code Review + Acceptance Tests (PARALLEL TRACKS) | `~/.claude/skills/core/develop-steps/step-4-code-review-acceptance-tests.md` |
 | Step 6 — Phase Gate | `~/.claude/skills/core/develop-steps/step-6-phase-gate.md` |
 | Step 6b — Documentation (runs in parallel with gate file writes) | `~/.claude/skills/core/develop-steps/step-6b-documentation.md` |

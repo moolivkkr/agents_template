@@ -218,9 +218,11 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 | TC-UI-NNN | Sort by column header | LOW | component |
 | TC-UI-NNN | Responsive — desktop (1280px) | HIGH | component |
 | TC-UI-NNN | Responsive — mobile (375px) | HIGH | component |
-| TC-UI-NNN | Accessibility — keyboard navigation | HIGH | component |
-| TC-UI-NNN | Accessibility — screen reader | MEDIUM | component |
+| TC-A11Y-NNN | Accessibility — keyboard navigation (WCAG 2.2 AA) | HIGH | component |
+| TC-A11Y-NNN | Accessibility — screen reader names/roles | MEDIUM | component |
 | TC-UI-NNN | Navigation — click row → detail page | HIGH | e2e |
+| TC-SEC-NNN | XSS-RENDER — stored markup in any user-supplied field renders as text | HIGH | component |
+| TC-SEC-NNN | SESSION-STORAGE — no token in localStorage/sessionStorage/URL after login | HIGH | e2e |
 
 ### Form Tests (if this screen has forms)
 | TC ID | Test Description | Priority | Tier |
@@ -243,7 +245,10 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 | TC-COMP-NNN | [ComponentName] | Accessibility — ARIA roles | MEDIUM | component |
 
 **Rules:**
-- Assign actual sequential TC-* IDs (not NNN placeholders) — coordinate with spec_writer's ID ranges
+- Assign real, PROJECT-UNIQUE TC-* IDs (not NNN placeholders) from this screen's block in spec_writer's
+  scheme (`P·10000 + k·100 + i` — see spec_writer *Allocating IDs*); tc-inventory flags any ID another
+  phase already defines. TC-ACC is acceptance; accessibility is TC-A11Y.
+- Put each ID in the test's NAME when writing tests (tc-inventory counts names, not comments)
 - Every interaction flow in the "Interaction Flows" section must have at least one TC-* ID
 - Every 4-state (loading/error/empty/data) must have a TC-* ID
 - Every form must have validation + submit + error mapping TC-* IDs

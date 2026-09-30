@@ -118,7 +118,10 @@ if [ -f "deploy/k8s/app.env" ]; then
   DEPLOY_TYPE=k8s; HEALTHY=false
   HEALTH_URL="http://${APP}-qa.localhost:${INGRESS_PORT}"
   if scripts/k8s/deploy.sh dev && scripts/k8s/env-reset.sh qa; then HEALTHY=true; fi
-  # deploy.sh qa's verdict already includes smoke + digest parity (qa pods run dev's digests)
+  # deploy.sh qa's verdict already includes smoke + digest parity (qa pods run dev's digests).
+  # On the release candidate, acceptance_test_agent runs the committed specs (commands."x:acceptance"),
+  # performance_agent the NFR-PERF load test and system_test_agent the qa system checks — each writes its
+  # sdlc.test-results/v1 sidecar under agent_state/accept/, and release readiness requires all PASS.
   cat agent_state/deploy/last-deploy-status.json
 
 elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
@@ -137,7 +140,7 @@ elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
 
   # Health check with retry (up to 90s — acceptance needs all services warm)
   echo "  Health checking..."
-  HEALTH_URL="http://localhost:${APP_PORT:-8080}/health"
+  HEALTH_URL="http://localhost:${APP_PORT:-8080}/healthz"   # runtime contract liveness; /readyz for readiness
   HEALTHY=false
   for i in $(seq 1 18); do
     if curl -sf "$HEALTH_URL" > /dev/null 2>&1; then

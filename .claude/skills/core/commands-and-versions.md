@@ -38,8 +38,15 @@ They all run exactly these. When one is wrong, fix the table, not the caller.
 ```
 
 - Purposes are lowercase and fixed: `install build typecheck lint test:unit test:integration test:ui
-  test:e2e test:mobile migrate seed run`, plus any project-specific `x:<name>`. Leave a row out when it
-  doesn't apply; don't write "N/A".
+  test:e2e test:mobile migrate seed run`, plus `x:<name>` rows. Leave a row out when it doesn't apply;
+  don't write "N/A".
+- **Conventional `x:` rows** that the testing agents look for:
+  - `x:acceptance`: the committed acceptance specs. **Required when the phase has FRs;** without it,
+    acceptance reports BLOCKED.
+  - `x:mobile-jest`: RN Jest.
+  - `x:perf`: the k6 script runner.
+  - `x:system`: the system-test script.
+  - `x:mutation`: optional, advisory.
 - `$PHASE` and `$APP_BASE_URL` are substituted at run time. JUnit output goes under
   `agent_state/phases/$PHASE/junit/` (see `testing/test-results-sidecar.md`).
 - **Test commands never retry failures silently.** Set Playwright `retries: 0` locally, and use

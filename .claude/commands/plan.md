@@ -334,6 +334,11 @@ timeout/retry/circuit-breaker design, and generates runbook stubs →
 `agent_state/phases/${PHASE}/reports/reliability_review.md` (+ `.json`). It also runs again in
 `/deploy` (Step 4d) to validate the deployed system against the SLOs it defined here.
 
+**Then — security merge (whenever threat_model_agent ran):** re-spawn `spec_writer`
+(subagent_type: spec_writer) in **security-merge mode**. It reads `reports/threat_model.md` and writes
+the phase's `TC-SEC-*` rows (k=00 block, with tier and priority) into the phase inventory, so they're
+in the gated TC inventory. Before this step existed, threat-model tests reached no tester and no gate.
+
 ---
 
 ## Step 4 — Spec Verification

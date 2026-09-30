@@ -76,7 +76,7 @@ cd <project>
 
 ### Verify
 ```bash
-curl http://localhost:<PORT>/health
+curl ${APP_BASE_URL:-http://localhost:<PORT>}/readyz   # runtime contract: /healthz liveness, /readyz readiness
 # Expected: {"status": "ok"}
 ```
 

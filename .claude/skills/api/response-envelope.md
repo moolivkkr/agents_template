@@ -85,8 +85,11 @@ The HTTP status carries the class; the body carries the detail:
   in integer minor units.
 - **Every response sets `X-Request-Id`,** which equals `meta.request_id` / `error.request_id`.
 - **Writes (POST) accept an `Idempotency-Key` header** (see `core/api-excellence.md` §Idempotency).
-- **Requests are wrapped too.** Request bodies are the resource payload, not `{"data": …}`: the
+- **Requests aren't wrapped.** Request bodies are the resource payload, not `{"data": …}`: the
   envelope is for responses.
+- **Operational endpoints are exempt:** `/healthz`, `/readyz` and `/api/version` (or the project's
+  VERSION_PATH) return plain, unwrapped JSON (`{"status":"ok"}`, `{"git_sha":"…","env":"qa"}`).
+  Probes, `smoke.sh` and the deployed-sha preflights read them directly.
 
 ## Types
 

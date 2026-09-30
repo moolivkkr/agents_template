@@ -71,17 +71,12 @@ Benchmark configuration:
 
 For each endpoint in scope:
 
-### Latency profiling
+### Latency and throughput — open model (same method as performance_agent's gated tier)
 ```bash
-# Warm-up: 10 requests (discard results)
-# Measurement: 100 requests, capture response times
-# Calculate: p50, p95, p99, max
-```
-
-### Throughput testing
-```bash
-# Sustained load: N concurrent connections for 30 seconds
-# Capture: requests/second, error rate
+# k6 constant-arrival-rate at the NFR target rate (NOT a fixed number of sequential or concurrent requests:
+# a closed model slows its own arrivals when the server slows and hides queueing — coordinated omission).
+# Warm-up stage first; thresholds = the NFR-PERF targets; dropped_iterations must be 0.
+# Capture p50/p95/p99/max, error rate, achieved rate. See ~/.claude/skills/testing/load-testing.md.
 ```
 
 ### Memory profiling

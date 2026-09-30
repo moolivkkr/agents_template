@@ -340,7 +340,8 @@ Wave 2A (sequenced — each step waits for the previous; skip a step whose agent
 Each spawn prompt (prepend the GROUND TRUTH line):
 ```
 Agent prompt (subagent_type: <role>): "[GROUND TRUTH] You are <role> running Wave 2 step 2A.<n> for Phase ${PHASE}.
-Read FIRST: agent_state/phases/${PHASE}/audit_report.md (what already exists: extend it, don't rebuild it)
+Read FIRST: agent_state/phases/${PHASE}/audit_report.md (+ audit_report_ui.md for ui_developer/mobile_developer)
+(what already exists: extend it, don't rebuild it)
 and agent_state/codebase/ (conventions). Then the phase specs in docs/design/phases/${PHASE}/specs/,
 IMPLEMENTATION_GUIDELINES.md (incl. §Runtime contract and §Commands and versions), and the outputs of
 the earlier 2A steps listed above.
@@ -426,7 +427,7 @@ Write agent_state/phases/${PHASE}/reports/candidate_selection.md and log a compl
 ```bash
 WINNER=$(grep -oE 'WINNER: c[0-9]+' "agent_state/phases/${PHASE}/reports/candidate_selection.md" | grep -oE 'c[0-9]+' | head -1)
 git merge --no-ff "cand/phase-${PHASE}/${WINNER}" -m "phase ${PHASE}: adopt candidate ${WINNER} (selected — see candidate_selection.md)"
-# Apply grafts named in candidate_selection.md (cherry-pick specific files — NEVER blind-merge a loser), then:
+# Grafts named in candidate_selection.md are HUNKS, applied during the step-5b adopt pass (never a blind merge of a loser); then:
 for i in $(seq 1 "${N}"); do
   C="c${i}"
   git worktree remove --force "agent_state/phases/${PHASE}/candidates/${C}" 2>/dev/null || true
@@ -556,7 +557,7 @@ Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the deployment strategy:
 | Project Type | Deploy Strategy | Health Check |
 |---|---|---|
 | **Has `deploy/k8s/app.env`** (lab cluster) | `scripts/k8s/deploy.sh dev`, then `scripts/k8s/deploy.sh qa` (promotes dev's digests) | The script's own verdict: smoke + digest parity; `HEALTHY` in `agent_state/deploy/last-deploy-status.json` |
-| Web API + UI | `docker compose up -d --build` | `curl -sf http://localhost:PORT/health` |
+| Web API + UI | `docker compose up -d --build` | `curl -sf http://localhost:PORT/healthz` (runtime contract; `/readyz` for readiness) |
 | CLI tool | `go build ./cmd/...` or `npm run build` | Binary exists + `./bin/app --version` exits 0 |
 | Library/SDK | `go build ./...` or `npm run build` | Build succeeds (no runtime to health check) |
 | WASM module | Build native + WASM targets | Both binaries exist |
@@ -805,7 +806,7 @@ Wave 4 Track A (parallel):
   ├─ Agent: tenant_isolation_verifier → reports/tenant_isolation.md    (only if multi-tenant; see IMPL_GUIDELINES)
   ├─ Agent: dependency_scanner       → reports/dependency_scan.md      (CVEs, licenses, outdated)
   ├─ Agent: code_quality_verifier    → reports/quality_gate.md         (TODOs, stubs, secrets, dead code)
-  ├─ Agent: accessibility_auditor    → reports/accessibility_audit.md  (only if web UI; WCAG-AA against the BUILT UI)
+  ├─ Agent: accessibility_auditor    → reports/accessibility_audit.md  (only if web UI; WCAG 2.2 AA against the BUILT UI at BASE URL ${APP_BASE_URL})
   ├─ Agent: mobile_platform_auditor  → reports/mobile_platform_audit.md (only if mobile screens changed; iOS + Android)
   ├─ Agent: ui_standards_auditor     → reports/ui_standards_audit.md   (web/mobile UI phases; every page vs standards + Stitch baseline)
   ├─ Agent: migration_safety_reviewer → reports/migration_safety.md    (only if the phase adds migrations)
@@ -859,7 +860,7 @@ Each spawn prompt (prepend GROUND TRUTH):
 ```
 Agent prompt (subagent_type: <reconciler>): "[GROUND TRUTH] You are <reconciler> running Wave 4 Track C for Phase ${PHASE}.
 spec_test_reconciler: FIRST run the deterministic inventory — it is your evidence, your prose explains it:
-  python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/test_results.json \
+  python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/test_results.json [+ every other results sidecar that exists: acceptance_report.json, performance_results.json, e2e_results.json, mobile_e2e_results.json] \
     --diff-base $(cat agent_state/phases/${PHASE}/base_sha) --out agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json
   (an ID counts only when a test NAMED with it ran and passed; skipped/comment-only/duplicate IDs and
   unacknowledged test weakening fail it). Then write specs_vs_tests.md around that JSON.
@@ -894,6 +895,10 @@ idempotent operations with backoff+jitter, readiness vs liveness semantics, grac
 drain, bounded pools against the DB connection budget, metric label cardinality.
 Report every violation with file:line. Produce reports/reliability_review.md ending with 'BLOCKING:N WARNING:N INFO:N'."
 
+Agent prompt (subagent_type: system_test_agent): "[GROUND TRUTH] You are system_test_agent running Wave 4 Track D for Phase ${PHASE} (only when the phase has an availability SLO, or the roster lists it).
+BASE URL: ${APP_BASE_URL} (qa). Run your readiness-semantics, rolling-restart, pod-kill and DB-restart checks and the exit-criteria trace.
+Produce reports/system_test_results.md + system_test_results.json (sdlc.test-results/v1)."
+
 Agent prompt (subagent_type: performance_agent): "[GROUND TRUTH] You are performance_agent running Wave 4 Track D for Phase ${PHASE}.
 BASE URL: ${APP_BASE_URL} (qa). RUN (don't recommend) an open-model load test (k6 constant-arrival-rate)
 for every NFR-PERF-* in scope at its target rate, with thresholds = the NFR targets. Warm up first,
@@ -921,6 +926,7 @@ in_roster migration_safety_reviewer && REQUIRED_W4="$REQUIRED_W4 migration_safet
 in_roster breaking_change_reviewer  && REQUIRED_W4="$REQUIRED_W4 breaking_change_review.md"
 in_roster reliability_agent         && REQUIRED_W4="$REQUIRED_W4 reliability_review.md"
 in_roster performance_agent         && REQUIRED_W4="$REQUIRED_W4 performance_results.md"
+in_roster system_test_agent         && REQUIRED_W4="$REQUIRED_W4 system_test_results.md"
 for R in $REQUIRED_W4; do
   F="$(report_path "$R")"
   if [ ! -f "$F" ]; then
@@ -996,7 +1002,7 @@ Before spawning the fix agent, **classify each failure** using the adaptive repl
 | SCHEMA | Migration/constraint error | ALL tiers |
 | UI | Component render failure | UI + E2E |
 | CONFIG | Health check fail, connection refused | integration + E2E + acceptance |
-| FLAKY | Passes on retry | failing tier only |
+| FLAKY | Failed, then passed on retry (counts as FAILING at the gate) | race/ordering triage of the flaky tests (shared state, time, unawaited async, racing selectors); re-run the tier 3× with -race / repeat; quarantine only with issue + expiry |
 | MOBILE-PLATFORM | Fails on one platform only (iOS xor Android), permission/deep-link/lifecycle flow, native crash on launch | mobile component + device tier on BOTH platforms |
 | MOBILE-BUILD | iOS/Android binary fails to build or install | Wave 3.5 mobile build + ALL mobile tiers |
 
@@ -1075,7 +1081,10 @@ When anything is stale, in this order:
    refreshing each tier sidecar (the Wave 3v prompt).
 3. **Re-run the runtime tiers if the code under them changed.** Re-spawn `mobile_e2e_orchestrator`
    if mobile code changed, and `acceptance_test_agent` if any code changed since its run.
-4. **Re-run the inventory.** Re-spawn `spec_test_reconciler` for `tc-inventory.py --results … --diff-base`.
+4. **Re-run the inventory LAST, unconditionally,** after steps 2–3 (and after Track B/D acceptance and
+   performance have their final sidecars). Re-spawn `spec_test_reconciler` with EVERY results sidecar:
+   `tc-inventory.py --results reports/test_results.json reports/acceptance_report.json reports/performance_results.json reports/e2e_results.json [reports/mobile_e2e_results.json …] --diff-base …`.
+   Otherwise the gate reads a Wave 4 inventory in which acceptance/performance rows are still UNTESTED.
 5. **Re-review security** (SEC-07) when code changed after Wave 4. Re-spawn `security_reviewer`
    (subagent_type: security_reviewer) scoped to
    `git diff $(cat $P/wave4_sha)..HEAD -- . ':(exclude)agent_state'`, then re-run its fix loop if it
@@ -1182,7 +1191,7 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    - migration_safety.md — when the phase adds/changes DB migrations (migration_safety_reviewer)
    - breaking_change_review.md — when the phase changes a contract an earlier phase consumes (breaking_change_reviewer)
    - visual_validation.md — when `*.wireframe.html` files exist for this phase
-   - ui_test_results.md / ui_code_optimization.md — when `frontend.enabled = true`
+   - ui_test_results.md — when `frontend.enabled = true` (ui_code_optimization.md only if `/optimize` ran; the optimizers are not part of /develop)
    - accessibility_audit.md — when `accessibility_auditor` is in the roster (web UI phases)
    - ui_standards_audit.md (+ .json) — when `ui_standards_auditor` is in the roster; `blocking` must be 0
      or each remaining item carried forward (e.g. a reconstructed baseline awaiting approval)
@@ -1272,7 +1281,9 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    ```bash
    M="agent_state/phases/${PHASE}/manifest.json"; [ -f "$M" ] || echo '{}' > "$M"
    jq --argjson score "${GATE_SCORE:-0}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-     '.gate = {passed: true, verified_by: "verify-gate.sh", roster_complete: true, gate_score: $score, ts: $ts}' \
+     --slurpfile mig <(cat agent_state/phases/${PHASE}/migration_agent/manifest.json 2>/dev/null || echo '{}') \
+     '.gate = {passed: true, verified_by: "verify-gate.sh", roster_complete: true, gate_score: $score, ts: $ts}
+      | .schema.migrations_created = ($mig[0].migrations_created // $mig[0].migrations // [])' \
      "$M" > "$M.tmp" && mv "$M.tmp" "$M"
    touch "agent_state/phases/${PHASE}/gate.passed"
    bash .claude/hooks/verify-gate.sh "${PHASE}" || { rm -f "agent_state/phases/${PHASE}/gate.passed"; echo "⛔ final verify-gate failed — gate NOT passed"; }

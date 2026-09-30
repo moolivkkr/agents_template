@@ -12,18 +12,22 @@ spec:
     metadata: {labels: {app: api}}
     spec:
       securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+      terminationGracePeriodSeconds: 30     # > preStop + the app's drain timeout
       containers:
       - name: api
         image: api
         args: [serve]
+        # SIGTERM arrives while endpoints are still being removed: keep serving briefly, then drain.
+        # Native sleep action (no shell needed — distroless-friendly); GA in Kubernetes 1.34.
+        lifecycle: {preStop: {sleep: {seconds: 5}}}
         ports: [{containerPort: 8080}]
         envFrom: [{configMapRef: {name: app-config}}]
         env:
         - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_USER}}}
         - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_PASSWORD}}}
         - {name: DATABASE_URL, value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/app?sslmode=disable"}
-        readinessProbe: {httpGet: {path: /readyz, port: 8080}, periodSeconds: 5}
-        livenessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10}
+        readinessProbe: {httpGet: {path: /readyz, port: 8080}, periodSeconds: 5, timeoutSeconds: 2, failureThreshold: 3}
+        livenessProbe: {httpGet: {path: /healthz, port: 8080}, periodSeconds: 10, timeoutSeconds: 2, failureThreshold: 3}
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         resources:
           requests: {cpu: 50m, memory: 64Mi}

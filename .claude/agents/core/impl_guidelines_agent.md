@@ -197,8 +197,9 @@ the next section):
 
 Fill it from the decided stack, in the format of `~/.claude/skills/core/commands-and-versions.md`.
 Purposes are lowercase and fixed (`install build typecheck lint test:unit test:integration test:ui
-test:e2e test:mobile migrate seed run`, plus `x:<name>`); leave out a row that doesn't apply (never
-"N/A"); `$PHASE` and `$APP_BASE_URL` are substituted at run time; test commands never retry silently
+test:e2e test:mobile migrate seed run`, plus `x:<name>` — always write `x:acceptance` when the product
+has FRs (acceptance reports BLOCKED without it), and `x:perf`, `x:system`, `x:mobile-jest` when those
+tiers exist); leave out a row that doesn't apply (never "N/A"); `$PHASE` and `$APP_BASE_URL` are substituted at run time; test commands never retry silently
 and Go tests run with `-count=1`. Example for a Go API + React web app on PostgreSQL:
 
 ```markdown
@@ -217,6 +218,9 @@ and Go tests run with `-count=1`. Example for a Go API + React web app on Postgr
 | migrate | go run ./cmd/app migrate |
 | seed | go run ./cmd/app seed |
 | run | go run ./cmd/app serve |
+| x:acceptance | cd web && npx playwright test tests/acceptance --reporter=junit |
+| x:perf | k6 run perf/nfr.js |
+| x:system | ./scripts/system-tests.sh |
 
 | Component | Version |
 |---|---|

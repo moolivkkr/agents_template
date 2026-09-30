@@ -71,7 +71,7 @@
     "test_results": {
       "unit": "agent_state/phases/{{PHASE}}/reports/unit_tests.md",
       "integration": "agent_state/phases/{{PHASE}}/reports/integration_tests.md",
-      "e2e": "agent_state/e2e/results.md",
+      "e2e": "agent_state/phases/{PHASE}/reports/e2e_results.md",
       "e2e_workflows": "agent_state/e2e/workflows.json",
       "acceptance": "agent_state/phases/{{PHASE}}/reports/acceptance_report.md",
       "regression": "agent_state/phases/{{PHASE}}/reports/regression_check.md",

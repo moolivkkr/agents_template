@@ -177,6 +177,16 @@ docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
 # If --failover-test: run scripts/failover-test.sh
 ```
 
+### Deploy history (every target)
+`/rollback` redeploys the previous HEALTHY build from history — for local/staging/prod too — so every
+deploy appends one line in the same format `scripts/k8s/deploylib.py` writes for dev/qa:
+```bash
+mkdir -p "agent_state/deploy/${TARGET}"
+python3 -c 'import json,sys,datetime; print(json.dumps({"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "env": sys.argv[1], "git_sha": sys.argv[2], "images": json.loads(sys.argv[3]), "mode": "deploy", "verdict": sys.argv[4]}))' \
+  "${TARGET}" "$(git rev-parse --short=12 HEAD)" "${IMAGES_JSON:-{}}" "${VERDICT:-HEALTHY}" >> "agent_state/deploy/${TARGET}/history.jsonl"
+```
+(`IMAGES_JSON` = `{"<service>": "<repo>@sha256:<digest>"}` for containerized targets; `VERDICT` from Step 4/5.)
+
 ### Staging / Production
 **⚠ Confirm with user before proceeding for staging and prod targets.**
 

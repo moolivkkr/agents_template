@@ -60,7 +60,7 @@ graph TB
 
     subgraph "docker-compose network: app-network"
         subgraph "Stateless Services"
-            api["API Server<br/>:8080 → :8080<br/>Go/Chi v5<br/>healthcheck: /health"]
+            api["API Server<br/>:8080 → :8080<br/>Go/Chi v5<br/>probes: /healthz + /readyz"]
             ui["UI Dev Server<br/>:3000 → :3000<br/>React 18 + Vite<br/>hot-reload enabled"]
         end
 
