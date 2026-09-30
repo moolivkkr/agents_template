@@ -86,6 +86,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | Command | When to use |
 |---------|------------|
 | `/init` | Project setup (run once) |
+| `/autonomous [--resume]` | Full pipeline init → map → discuss → plan → design → develop → accept with ONE human checkpoint; kept running by the autonomous-continue Stop hook (see docs/AUTONOMOUS_GUIDE.md) |
 | `/remember <fact>` | Record a Tier 0 ground-truth fact (retired/renamed component, hard constraint) — propagates to every session + subagent |
 | `/worklog` | Consolidate all phase artifacts into one human-readable ledger (`docs/WORKLOG.md`) — what was implemented, decided (and why), and pending, across every agent |
 | `/plan --phase=N` | Plan a phase before implementing |

@@ -1,0 +1,154 @@
+# Autonomous Guide — running `/startup:autonomous`
+
+`/startup:autonomous` runs the whole SDLC — init, map, discuss, plan, design, develop for every
+phase, then local deploy and global acceptance — with **one** required human checkpoint before any
+code is written. This guide covers what it does, where it stops on purpose, and how to resume.
+
+Command file: `.claude/commands/autonomous.md`.
+
+---
+
+## 1. Before you start
+
+- `requirements/` exists and is non-empty (Step 0 stops otherwise).
+- Docker is running; `git`, `node`, `npm` on PATH; common dev ports (3000, 5432, 8080) free. Step 0
+  checks these and stops early with fix instructions rather than spending tokens on a doomed run.
+- **Framework hooks are in the project.** `new-project.sh` copies `.claude/hooks/` and
+  `.claude/settings.json` into new projects. For an existing project, Step 0 copies them from
+  `~/.claude/hooks/startup/` (staged there by `install.sh`). If the hook is still missing, the run
+  continues with a warning, but nothing will stop it from ending between steps. Hooks registered
+  mid-session take effect for Stop checks from the next turn.
+
+## 2. The flow
+
+```
+Step 0   Pre-flight + hooks + run.json
+Step 1   /init --auto            BRD + IMPLEMENTATION_GUIDELINES + agents (gaps auto-researched)
+Step 1b  /map                    codebase knowledge base (skipped for greenfield)
+Step 2a  /discuss --auto         assumptions + decisions for phase 1
+Step 2b  /plan --auto            PHASE_PLAN, specs, data contracts, goal verification
+Step 2c  /design --source=stitch --auto    UI / mobile phases only — AFTER /plan
+Step 3   🛑 HUMAN CHECKPOINT
+Step 4   /develop-orchestrator --phase=1 --auto
+Step 5   per remaining phase: /map --incremental → /discuss → /plan → /design → [checkpoint] → /develop → verify
+Step 5b  local deploy
+Step 6   /accept --auto          global acceptance + pipeline completeness
+Step 7   final report + /health
+```
+
+`/design` runs **after** `/plan`: it hard-stops without `PHASE_PLAN.md` and
+`specs/data-contracts.md`, which only `/plan` produces. With `--source=stitch` it falls back to the
+pure-agent design path if the Stitch MCP is unavailable, and logs that.
+
+## 3. Why it no longer stalls
+
+Earlier runs stopped after every sub-command and waited for the user to type the next one. Three
+changes fix that:
+
+1. **Sub-commands are invoked by the model through the Skill tool**, as `startup:<cmd>` with the
+   flags in `args` (inside the framework repo, without the prefix). The user is never told to run the
+   next command.
+2. **A sub-command's closing "▶ Next: …" line is ignored under autonomous.** The model updates the
+   run state and continues with the next step in the same turn.
+3. **A Stop hook enforces it.** `.claude/hooks/autonomous-continue.sh` blocks the turn from ending
+   while `agent_state/autonomous/run.json` has `"active": true, "status": "running"`, and tells the
+   model the next step.
+
+**Auto mode everywhere.** `/init`, `/map`, `/discuss`, `/plan`, `/design`, `/develop`,
+`/develop-orchestrator` and `/accept` each treat either `--auto` **or** an active `run.json`
+(status `running`) as auto mode, so a lost flag doesn't bring back the prompts. In auto mode a
+"surface to user" point auto-resolves with the recommended option, is logged to
+`agent_state/autonomous/auto-resolved.jsonl`, and is carried to the next checkpoint or the final
+report.
+
+## 4. `run.json` — the run state
+
+```json
+{"active": true, "status": "running", "phase": 1, "step": "plan_complete", "next_step": "design",
+ "updated": "<iso8601>", "started": "<iso8601>", "args": "<the /autonomous args>"}
+```
+
+Written at Step 0 and after every step (`updated` is bumped, `step` = last completed, `next_step` =
+what runs next).
+
+| `status` | Set when | Hook behaviour |
+|----------|----------|----------------|
+| `running` | Normal progress | Blocks the turn from ending |
+| `awaiting_human` | The Step 3 checkpoint, `--confirm_each_phase`, or a security pause | Allows stop |
+| `paused` (with `reason`) | Escalation limit exceeded, catastrophic failure, a roster agent never ran, or you said stop | Allows stop |
+| `failed` | Unrecoverable | Allows stop |
+| `complete` | Step 7 done (`active` becomes `false`) | Allows stop |
+| `stalled` | Set **by the hook** when `updated` hasn't changed across repeated blocked stops (default 2, `AUTONOMOUS_MAX_NUDGES`) | Allows stop, so a stuck run can't loop forever |
+
+## 5. The one human checkpoint
+
+Step 3 sets `status: awaiting_human` and presents a review: LOW-confidence decisions,
+HYPOTHESIZED assumptions, phase 1 scope, tech stack, and UI designs. Reply `go` / `approve`,
+describe changes, or `stop`.
+
+**What approval also covers — the force-gate policy.** The review states: *in autonomous mode, a
+phase gate that still fails after 3 fix cycles is force-gated with full logging, except a
+structurally incomplete roster (a required agent never ran), which pauses the run.* Approving the
+checkpoint is the explicit approval that `/develop --force_gate` requires; it is recorded as
+`"force_gate_policy": "approved"` in `agent_state/autonomous/approved.json`. A forced gate writes
+`gate.forced` with the remaining blockers, and the next phase's audit surfaces them as
+carried-forward items. `verify-gate.sh` still refuses to force past a roster whose required agent
+never ran — that pauses the run with the missing agent named.
+
+With `--confirm_each_phase`, the same checkpoint is repeated before each later phase's `/develop`.
+
+## 6. What legitimately pauses a run
+
+- The Step 3 checkpoint (and per-phase checkpoints with `--confirm_each_phase`).
+- A **security decision with no hardened default** — security choices never auto-resolve
+  permissively; when there is no clear most-restrictive option the run sets `awaiting_human`.
+- The **escalation circuit breaker**: more than 10 escalations in one phase exits auto mode
+  (`paused`); unresolved items are in `agent_state/debates/unresolved.json`.
+- A **roster gap**: a required agent has no completed entry in `execution.jsonl`.
+- A catastrophic failure (won't build, infra won't start after retries) that blocks later phases.
+- The hook marking the run `stalled`.
+
+Anything else — a failing test, a blocking review finding, a design-gate BLOCK — is handled inside
+the run by fix loops, with the outcome logged.
+
+## 7. Resuming
+
+```
+/startup:autonomous --resume
+```
+
+Reads `phase` and `next_step` from `run.json`, re-arms it (`status: running`, clears the
+nudge/stall fields) and continues from that step. Step ids, in order:
+
+```
+preflight → init → map → discuss → plan → design → checkpoint → develop →
+  (per phase N ≥ 2: map → discuss → plan → design → [checkpoint] → develop → verify) →
+deploy → accept → report
+```
+
+Resuming at `checkpoint` re-presents the review and never assumes approval. After an automatic
+context compaction mid-run, the model re-reads `run.json` + `checkpoint.json` and continues from
+`next_step` without a resume command.
+
+## 8. Other flags
+
+```
+--confirm_each_phase   Checkpoint before every phase's /develop
+--skip_init            Reuse existing BRD + IMPLEMENTATION_GUIDELINES
+--max_phases=N         Build only the first N phases
+--resume               Continue from run.json
+```
+
+## 9. Artifacts
+
+| Path | Contents |
+|------|----------|
+| `agent_state/autonomous/run.json` | Run state read by the Stop hook |
+| `agent_state/autonomous/checkpoint.json` | Per-step checkpoint (counts, auto-resolution totals) |
+| `agent_state/autonomous/approved.json` | Checkpoint approval, incl. `force_gate_policy` |
+| `agent_state/autonomous/auto-resolved.jsonl` | Every auto-resolved decision: question, options, choice, rationale, category, security flag |
+| `agent_state/autonomous/decisions.md` | `/init --auto` research decisions with confidence |
+| `agent_state/autonomous/acceptance-report.md` | `/accept` results |
+
+Each phase runs on its own git branch (`phase-N-implementation`) and is tagged `phase-N-complete`
+when its gate passes.

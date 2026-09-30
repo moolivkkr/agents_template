@@ -144,7 +144,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `adr_agent` | opus/medium | guidelines | docs/architecture/adrs/ | Subagent of architecture_orchestrator; also invoked by /plan |
 | `ux_designer` | opus/medium | BRD, guidelines | docs/design/phases/N/specs/*.wireframe.md | UI wireframe specifications |
 | `wireframe_generator` | opus/low | BRD | wireframe scaffolding | Subagent of ux_designer |
-| `design_quality_reviewer` | opus/medium | wireframes, guidelines | design quality report | Validates UI specs against 9 dimensions |
+| `design_quality_reviewer` | opus/medium | wireframes, guidelines | design quality report | Validates UI specs against 11 dimensions (incl. design-system adherence) |
 
 ### Implementation (Generated)
 
@@ -347,7 +347,7 @@ debate team (on-demand, any pipeline):
 | `/discuss` | phase_assumptions_analyzer -> decision_researcher (parallel, one per question) |
 | `/map` | codebase_mapper (parallel: tech + architecture + quality + concerns) |
 | `/plan` | project_planner -> spec_writer (parallel) -> ux_designer -> design_quality_reviewer -> spec_verifier -> brd_spec_reconciler -> plan_goal_verifier -> adr_agent |
-| `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer ∥ mobile_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
+| `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer ∥ mobile_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [ui_standards_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
 | `/test` | test_runner, e2e_orchestrator, mobile_e2e_orchestrator (--mobile), performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
 | `/design` | wireframe_generator -> ux_designer (Stitch renders normalized when --source=stitch) -> design_quality_reviewer (BLOCKING gate) |
 | `/ui-audit` | ui_standards_auditor -> (--fix=design) parent Stitch calls -> ux_designer -> design_quality_reviewer; (--fix=code) ui_developer / mobile_developer -> test_runner -> re-audit |
@@ -394,6 +394,4 @@ debate team (on-demand, any pipeline):
 
 | Model | Count |
 |---|---|
-| opus | 16 (+2: market_research_agent, rule_developer_agent) |
-| sonnet | 51 (+6: rule_pipeline_orchestrator, rule_fp_optimizer_agent, corpus_completeness_agent, rule_db_publisher_agent, plugin_ui_developer_agent, plugin_test_agent) |
-| haiku | 3 |
+| opus | 79 (all core agents + templates; effort varies high/medium/low) |

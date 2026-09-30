@@ -11,46 +11,69 @@ You provide requirements. The agents do the rest — from turning a pitch deck i
 ```
 requirements/                  ← YOUR INPUT — agents read but never modify this
     ├── feature-spec.md        ← user stories, PRD, pitch deck (any format)
-    ├── research/              ← optional: output from /startup/research
+    ├── research/              ← optional: output from /startup:research
     ├── IMPLEMENTATION_GUIDELINES.md  ← optional DRAFT: fill in what you know
     └── test-data/             ← optional: seed data per phase
 
-                ↓ /startup/init reads requirements/, interviews for gaps ↓
+                ↓ /startup:init reads requirements/, interviews for gaps ↓
 
 docs/                          ← GENERATED OUTPUT — agents write here
     ├── BRD.md                 ← numbered requirements (FR-*, NFR-*) — always generated
     └── IMPLEMENTATION_GUIDELINES.md  ← confirmed tech stack
 
-/startup/research  →  ultra-deep market & product research (optional, before init)
-/startup/init      →  BRD + agents from requirements
-/startup/map       →  persistent codebase knowledge base (4 parallel focus areas)
-/startup/discuss   →  surface assumptions + research decisions (before /plan)
-/startup/plan      →  specs + data-contracts.md + UI specs + goal verification per phase
-/startup/develop   →  implement + test + review + gate per phase
-/startup/accept    →  local deploy + health gate + full-product validation + release notes
-/startup/deploy    →  build + migrate + deploy + health validation
+/startup:research  →  ultra-deep market & product research (optional, before init)
+/startup:init      →  BRD + agents from requirements
+/startup:map       →  persistent codebase knowledge base (4 parallel focus areas)
+/startup:discuss   →  surface assumptions + research decisions (before /plan)
+/startup:plan      →  specs + data-contracts.md + UI specs + goal verification per phase
+/startup:design    →  UI/mobile design contract per phase (optionally rendered in Google Stitch), behind a blocking design gate
+/startup:develop   →  implement + test + review + gate per phase
+/startup:accept    →  local deploy + health gate + full-product validation + release notes
+/startup:deploy    →  build + migrate + deploy + health validation
 
-OR: /startup/autonomous  →  all of the above end-to-end with one human checkpoint
+OR: /startup:autonomous  →  all of the above end-to-end with one human checkpoint
 
 Session management:
-/startup/pause     →  save session state for later resumption
-/startup/resume    →  restore paused session and continue
+/startup:pause     →  save session state for later resumption
+/startup:resume    →  restore paused session and continue
 
 Parallel work:
-/startup/workstream →  manage concurrent feature branches (create, switch, merge)
+/startup:workstream →  manage concurrent feature branches (create, switch, merge)
 
 Issue resolution (use anytime):
-/startup/hotfix    →  scoped fix + scoped test + scoped review (bypasses full pipeline)
-/startup/diagnose  →  trace symptom to root cause, optional auto-fix
-/startup/benchmark →  performance baselines + regression detection
-/startup/rollback  →  reverse deployment to previous known-good state
+/startup:hotfix    →  scoped fix + scoped test + scoped review (bypasses full pipeline)
+/startup:diagnose  →  trace symptom to root cause, optional auto-fix
+/startup:benchmark →  performance baselines + regression detection
+/startup:rollback  →  reverse deployment to previous known-good state
+
+Design & demo:
+/startup:stitch    →  Google Stitch workbench (init | generate | variants | edit | theme | sync | status)
+/startup:ui-audit  →  audit every built page vs design standards + its Stitch baseline
+/startup:demo      →  write, stand up and rehearse a stakeholder demo of a completed phase
 
 Pipeline diagnostics:
-/startup/health    →  diagnose agent_state integrity + auto-repair
-/startup/forensics →  post-mortem analysis of failed pipeline runs
+/startup:health    →  diagnose agent_state integrity + auto-repair
+/startup:forensics →  post-mortem analysis of failed pipeline runs
 ```
 
-> **Convention:** `requirements/` is read-only input. `docs/` is generated output. Never write `BRD.md` by hand — always run `/startup/init`. The `IMPLEMENTATION_GUIDELINES.md` in `requirements/` is your optional draft; `/init` produces the authoritative confirmed version in `docs/`.
+> **Command names.** `install.sh` copies the commands into `~/.claude/commands/startup/`, so Claude Code exposes them as `/startup:<name>` (for example `/startup:develop`). Inside this framework repo itself they also resolve without the prefix (`/develop`), which is how `CLAUDE.md` and the command files refer to them.
+
+> **Convention:** `requirements/` is read-only input. `docs/` is generated output. Never write `BRD.md` by hand — always run `/startup:init`. The `IMPLEMENTATION_GUIDELINES.md` in `requirements/` is your optional draft; `/init` produces the authoritative confirmed version in `docs/`.
+
+---
+
+## What's new (2026-09)
+
+| Area | Change | Guide |
+|------|--------|-------|
+| **React Native mobile (iOS + Android)** | New generated agents `mobile_developer` and `mobile_test_agent`; new core agents `mobile_e2e_orchestrator` (device matrix runner) and `mobile_platform_auditor`; Maestro (default), Detox and Appium skill packs; TC categories `TC-MCMP/MINT/ME2E/MPLT/MA11Y/MVIS/MPERF`; `/startup:test --mobile [--platform=ios\|android]`; IMPLEMENTATION_GUIDELINES §24 Mobile; `mobile.yml` CI guidance | [docs/MOBILE_GUIDE.md](docs/MOBILE_GUIDE.md) |
+| **Google Stitch design** | `/startup:stitch` workbench; `/startup:design --source=stitch` fixed (real MCP probe, design-system Path A/B, `deviceType` on every call, `edit_screens` in the design-gate BLOCK loop, mobile-only projects included); `docs/design/stitch.json` holds the Stitch baseline for every page | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md) |
+| **UI standards audit** | New core agent `ui_standards_auditor` and `/startup:ui-audit`: every built web and React Native page is audited against the design standards and its Stitch baseline | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md#7-auditing-built-pages--startupui-audit) |
+| **`/startup:autonomous` no longer stalls** | Sub-commands run through the Skill tool; their "▶ Next" hints are ignored under autonomous; `/design` runs after `/plan`; every sub-command honours auto mode; a Stop hook keeps the turn going while `run.json` says `running`; resume by step id | [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
+| **`/develop` wave execution** | Wave 2A sequenced named spawns (database → migration → backend → api → ui ∥ mobile); Wave 3 per-tier named agents; Wave 3v `test_runner` independently re-runs suites and cross-checks writer counts; Wave 4 conditional reviewers driven by the roster | [Implementation waves](#implementation-waves) |
+| **`/startup:demo`** | New command: `demo_documenter` → `demo_executor` → `demo_validator` | [Commands](#commands) |
+| **Dependency graph** | `downstream:` is now derived by `.claude/agents/_sync-deps.py`; `tests/dependency-graph.test.sh` checks agents ↔ commands ↔ skills in CI | [Contributing](#contributing-to-the-framework) |
+| **Fixes** | TC-ID scanners now match `TC-[A-Z0-9]+` (they missed `TC-E2E-*`/`TC-A11Y-*`) and scan `e2e/`, `apps/`, `mobile/` incl. Maestro YAML; generated agents keep the bare role as `name:`; report names unified (`quality_gate.md`; reconciliation reports in `agent_state/reconciliation/phase-N/`); `product_api_researcher` wired into `/product-workflows` Step 2b; every agent loads at least one skill pack | — |
 
 ---
 
@@ -60,9 +83,9 @@ The framework has four building blocks. Understanding how they connect is the ke
 
 | Concept | What it is | Where it lives | Example |
 |---------|-----------|----------------|---------|
-| **Command** | User-facing entry point. You invoke these. Each command orchestrates a sequence of agents. | `.claude/commands/*.md` | `/startup/develop`, `/startup/review` |
-| **Pipeline Step** | A numbered step inside a command. Steps run sequentially; some steps run agents in parallel. | Defined inside command `.md` files | Step 4 (Review) inside `/startup/develop` |
-| **Agent** | The worker that does the actual job. Reads inputs, loads skill packs, produces code or reports. | `.claude/agents/core/*.md` (universal) and `.claude/agents/generated/*.md` (project-specific) | `code_reviewer_I`, `api_developer_myapp` |
+| **Command** | User-facing entry point. You invoke these. Each command orchestrates a sequence of agents. | `.claude/commands/*.md` | `/startup:develop`, `/startup:review` |
+| **Pipeline Step** | A numbered step inside a command. Steps run sequentially; some steps run agents in parallel. | Defined inside command `.md` files | Step 4 (Review) inside `/startup:develop` |
+| **Agent** | The worker that does the actual job. Reads inputs, loads skill packs, produces code or reports. | `.claude/agents/core/*.md` (universal) and `.claude/agents/generated/*.md` (project-specific) | `code_reviewer_I`, `api_developer` |
 | **Skill Pack** | Static knowledge file. Contains idiomatic patterns, conventions, and anti-patterns for a specific technology. Agents load these as context before executing. | `.claude/skills/**/*.md` | `go.md`, `react.md`, `testify.md` |
 
 ### How they connect
@@ -71,7 +94,7 @@ The framework has four building blocks. Understanding how they connect is the ke
 COMMAND                    PIPELINE STEPS              AGENTS                    SKILL PACKS
 (you invoke)               (inside the command)        (do the work)             (domain knowledge)
 ─────────────              ──────────────────          ─────────────             ──────────────────
-/startup/develop    ─┬──→  Step 0 Orient
+/startup:develop    ─┬──→  Step 0 Orient
                      ├──→  Step 1 Audit          ──→  backend_audit_agent
                      ├──→  Step 2 Implement      ──→  backend_developer    ←──  go.md, chi.md, postgresql.md
                      │                           ──→  api_developer        ←──  go.md, chi.md, api-design.md
@@ -85,7 +108,7 @@ COMMAND                    PIPELINE STEPS              AGENTS                   
                      ├──→  Step 5 Acceptance     ──→  acceptance_test_agent←──  go.md, api-design.md
                      └──→  Step 6 Gate
 
-/startup/review     ─┬──→  Step 1 Style         ──→  code_reviewer_I      ←──  go.md, chi.md
+/startup:review     ─┬──→  Step 1 Style         ──→  code_reviewer_I      ←──  go.md, chi.md
                      ├──→  Step 2 Architecture   ──→  code_reviewer_II     ←──  go.md, chi.md, postgresql.md
                      └──→  Step 3 Security       ──→  security_reviewer    ←──  go.md, security-owasp.md
 ```
@@ -97,13 +120,13 @@ COMMAND                    PIPELINE STEPS              AGENTS                   
 ### Skill pack loading flow
 
 ```
-/startup/init
+/startup:init
   → agent_factory reads IMPLEMENTATION_GUIDELINES
   → extracts tech profile: { lang: go, framework: chi, db_tech: postgresql, ... }
   → resolves {{PLACEHOLDER}} in agent templates: ".claude/skills/languages/{{LANG}}.md" → ".claude/skills/languages/go.md"
   → writes generated agents with resolved skill_packs paths
 
-/startup/develop (later)
+/startup:develop (later)
   → spawns backend_developer agent
   → agent reads skill_packs: [go.md, chi.md, postgresql.md]
   → skill content becomes part of agent's working context
@@ -163,10 +186,11 @@ The agents work with whatever you have. If something is missing, they'll ask.
 ### 4. Run the SDLC
 
 ```
-/startup/init       ← run once per project
-/startup/plan       ← run once per phase (auto-detects next phase)
-/startup/develop    ← run once per phase (auto-detects current phase)
-/startup/accept     ← run once after all phases complete
+/startup:init       ← run once per project
+/startup:plan       ← run once per phase (auto-detects next phase)
+/startup:design     ← UI / mobile phases: design contract + design gate (after /plan)
+/startup:develop    ← run once per phase (auto-detects current phase)
+/startup:accept     ← run once after all phases complete
 ```
 
 ---
@@ -175,47 +199,58 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 | Command | What it does |
 |---------|-------------|
-| `/startup/product-workflows` | **NEW** Product workflow intelligence — researches docs, videos, APIs, forums for a named product. Produces screen-by-screen workflows, config schemas, dependency graphs, API coverage matrix, persona flows |
-| `/startup/research` | Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
-| `/startup/init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode |
-| `/startup/map` | **NEW** Analyzes codebase with 4 parallel mapper agents (tech, architecture, quality, concerns). Produces persistent knowledge base in `agent_state/codebase/` |
-| `/startup/discuss` | **NEW** Pre-planning context gathering — surfaces assumptions (CONFIRMED/DEDUCED/HYPOTHESIZED), researches gray area decisions, identifies risks. Run before `/plan` |
-| `/startup/plan` | Creates TRDs, typed data contracts, component-level UI specs, and **goal-backward verification** per phase. Supports `--auto` |
-| `/startup/develop` | Implements phase end-to-end: audit → build checks → code → tests → review + acceptance (parallel) → gate. Supports `--auto` |
-| `/startup/autonomous` | Runs the full pipeline end-to-end — `/map` → `/discuss` → `/plan` → `/develop` for all phases. One human checkpoint. Auto-researches all decisions |
-| `/startup/accept` | Runs full-product acceptance tests + contract shape assertions after all phases |
-| `/startup/test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system) |
-| `/startup/review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
-| `/startup/optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
-| `/startup/deploy` | Builds, migrates, deploys to local / staging / prod, validates health post-deploy |
-| `/startup/status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
-| `/startup/pause` | **NEW** Saves session state (phase, step, completed items, blockers, decisions) for later resumption. Supports named threads |
-| `/startup/resume` | **NEW** Restores paused session state and routes to the appropriate command to continue. Use `--list` to see all paused sessions |
-| `/startup/workstream` | **NEW** Manages parallel workstreams — create, list, switch, status, complete, merge. Enables concurrent work on independent features |
-| `/startup/hotfix` | Fast-track bug fix — scoped change → scoped test → scoped review → merge. Bypasses full `/develop` cycle |
-| `/startup/diagnose` | Structured bug investigation — traces symptom to root cause through spec ↔ implementation comparison |
-| `/startup/benchmark` | Performance tracking — captures metrics per phase, saves baselines, flags regressions >10% |
-| `/startup/rollback` | Deployment rollback — reverses migrations, redeploys previous build, validates health |
-| `/startup/health` | **NEW** Diagnoses pipeline state integrity — manifest validity, gate consistency, file references, memory hygiene (stale sessions, stale codebase mappings, oversized logs, orphaned debates). Use `--fix` for auto-repair |
-| `/startup/forensics` | **NEW** Post-mortem investigation for failed pipeline runs — timeline reconstruction, root cause classification, recovery recommendations |
+| `/startup:product-workflows` | **NEW** Product workflow intelligence — researches docs, videos, APIs, forums for a named product. Produces screen-by-screen workflows, config schemas, dependency graphs, API coverage matrix, persona flows |
+| `/startup:research` | Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
+| `/startup:init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode |
+| `/startup:map` | **NEW** Analyzes codebase with 4 parallel mapper agents (tech, architecture, quality, concerns). Produces persistent knowledge base in `agent_state/codebase/` |
+| `/startup:discuss` | **NEW** Pre-planning context gathering — surfaces assumptions (CONFIRMED/DEDUCED/HYPOTHESIZED), researches gray area decisions, identifies risks. Run before `/plan` |
+| `/startup:plan` | Creates TRDs, typed data contracts, component-level UI specs, and **goal-backward verification** per phase. Supports `--auto` |
+| `/startup:design` | UI/mobile design contract for a phase — wireframe pair per screen (`.wireframe.html` + `.wireframe.md`), component/API bindings, tokens, `TC-UI-*` — behind the BLOCKING `design_quality_reviewer` gate. `--source=stitch` renders screens in Google Stitch first. Runs after `/plan` |
+| `/startup:develop` | Implements phase end-to-end: audit → build checks → code → tests → review + acceptance (parallel) → gate. Supports `--auto`. Executed wave by wave through `/startup:develop-orchestrator` |
+| `/startup:develop-orchestrator` | The canonical `/develop` executor: the parent session spawns one named agent per wave step and verifies between waves. Supports `--auto` |
+| `/startup:autonomous` | Runs the full pipeline end-to-end — `/init` → `/map` → `/discuss` → `/plan` → `/design` → `/develop` for all phases, then `/accept`. One human checkpoint. Auto-researches all decisions. See [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
+| `/startup:accept` | Runs full-product acceptance tests + contract shape assertions after all phases. Supports `--auto` |
+| `/startup:test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system / traceability / mobile) |
+| `/startup:stitch` | Google Stitch workbench — `init` (project + house-style design system), `generate`, `variants`, `edit`, `theme`, `sync` (into the wireframe contract, behind the design gate), `status` |
+| `/startup:ui-audit` | Audits every page of the running web + React Native UI against the design standards and its Stitch baseline. Report-only by default; `--fix=design\|code\|all`, `--approve=<pages>` |
+| `/startup:demo` | Prepares and dry-runs a stakeholder demo of a completed phase (`demo_documenter` → `demo_executor` → `demo_validator`) |
+| `/startup:recon` | Two-way reconcile requirements ↔ BRD ↔ TRD ↔ code ↔ tests. Bare = report only; `--fix=code` (spec wins, alias `/converge`); `--fix=docs` (as-built wins, alias `/reconcile`) |
+| `/startup:remember` | Records a Tier 0 ground-truth fact in `docs/PROJECT_FACTS.md` that every session and subagent honours |
+| `/startup:worklog` | Consolidates every phase's artifacts into one ledger, `docs/WORKLOG.md` |
+| `/startup:consolidate` | Off-path memory maintenance — dedup lessons/patterns, audit Tier 0 facts. Non-destructive |
+| `/startup:eval` | Runs the framework's own eval suite and compares against a baseline (improve / regress / wash) |
+| `/startup:reset-phase` | Archives a phase's state and tags it so the phase can be re-developed cleanly |
+| `/startup:review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
+| `/startup:optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
+| `/startup:deploy` | Builds, migrates, deploys to local / staging / prod, validates health post-deploy |
+| `/startup:status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
+| `/startup:pause` | **NEW** Saves session state (phase, step, completed items, blockers, decisions) for later resumption. Supports named threads |
+| `/startup:resume` | **NEW** Restores paused session state and routes to the appropriate command to continue. Use `--list` to see all paused sessions |
+| `/startup:workstream` | **NEW** Manages parallel workstreams — create, list, switch, status, complete, merge. Enables concurrent work on independent features |
+| `/startup:hotfix` | Fast-track bug fix — scoped change → scoped test → scoped review → merge. Bypasses full `/develop` cycle |
+| `/startup:diagnose` | Structured bug investigation — traces symptom to root cause through spec ↔ implementation comparison |
+| `/startup:benchmark` | Performance tracking — captures metrics per phase, saves baselines, flags regressions >10% |
+| `/startup:rollback` | Deployment rollback — reverses migrations, redeploys previous build, validates health |
+| `/startup:health` | **NEW** Diagnoses pipeline state integrity — manifest validity, gate consistency, file references, memory hygiene (stale sessions, stale codebase mappings, oversized logs, orphaned debates). Use `--fix` for auto-repair |
+| `/startup:forensics` | **NEW** Post-mortem investigation for failed pipeline runs — timeline reconstruction, root cause classification, recovery recommendations |
 
 ### Command arguments
 
-**`/startup/research`**
+**`/startup:research`**
 ```
 --domain="..."    Product domain to research (required, e.g., "XDR/EDR cybersecurity")
 --depth=deep      Research depth: quick | deep (default) | ultra
 --focus=all       Focus area: vendors | capabilities | technical | personas | moats | all
 ```
 
-**`/startup/init`**
+**`/startup:init`**
 ```
 --update_agents   Re-generate project agents only (use after tech stack changes)
 --brd_only        Regenerate BRD only
 --auto            Auto-research mode — agents research answers instead of asking user
 ```
 
-**`/startup/plan`**
+**`/startup:plan`**
 ```
 --phase=N         Override phase number (default: auto-detect next unplanned)
 --ui_only         Regenerate UI specs only
@@ -223,16 +258,60 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --auto            Auto-assign FR-* to phases by dependency analysis
 ```
 
-**`/startup/develop`**
+**`/startup:develop`**
 ```
 --phase=N         Override phase number (default: auto-detect from gate state)
 --audit_only      Gap report only — no implementation changes
 --test_only       Run tests only — no implementation changes
 --force_gate      Force gate to pass with failures (logged as gate_override in manifest)
 --auto            Autonomous mode — auto-resolve escalations, auto-fix gate failures
+--candidates=N    Build N (2–3) independent candidate implementations and pick a winner (expensive; opt-in)
 ```
 
-**`/startup/product-workflows`**
+**`/startup:design`**
+```
+--phase=N         Phase to design (default: auto-detect)
+--source=stitch   Render screens in Google Stitch, then normalize into the same wireframe contract
+                  (falls back to the pure-agent path if the Stitch MCP is unavailable)
+--screen=NAME     Regenerate a single screen
+--auto            No prompts; a BLOCK verdict auto-fixes (max 2 cycles), then downgrades to WARN
+```
+
+**`/startup:stitch`**
+```
+<action>          init | generate | variants | edit | theme | sync | status
+--phase=N         Phase whose screens to work on (default: current phase)
+--screen=NAME     One screen (wireframe base name); omit on generate/sync to process every in-scope screen
+--device=TYPE     DESKTOP | MOBILE | TABLET (default: MOBILE for React Native, DESKTOP for web)
+--prompt="…"      edit / variants: the change or direction (edit after a gate BLOCK: omit to use the reviewer's fix list)
+--count=N         variants: 1-5 (default 3)
+--range=R         variants: REFINE | EXPLORE | REIMAGINE (default EXPLORE)
+```
+
+**`/startup:ui-audit`**
+```
+--fix=MODE        none (default, report only) | design | code | all
+--app=APP         web | mobile | all (default: every enabled app)
+--page=ROUTE      Restrict to one route (default: every page)
+--approve=KEYS    Approve 'reconstructed' Stitch baselines (recorded in docs/DECISIONS.md)
+```
+
+**`/startup:demo`**
+```
+--phase=N         Phase to demo (default: latest phase with gate.passed)
+--validate-only   Re-run setup + validation of the existing docs/demos/phase-N/demo-script.md
+```
+
+**`/startup:accept`**
+```
+--persona=NAME    One persona only
+--use_case=FR-ID  One use case only
+--reseed          Force re-seed
+--auto            No prompts (set by /autonomous)
+--force_accept    Proceed past a failing cross-phase regression with a logged NOT-READY waiver
+```
+
+**`/startup:product-workflows`**
 ```
 --product="..."   Product name (required, e.g., "Trellix DLP", "CrowdStrike Falcon")
 --capabilities="…" Comma-separated list (omit to discover and document FULL system)
@@ -242,42 +321,42 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --output=DIR      Output directory (default: docs/product-workflows)
 ```
 
-**`/startup/discuss`**
+**`/startup:discuss`**
 ```
 --phase=N         Phase to discuss (default: auto-detect next unplanned)
 --auto            Skip interactive questions — use recommended defaults, log all decisions
 --focus=all       Focus: assumptions | risks | decisions | all
 ```
 
-**`/startup/map`**
+**`/startup:map`**
 ```
---focus=all       Focus: tech | architecture | quality | concerns | all
+--focus=all       Focus: tech | architecture | quality | concerns | strategy | all
 --incremental     Only re-map files changed since last mapping
 --phase=N         Scope mapping to components relevant to a specific phase
 ```
 
-**`/startup/autonomous`**
+**`/startup:autonomous`**
 ```
 --confirm_each_phase   Pause for human review before EACH phase (default: Phase 1 only)
---resume               Resume from last checkpoint
+--resume               Resume from agent_state/autonomous/run.json (next_step)
 --skip_init            Use existing BRD + IMPL_GUIDELINES
 --max_phases=N         Limit to N phases
 ```
 
-**`/startup/pause`**
+**`/startup:pause`**
 ```
 --phase=N         Phase being worked on (auto-detected)
 --reason="..."    Why work is being paused
 --thread=NAME     Named thread for this work (enables multiple paused contexts)
 ```
 
-**`/startup/resume`**
+**`/startup:resume`**
 ```
 --thread=NAME     Named thread to resume (default: latest session)
 --list            List all paused sessions instead of resuming
 ```
 
-**`/startup/workstream`**
+**`/startup:workstream`**
 ```
 --action=ACTION   create | list | switch | status | complete | merge (required)
 --name=NAME       Workstream name (required for create/switch/complete/merge)
@@ -285,21 +364,21 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --description="…" Workstream description (for create)
 ```
 
-**`/startup/health`**
+**`/startup:health`**
 ```
 --fix             Attempt automatic repair of detected issues
 --phase=N         Check specific phase only
 --verbose         Show detailed results including passing checks
 ```
 
-**`/startup/forensics`**
+**`/startup:forensics`**
 ```
 --phase=N         Phase to investigate (default: most recently failed)
 --command=CMD     Which command failed: plan | develop | test | review | deploy
 --depth=standard  Investigation depth: quick | standard | deep
 ```
 
-**`/startup/test`**
+**`/startup:test`**
 ```
 --phase=N         Target a specific phase
 --unit            Unit tests only
@@ -311,9 +390,13 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --performance     Load tests against NFR-PERF-* targets
 --system          Cross-phase smoke tests
 --manual          Generate manual QA test plan
+--traceability    TC-* ID inventory: spec IDs vs test annotations
+--mobile          React Native tiers: Jest+RNTL (test_runner) + device flows on iOS simulator
+                  and Android emulator (mobile_e2e_orchestrator)
+--platform=P      With --mobile: ios | android (default both; a single-platform run never satisfies a gate)
 ```
 
-**`/startup/optimize`**
+**`/startup:optimize`**
 ```
 --phase=N         Target phase (default: auto-detect latest completed)
 --backend_only    Optimize backend only — skip UI
@@ -322,13 +405,13 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --aggressive      Include MEDIUM-confidence dead code removal
 ```
 
-**`/startup/deploy`**
+**`/startup:deploy`**
 ```
 --target=local|staging|prod   (default: local)
 --dry_run                     Show plan without deploying
 ```
 
-**`/startup/hotfix`**
+**`/startup:hotfix`**
 ```
 --phase=N         Phase containing the bug (required)
 --component=NAME  Component to fix (e.g. auth, users)
@@ -337,7 +420,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --deploy          Fast-track to /deploy after merge
 ```
 
-**`/startup/diagnose`**
+**`/startup:diagnose`**
 ```
 --symptom="…"     What's broken (required, e.g. "GET /users returns 500")
 --phase=N         Phase to investigate (default: auto-detect)
@@ -345,7 +428,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --fix             Auto-apply recommended fix after diagnosis
 ```
 
-**`/startup/benchmark`**
+**`/startup:benchmark`**
 ```
 --phase=N           Target phase (default: latest completed)
 --save-baseline     Save results as the baseline for this phase
@@ -353,7 +436,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 --endpoints="…"     Test specific endpoints only (comma-separated)
 ```
 
-**`/startup/rollback`**
+**`/startup:rollback`**
 ```
 --target=local|staging|prod   Environment to roll back (required)
 --confirm                     Required for production rollback
@@ -363,7 +446,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 ## The SDLC pipeline
 
-`/startup/develop` runs a multi-step pipeline per phase:
+`/startup:develop` runs a multi-step pipeline per phase. The step view below is the logical pipeline; the executed form is the wave sequence in [Implementation waves](#implementation-waves), run by `/startup:develop-orchestrator`.
 
 ```
 Step 0    Orient           Detect phase, load previous manifest, start infra
@@ -409,6 +492,8 @@ Step 6    Report           Summary of what was built, test results, gate status
 ✅ Acceptance tests        all in-scope use cases pass (browser-based for UI phases)
 ```
 
+Before any of these are evaluated, the gate runs `.claude/hooks/verify-gate.sh`: every agent named in `agent_state/phases/N/roster.json` must have a `completed` line in `execution.jsonl`, and each completed agent's report must exist and not be a stub. Conditional agents (mobile, accessibility, UI standards, migration safety, breaking change, tenant isolation) add their reports to the required set when they are in the roster; mobile phases also need device results on **both** iOS and Android.
+
 **Bug severity classification:** Gate blockers are classified as critical/high/medium/low. Critical issues cannot be carried forward. High issues auto-escalate to critical after 1 phase. Medium auto-escalates after 3 phases.
 
 If any condition fails: the gate does not write. The blocker is surfaced with the specific file, finding, and how to fix it. Use `--force_gate` to override known flakes (logged in manifest as `gate_override`).
@@ -442,27 +527,47 @@ Four skill packs in `.claude/skills/core/` add intelligence to the pipeline:
 
 ### Implementation waves
 
-Each phase runs in waves (sequential between waves, parallel within):
+`/startup:develop-orchestrator` is the canonical executor: the parent session runs each wave as separate, **named** agent spawns (`subagent_type` = the agent's role) and verifies the outputs between waves. The wave numbers below match that file.
 
 ```
-Wave 1    database_agent + migration_agent          (parallel)
-Wave 1.5  Migration validation — dry-run UP/DOWN    (sequential gate)
-Wave 2a   backend_developer                         (sequential — api needs service interfaces)
-Wave 2b   api_developer                             (reads backend manifest for return types)
-Wave 2.5  API contract validation                   (UI phases only — blocks Wave 3)
-Wave 3    ui_developer                              (UI phases only — reads api-contracts.md)
-Wave 3.5  Local deploy + health check               (build → migrate → start → verify healthy)
-Wave 4    unit_test_agent + integration_test_agent + acceptance_test_agent  (parallel)
+Wave 0    Scale the workflow depth (trivial / small / standard / platform)
+Wave 0b   Write roster.json — the agents this phase MUST run (real agent names)
+Wave 1    backend_audit_agent [+ ui_audit_agent]                → audit_report.md
+Wave 2A   Single implementation, sequenced (each step reads the previous step's output):
+            2A.1 database_agent    → docs/design/database.md
+            2A.2 migration_agent   → migrations/
+            2A.3 backend_developer → services / repositories
+            2A.4 api_developer     → handlers + specs/api-contracts.md (the contract every UI/mobile test mocks from)
+            2A.5 ui_developer      (web; needs 2A.4)   ∥   2A.6 mobile_developer (React Native; needs 2A.4)
+Wave 2B   Candidate selection instead of 2A for hard phases (N implementations → solution_selector)
+Wave 3    Tests — separate named agent per tier, parallel tracks:
+            unit_test_agent · integration_test_agent
+            ui_test_agent → e2e_orchestrator                 (web; non-web projects run e2e_orchestrator alone)
+            mobile_test_agent → mobile_e2e_orchestrator      (React Native, iOS AND Android)
+Wave 3v   test_runner — independent re-run of the Node tiers; any writer-vs-independent count mismatch is BLOCKING
+Wave 3.5  Local deploy + health check (web/API: build → migrate → start → /health; mobile: build, install, cold-launch)
+Wave 4    Review + reconcile + acceptance, one named agent each, in parallel:
+            Track A  code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier
+                     + conditional: tenant_isolation_verifier · accessibility_auditor · mobile_platform_auditor ·
+                       ui_standards_auditor · migration_safety_reviewer · breaking_change_reviewer
+            Track C  spec_impl_reconciler · spec_test_reconciler
+            Track B  acceptance_test_agent (against the live app; RN persona flows on both platforms)
+Wave 5    Collective feedback + fix loop (adaptive replanning, re-run affected tiers)
+Wave 6    Gate — verify-gate.sh: roster.required ⊆ completed entries in execution.jsonl, reports non-stub
 ```
 
-**Key dependency:** api_developer reads backend_developer's manifest to know which response helper to use (`RespondList` for list methods, `RespondOne` for single methods). This is why Wave 2 is sequential (2a → 2b), not parallel.
+**Roster-driven report checks.** Conditional agents run only when Wave 0b puts them in `roster.json` (web UI → `accessibility_auditor`; mobile screens changed → the four mobile agents; UI or mobile changed → `ui_standards_auditor`; migrations → `migration_safety_reviewer`; cross-phase contract change → `breaking_change_reviewer`; multi-tenant → `tenant_isolation_verifier`). The Wave 3 and Wave 4 verification blocks require exactly the reports of the agents in the roster, so a skipped reviewer is either an explicit, documented omission or a gate failure.
+
+**Report locations.** Test and review reports go to `agent_state/phases/N/reports/` (the code-quality report is `quality_gate.md`); reconciliation reports (`specs_vs_impl.md`, `specs_vs_tests.md`, `test_case_inventory.md`, `brd_vs_specs.md`) go to `agent_state/reconciliation/phase-N/`, where `/plan`, `/test`, `/recon` and `pipeline_completeness_agent` read them.
+
+**Key dependency:** api_developer reads backend_developer's manifest to know which response helper to use (`RespondList` for list methods, `RespondOne` for single methods), and publishes `api-contracts.md` for the UI and mobile steps. This is why Wave 2A is sequenced, not parallel.
 
 ### Auto-checkpoints
 
 After each wave completes, the orchestrator writes a lightweight checkpoint to `agent_state/phases/N/checkpoints/wave-N.json`. If context resets mid-pipeline (no explicit `/pause`), `/resume` detects these checkpoints and routes you to the right wave:
 
 ```
-/startup/resume
+/startup:resume
   → "No explicit /pause session found, but auto-checkpoints detected:
      Phase: 2, Last wave: 3. Resume with: /develop --phase=2"
 ```
@@ -497,6 +602,7 @@ my-project/
 │   ├── traceability-matrix.md         ← requirement → phase → test coverage
 │   ├── adr/                           ← Architecture Decision Records
 │   └── design/
+│       ├── stitch.json                ← Google Stitch project, design system, screens + all-pages baseline map
 │       └── phases/
 │           └── N/
 │               ├── PHASE_PLAN.md      ← scope, exit criteria, wave structure
@@ -513,8 +619,12 @@ my-project/
 │   │   └── phase-N/
 │   │       ├── brd_vs_specs.md
 │   │       ├── specs_vs_impl.md
-│   │       └── specs_vs_tests.md
+│   │       ├── specs_vs_tests.md
+│   │       └── test_case_inventory.md
 │   ├── patterns.md                        ← ACCUMULATED cross-phase patterns (what works / what to avoid)
+│   ├── autonomous/                        ← GENERATED by /autonomous
+│   │   ├── run.json                       ← run state read by the Stop hook (status, phase, step, next_step)
+│   │   ├── checkpoint.json · approved.json · auto-resolved.jsonl
 │   ├── codebase/                        ← GENERATED by /map
 │   │   ├── .last-mapped                 ← timestamp + SHA + confidence level
 │   │   ├── SUMMARY.md                   ← 1-page overview
@@ -544,9 +654,16 @@ my-project/
 │           ├── test-data/
 │           │   ├── generated-seed.yaml
 │           │   └── seed-cleanup.md
+│           ├── roster.json            ← agents this phase MUST run (Wave 0b)
+│           ├── execution.jsonl        ← one "completed" line per agent that ran (checked by verify-gate.sh)
 │           └── reports/
 │               ├── unit_tests.md
 │               ├── integration_tests.md
+│               ├── ui_test_results.md          ← web UI component/integration tests (UI phases)
+│               ├── e2e_results.md
+│               ├── mobile_test_results.md      ← React Native Jest/RNTL (mobile phases)
+│               ├── mobile_e2e_results.md/.json ← device flows per platform (mobile phases)
+│               ├── test_results.md/.json       ← Wave 3v independent re-run (test_runner)
 │               ├── regression_check.md         ← cross-phase regression (Phase > 1)
 │               ├── code_optimization.md        ← backend dead code + optimization
 │               ├── ui_code_optimization.md     ← UI dead code + optimization (UI phases)
@@ -554,6 +671,12 @@ my-project/
 │               ├── code_review_II.md
 │               ├── security_review.md
 │               ├── dependency_scan.md          ← CVE/outdated/license scan
+│               ├── quality_gate.md             ← code_quality_verifier
+│               ├── accessibility_audit.md      ← conditional reviewers: only when in the roster
+│               ├── mobile_platform_audit.md
+│               ├── ui_standards_audit.md/.json + ui_standards_stitch_requests.json
+│               ├── migration_safety.md
+│               ├── breaking_change_review.md
 │               ├── acceptance_report.md
 │               └── documentation_update.md
 │
@@ -564,6 +687,8 @@ my-project/
 ├── CLAUDE.md                          ← Project context (written by /init)
 │
 └── .claude/
+    ├── settings.json                  ← hooks: SessionStart fact injection; Stop = verify-gate + autonomous-continue
+    ├── hooks/                         ← copied in by new-project.sh or /autonomous Step 0
     └── agents/
         └── generated/                 ← Project-specific agents (written by /init)
             ├── go_backend_developer_myapp.md
@@ -572,13 +697,15 @@ my-project/
             └── ...
 ```
 
+Generated file names carry the project suffix, but each generated agent's `name:` stays the bare role (`backend_developer`, `unit_test_agent`, `mobile_test_agent`, …). That one name is the `subagent_type` the orchestrator spawns, the `"agent"` written to `execution.jsonl`, and the entry in `roster.json`, so the three always agree.
+
 ---
 
 ## Agents
 
 ### Core agents (always available)
 
-These live in `~/.claude/agents/` after install. No project setup required.
+These live in `~/.claude/agents/` after install. No project setup required. The repo ships **69 core agents** (`.claude/agents/core/`) and **10 generation templates** (`.claude/agents/templates/`); the tables below cover the main ones, and [.claude/agents/INVENTORY.md](.claude/agents/INVENTORY.md) is the complete index with inputs, outputs and effort levels.
 
 #### Requirements & Planning
 
@@ -614,9 +741,9 @@ These live in `~/.claude/agents/` after install. No project setup required.
 
 | Agent | Role | Model |
 |-------|------|-------|
-| `ux_designer` | Produces wireframe specs — layout, components, API bindings, interactions | opus/medium |
+| `ux_designer` | Produces wireframe specs — layout, components, API bindings, interactions; normalizes Google Stitch renders into the same wireframe pair; mobile screens get testIDs + Tier 4M TCs | opus/medium |
 | `wireframe_generator` | Initial wireframe scaffolding (invoked by `ux_designer`) | opus/low |
-| `design_quality_reviewer` | Validates wireframes: no TBD bindings, loading/error/empty states, accessibility | opus/medium |
+| `design_quality_reviewer` | BLOCKING design gate — validates wireframes against 11 quality dimensions (no TBD bindings, loading/error/empty states, accessibility, design-system adherence, …) | opus/medium |
 | `spec_verifier` | Confirms all FR-* in scope have spec coverage; all cited IDs exist in BRD | opus/high |
 | `adr_agent` | Writes Architecture Decision Records for significant design choices | opus/medium |
 
@@ -634,8 +761,10 @@ These are created by `agent_factory` from templates during `/init`:
 | `integration_test_agent.tmpl` | `{lang}_integration_test_agent_{project}.md` | Always |
 | `ui_developer.tmpl` | `{ui}_ui_developer_{project}.md` | `frontend.enabled = true` |
 | `ui_test_agent.tmpl` | `{ui}_ui_test_agent_{project}.md` | `frontend.enabled = true` |
+| `mobile_developer.tmpl` | React Native app developer (iOS + Android) | `mobile.enabled = true` |
+| `mobile_test_agent.tmpl` | React Native test writer (Jest + RNTL, device flows) | `mobile.enabled = true` |
 
-Each generated agent is pre-loaded with your project's specific language, framework, ORM, test library, and design conventions.
+Each generated agent is pre-loaded with your project's specific language, framework, ORM, test library, and design conventions. `agent_factory` resolves template placeholders that are not filenames (for example a mock library or a component kit) through a skill-pack resolution table, so every resolved skill path exists. The generated agent's `name:` is always the bare role (see [Project structure](#project-structure)). When `mobile.enabled = true`, the core agents `mobile_e2e_orchestrator` and `mobile_platform_auditor` are also activated for the project.
 
 #### Code Optimization
 
@@ -652,12 +781,23 @@ Each generated agent is pre-loaded with your project's specific language, framew
 | `code_reviewer_I` | Style, idioms, naming, formatting — reads active language skill pack | opus/high |
 | `code_reviewer_II` | Architecture, design patterns, constraint compliance | opus/high |
 | `security_reviewer` | OWASP top 10, auth/authz, injection, secrets, data exposure | opus/high |
+| `code_quality_verifier` | TODOs, stubs, hardcoded secrets, dead imports, debug statements → `quality_gate.md` | opus/high |
+| `tenant_isolation_verifier` | Traces tenantID from every handler to every data access (multi-tenant projects) | opus/high |
+| `accessibility_auditor` | WCAG 2.1 AA against the built, running web UI (axe, keyboard, contrast, ARIA) | opus/high |
+| `ui_standards_auditor` | Every built web + React Native page vs the design standards and its Stitch baseline; emits Stitch requests for missing or flawed baselines | opus/high |
+| `mobile_platform_auditor` | React Native iOS/Android conformance: VoiceOver/TalkBack, touch targets, text scaling, permissions, deep links, secure storage, cleartext/ATS, platform parity | opus/high |
+| `migration_safety_reviewer` | Adversarial migration review — data loss, irreversible ops, lock risk, rollback | opus/high |
+| `breaking_change_reviewer` | Changes that break contracts earlier phases depend on | opus/high |
+
+All Wave 4 reviewers run as separate named agents in parallel; the ones after `security_reviewer` except `code_quality_verifier` are conditional and run when the phase roster includes them.
 
 #### Testing
 
 | Agent | Role | Model | Invoked by |
 |-------|------|-------|-----------|
-| `e2e_orchestrator` | Runs complete user workflow tests across full stack | opus/medium | `/develop` Step 3c, `/test --e2e` |
+| `e2e_orchestrator` | Runs complete user workflow tests across full stack | opus/medium | `/develop` Wave 3c (after `ui_test_agent` on web), `/test --e2e` |
+| `test_runner` | Runs the suites with the project's commands and never edits tests; in Wave 3v it re-runs them independently and fails the wave on any writer-vs-independent count mismatch | opus/low | `/develop` Wave 3v, `/test` |
+| `mobile_e2e_orchestrator` | Builds the React Native app, boots the iOS simulator + Android emulator matrix, runs every device flow on both platforms with evidence | opus/medium | `/develop` Wave 3d, `/test --mobile` |
 | `acceptance_test_agent` | Use case + persona level validation with seed data | opus/high | `/develop` Step 5, `/test --acceptance`, `/accept` |
 | `performance_agent` | Load tests vs NFR-PERF-* targets | opus/medium | `/test --performance` |
 | `system_test_agent` | Cross-phase smoke tests, data flow validation | opus/medium | `/test --system` |
@@ -694,9 +834,11 @@ Each generated agent is pre-loaded with your project's specific language, framew
 
 | Agent | Role |
 |-------|------|
-| `demo_executor` | Runs demo scripts and captures outputs |
-| `demo_validator` | Validates demo output against expected results |
-| `demo_documenter` | Produces demo documentation and walkthrough |
+| `demo_documenter` | Writes the demo script, test-data setup and walkthrough |
+| `demo_executor` | Stands up the demo environment — starts services, seeds data |
+| `demo_validator` | Walks every step of the script and verifies each result |
+
+All three run in that order from `/startup:demo`.
 
 ---
 
@@ -704,20 +846,22 @@ Each generated agent is pre-loaded with your project's specific language, framew
 
 Skill packs are static knowledge files that agents load as context before executing. They contain idiomatic patterns, code examples, conventions, and anti-patterns for a specific technology. They're how `code_reviewer_I` knows what "idiomatic Go" means vs "idiomatic Python", and how `code_optimizer` knows to check for nil-slice → JSON null bugs in Go but `undefined` → omitted-field bugs in TypeScript.
 
-### Available skill packs (160+)
+### Available skill packs (230+)
+
+`.claude/skills/` holds 238 skill-pack files (plus `INDEX.md`): backend 88, core 47, ui 23 (incl. 6 archetypes and a README), frameworks 22, testing 22, databases 11, infrastructure 10, requirements 10, languages 5. The Core, Backend, Databases, Requirements and Infrastructure rows below name a selection; see `.claude/skills/INDEX.md` for the full list.
 
 | Category | Skill Packs |
 |----------|-------------|
 | **Core** (16) | `api-design` · `api-excellence` · `security-owasp` · `testing-principles` · `code-quality` · `git-workflow` · `auto-research` · `deep-research` · `debate-protocol` · `software-architecture` · `resiliency-patterns` · `observability-patterns` · `verification-protocol` · `context-budget-protocol` · `shared-backend-patterns` · `implementation-guidelines-template` |
 | **Requirements** (9) | `requirement-clarity` · `acceptance-criteria` · `persona-definition` · `nfr-patterns` · `gap-analysis-checklist` · `conflict-detection` · `business-objectives` · `traceability-matrix` · `edge-case-taxonomy` |
-| **UI Patterns** (14) | `professional-ui-standards` · `error-handling-patterns` · `form-patterns` · `accessibility-patterns` · `responsive-patterns` · `loading-states` · `component-composition` · `api-integration-patterns` · `shadcn` · `tailwind` · **NEW:** `type-generation-protocol` · `form-validation-protocol` · `advanced-state-patterns` · `structured-wireframe-format` |
+| **UI Patterns** (16) | `professional-ui-standards` · `error-handling-patterns` · `form-patterns` · `accessibility-patterns` · `responsive-patterns` · `loading-states` · `component-composition` · `api-integration-patterns` · `shadcn` · `tailwind` · `type-generation-protocol` · `form-validation-protocol` · `advanced-state-patterns` · `structured-wireframe-format` · `vertix-portal-design-system` · **NEW:** `stitch-design` (Google Stitch MCP) |
 | **UI Archetypes** (6) | `list-page` · `detail-page` · `form-page` · `dashboard-page` · `settings-page` · `component-test` |
 | **Languages** (5) | `go` · `python` · `typescript` · `java` · `rust` |
-| **Frameworks** (18) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · **NEW:** `drf` · `express` · `nestjs` · **NEW:** `fastify` · `spring-boot` · **NEW:** `quarkus` · `axum` · **NEW:** `actix-web` · **NEW:** `graphql` · **Frontend:** `react` · `nextjs` · `vue` · `tanstack-query` |
+| **Frameworks** (22) | **Backend:** `gin` · `echo` · `chi` · `fastapi` · `django` · `drf` · `express` · `nestjs` · `fastify` · `spring-boot` · `quarkus` · `axum` · `actix-web` · `graphql` · `trpc` · **Frontend:** `react` · `nextjs` · `vue` · `svelte` · `tanstack-query` · **Mobile (NEW):** `react-native` · `react-native-app-patterns` |
 | **Databases** (9) | `postgres` · `mysql` · `mongodb` · `redis` · `sqlite` · **NEW:** `dynamodb` · **NEW:** `elasticsearch` · **NEW:** `firestore` · `query-optimization` |
-| **Testing** (13) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` · `junit-mockito` · `pytest` · `rust-test` · **NEW:** `property-based` · **NEW:** `contract-testing` · **NEW:** `load-testing` · **NEW:** `targeted-testing` · **NEW:** `external-service-mocks` |
+| **Testing** (22) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` · `junit-mockito` · `pytest` · `rust-test` · `property-based` · `contract-testing` · `load-testing` · `targeted-testing` · `external-service-mocks` · `reproduction-first` · `test-case-generation` · `test-case-traceability` · **Mobile (NEW):** `mobile-testing-strategy` · `react-native-testing-library` · `maestro` · `detox` · `appium-mobile` |
 | **Backend Archetypes** (60+) | CRUD handler/service/repository + tests (all 5 languages) · auth middleware · error handling · migrations · Dockerfiles · observability · performance · **NEW:** workers · **NEW:** WebSocket · **NEW:** gRPC · **NEW:** message queues |
-| **Infrastructure** (3) | `docker` · `github-actions` · `kubernetes` |
+| **Infrastructure** (10) | `docker` · `github-actions` · `kubernetes` · `terraform` · `localstack-aws-local` · `secrets-management` · `feature-flags` · `caching-strategies` · `auth-session-flows` · `saas-tenancy-models` |
 
 ### Which agents load which skills
 
@@ -740,11 +884,11 @@ Each agent loads a specific set of skill packs based on what it needs to do:
 | **acceptance_test_agent** | `{{LANG}}`, `api-design`, `testing-principles` | API call patterns, persona-based testing, response validation |
 | **e2e_orchestrator** | `{{LANG}}`, `testing-principles` | Test execution commands, workflow test design |
 
-`{{PLACEHOLDER}}` values are resolved from `IMPLEMENTATION_GUIDELINES.md` during `/startup/init` by `agent_factory`.
+`{{PLACEHOLDER}}` values are resolved from `IMPLEMENTATION_GUIDELINES.md` during `/startup:init` by `agent_factory`.
 
 ### Adding a custom skill pack
 
-Create a `.md` file in `~/.claude/skills/<category>/` following the format of any existing skill pack. Then run `/startup/init --update_agents` to regenerate project agents with the new skill.
+Create a `.md` file in `~/.claude/skills/<category>/` following the format of any existing skill pack. Then run `/startup:init --update_agents` to regenerate project agents with the new skill.
 
 ```bash
 # Example: add a skill pack for Prisma ORM
@@ -759,7 +903,7 @@ cat > ~/.claude/skills/databases/prisma.md << 'EOF'
 EOF
 
 # Regenerate agents to pick up the new skill
-/startup/init --update_agents
+/startup:init --update_agents
 ```
 
 ---
@@ -816,10 +960,12 @@ Providing your own seed data gives you deterministic acceptance tests from day o
 
 Every agent runs on Claude Opus 5.5 (`model: opus`); depth and cost are tuned per agent with `effort` rather than by switching to a smaller model. One model family also keeps the whole pipeline in one prompt-cache namespace.
 
+Counts cover the 69 core agents and 10 generation templates (79 files).
+
 | Effort | Agents | Rationale |
 |------|--------|-----------|
-| **high** (26) | reviewers, verifiers, reconcilers, security and migration safety, implementation templates | Correctness-critical judgment and code generation |
-| **medium** (44) | spec, planning, design, documentation, research, test-writing agents | Structured writing and analysis |
+| **high** (29) | reviewers, verifiers, reconcilers, security and migration safety, implementation templates | Correctness-critical judgment and code generation |
+| **medium** (46) | spec, planning, design, documentation, research, test-writing agents | Structured writing and analysis |
 | **low** (4) | `test_runner`, `demo_executor`, `dependency_scanner`, `wireframe_generator` | Mechanical execution and result formatting |
 
 Escalation: when an agent's first attempt fails on an external signal (tests, a blocking review finding, a gate miss), the orchestrator retries it with `model: fable`; Layer 3 gate verification also runs on `fable`. See `.claude/skills/core/model-routing.md`. To change an agent's depth, edit `effort:` in its frontmatter.
@@ -903,32 +1049,32 @@ The main session runs with a 1M-token context window, and Claude Code compacts t
 Auto-checkpoints at every wave boundary mean `/resume` can always reconstruct state:
 
 ```
-/startup/resume                           ← checks auto-checkpoints first, then explicit sessions
+/startup:resume                           ← checks auto-checkpoints first, then explicit sessions
 ```
 
-For explicit saves, use `/startup/pause`:
+For explicit saves, use `/startup:pause`:
 
 ```
-/startup/pause --reason="context limit"   ← saves phase, step, completed items, blockers
+/startup:pause --reason="context limit"   ← saves phase, step, completed items, blockers
 ```
 
 Then in a new conversation:
 ```
-/startup/resume                           ← restores from checkpoint or pause snapshot
+/startup:resume                           ← restores from checkpoint or pause snapshot
 ```
 
 Or use the lightweight approach — all state is in `agent_state/phases/N/`:
 ```
-/startup/status          ← shows exactly where you stopped
-/startup/develop --phase=N   ← resumes from last incomplete step
+/startup:status          ← shows exactly where you stopped
+/startup:develop --phase=N   ← resumes from last incomplete step
 ```
 
 For named threads (multiple paused sessions):
 ```
-/startup/pause --thread=auth-refactor
-/startup/pause --thread=phase-3-ui
-/startup/resume --list                    ← shows all paused sessions
-/startup/resume --thread=auth-refactor    ← resumes specific thread
+/startup:pause --thread=auth-refactor
+/startup:pause --thread=phase-3-ui
+/startup:resume --list                    ← shows all paused sessions
+/startup:resume --thread=auth-refactor    ← resumes specific thread
 ```
 
 ---
@@ -943,6 +1089,8 @@ git pull
 bash install.sh
 ```
 
+`install.sh` also stages the framework hooks in `~/.claude/hooks/startup/` (with a `project-settings.json`). Projects created with `new-project.sh` get `.claude/hooks/` and `.claude/settings.json` copied in; `/startup:autonomous` Step 0 copies them into an existing project that lacks them. Hook paths use `$CLAUDE_PROJECT_DIR`, so they resolve inside each project. To refresh hooks in an older project after an update, copy `~/.claude/hooks/startup/*.sh` into its `.claude/hooks/`.
+
 ---
 
 ## Common patterns
@@ -950,7 +1098,7 @@ bash install.sh
 ### Resuming after a break
 
 ```
-/startup/status         ← tells you exactly where you are and what to run next
+/startup:status         ← tells you exactly where you are and what to run next
 ```
 
 ### Re-running a phase
@@ -958,22 +1106,26 @@ bash install.sh
 Delete the gate file to unlock re-development:
 ```bash
 rm agent_state/phases/2/gate.passed
-/startup/develop --phase=2
+/startup:develop --phase=2
 ```
 
 ### Handling a change request mid-project
 
 1. Use `product_manager` agent to evaluate the change and update `docs/BRD.md`
-2. Re-run `/startup/plan --phase=N` for the affected phase
-3. Re-run `/startup/develop --phase=N`
+2. Re-run `/startup:plan --phase=N` for the affected phase
+3. Re-run `/startup:develop --phase=N`
 
 ### Adding a tech stack not in skill packs
 
-Create `~/.claude/skills/<category>/<tech>.md` following the format of an existing skill. Run `/startup/init --update_agents` to regenerate agents with the new skill pack.
+Create `~/.claude/skills/<category>/<tech>.md` following the format of an existing skill. Run `/startup:init --update_agents` to regenerate agents with the new skill pack.
 
 ### Skipping UI wireframes
 
 If your project has no frontend, set `frontend.enabled = false` in `docs/IMPLEMENTATION_GUIDELINES.md`. The `ui_developer`, `ui_audit_agent`, and `ui_test_agent` will not be generated.
+
+### Adding a React Native app
+
+Fill in IMPLEMENTATION_GUIDELINES §24 (Mobile) so the tech profile has `mobile.enabled = true`, then run `/startup:init --update_agents`. See [docs/MOBILE_GUIDE.md](docs/MOBILE_GUIDE.md).
 
 ---
 
@@ -990,6 +1142,64 @@ requirements/
 ```
 
 `requirements/` is **read-only**. Agents never modify it. All generated output goes to `docs/`, `agent_state/`, and `.claude/agents/generated/`.
+
+---
+
+## Contributing to the framework
+
+This section is for editing the framework itself (agents, commands, skills, hooks in this repo), not for using it in a project.
+
+### Dependency graph: agents ↔ commands ↔ skills
+
+Each agent's frontmatter declares its place in the graph (schema: [.claude/agents/AGENT_SCHEMA.md](.claude/agents/AGENT_SCHEMA.md)):
+
+| Field | Who writes it | Meaning |
+|-------|---------------|---------|
+| `upstream` | You | Hard ordering. Must point to an agent in an **earlier** `/develop-orchestrator` wave; an agent in the same wave belongs in `runs_after` |
+| `runs_after` | You | Soft ordering — this agent reads the other's output when it exists |
+| `downstream` | `_sync-deps.py` | **Derived, never hand-edited:** the exact inverse of every other agent's `upstream` ∪ `runs_after` |
+| `skill_packs` | You (or `_add-packs.py`) | Every agent loads at least one skill pack; every path must exist |
+
+### Maintenance workflow
+
+After adding or editing an agent, template, command or skill:
+
+```bash
+python3 .claude/agents/_sync-deps.py        # re-derive downstream lists (--check = dry run for CI)
+.claude/agents/_sync-contract.sh            # regenerate the reference-packs + operating-contract blocks
+bash tests/run-all.sh                       # must print ALL TESTS PASSED
+./install.sh                                # deploy to ~/.claude (the installed copy is not git-tracked)
+```
+
+To add skill packs to an agent: `python3 .claude/agents/_add-packs.py <agent-file> <category>/<pack>.md [...]` (it refuses a pack that doesn't exist), then run `_sync-contract.sh` on the same file.
+
+### Framework tests
+
+`bash tests/run-all.sh` runs six suites (111 checks at the time of writing; requires `python3` with PyYAML and `jq`):
+
+| Suite | Guards |
+|-------|--------|
+| `agent-registry.test.sh` | Base-roster names that have no agent file; INVENTORY.md core-agent count drift |
+| `autonomous-chain.test.sh` | The `/autonomous` chain: every referenced sub-command/flag exists, Skill-tool invocation, `/design` after `/plan`, auto-mode contracts in sub-commands, force-gate policy, Stop hook registered and installed into projects |
+| `autonomous-continue.test.sh` | The Stop hook blocks mid-run stops, allows `awaiting_human`/`paused`/`failed`/`complete`, and marks a no-progress run `stalled` |
+| `dependency-graph.test.sh` | `tests/lib/depgraph.py` finding classes (below) plus derived-deps sync, the skill-resolution table, TC-ID regex, generated-agent identity, mobile wiring and the Stitch tool surface |
+| `remember.test.sh` | Deterministic bi-temporal fact supersession in `remember.sh` |
+| `verify-gate.test.sh` | The phase-gate hook (roster completeness, stub reports, forged `gate.passed`) |
+
+`python3 tests/lib/depgraph.py` reports ten finding classes, all of which must be empty:
+
+| Class | Meaning |
+|-------|---------|
+| `DANGLING_AGENT` | A dependency or spawn names an agent with no file |
+| `DANGLING_SKILL` | A `skill_packs` entry or body path names a skill file that doesn't exist |
+| `ASYMMETRIC` | A lists B downstream but B doesn't list A upstream / runs_after |
+| `WAVE_ORDER` | A hard `upstream` edge to an agent in the same or a later wave |
+| `IO_UNPRODUCED` | An agent reads a file no agent or command produces |
+| `REPORT_NAME` | The orchestrator expects a report name the agent never writes |
+| `ORPHAN_AGENT` | An agent nothing invokes |
+| `ORPHAN_SKILL` | A skill pack nothing references |
+| `NO_SKILLS` | An agent that loads no skill pack |
+| `YAML_ERROR` | Frontmatter that doesn't parse |
 
 ---
 
@@ -1021,7 +1231,7 @@ Use Go with Chi router and PostgreSQL.
 EOF
 
 # 4. Open Claude Code in this directory and run:
-/startup/init
+/startup:init
 ```
 
 That's it. `/init` reads your paragraph, interviews you for gaps, creates a structured BRD with numbered requirements (FR-001, FR-002, ...), confirms your tech stack, and generates project-specific agents.
@@ -1033,7 +1243,7 @@ docs/IMPLEMENTATION_GUIDELINES.md    ← confirmed: Go 1.22 / Chi / PostgreSQL /
 .claude/agents/generated/            ← 8 agents customized for Go + Chi + PostgreSQL
 ```
 
-**Next step:** Run `/startup/status` to see what the system recommends.
+**Next step:** Run `/startup:status` to see what the system recommends.
 
 ---
 
@@ -1042,7 +1252,7 @@ docs/IMPLEMENTATION_GUIDELINES.md    ← confirmed: Go 1.22 / Chi / PostgreSQL /
 Now build the first feature set. The system breaks your BRD into phases automatically.
 
 ```
-/startup/plan               ← creates specs for Phase 1 (auto-detected)
+/startup:plan               ← creates specs for Phase 1 (auto-detected)
 ```
 
 This produces:
@@ -1054,24 +1264,26 @@ This produces:
 Review the specs in `docs/design/phases/1/specs/`. Then:
 
 ```
-/startup/develop            ← implements Phase 1 end-to-end
+/startup:develop            ← implements Phase 1 end-to-end
 ```
 
 This runs the full pipeline: audit → code → tests → review → acceptance → gate. Takes 15-40 minutes depending on phase size. You don't need to do anything — watch the progress.
 
 **What happens inside `/develop`:**
 ```
-Wave 1:  Database schema + migrations
-Wave 2:  Backend services → API handlers (sequential — API needs service interfaces)
-Wave 3:  UI components (if frontend enabled)
-Wave 4:  Unit tests + integration tests (parallel)
-Wave 5:  Code review (style + architecture + security) + acceptance tests (parallel)
-Wave 6:  13-point quality gate — all must pass to proceed
+Wave 1:   Audit — what exists vs what the specs require
+Wave 2:   Database → migrations → backend → API (publishes api-contracts.md) → UI ∥ mobile app
+Wave 3:   Tests, one agent per tier (unit, integration, UI → browser E2E, mobile → device E2E)
+Wave 3v:  test_runner re-runs the suites independently and cross-checks the writers' counts
+Wave 3.5: Local deploy + health check
+Wave 4:   Reviewers + reconcilers + acceptance tests (parallel, one named agent each)
+Wave 5:   Fix loop
+Wave 6:   Gate — every agent in the phase roster must have completed, every report must pass
 ```
 
 **If the gate passes:** `agent_state/phases/1/gate.passed` is written. You're done with Phase 1.
 
-**If the gate blocks:** The system tells you exactly what failed and how to fix it. Fix it, then re-run `/startup/develop`.
+**If the gate blocks:** The system tells you exactly what failed and how to fix it. Fix it, then re-run `/startup:develop`.
 
 ---
 
@@ -1080,10 +1292,10 @@ Wave 6:  13-point quality gate — all must pass to proceed
 Before planning, surface assumptions and research decisions. This prevents "assumption bugs" — the #1 cause of mid-implementation rework.
 
 ```
-/startup/map                ← maps the codebase (skip for greenfield projects)
-/startup/discuss            ← surfaces assumptions + researches decisions
-/startup/plan               ← plans with full context
-/startup/develop            ← implements with confidence
+/startup:map                ← maps the codebase (skip for greenfield projects)
+/startup:discuss            ← surfaces assumptions + researches decisions
+/startup:plan               ← plans with full context
+/startup:develop            ← implements with confidence
 ```
 
 **What `/discuss` does:**
@@ -1104,8 +1316,8 @@ You review the output, confirm or override decisions, then `/plan` uses your con
 
 **Use `--auto` to skip the interactive review** (agents pick recommended defaults):
 ```
-/startup/discuss --auto     ← auto-resolves all decisions, logs everything
-/startup/plan               ← reads DISCUSSION.md automatically
+/startup:discuss --auto     ← auto-resolves all decisions, logs everything
+/startup:plan               ← reads DISCUSSION.md automatically
 ```
 
 **What `/map` does:**
@@ -1131,20 +1343,23 @@ The complete step-by-step workflow for each phase:
 # ── Phase N ───────────────────────────────────────────────
 
 # 1. Update codebase knowledge (skip for Phase 1 of greenfield)
-/startup/map --incremental
+/startup:map --incremental
 
 # 2. Surface assumptions and research decisions
-/startup/discuss --phase=N
+/startup:discuss --phase=N
 
 # 3. Generate specs with goal verification
-/startup/plan --phase=N
+/startup:plan --phase=N
+
+# 3b. UI / mobile phases: design contract behind the design gate
+/startup:design --phase=N                  # add --source=stitch to render screens in Google Stitch
 
 # 4. Review specs (optional but recommended)
 #    Check: docs/design/phases/N/specs/
 #    Check: agent_state/phases/N/plan_check.md (goal verification)
 
 # 5. Implement end-to-end
-/startup/develop --phase=N
+/startup:develop --phase=N
 
 # 6. Gate passes → Phase N complete!
 #    Repeat from step 1 for Phase N+1
@@ -1152,16 +1367,16 @@ The complete step-by-step workflow for each phase:
 
 **Between phases — optional quality commands:**
 ```
-/startup/test --phase=N          ← re-run tests independently
-/startup/review                  ← standalone code review
-/startup/optimize                ← dead code removal + performance
-/startup/benchmark --save-baseline  ← capture performance metrics
+/startup:test --phase=N          ← re-run tests independently
+/startup:review                  ← standalone code review
+/startup:optimize                ← dead code removal + performance
+/startup:benchmark --save-baseline  ← capture performance metrics
 ```
 
 **After all phases:**
 ```
-/startup/accept                  ← global acceptance testing (all personas, all use cases)
-/startup/deploy --target=local   ← deploy locally
+/startup:accept                  ← global acceptance testing (all personas, all use cases)
+/startup:deploy --target=local   ← deploy locally
 ```
 
 ---
@@ -1171,17 +1386,19 @@ The complete step-by-step workflow for each phase:
 Let the system build everything. You review once, then walk away.
 
 ```
-/startup/autonomous
+/startup:autonomous
 ```
 
 **What happens:**
 
 ```
-Phase 0:   Environment pre-flight (Docker, ports, tools)
+Phase 0:   Environment pre-flight (Docker, ports, tools, framework hooks, run.json)
 Phase 1:   /init --auto         Creates BRD + agents (auto-researches all gaps)
-Phase 1b:  /map                 Codebase knowledge base
+Phase 1b:  /map                 Codebase knowledge base (skipped for greenfield)
 Phase 2:   /discuss --auto      Surfaces assumptions (auto-resolved)
-Phase 2b:  /plan --auto         Specs + goal verification
+Phase 2b:  /plan --auto         Specs + data contracts + goal verification
+Phase 2c:  /design --source=stitch --auto   UI/mobile phases only — AFTER /plan (needs PHASE_PLAN + data-contracts);
+                                            pure-agent fallback if Stitch is unavailable
 
      ┌─────────────────────────────────────────────────────────┐
      │  🛑 HUMAN CHECKPOINT — the ONE required interaction     │
@@ -1194,12 +1411,15 @@ Phase 2b:  /plan --auto         Specs + goal verification
      │  Type "go" to approve, or describe changes              │
      └─────────────────────────────────────────────────────────┘
 
-Phase 4:   /develop --auto      Implements Phase 1
+Phase 4:   /develop --auto      Implements Phase 1 (via /develop-orchestrator, wave by wave)
 Phase 5:   For each remaining phase:
-             /map --incremental → /discuss --auto → /plan --auto → /develop --auto
-Phase 6:   /accept --auto       Global validation
+             /map --incremental → /discuss --auto → /plan --auto → /design (UI phases) → /develop --auto
+Phase 5b:  Local deploy
+Phase 6:   /accept --auto       Global validation + pipeline completeness
 Phase 7:   Final report + /health integrity check
 ```
+
+**It runs as one continuous turn.** Each sub-command is invoked through the Skill tool (`startup:<cmd>`), their closing "▶ Next: …" hints are ignored, and a Stop hook (`.claude/hooks/autonomous-continue.sh`) blocks the turn from ending while `agent_state/autonomous/run.json` has `"status": "running"`. The run stops only at the human checkpoint, a security pause, a real failure, or completion. Approving the checkpoint also approves the force-gate policy for later phases. Full walkthrough: [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md).
 
 **Safety guarantees in autonomous mode:**
 - Security decisions NEVER auto-resolve permissively (uses hardened defaults)
@@ -1210,10 +1430,10 @@ Phase 7:   Final report + /health integrity check
 
 **Customize autonomous runs:**
 ```
-/startup/autonomous --confirm_each_phase    ← checkpoint before EVERY phase
-/startup/autonomous --max_phases=2          ← only build first 2 phases
-/startup/autonomous --skip_init             ← reuse existing BRD
-/startup/autonomous --resume                ← continue from last checkpoint
+/startup:autonomous --confirm_each_phase    ← checkpoint before EVERY phase
+/startup:autonomous --max_phases=2          ← only build first 2 phases
+/startup:autonomous --skip_init             ← reuse existing BRD
+/startup:autonomous --resume                ← continue from run.json next_step
 ```
 
 ---
@@ -1222,21 +1442,21 @@ Phase 7:   Final report + /health integrity check
 
 **Save and resume work across conversations:**
 ```
-/startup/pause                              ← saves phase, step, decisions, blockers
-/startup/pause --reason="end of day"        ← with reason
-/startup/pause --thread=auth-work           ← named thread (multiple paused contexts)
+/startup:pause                              ← saves phase, step, decisions, blockers
+/startup:pause --reason="end of day"        ← with reason
+/startup:pause --thread=auth-work           ← named thread (multiple paused contexts)
 
 # In a new conversation:
-/startup/resume                             ← restores latest session
-/startup/resume --list                      ← shows all paused sessions
-/startup/resume --thread=auth-work          ← resumes specific thread
+/startup:resume                             ← restores latest session
+/startup:resume --list                      ← shows all paused sessions
+/startup:resume --thread=auth-work          ← resumes specific thread
 ```
 
 **Context window fills up?** Same flow:
 ```
-/startup/pause --reason="context limit"
+/startup:pause --reason="context limit"
 # Start new conversation
-/startup/resume
+/startup:resume
 ```
 
 ---
@@ -1247,29 +1467,29 @@ Work on independent features concurrently:
 
 ```
 # Create workstreams (each gets its own git branch)
-/startup/workstream create --name=auth --phase=3 --description="Authentication system"
-/startup/workstream create --name=reports --phase=4 --description="Reporting dashboard"
+/startup:workstream create --name=auth --phase=3 --description="Authentication system"
+/startup:workstream create --name=reports --phase=4 --description="Reporting dashboard"
 
 # Work on auth
-/startup/workstream switch --name=auth
-/startup/discuss --phase=3
-/startup/plan --phase=3
-/startup/develop --phase=3
+/startup:workstream switch --name=auth
+/startup:discuss --phase=3
+/startup:plan --phase=3
+/startup:develop --phase=3
 
 # Switch to reports (auth progress is saved automatically)
-/startup/workstream switch --name=reports
-/startup/discuss --phase=4
-/startup/plan --phase=4
-/startup/develop --phase=4
+/startup:workstream switch --name=reports
+/startup:discuss --phase=4
+/startup:plan --phase=4
+/startup:develop --phase=4
 
 # Check progress across all workstreams
-/startup/workstream list
+/startup:workstream list
 # Output:
 #   ● auth      (active)  Phase 3   branch: workstream/auth      progress: 100%
 #   ○ reports   (paused)  Phase 4   branch: workstream/reports   progress: 60%
 
 # Merge completed auth back to main (runs integration check + regression tests)
-/startup/workstream merge --name=auth
+/startup:workstream merge --name=auth
 ```
 
 **When to use workstreams:** Features that don't share components. If Phase 3 and Phase 4 both modify the same service, use sequential phases instead.
@@ -1282,7 +1502,7 @@ For new products or unfamiliar markets:
 
 ```
 # 1. Research first (6 parallel agents, 15-30 minutes)
-/startup/research --domain="XDR/EDR cybersecurity"
+/startup:research --domain="XDR/EDR cybersecurity"
 
 # Produces:
 #   requirements/research/01-vendors.md
@@ -1296,8 +1516,8 @@ For new products or unfamiliar markets:
 # 2. Review research, adjust priorities
 
 # 3. Build (research feeds into /init automatically)
-/startup/autonomous
-# OR manually: /startup/init → /startup/plan → /startup/develop
+/startup:autonomous
+# OR manually: /startup:init → /startup:plan → /startup:develop
 ```
 
 ---
@@ -1306,14 +1526,14 @@ For new products or unfamiliar markets:
 
 | Situation | What to run | What it does |
 |-----------|------------|-------------|
-| Pipeline failed mid-run | `/startup/forensics` | Timeline reconstruction → root cause → recovery steps |
-| Suspect corrupted state | `/startup/health` | Checks manifest integrity, gate consistency, file references |
-| Auto-repair state issues | `/startup/health --fix` | Fixes orphaned reports, dead refs, incomplete logs |
-| Bug in the built app | `/startup/diagnose --symptom="..."` | Traces symptom → spec → implementation → root cause |
-| Quick fix needed | `/startup/hotfix --phase=N --component=auth` | Scoped fix → scoped test → scoped review → merge |
-| Need to undo a deploy | `/startup/rollback --target=local` | Reverses migrations, redeploys previous build |
-| Phase needs a redo | `/startup/reset-phase --phase=N` | Archives state, creates safety tag, prepares clean re-run |
-| Flaky test blocking gate | `/startup/develop --force_gate` | Forces gate with full logging (tracked in manifest) |
+| Pipeline failed mid-run | `/startup:forensics` | Timeline reconstruction → root cause → recovery steps |
+| Suspect corrupted state | `/startup:health` | Checks manifest integrity, gate consistency, file references |
+| Auto-repair state issues | `/startup:health --fix` | Fixes orphaned reports, dead refs, incomplete logs |
+| Bug in the built app | `/startup:diagnose --symptom="..."` | Traces symptom → spec → implementation → root cause |
+| Quick fix needed | `/startup:hotfix --phase=N --component=auth` | Scoped fix → scoped test → scoped review → merge |
+| Need to undo a deploy | `/startup:rollback --target=local` | Reverses migrations, redeploys previous build |
+| Phase needs a redo | `/startup:reset-phase --phase=N` | Archives state, creates safety tag, prepares clean re-run |
+| Flaky test blocking gate | `/startup:develop --force_gate` | Forces gate with full logging (tracked in manifest) |
 
 ---
 
@@ -1321,29 +1541,34 @@ For new products or unfamiliar markets:
 
 | I want to... | Run this |
 |-------------|----------|
-| Build everything hands-off | `/startup/autonomous` |
-| Understand a competitor's product deeply | `/startup/product-workflows --product="Trellix DLP"` |
-| Research a market first | `/startup/research --domain="..."` |
-| Start a new project | `bash new-project.sh my-app` → `/startup/init` |
-| Understand codebase before planning | `/startup/map` |
-| Surface assumptions before planning | `/startup/discuss` |
-| Build the next feature set | `/startup/discuss` → `/startup/plan` → `/startup/develop` |
-| See where I am | `/startup/status` |
-| Save progress for later | `/startup/pause` → (new session) → `/startup/resume` |
-| Work on two features in parallel | `/startup/workstream create --name=feature-a` |
-| Run tests without building | `/startup/test --phase=N` |
-| Review code quality | `/startup/review` |
-| Optimize code | `/startup/optimize` |
-| Deploy | `/startup/deploy --target=local` |
-| Validate the full product | `/startup/accept` |
-| Fix a bug fast | `/startup/hotfix --phase=N --component=auth` |
-| Investigate a bug | `/startup/diagnose --symptom="..."` |
-| Check pipeline health | `/startup/health` |
-| Investigate a failure | `/startup/forensics` |
-| Track performance | `/startup/benchmark --save-baseline` |
-| Roll back a deploy | `/startup/rollback --target=local` |
-| Add a feature mid-project | `product_manager` agent → `/startup/plan` |
-| Re-do a phase | `/startup/reset-phase --phase=N` → `/startup/develop` |
+| Build everything hands-off | `/startup:autonomous` |
+| Understand a competitor's product deeply | `/startup:product-workflows --product="Trellix DLP"` |
+| Research a market first | `/startup:research --domain="..."` |
+| Start a new project | `bash new-project.sh my-app` → `/startup:init` |
+| Understand codebase before planning | `/startup:map` |
+| Surface assumptions before planning | `/startup:discuss` |
+| Build the next feature set | `/startup:discuss` → `/startup:plan` → `/startup:develop` |
+| See where I am | `/startup:status` |
+| Save progress for later | `/startup:pause` → (new session) → `/startup:resume` |
+| Work on two features in parallel | `/startup:workstream create --name=feature-a` |
+| Run tests without building | `/startup:test --phase=N` |
+| Review code quality | `/startup:review` |
+| Optimize code | `/startup:optimize` |
+| Deploy | `/startup:deploy --target=local` |
+| Validate the full product | `/startup:accept` |
+| Fix a bug fast | `/startup:hotfix --phase=N --component=auth` |
+| Investigate a bug | `/startup:diagnose --symptom="..."` |
+| Check pipeline health | `/startup:health` |
+| Investigate a failure | `/startup:forensics` |
+| Track performance | `/startup:benchmark --save-baseline` |
+| Roll back a deploy | `/startup:rollback --target=local` |
+| Add a feature mid-project | `product_manager` agent → `/startup:plan` |
+| Re-do a phase | `/startup:reset-phase --phase=N` → `/startup:develop` |
+| Design screens in Google Stitch | `/startup:stitch init` → `/startup:design --source=stitch` |
+| Check built pages against the design | `/startup:ui-audit` (add `--fix=all` to repair) |
+| Test the React Native app on both platforms | `/startup:test --mobile` |
+| Rehearse a stakeholder demo | `/startup:demo --phase=N` |
+| Resume an interrupted autonomous run | `/startup:autonomous --resume` |
 
 ---
 
@@ -1387,47 +1612,53 @@ If any check fails, the gate blocks and tells you exactly what to fix.
 ### Commands at a glance
 
 ```
-Pipeline (24 commands total):
-/startup/product-workflows  Product workflow intelligence (docs + videos + APIs).
-/startup/research     Deep market & product research. Vendors, capabilities, moats.
-/startup/init         One-time project setup. Creates BRD + agents from requirements.
-/startup/map          Codebase knowledge base — 4 parallel focus areas.
-/startup/discuss      Surface assumptions + research decisions. Run before /plan.
-/startup/plan         Plans a phase. Creates specs, data contracts, goal verification.
-/startup/develop      Builds a phase end-to-end with parallel review + acceptance.
-/startup/autonomous   Full pipeline: map → discuss → plan → develop (all phases).
-/startup/accept       Full-product validation after all phases complete.
-/startup/deploy       Build and deploy to local, staging, or production.
+Pipeline (44 command files in total, including the rules-board family and aliases):
+/startup:product-workflows  Product workflow intelligence (docs + videos + APIs).
+/startup:research     Deep market & product research. Vendors, capabilities, moats.
+/startup:init         One-time project setup. Creates BRD + agents from requirements.
+/startup:map          Codebase knowledge base — parallel focus areas.
+/startup:discuss      Surface assumptions + research decisions. Run before /plan.
+/startup:plan         Plans a phase. Creates specs, data contracts, goal verification.
+/startup:design       UI/mobile design contract behind a blocking design gate (after /plan).
+/startup:develop      Builds a phase end-to-end with parallel review + acceptance.
+/startup:autonomous   Full pipeline: init → map → discuss → plan → design → develop → accept.
+/startup:accept       Full-product validation after all phases complete.
+/startup:deploy       Build and deploy to local, staging, or production.
+
+Design & Demo:
+/startup:stitch       Google Stitch workbench (init/generate/variants/edit/theme/sync/status).
+/startup:ui-audit     Every built page vs design standards + its Stitch baseline.
+/startup:demo         Write, stand up and rehearse a stakeholder demo.
 
 Session & Workflow:
-/startup/pause        Save session state for later resumption.
-/startup/resume       Restore paused session and continue working.
-/startup/workstream   Manage parallel workstreams (create/switch/merge).
+/startup:pause        Save session state for later resumption.
+/startup:resume       Restore paused session and continue working.
+/startup:workstream   Manage parallel workstreams (create/switch/merge).
 
 Standalone:
-/startup/test         Runs tests standalone. Many flags for targeting specific tiers.
-/startup/review       Code review: spec compliance → style + arch + security (parallel).
-/startup/optimize     Code cleanup and optimization with before/after comparison.
-/startup/benchmark    Performance tracking with baselines and regression detection.
-/startup/status       Where am I? What should I run next?
+/startup:test         Runs tests standalone. Many flags for targeting specific tiers (incl. --mobile).
+/startup:review       Code review: spec compliance → style + arch + security (parallel).
+/startup:optimize     Code cleanup and optimization with before/after comparison.
+/startup:benchmark    Performance tracking with baselines and regression detection.
+/startup:status       Where am I? What should I run next?
 
 Issue Resolution:
-/startup/hotfix       Fast-track bug fix. Scoped test + scoped review. No full pipeline.
-/startup/diagnose     Trace a symptom to root cause. Optional auto-fix.
-/startup/rollback     Roll back a deployment. Reverse migrations + redeploy previous build.
-/startup/reset-phase  Reset a phase for re-development with state preservation.
+/startup:hotfix       Fast-track bug fix. Scoped test + scoped review. No full pipeline.
+/startup:diagnose     Trace a symptom to root cause. Optional auto-fix.
+/startup:rollback     Roll back a deployment. Reverse migrations + redeploy previous build.
+/startup:reset-phase  Reset a phase for re-development with state preservation.
 
 Pipeline Diagnostics:
-/startup/health       Check pipeline state integrity. Use --fix for auto-repair.
-/startup/forensics    Investigate failed pipeline runs. Timeline + root cause + recovery.
+/startup:health       Check pipeline state integrity. Use --fix for auto-repair.
+/startup:forensics    Investigate failed pipeline runs. Timeline + root cause + recovery.
 ```
 
 ### Tips
 
 - **Start small.** Your first requirements file can be a single paragraph. `/init` will ask clarifying questions.
-- **Check status often.** `/startup/status` always tells you the next action.
+- **Check status often.** `/startup:status` always tells you the next action.
 - **Trust the gate.** If the gate blocks, read the blocker — it tells you the exact file, line, and fix.
 - **Use `--dry_run` for optimize.** See what would change before committing to it.
 - **Commit between phases.** Each phase is a natural commit point.
 - **Provide seed data for predictable tests.** Drop YAML files into `requirements/test-data/` for deterministic acceptance tests.
-- **Add your own skill packs.** Using a framework not in the defaults? Create a `.md` file in `~/.claude/skills/` and re-run `/startup/init --update_agents`.
+- **Add your own skill packs.** Using a framework not in the defaults? Create a `.md` file in `~/.claude/skills/` and re-run `/startup:init --update_agents`.

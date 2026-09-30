@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # startup-agents installer
 # Installs commands, core agents, templates, skill packs, and docs to ~/.claude/
-# After install, /startup/<command> is available in any project.
+# After install, /startup:<command> is available in any project.
 
 set -e
 
@@ -176,9 +176,9 @@ echo "  1. cd <your-new-project>"
 echo "  2. mkdir requirements"
 echo "  3. Copy your specs, user stories, or pitch deck into requirements/"
 echo "  4. Optionally add requirements/IMPLEMENTATION_GUIDELINES.md"
-echo "  5. Open Claude Code and run: /startup/init"
+echo "  5. Open Claude Code and run: /startup:init   (or /startup:autonomous for the full pipeline)"
 echo
-echo "Commands (/startup/<command>):"
+echo "Commands (/startup:<command>):"
 echo "  ┌─────────────────┬────────────────────────────────────────────────┐"
 echo "  │ Pipeline         │                                                │"
 echo "  ├─────────────────┼────────────────────────────────────────────────┤"
