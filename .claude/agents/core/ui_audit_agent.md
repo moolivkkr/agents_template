@@ -26,6 +26,8 @@ trigger:
 skill_packs:
   - "~/.claude/skills/ui/professional-ui-standards.md"
   - "~/.claude/skills/ui/structured-wireframe-format.md"
+  - "~/.claude/skills/api/response-envelope.md"
+  - "~/.claude/skills/security/secure-coding.md"
 ---
 
 # Agent: UI Audit Agent
@@ -40,7 +42,7 @@ Audits the current state of the UI codebase at the start of a UI phase. Runs alo
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/BRD.md` — user personas, FR-* for UI-facing flows in scope
-2. `docs/IMPLEMENTATION_GUIDELINES.md` §Component Inventory — UI components, state management, build tool
+2. `docs/IMPLEMENTATION_GUIDELINES.md` `## Technology stack` (UI framework, components, state management, build tool) and §1 Project Structure
 3. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — which screens/flows are in scope
 4. `docs/design/phases/{{PHASE}}/specs/*.wireframe.md` — the wireframes to implement
 5. `agent_state/phases/{{PHASE-1}}/manifest.json` — UI artifacts from previous phases, any `carried_forward[]` UI issues
@@ -73,6 +75,16 @@ For each API endpoint referenced in the wireframes:
 
 ### 6. Carried-Forward Issues
 Surface any `carried_forward[]` items from the previous phase manifest that are UI-related.
+
+### 7. Existing Code and Conventions (what ui_developer / mobile_developer build on)
+- Screens and components the wireframes need that already exist (file path), so implementers extend them instead of re-creating them. Use `agent_state/phases/{{PHASE-1}}/ui_developer/manifest.json` (and the mobile one) when present.
+- Conventions with one `file:line` example each: folder layout, component and hook naming, styling approach, API client and envelope unwrapping, i18n keys, `data-testid` style.
+
+### 8. Contract and Security Drift in Existing UI Code
+- API calls that unwrap a shape other than `~/.claude/skills/api/response-envelope.md` (top-level `pagination`, offset paging, `error === null` checks, a `detail` field).
+- Session tokens read from or written to `localStorage`/`sessionStorage`, or put in URLs / WebSocket query strings.
+- Unsanitized HTML rendering (`dangerouslySetInnerHTML`, `v-html`, `innerHTML` without DOMPurify), and LLM provider SDKs or keys in client code.
+Each item goes in the report with `file:line`, owner `ui_developer` (or `mobile_developer`).
 
 ## Output: `agent_state/phases/{{PHASE}}/audit_report_ui.md`
 
@@ -109,6 +121,18 @@ Surface any `carried_forward[]` items from the previous phase manifest that are 
 ## Component Library Violations
 - [ ] <Component> — custom implementation duplicates <library_component>
 
+## Existing Screens / Components to Extend (do not re-create)
+| Wireframe | Existing code | State |
+|-----------|---------------|-------|
+
+## Conventions Observed
+| Convention | What the code does | Example (file:line) |
+|------------|--------------------|---------------------|
+
+## Contract and Security Drift
+| File:line | Issue (envelope / token storage / unsafe HTML / client-side LLM key) | Owner |
+|-----------|----------------------------------------------------------------------|-------|
+
 ## Recommended Implementation Order
 1. ...
 ```
@@ -130,6 +154,8 @@ These hold the conventions and patterns for the work you're doing. Before writin
 
 - `~/.claude/skills/ui/professional-ui-standards.md`
 - `~/.claude/skills/ui/structured-wireframe-format.md`
+- `~/.claude/skills/api/response-envelope.md`
+- `~/.claude/skills/security/secure-coding.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
