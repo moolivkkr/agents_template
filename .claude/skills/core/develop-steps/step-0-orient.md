@@ -333,7 +333,7 @@ Before starting the pipeline, estimate total token usage for this phase. These e
 | spec_test_reconciler | high | ~15K | Always |
 | code_optimizer | medium | ~20K | Always |
 | ui_code_optimizer | medium | ~20K | If HAS_UI |
-| documentation_agent | medium | ~15K | Always |
+| documentation_agent | medium | ~15K | If docs policy `developer_docs` is on (off in lean) |
 
 5. Calculate total:
    ```

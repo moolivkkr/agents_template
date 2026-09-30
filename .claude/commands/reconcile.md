@@ -230,12 +230,19 @@ discrepancy lands in exactly one bucket:
 For **DRIFT-DOC** and **UNSPEC** items only:
 
 1. Edit the specific requirement/BRD/TRD file to match as-built. Preserve the doc's own
-   ID scheme (FR-*/NFR-*/section numbering) and voice. For UNSPEC, add a new FR-*/section.
+   ID scheme (FR-*/NFR-*/section numbering) and voice. For UNSPEC, add a new FR-*/section with
+   `Source: as-built: <file:line>` and EARS acceptance criteria that describe what the code does (so
+   `acceptance-map.py` sees it as an as-built FR still needing tests, and `/plan` schedules them).
+   If the repo has **no BRD at all**, don't hand-assemble one here: run `/init --from-code`, which
+   writes it from the capability inventory with the same rules.
 2. Keep edits **surgical** — change the drifted statement, don't rewrite whole documents.
 3. Leave a dated reconciliation note in each edited doc's changelog/amendment section if it
    has one (many products have `docs/*-AMENDMENT-*.md` — append there when present).
 4. **GAP-IMPL and INVENTED are never applied** — they go to the action plan / human ruling.
-5. Commit per repo:
+5. Run `python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json`
+   and list the FRs you added or changed with their acceptance status in the report. The doc change
+   isn't finished until their acceptance tests match (see `/recon` step 5).
+6. Commit per repo:
    `docs(reconcile): align <product> docs with as-built architecture (N DRIFT, M UNSPEC)`
    with the Co-Authored-By trailer. Branch first if on the default branch.
 

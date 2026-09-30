@@ -128,7 +128,7 @@ six-wave ceremony for a typo fix. See `~/.claude/skills/core/scale-adaptive-dept
 | **trivial** | 1 file, no shared layer, copy/typo | scoped edit + test only (skip audit/TRD/review waves) |
 | **small** | ≤2 components, no shared layer | Waves 2, 3, 6 (light) |
 | **standard** | multi-component or brownfield | full Waves 1–6 (default) |
-| **platform** | shared layer, new subsystem, many FR-* | full 1–6 + architecture/ADR pass |
+| **platform** | shared layer, new subsystem, many FR-* | full 1–6 + decision pass (DECISIONS.md; ADR files and diagrams only if the docs policy has them on) |
 
 Complexity also drives model routing (`model-routing.md`); this drives *workflow depth*. Upgrades
 allowed mid-run (escalate if a "small" phase turns out to touch a shared layer); never silently
@@ -184,7 +184,13 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - the phase has NFR-PERF-* targets in scope: ADD performance_agent (Wave 4 Track D, a gated load test
 #    on qa). With an availability/SLO target also ADD reliability_agent (Track D code checks).
 #  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
-#  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
+#  - platform: ADD adr_agent (decisions to docs/DECISIONS.md; spawn it with MODE: ledger-only unless
+#    `docs-policy.py is-on adr_files`). ADD architecture_orchestrator ONLY if
+#    `python3 .claude/hooks/docs-policy.py is-on architecture_diagrams` exits 0 (off in the lean docs
+#    profile — the diagrams are optional; record the skip in skipped_agents[]).
+#  - PHASE_PLAN.md says `Mode: as-built` (/plan --as-built): DROP the implementation agents that have no
+#    gap work (record each in skipped_agents[] with reason "as-built baseline"); keep every test,
+#    review, reconcile and acceptance agent. The phase's job is the test + acceptance baseline.
 #  - candidate-selection will run this phase (Wave 2 mode N>=2 — PLATFORM / high-complexity /
 #    prev-failure / --candidates=N): ADD solution_selector. It is a REQUIRED agent whenever N>=2, so
 #    its completed line + candidate_selection.md report are proven by the Wave-6 roster check. When
@@ -221,7 +227,7 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 
 ```bash
 # 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
-for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py; do
+for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py; do
   [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
@@ -876,8 +882,30 @@ report ends with the one-line count 'BLOCKING:N WARNING:N INFO:N' (the gate read
 
 ### Track B — Acceptance Tests
 
+**Pre-step (before spawning Track B): requirement changes reach the tests.** The acceptance scope of a
+phase is every FR delivered so far plus this phase's, so a BRD change since an earlier gate (a
+`product_manager` change request, `/recon --fix=docs --apply`, a hand edit) is handled here, not
+discovered at release:
+```bash
+python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --out agent_state/phases/${PHASE}/reports/acceptance_map.json || true
+jq -r '.frs[] | select(.status=="CHANGED" or .status=="NEW" or .status=="PARTIAL") | "\(.fr) \(.status) phases=\(.phases|join(",")) \(.issues|join("; "))"' \
+  agent_state/phases/${PHASE}/reports/acceptance_map.json
+```
+If any line prints, spawn `spec_writer` (subagent_type: spec_writer) with `MODE: acceptance-amend`
+and that list. It rewrites those FRs' TC-ACC rows to the current BRD text, in the phase that owns each
+FR (this phase for NEW/PARTIAL rows of this phase's FRs). Wait for it, then pass the same list to Track B
+as `CHANGED_FRS`. Nothing printed → `CHANGED_FRS: none`.
+
 ```
 Agent prompt (subagent_type: acceptance_test_agent): "[GROUND TRUTH] You are acceptance_test_agent running Wave 4 Track B for Phase ${PHASE}.
+CHANGED_FRS: <the pre-step list, or none> — update (or add, or retire) the tests for these FRs' amended
+TC-ACC rows, whatever phase wrote them; each changed pre-existing test gets its TEST-CHANGE comment
+citing spec: the row.
+After the run, merge the requirement map into your sidecar (every FR delivered so far + this phase's):
+  python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/acceptance_report.json \
+    --merge-into agent_state/phases/${PHASE}/reports/acceptance_report.json --out agent_state/phases/${PHASE}/reports/acceptance_map.json
+  (a Must/Should FR with no TC-ACC row, a SHALL with no row, a changed FR, or a failing FR becomes an
+  UNTESTED case the gate blocks on).
 BASE URL: ${APP_BASE_URL} (qa on lab-cluster projects). PREREQUISITE: GET <BASE URL>/healthz returns 200
 (CLI: the built binary answers --version). If not, verdict BLOCKED — never fake PASS.
 Every FR-* acceptance criterion in scope, per persona, as COMMITTED runnable specs under
@@ -1420,6 +1448,10 @@ Individual reports answer "what did agent X find"; nobody assembles "what happen
 a per-phase narrative that rolls up every wave, then regenerate the consolidated project ledger so a
 human or a NEW session has one place to read.
 
+Steps 4a and 4b follow the docs policy (both on in the lean profile, since they are rebuilt from
+artifacts rather than maintained by hand): skip 4a unless `python3 .claude/hooks/docs-policy.py is-on phase_summary`
+exits 0, and 4b unless `python3 .claude/hooks/docs-policy.py is-on worklog` does. Step 4c always runs.
+
 **4a. Write `agent_state/phases/${PHASE}/PHASE_SUMMARY.md`** — a wave-by-wave narrative assembled
 from the reports each wave already produced (not new analysis, just consolidation):
 
@@ -1457,3 +1489,14 @@ DECISIONS + execution.jsonl and rewrites `docs/WORKLOG.md`). Commit `docs/WORKLO
 deviations that weren't promoted). This is what makes decisions survive into the next session.
 Record each missing entry with `bash .claude/hooks/remember.sh decide … --source agent:<name> --confidence reported` —
 the guard denies direct edits to the ledger.
+
+### 5. Record the requirement → acceptance baseline
+
+The gate proved every FR delivered so far passes its acceptance tests. Record what the BRD said when it
+did, so a later change to an FR's text shows up as CHANGED (its tests checked the old wording):
+```bash
+python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/acceptance_report.json \
+  --record --out agent_state/phases/${PHASE}/reports/acceptance_map.json
+```
+Commit `agent_state/accept/fr-baseline.json` with the gate. A non-zero exit means an FR is still CHANGED,
+which the gate should already have blocked. Don't pass `--ack` here; that decision belongs to the human.

@@ -22,7 +22,7 @@ output:
 quality_gates:
   requirements_complete: true
   all_gaps_resolved_or_documented: true
-  traceability_matrix_generated: true
+  traceability_matrix_generated: optional   # only when docs-policy traceability_matrix_file is on
 dependencies:
   upstream: []
   downstream: [architecture_orchestrator, impl_guidelines_agent, product_manager, project_planner, requirements_brd_reconciler, ux_designer, wireframe_generator]  # derived by _sync-deps.py — do not hand-edit
@@ -53,6 +53,23 @@ Single-agent orchestrator that combines the `brd_analyzer → brd_interviewer �
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 
 ---
+
+## As-built mode (`MODE: as-built`, from `/init --from-code`)
+
+The source is the code, not `requirements/`. Input: `agent_state/init/as-built/capability-inventory.md`
+(capabilities with L1–L4 levels and file:line) and `agent_state/codebase/*`. The phases below run with
+these differences:
+- **Phase 1:** ingest the inventory (primary) and any `requirements/` or `docs/` prose (secondary; where
+  it disagrees with the code, the code wins and the disagreement goes to Assumptions).
+- **FRs:** one per L3+ capability, `Source` = `as-built: <file:line>`. Requirement text and EARS
+  criteria describe what the code does now; every SHALL is observable in the code or its tests. An
+  L1/L2 capability becomes an FR with `Status: gap` in its text and `Source` = `as-built (stub): <file:line>`.
+- **Interview:** only what code can't tell you: MoSCoW priority (one grouped question: which
+  capabilities are Must), business objectives, and compliance. In `--auto`: Must for user-facing routes
+  that have tests, Should otherwise; each logged with LOW confidence.
+- **Personas** from the roles in the auth/RBAC code. **NFRs** only where the code evidences them; never
+  invent performance targets (they go to Open Questions).
+- The header records `Baseline: as-built from <git sha> on <date>`.
 
 ## WORKFLOW
 
@@ -164,8 +181,12 @@ Write the full BRD using this structure:
     - Definition of Done
 ```
 
-### Phase 6: Produce docs/traceability-matrix.md
-Generate a traceability matrix mapping every requirement ID to:
+### Phase 6: docs/traceability-matrix.md (optional — off in the lean docs profile)
+Only when `python3 .claude/hooks/docs-policy.py is-on traceability_matrix_file` exits 0. Its design and
+test columns stay TBD forever, so by default it isn't written: the live requirement → test trace is
+`agent_state/accept/acceptance_map.md` (`acceptance-map.py`), regenerated at every gate and in `/accept`.
+The BRD's own traceability section (requirement → phase) is still written. When on, map every
+requirement ID to:
 - Source file
 - Design artifact (TBD until downstream agents run)
 - Test coverage (TBD until test agents run)

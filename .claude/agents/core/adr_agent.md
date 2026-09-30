@@ -1,6 +1,6 @@
 ---
 name: adr_agent
-description: "Writes Architecture Decision Records in docs/adr/ capturing context, alternatives, and rationale for significant technology and design choices. Use in /plan Step 4b when specs introduce architectural decisions."
+description: "Records significant technology and design decisions: always as a D-NNN entry in docs/DECISIONS.md, and as a long-form ADR in docs/adr/ only when the docs policy has adr_files on (off in the lean profile; otherwise run with MODE: ledger-only). Use in /plan Step 4c when specs introduce architectural decisions."
 model: opus
 effort: medium
 category: design
@@ -51,6 +51,15 @@ detection rule `/plan` Step 4b applies; scan each in-scope spec for them:
 6. Any decision judged **hard/expensive to reverse** later.
 
 If none are present in a spec, do NOT manufacture an ADR — record "no ADR-warranting decision" and move on.
+
+## Ledger-only mode (`MODE: ledger-only` — the lean docs default)
+
+When your prompt says `MODE: ledger-only` (the project's docs policy has `adr_files` off), write no
+file under `docs/adr/`. For each warranting decision, record only the ledger entry, with enough in it
+to stand alone: `remember.sh decide … --source adr --decision "<what was chosen>" --rationale "<why;
+the runner-up and why it lost>"`, and no `--link`. `docs/DECISIONS.md` is what every agent and new
+session reads, so the decision is kept; the long-form file, which nobody re-reads, is not. Your Definition of
+Done is then only the ledger items.
 
 ## ADR Format
 

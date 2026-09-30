@@ -68,7 +68,12 @@ Acceptance Criteria:
   Then <expected behavior>
 ```
 
-Output user stories to `docs/user-stories/<feature>.md`.
+**Where the criteria go:** the acceptance criteria are written on the FR-* itself in `docs/BRD.md`, in
+EARS form (one SHALL per clause, `~/.claude/skills/requirements/ears-notation.md`). That's what
+`spec_writer` turns into TC-ACC rows and `acceptance_test_agent` into tests, so a criterion that lives
+only in a user story is never tested. The Given/When/Then story is optional narrative: write
+`docs/user-stories/<feature>.md` only when `python3 .claude/hooks/docs-policy.py is-on user_stories`
+exits 0 (off in the lean docs profile).
 
 ### 2. Requirements Maintenance
 When change requests arrive:
@@ -96,15 +101,14 @@ Assign MoSCoW priority to each FR-*:
 ### Step 1: Read BRD + Guidelines
 Understand current requirements, constraints, and technology context.
 
-### Step 2: Generate User Stories
-For each `FR-*` without a user story:
-- Write story in standard format
-- Attach acceptance criteria (minimum 2: happy path + error path)
-- Link back to `FR-*` ID
+### Step 2: Acceptance Criteria on the FR (and optional user stories)
+For each new or changed `FR-*`:
+- Write its acceptance criteria on the FR in `docs/BRD.md`, in EARS (minimum 2: happy path + error path)
+- Only if the docs policy has `user_stories` on: also write the story in standard format, linked to the `FR-*` ID
 
 ### Step 3: Review Completeness
-- Every FR-* maps to at least one user story
-- Every user story maps back to one FR-*
+- Every FR-* has EARS acceptance criteria in the BRD
+- (user stories on) every user story maps back to one FR-*
 - All NFR-* translated to measurable acceptance criteria (e.g., "Page loads in < 2s on 3G connection")
 
 ### Step 4: Handle Change Requests
@@ -211,12 +215,28 @@ Present impact report to user. Do NOT modify BRD until user confirms:
 - DEFER — log change request for future milestone
 - MODIFY_SCOPE — narrow the change to reduce blast radius
 
+### Step 5 — Acceptance follow-through (after PROCEED)
+A requirement change is not done until its acceptance tests follow it. After amending the BRD, run
+```bash
+python3 .claude/hooks/acceptance-map.py --out agent_state/change-requests/CR-<N>-acceptance.json || true
+```
+and add an **Acceptance impact** table to `CR-<N>-impact.md` from its output: each FR-* the change
+touched, with its status and the next step:
+
+| Status | Meaning | Next step |
+|---|---|---|
+| CHANGED (FR in a delivered phase) | its tests check the old criteria | `/accept` (Step 1a updates the TC-ACC rows + tests in the owning phase), or the next `/develop` gate does it in its Wave 4 pre-step |
+| NEW, in a planned or current phase | no TC-ACC rows yet | `/plan --phase=<N>` for that phase |
+| unplanned | in no phase plan | the next `/plan` picks it up |
+
+The phase gate and `/accept` block until CHANGED FRs have updated rows and passing tests.
+
 ---
 
 ## QUALITY GATES
 
-- [ ] Every `FR-*` in BRD has at least one linked user story
-- [ ] Every user story has minimum 2 acceptance criteria scenarios
+- [ ] Every `FR-*` in BRD has EARS acceptance criteria (minimum 2: happy path + error path)
+- [ ] (user stories on) every user story links to an FR-*
 - [ ] All acceptance criteria are testable (no subjective language)
 - [ ] MoSCoW priority assigned to every FR-*
 - [ ] Changelog entry created for every BRD update
@@ -258,8 +278,9 @@ Keep it short; the detail belongs in the artifact.
 <!-- END operating-contract -->
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
-- [ ] Primary output written to the EXACT path `docs/BRD.md` (the living BRD), plus user stories under `docs/user-stories/` and a `agent_state/product_manager/changelog.md` entry for every change.
-- [ ] Every new/changed FR-* has ≥1 user story with ≥2 testable acceptance-criteria scenarios (happy path + error path) and a MoSCoW priority — no subjective language.
+- [ ] Primary output written to the EXACT path `docs/BRD.md` (the living BRD), a `agent_state/product_manager/changelog.md` entry for every change, and user stories under `docs/user-stories/` only when the docs policy has `user_stories` on.
+- [ ] Every new/changed FR-* has ≥2 testable EARS acceptance criteria ON THE FR in the BRD (happy path + error path) and a MoSCoW priority — no subjective language.
+- [ ] After a PROCEED amendment, `acceptance-map.py` ran and `CR-<N>-impact.md` has the Acceptance impact table (each touched FR's status + next step).
 - [ ] For any BRD amendment, a change-impact analysis was produced (`agent_state/change-requests/CR-<N>-impact.md`) and the user decision gate (PROCEED/DEFER/MODIFY_SCOPE) was honored — I did NOT modify the BRD before the user confirmed.
 - [ ] Every story traces back to a real FR-*/NFR-*/OBJ-* ID that exists verbatim in the BRD — no invented requirement IDs.
 - [ ] If a change request was out of scope or lacked BRD backing, I rejected/deferred it explicitly with a reason rather than silently expanding scope or emitting an empty-but-present amendment.

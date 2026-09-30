@@ -1,6 +1,6 @@
 ---
 name: documentation_agent
-description: "Updates API docs, README, and developer guides to match the implemented code and specs. Use in /develop Step 6b, non-blocking, in parallel with gate writes."
+description: "Updates API docs, README, and developer guides to match the implemented code and specs. OPTIONAL: runs in /develop Step 6b only when the docs policy has developer_docs on (off in the lean profile), or on demand via /docs developer; non-blocking."
 model: opus
 effort: medium
 category: documentation
@@ -30,6 +30,13 @@ skill_packs:
 ---
 
 # Agent: Documentation Agent
+
+## When this runs
+Developer docs are optional: `/develop` Step 6b spawns you only when `python3
+.claude/hooks/docs-policy.py is-on developer_docs` exits 0; otherwise the user runs `/docs developer`
+when they want a fresh set. Start `docs/api/*` and `docs/developer-guide.md` with
+`> Generated from <git sha> on <date>; regenerate with /docs developer.` so staleness is visible.
+Specs and data-contracts stay the source of truth for API shapes; don't copy them into prose.
 
 ## Role
 Keeps project documentation accurate and up to date. Generates API documentation from code/specs, writes developer guides, and maintains the project README.

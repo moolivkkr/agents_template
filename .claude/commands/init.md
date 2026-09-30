@@ -14,6 +14,10 @@ arguments:
     required: false
     default: false
     description: "Auto-research mode — agents research answers instead of asking user. Logs all decisions with confidence levels to agent_state/autonomous/decisions.md"
+  - name: from_code
+    required: false
+    default: false
+    description: "Adopt an EXISTING codebase that has no BRD: map the code, build an as-built capability inventory, and write the BRD + IMPLEMENTATION_GUIDELINES from it (every FR sourced to file:line). Then /plan --phase=1 --as-built builds the spec + acceptance baseline."
 ---
 
 # /init — Project Initialization
@@ -30,6 +34,65 @@ arguments:
 Bootstraps a new project from scratch. Reads `./requirements/`, produces `docs/BRD.md` and `docs/IMPLEMENTATION_GUIDELINES.md`, generates project-specific agents, and writes `CLAUDE.md`.
 
 **Run once at project start. Use `/plan` to begin phase work.**
+
+## Which entry point
+
+| The repo has | Run | What happens |
+|---|---|---|
+| requirements in `./requirements/`, little or no code | `/init` | BRD from the requirements (the steps below) |
+| code, no `docs/BRD.md` | `/init --from-code` | BRD + guidelines written FROM the code (next section), then `/plan --phase=1 --as-built` |
+| code AND a BRD/specs that have drifted apart | `/recon` (not `/init`) | two-way drift report; `--fix=docs` makes the docs follow the code, `--fix=code` makes the code follow the docs |
+
+If `./requirements/` is empty and the repo has a real codebase (more than a handful of source files),
+plain `/init` stops and offers `--from-code` instead of interviewing from scratch (auto mode: switch
+to `--from-code` and log it).
+
+## Existing codebase (`--from-code`)
+
+**Guard:** if `docs/BRD.md` exists, STOP. This repo already has requirements. Use `/recon` to see
+the drift, then `/recon --fix=docs --apply` (docs follow code) or `--fix=code` (code follows docs).
+
+Replaces Step 0–2 below with these, then continues at Step 1.5:
+
+**A1 — Map the code.** Run `/map` (full). Writes `agent_state/codebase/` (tech, architecture,
+quality, concerns).
+
+**A2 — As-built capability inventory.** Spawn `codebase_mapper` focused on capabilities, using the
+four levels from `/reconcile` Step 1 (L1 exists, L2 real logic, L3 wired to a live path, L4 data
+flows end to end). Output: `agent_state/init/as-built/capability-inventory.md`, one row per
+capability: where (file:line of the entry point), level, observed behaviour, the roles/permission
+checks on it, and the tests that already exercise it. Existing prose (`README*`, `docs/**/*.md`,
+OpenAPI files, `./requirements/*`) is secondary evidence; the code wins where they disagree, and each
+disagreement is listed.
+
+**A3 — BRD from the inventory.** Spawn `brd_agent` with `MODE: as-built` and the inventory as its
+input. Its rules:
+- One FR-* per L3+ capability. `Source` = `as-built: <file:line>`. The requirement text and its EARS
+  acceptance criteria describe what the code does now; every SHALL must be observable in the code or
+  its tests. No aspirational criteria.
+- An L1/L2 capability (stub, `TODO`, unwired handler) becomes an FR-* with `Status: gap` in its text
+  and `Source` = `as-built (stub): <file:line>`. The intent is recorded; the gap is visible.
+- MoSCoW priority and business objectives can't be read from code. Ask them as `NEEDS_INPUT` (one
+  grouped question: which capabilities are Must). In auto mode: Must for user-facing routes that
+  have tests, Should otherwise, each logged with LOW confidence.
+- Personas come from the roles in the auth/RBAC code. NFR-* only where the code evidences them
+  (configured timeouts, rate limits, auth scheme). Performance targets are never invented; they go
+  to Open Questions.
+- The BRD header records `Baseline: as-built from <git sha> on <date>`.
+
+**A4 — IMPLEMENTATION_GUIDELINES from the code.** Spawn `impl_guidelines_agent` with
+`MODE: as-built`: stack and versions from the manifests and lockfiles (go.mod, package.json,
+Dockerfiles, compose, CI), the component inventory from the map, and the `## Commands and versions`
+table from the Makefile / package scripts / CI. Run each command once; a command that fails is fixed
+or marked, never recorded as working.
+
+**Then:** Step 1.5 as written. Step 2b treats a `Source: as-built:` FR as traced (to the capability
+inventory, not to `./requirements/`). Step 2c runs only if research exists. In Step 2d, dimensions
+the code can't answer (objectives, compliance) become Open Questions (WARN, not FAIL). Steps 3–5 as
+written; the closing line is `▶ Next: /plan --phase=1 --as-built`.
+
+After the as-built phase's gate passes, every as-built FR has committed, passing acceptance tests.
+From then on, `/recon` detects drift in both directions and `/accept` re-proves the whole BRD.
 
 ## Session Context Budget
 
@@ -385,6 +448,15 @@ Seed it with any invariants already known from IMPLEMENTATION_GUIDELINES or the 
 (retired/renamed components, off-limits directories, environment gotchas) using the `/remember`
 format. If none are known yet, leave it empty — `/remember` fills it over time. See
 `~/.claude/skills/core/shared-context-protocol.md`.
+
+### Step 4c — Record the docs policy
+
+```bash
+S=.claude/hooks/docs-policy.py; [ -f "$S" ] || S="$HOME/.claude/hooks/startup/docs-policy.py"
+[ -f agent_state/config/docs-policy.json ] || python3 "$S" profile lean   # optional docs off; see /docs
+```
+The project starts lean: only the documents a gate or agent reads are maintained. The user turns
+optional ones back on with `/docs --enable=<key>` (or `--profile=full`).
 
 ---
 
