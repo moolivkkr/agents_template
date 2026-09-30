@@ -221,12 +221,17 @@ WHERE tenant_id = $1 AND created_at < $2
 ORDER BY created_at DESC
 LIMIT $3
 
--- Return cursor for next page
-response = { data: rows, next_cursor: last_row.created_at, has_more: len(rows) == limit }
+-- Fetch limit + 1 rows: the extra row tells you has_more without a COUNT
+-- Tiebreak on id so rows with equal created_at are neither skipped nor repeated:
+--   WHERE tenant_id = $1 AND (created_at, id) < ($2, $3) ORDER BY created_at DESC, id DESC LIMIT $4
+
+response = { data: rows[:limit],
+             meta: { request_id,
+                     pagination: { next_cursor: encode(last.created_at, last.id) or null,
+                                   has_more: len(rows) > limit, limit } } }
 ```
-- Default pagination strategy is cursor-based (not offset-based)
-- Offset-based is acceptable ONLY for admin UIs with known-small datasets
-- Cursor should be opaque to the client (encode timestamp + ID for uniqueness)
+- Pagination is cursor-based only (`?cursor=&limit=`); no offset/page-number API
+- The cursor is opaque to the client (encode timestamp + ID); `next_cursor` is null when `has_more` is false
 
 ### Error Mapping
 ```
@@ -277,73 +282,72 @@ function handler(request):
 
 ### Response Envelope
 ```json
+// Canonical definition: ~/.claude/skills/api/response-envelope.md (it wins over this summary)
+
 // Success
 {
     "data": { ... },
-    "meta": {
-        "request_id": "uuid",
-        "timestamp": "2024-01-01T00:00:00Z"
-    }
+    "meta": { "request_id": "uuid" }
 }
 
 // Success (list)
 {
     "data": [ ... ],
     "meta": {
-        "total": 142,
-        "next_cursor": "encoded_cursor",
-        "has_more": true
+        "request_id": "uuid",
+        "pagination": { "next_cursor": "encoded_cursor", "has_more": true, "limit": 20 }
     }
 }
 
-// Error
+// Error — no "data" and no "meta": request_id lives inside "error"
 {
     "error": {
-        "code": "VALIDATION_ERROR",
-        "message": "Human-readable message",
+        "code": "VALIDATION_FAILED",
+        "message": "Some fields are invalid.",
         "details": [
-            { "field": "email", "message": "invalid format" }
-        ]
-    },
-    "meta": {
+            { "field": "email", "code": "invalid_format", "message": "Enter a valid email address." }
+        ],
         "request_id": "uuid",
-        "timestamp": "2024-01-01T00:00:00Z"
+        "retryable": false
     }
 }
 ```
 
 ### Error Mapping
 ```
-Domain Error     → HTTP Status → Error Code
-──────────────────────────────────────────────
-ValidationError  → 400         → VALIDATION_ERROR
-NotFoundError    → 404         → NOT_FOUND
-ConflictError    → 409         → CONFLICT
-UnauthorizedErr  → 401         → UNAUTHORIZED
-ForbiddenError   → 403         → FORBIDDEN
-RateLimitError   → 429         → RATE_LIMITED
-UpstreamError    → 502         → UPSTREAM_ERROR
-InternalError    → 500         → INTERNAL_ERROR
+Domain Error       → HTTP Status → Error Code
+────────────────────────────────────────────────
+MalformedRequest   → 400         → MALFORMED_REQUEST
+ValidationError    → 400         → VALIDATION_FAILED        (details[] per field)
+UnauthenticatedErr → 401         → UNAUTHENTICATED
+ForbiddenError     → 403         → FORBIDDEN
+NotFoundError      → 404         → NOT_FOUND                (also another tenant's/owner's object)
+ConflictError      → 409         → CONFLICT
+BusinessRuleError  → 422         → BUSINESS_RULE_VIOLATION
+RateLimitError     → 429         → RATE_LIMITED             (retryable, Retry-After)
+InternalError      → 500         → INTERNAL
+UnavailableError   → 503         → UNAVAILABLE              (dependency down/timed out; retryable)
 ```
 
 ---
 
 ## Error Handling Contract
 
-### Domain Error Taxonomy (8 Types)
+### Domain Error Taxonomy (9 Types)
 
-Every backend defines exactly these 8 domain error types:
+Every backend defines exactly these 9 domain error types (plus 400 MALFORMED_REQUEST for unreadable bodies):
 
 | Error Type     | Meaning                                  | HTTP | Retryable |
 |---------------|------------------------------------------|------|-----------|
 | Validation    | Input failed validation rules            | 400  | No        |
-| NotFound      | Requested entity does not exist          | 404  | No        |
+| NotFound      | Entity does not exist (or isn't yours)   | 404  | No        |
 | Conflict      | State conflict (duplicate, version)      | 409  | No        |
-| Unauthorized  | Missing or invalid credentials           | 401  | No        |
+| BusinessRule  | Valid input rejected by a domain rule    | 422  | No        |
+| Unauthenticated | Missing or invalid credentials         | 401  | No        |
 | Forbidden     | Valid credentials, insufficient perms    | 403  | No        |
 | RateLimit     | Too many requests                        | 429  | Yes       |
-| Upstream      | External dependency failed               | 502  | Yes       |
-| Internal      | Unexpected server error                  | 500  | Maybe     |
+| Unavailable   | A dependency failed or timed out         | 503  | Yes       |
+| Internal      | Unexpected server error                  | 500  | No (client) |
 
 ### Error Wrapping
 ```
@@ -353,7 +357,7 @@ Service:    "get user profile: find user abc123: connection refused"
 Handler:    logs full chain, returns generic message to client
 
 // NEVER expose internal error details to clients
-// Client sees: { "error": { "code": "INTERNAL_ERROR", "message": "Something went wrong" } }
+// Client sees: { "error": { "code": "INTERNAL", "message": "Something went wrong.", "request_id": "…", "retryable": false } }
 // Server logs: full error chain with stack trace
 ```
 

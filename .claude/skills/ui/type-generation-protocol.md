@@ -33,25 +33,28 @@ Create `src/types/api.ts` (or `types/api.ts` at project root depending on projec
 // Generated: {{TIMESTAMP}}
 
 // ─── Response Envelopes ─────────────────────────────────────────────
+// Copied verbatim from ~/.claude/skills/api/response-envelope.md (the one envelope). Success and
+// error are exclusive: branch on res.ok / "error" in body, never on `error === null`.
 
-export interface ApiResponse<T> {
-  data: T;
-  error: ApiError | null;
-  meta?: PaginationMeta;
-}
+export type Pagination = {
+  next_cursor: string | null; // opaque; send back as ?cursor=… ; null when has_more is false
+  has_more: boolean;
+  limit: number;
+  total_count?: number;       // present only when the endpoint documents it
+};
 
-export interface ApiError {
-  code: string;
-  message: string;
-  details?: Record<string, unknown>;
-}
+export type ApiSuccess<T> = { data: T; meta: { request_id: string; pagination?: Pagination } };
 
-export interface PaginationMeta {
-  total: number;
-  page: number;
-  per_page: number;
-  total_pages: number;
-}
+export type FieldError = { field: string; code: string; message: string };
+
+export type ApiErrorBody = {
+  error: { code: string; message: string; details?: FieldError[]; request_id: string; retryable: boolean };
+};
+
+export type ApiResult<T> = ApiSuccess<T> | ApiErrorBody;
+
+export const isApiError = (body: unknown): body is ApiErrorBody =>
+  typeof body === "object" && body !== null && "error" in body;
 
 // ─── Resource Types ─────────────────────────────────────────────────
 
@@ -67,11 +70,13 @@ export interface UserResponse {
   updated_at: string;
 }
 
-// List response = ApiResponse<UserResponse[]>
-export type ListUsersResponse = ApiResponse<UserResponse[]>;
+// List response: data is always an array; meta.pagination is present
+export type ListUsersResponse = ApiSuccess<UserResponse[]> & {
+  meta: { request_id: string; pagination: Pagination };
+};
 
-// Single response = ApiResponse<UserResponse>
-export type GetUserResponse = ApiResponse<UserResponse>;
+// Single response
+export type GetUserResponse = ApiSuccess<UserResponse>;
 
 // ─── Request Types ──────────────────────────────────────────────────
 

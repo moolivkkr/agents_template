@@ -126,14 +126,14 @@ const handlers = [
     http.get(API_BASE, () => {
         return HttpResponse.json({
             data: makeWidgets(3),
-            meta: { cursor: '', has_more: false, total: 3, request_id: 'test', timestamp: new Date().toISOString() },
+            meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
         });
     }),
 
     http.get(`${API_BASE}/:id`, ({ params }) => {
         return HttpResponse.json({
             data: makeWidget({ id: params.id as string }),
-            meta: { request_id: 'test', timestamp: new Date().toISOString() },
+            meta: { request_id: 'test' },
         });
     }),
 
@@ -142,7 +142,7 @@ const handlers = [
         return HttpResponse.json(
             {
                 data: makeWidget({ name: body.name as string, description: body.description as string }),
-                meta: { request_id: 'test', timestamp: new Date().toISOString() },
+                meta: { request_id: 'test' },
             },
             { status: 201 },
         );
@@ -152,7 +152,7 @@ const handlers = [
         const body = await request.json() as Record<string, unknown>;
         return HttpResponse.json({
             data: makeWidget({ id: params.id as string, name: body.name as string, version: (body.version as number) + 1 }),
-            meta: { request_id: 'test', timestamp: new Date().toISOString() },
+            meta: { request_id: 'test' },
         });
     }),
 
@@ -190,7 +190,7 @@ describe('WidgetList', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: widgets,
-                    meta: { cursor: '', has_more: false, total: 3, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -211,7 +211,7 @@ describe('WidgetList', () => {
         server.use(
             http.get(API_BASE, () => {
                 return HttpResponse.json(
-                    { error: { code: 'INTERNAL_ERROR', message: 'Something went wrong' } },
+                    { error: { code: 'INTERNAL', message: 'Something went wrong.', request_id: 'test', retryable: false } },
                     { status: 500 },
                 );
             }),
@@ -230,7 +230,7 @@ describe('WidgetList', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: [],
-                    meta: { cursor: '', has_more: false, total: 0, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -254,7 +254,7 @@ describe('WidgetList interactions', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: [widget],
-                    meta: { cursor: '', has_more: false, total: 1, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -285,7 +285,7 @@ describe('WidgetList interactions', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: [widget],
-                    meta: { cursor: '', has_more: false, total: 1, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -376,12 +376,14 @@ describe('WidgetForm', () => {
                 return HttpResponse.json(
                     {
                         error: {
-                            code: 'VALIDATION_ERROR',
-                            message: 'Validation failed',
-                            details: { name: 'Name already exists' },
+                            code: 'VALIDATION_FAILED',
+                            message: 'Some fields are invalid.',
+                            details: [{ field: 'name', code: 'already_taken', message: 'Name already exists' }],
+                            request_id: 'test',
+                            retryable: false,
                         },
                     },
-                    { status: 422 },
+                    { status: 400 },
                 );
             }),
         );
@@ -402,7 +404,7 @@ describe('WidgetForm', () => {
             http.post(API_BASE, async () => {
                 await new Promise((resolve) => setTimeout(resolve, 100));
                 return HttpResponse.json(
-                    { data: makeWidget(), meta: { request_id: 'test', timestamp: new Date().toISOString() } },
+                    { data: makeWidget(), meta: { request_id: 'test' } },
                     { status: 201 },
                 );
             }),
@@ -435,7 +437,7 @@ describe('WidgetTable', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: widgets,
-                    meta: { cursor: '', has_more: false, total: 5, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -458,12 +460,12 @@ describe('WidgetTable', () => {
                 if (!cursor) {
                     return HttpResponse.json({
                         data: makeWidgets(20),
-                        meta: { cursor: 'page2-cursor', has_more: true, total: 25, request_id: 'test', timestamp: new Date().toISOString() },
+                        meta: { request_id: 'test', pagination: { next_cursor: 'page2-cursor', has_more: true, limit: 20 } },
                     });
                 }
                 return HttpResponse.json({
                     data: makeWidgets(5),
-                    meta: { cursor: '', has_more: false, total: 25, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -492,7 +494,7 @@ describe('WidgetTable', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: [],
-                    meta: { cursor: '', has_more: false, total: 0, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -535,11 +537,11 @@ describe('API integration', () => {
                 if (callCount === 1) {
                     return HttpResponse.json({
                         data: makeWidgets(2),
-                        meta: { cursor: '', has_more: false, total: 2, request_id: 'test', timestamp: new Date().toISOString() },
+                        meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                     });
                 }
                 return HttpResponse.json(
-                    { error: { code: 'INTERNAL_ERROR', message: 'Server error' } },
+                    { error: { code: 'INTERNAL', message: 'Server error', request_id: 'test', retryable: false } },
                     { status: 500 },
                 );
             }),
@@ -563,13 +565,13 @@ describe('API integration', () => {
                 callCount++;
                 if (callCount === 1) {
                     return HttpResponse.json(
-                        { error: { code: 'INTERNAL_ERROR', message: 'Temporary error' } },
+                        { error: { code: 'INTERNAL', message: 'Temporary error', request_id: 'test', retryable: false } },
                         { status: 500 },
                     );
                 }
                 return HttpResponse.json({
                     data: makeWidgets(1),
-                    meta: { cursor: '', has_more: false, total: 1, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );
@@ -641,7 +643,7 @@ describe('accessibility', () => {
             http.get(API_BASE, () => {
                 return HttpResponse.json({
                     data: [widget],
-                    meta: { cursor: '', has_more: false, total: 1, request_id: 'test', timestamp: new Date().toISOString() },
+                    meta: { request_id: 'test', pagination: { next_cursor: null, has_more: false, limit: 20 } },
                 });
             }),
         );

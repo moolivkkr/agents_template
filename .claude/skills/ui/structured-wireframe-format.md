@@ -183,11 +183,11 @@ components:
   - id: pagination
     primitive: "Pagination"
     data_source:
-      $ref: "data-contracts.md#ListUsersResponse.meta"
+      $ref: "data-contracts.md#ListUsersResponse.meta.pagination"
     fields:
-      page: "meta.page"
-      total: "meta.total"
-      per_page: "meta.per_page"
+      next_cursor: "meta.pagination.next_cursor"
+      has_more: "meta.pagination.has_more"
+      limit: "meta.pagination.limit"
 
   - id: stats_widget
     primitive: "Card"
@@ -251,7 +251,7 @@ states:
     user_table:
       description: "Renders DataTable with user rows from API response"
       data_binding: "data-contracts.md#ListUsersResponse.data"
-      pagination: "data-contracts.md#ListUsersResponse.meta"
+      pagination: "data-contracts.md#ListUsersResponse.meta.pagination"
     stats_widget:
       description: "Renders stat metrics from API response"
       data_binding: "data-contracts.md#UserStatsResponse.data"

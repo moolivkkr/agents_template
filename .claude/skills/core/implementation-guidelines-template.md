@@ -121,8 +121,9 @@ Performance is not an afterthought — it is a design constraint applied to ever
 
 - Default page size: {{DEFAULT_PAGE_SIZE}}
 - Max page size: {{MAX_PAGE_SIZE}}
-- Strategy: {{PAGINATION_STRATEGY}} (offset-based for small sets, cursor-based for 10K+ result sets)
-- Response envelope MUST include: items, total, limit, offset/cursor, has_more
+- Strategy: cursor-based (`?cursor=<next_cursor>&limit=<n>`), stable sort key + id tiebreaker — never offset
+- Response: `data` array + `meta.pagination` `{ next_cursor, has_more, limit, total_count? }`
+  (`~/.claude/skills/api/response-envelope.md`)
 
 **Connection pooling:**
 
@@ -266,30 +267,27 @@ Performance is not an afterthought — it is a design constraint applied to ever
 
 ### 2.3 Request/Response Conventions
 
+The envelope is fixed by the framework (`~/.claude/skills/api/response-envelope.md`); this section
+records it for the project and adds only the project's error codes. Success and error are exclusive.
+
 **Success response envelope:**
 
 ```json
 {
   "data": { ... },
-  "meta": {
-    "request_id": "{{REQUEST_ID_FORMAT}}",
-    "timestamp": "ISO-8601"
-  }
+  "meta": { "request_id": "{{REQUEST_ID_FORMAT}}" }
 }
 ```
 
-**List response envelope:**
+**List response envelope (cursor pagination):**
 
 ```json
 {
   "data": [ ... ],
-  "pagination": {
-    "total": 100,
-    "limit": {{DEFAULT_PAGE_SIZE}},
-    "offset": 0,
-    "has_more": true
-  },
-  "meta": { ... }
+  "meta": {
+    "request_id": "{{REQUEST_ID_FORMAT}}",
+    "pagination": { "next_cursor": "eyJpZCI6…", "has_more": true, "limit": {{DEFAULT_PAGE_SIZE}} }
+  }
 }
 ```
 
@@ -299,13 +297,16 @@ Performance is not an afterthought — it is a design constraint applied to ever
 {
   "error": {
     "code": "{{ERROR_CODE_FORMAT}}",
-    "message": "Human-readable message",
-    "detail": "Technical detail for debugging",
-    "retryable": false,
-    "request_id": "uuid"
+    "message": "User-safe message",
+    "details": [ { "field": "email", "code": "invalid_format", "message": "Enter a valid email address." } ],
+    "request_id": "uuid",
+    "retryable": false
   }
 }
 ```
+
+Technical detail (driver errors, SQL, stack traces, upstream messages) is never in the body: it is
+logged server-side under the same `request_id`.
 
 ### 2.4 HTTP Status Codes
 
@@ -421,7 +422,11 @@ Performance is not an afterthought — it is a design constraint applied to ever
 - **Primary method:** {{AUTH_METHOD}} (e.g., JWT Bearer tokens)
 - **Token format:** {{TOKEN_FORMAT}} (e.g., JWT with RS256 signing)
 - **Token lifetime:** Access: {{ACCESS_TOKEN_TTL}}, Refresh: {{REFRESH_TOKEN_TTL}}
-- **Token storage (client):** {{TOKEN_STORAGE}} (e.g., httpOnly cookie, secure localStorage)
+- **Token storage (client):** {{TOKEN_STORAGE}} (web: httpOnly Secure SameSite cookie, or access token
+  in memory + refresh token in an httpOnly cookie — never localStorage/sessionStorage; mobile:
+  Keychain/Keystore via the platform secure-storage module)
+- **CSRF (cookie sessions):** {{CSRF_STRATEGY}} (e.g., SameSite=Lax + double-submit `X-CSRF-Token` header)
+- **WebSocket auth:** {{WS_AUTH}} (e.g., single-use ticket from `POST /api/v1/ws-tickets`, or session cookie + Origin check — never a token in the URL)
 - **Provider:** {{AUTH_PROVIDER}} (e.g., self-hosted, Auth0, Clerk, Firebase Auth)
 
 ### 4.2 Authorization Model

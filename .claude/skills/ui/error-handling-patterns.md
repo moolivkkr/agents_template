@@ -18,14 +18,21 @@ tags:
 |---|---|---|---|
 | — | Network timeout | Full-screen retry | "Taking longer than expected. Check your connection." + Retry button |
 | — | Network error (no response) | Full-screen retry | "Unable to connect. Check your internet." + Retry button |
-| 400 | Bad Request | Toast error | "Invalid request. Please check your input." |
-| 401 | Unauthorized | Silent redirect | Redirect to `/login` — no error shown |
-| 403 | Forbidden | Inline message | "You don't have permission to access this." |
-| 404 | Not Found | Custom page | "This page doesn't exist." + navigation links |
-| 409 | Conflict | Toast + refresh | "This was modified by someone else." + Refresh button |
-| 422 | Validation | Field-level errors | Map each field error to its form field via `setError()` |
-| 429 | Rate Limited | Toast with timer | "Too many requests. Try again in X seconds." |
-| 500 | Server Error | Toast + retry | "Something went wrong." + Retry action |
+| 400 | `VALIDATION_FAILED` | Field-level errors | Map each `error.details[]` entry to its form field via `setError()`; toast only if no field matched |
+| 400 | `MALFORMED_REQUEST` | Toast error | "Invalid request. Please check your input." |
+| 401 | `UNAUTHENTICATED` | Silent redirect | Redirect to `/login` — no error shown |
+| 403 | `FORBIDDEN` | Inline message | "You don't have permission to access this." |
+| 404 | `NOT_FOUND` | Custom page | "This page doesn't exist." + navigation links (also shown for another tenant's/user's object) |
+| 409 | `CONFLICT` | Toast + refresh | "This was modified by someone else." + Refresh button |
+| 422 | `BUSINESS_RULE_VIOLATION` | Inline/toast with `error.message` | The server's user-safe message (e.g. "Orders can't be cancelled after shipping.") |
+| 429 | `RATE_LIMITED` | Toast with timer | "Too many requests. Try again in X seconds." (from `Retry-After`) |
+| 500 | `INTERNAL` | Toast + retry | "Something went wrong." + Retry action + "Reference: {request_id}" |
+| 503 | `UNAVAILABLE` | Toast + retry | "The service is busy. Try again shortly." (`retryable: true`) |
+
+The body is always the envelope from `~/.claude/skills/api/response-envelope.md`:
+`{ "error": { code, message, details[], request_id, retryable } }`. The client (`ApiError` in
+`ui/api-integration-patterns.md`) exposes those fields. Show `request_id` on unexpected errors so support
+can find the server log line. Never render a server message as HTML.
 
 ---
 
@@ -104,31 +111,39 @@ const createUser = useMutation({
 
 ---
 
-## Server Validation Error Mapping (422 → Form Fields)
+## Server Validation Error Mapping (400 `VALIDATION_FAILED` → Form Fields)
 
 ```tsx
-// API returns: { error: "Validation failed", details: { email: "already taken", name: "too short" } }
+// API returns 400:
+// { "error": { "code": "VALIDATION_FAILED", "message": "Some fields are invalid.",
+//              "details": [ { "field": "email", "code": "already_taken", "message": "That email is already registered." } ],
+//              "request_id": "b7e1c2…", "retryable": false } }
 
-import { UseFormReturn } from "react-hook-form";
+import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
+import type { FieldError } from "@/types/api";
+import { ApiError } from "@/lib/api-client";
 
-function mapServerErrors(form: UseFormReturn<any>, serverErrors: Record<string, string>) {
-  Object.entries(serverErrors).forEach(([field, message]) => {
-    form.setError(field as any, { type: "server", message });
-  });
+function mapServerErrors<T extends FieldValues>(form: UseFormReturn<T>, details: FieldError[]): boolean {
+  let mapped = false;
+  for (const d of details) {
+    if (d.field in form.getValues()) {
+      form.setError(d.field as Path<T>, { type: "server", message: d.message });
+      mapped = true;
+    }
+  }
+  return mapped; // false → no field matched; show a toast instead
 }
 
-// Usage in form submit handler:
-async function onSubmit(data: FormData) {
+// Usage in form submit handler (the Idempotency-Key is created once per submit):
+const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+async function onSubmit(input: CreateUserRequest) {
   try {
-    await api.users.create(data);
+    await createUser.mutateAsync({ input, idempotencyKey });
     toast.success("Created!");
     form.reset();
-  } catch (error: any) {
-    if (error.status === 422 && error.details) {
-      mapServerErrors(form, error.details);
-    } else {
-      toast.error("Failed to save");
-    }
+  } catch (error) {
+    if (error instanceof ApiError && error.code === "VALIDATION_FAILED" && mapServerErrors(form, error.details)) return;
+    toast.error(error instanceof ApiError ? error.message : "Failed to save");
   }
 }
 ```

@@ -165,6 +165,7 @@ export function useToggleItemStatus(id: string) {
 ```typescript
 import { useEffect, useRef, useCallback } from "react";
 import { useQueryClient } from "@tanstack/react-query";
+import { fetcher } from "@/lib/api-client";
 
 interface WSMessage {
   type: "created" | "updated" | "deleted";
@@ -172,9 +173,20 @@ interface WSMessage {
   data: Record<string, unknown>;
 }
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL ?? "ws://localhost:8080/ws";
-const RECONNECT_DELAY_MS = 3000;
+// Same origin as the page (the ingress routes /api/ws to the backend): the session cookie is sent on the
+// handshake and the server checks the Origin header (cross-site WebSocket hijacking).
+const wsUrl = (path: string) =>
+  `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${path}`;
+const RECONNECT_BASE_MS = 1000;
 const MAX_RECONNECT_ATTEMPTS = 10;
+
+// Auth: NEVER a bearer token in the WebSocket URL — query strings land in proxy, ingress and access logs.
+// Fetch a short-lived (≈30 s), single-use ticket over an authenticated request, and send a new one on
+// every (re)connect. The server binds the ticket to the user/tenant and deletes it on first use.
+async function fetchWsTicket(): Promise<string> {
+  const res = await fetcher<{ ticket: string }>("/v1/ws-tickets", { method: "POST" });
+  return res.data.ticket;
+}
 
 export function useWebSocket() {
   const queryClient = useQueryClient();
@@ -182,11 +194,16 @@ export function useWebSocket() {
   const reconnectAttempts = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const connect = useCallback(() => {
+  const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
-    const token = localStorage.getItem("auth_token");
-    const ws = new WebSocket(`${WS_URL}?token=${token}`);
+    let ticket: string;
+    try {
+      ticket = await fetchWsTicket();
+    } catch {
+      return scheduleReconnect(); // 401 already redirected to /login in fetcher
+    }
+    const ws = new WebSocket(`${wsUrl("/api/ws")}?ticket=${encodeURIComponent(ticket)}`);
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -205,22 +222,26 @@ export function useWebSocket() {
 
     ws.onclose = (event) => {
       console.log("[WS] Disconnected:", event.code, event.reason);
-      if (reconnectAttempts.current < MAX_RECONNECT_ATTEMPTS) {
-        const delay = RECONNECT_DELAY_MS * Math.pow(2, reconnectAttempts.current);
-        reconnectTimer.current = setTimeout(() => {
-          reconnectAttempts.current++;
-          connect();
-        }, Math.min(delay, 30000)); // Cap at 30s
-      }
+      scheduleReconnect();
     };
 
     ws.onerror = (error) => {
       console.error("[WS] Error:", error);
     };
+    function scheduleReconnect() {
+      if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) return;
+      // Exponential backoff with FULL jitter, capped at 30 s: after a server restart, thousands of
+      // clients must not reconnect in the same instant (thundering herd).
+      const cap = Math.min(RECONNECT_BASE_MS * 2 ** reconnectAttempts.current, 30000);
+      reconnectTimer.current = setTimeout(() => {
+        reconnectAttempts.current++;
+        void connect();
+      }, Math.random() * cap);
+    }
   }, [queryClient]);
 
   useEffect(() => {
-    connect();
+    void connect();
     return () => {
       clearTimeout(reconnectTimer.current);
       wsRef.current?.close(1000, "Component unmounted");
@@ -244,12 +265,12 @@ function handleWSMessage(queryClient: ReturnType<typeof import("@tanstack/react-
   }
 
   if (msg.type === "deleted" && msg.data.id) {
-    queryClient.setQueryData(
-      [msg.resource, "list"],
-      (old: any) => old ? {
-        ...old,
-        data: old.data.filter((item: any) => item.id !== msg.data.id),
-      } : old
+    // Lists are cursor-paginated infinite queries ({ pages: [{ data: T[], meta }] }): drop the item
+    // from every loaded page, then let invalidation (above) reconcile.
+    queryClient.setQueriesData({ queryKey: [msg.resource, "list"] }, (old: any) =>
+      old?.pages
+        ? { ...old, pages: old.pages.map((p: any) => ({ ...p, data: p.data.filter((i: any) => i.id !== msg.data.id) })) }
+        : old
     );
   }
 }
@@ -457,6 +478,12 @@ function ItemList() {
 ## 5. Cross-Tab Synchronization — BroadcastChannel API
 
 ### Pattern: Sync Auth State Across Tabs
+
+Tabs share the session cookie, so they only need to hear about **events** (logged out, logged in).
+Never send a token over BroadcastChannel and never write one to `localStorage`: any script on the
+origin, including an XSS payload, can listen to the channel and read storage. With in-memory bearer
+tokens each tab refreshes its own access token through the httpOnly refresh cookie.
+
 ```typescript
 const AUTH_CHANNEL = "auth-sync";
 
@@ -469,8 +496,7 @@ export function useAuthSync() {
     channel.onmessage = (event) => {
       switch (event.data.type) {
         case "LOGOUT":
-          // Another tab logged out — clear local state and redirect
-          localStorage.removeItem("auth_token");
+          // Another tab logged out (the server cleared the cookie) — drop cached data and redirect
           queryClient.clear();
           window.location.href = "/login";
           break;
@@ -479,11 +505,6 @@ export function useAuthSync() {
           // Another tab logged in — refresh auth state
           queryClient.invalidateQueries({ queryKey: ["auth", "me"] });
           break;
-
-        case "TOKEN_REFRESH":
-          // Another tab refreshed the token — update local storage
-          localStorage.setItem("auth_token", event.data.token);
-          break;
       }
     };
 
@@ -491,11 +512,11 @@ export function useAuthSync() {
   }, [queryClient]);
 }
 
-// Broadcast auth events
-export function broadcastAuth(type: "LOGIN" | "LOGOUT" | "TOKEN_REFRESH", token?: string) {
+// Broadcast auth EVENTS only — never a token value
+export function broadcastAuth(type: "LOGIN" | "LOGOUT") {
   try {
     const channel = new BroadcastChannel(AUTH_CHANNEL);
-    channel.postMessage({ type, token });
+    channel.postMessage({ type });
     channel.close();
   } catch {
     // BroadcastChannel not supported — degrade gracefully
@@ -564,7 +585,7 @@ function isBroadcastChannelSupported(): boolean {
   return typeof BroadcastChannel !== "undefined";
 }
 
-// Fallback: use localStorage events for older browsers
+// Fallback: use localStorage events for older browsers (an event flag only — never a token)
 function useLegacyTabSync() {
   useEffect(() => {
     const handler = (event: StorageEvent) => {

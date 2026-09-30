@@ -377,7 +377,7 @@ func (s *ServiceSuite) TestGet_NotFound() {
 
     s.cache.On("Get", mock.Anything, cacheKey).Return(nil, errors.New("miss"))
     s.repo.On("GetByID", mock.Anything, s.tenantID, id).
-        Return(nil, NewNotFoundError("widget", id.String()))
+        Return(nil, NewNotFoundError("Widget"))
 
     result, err := s.svc.Get(s.ctx, id)
 
@@ -438,7 +438,7 @@ func (s *ServiceSuite) TestDelete_NotFound() {
     id := uuid.New()
 
     s.repo.On("SoftDelete", mock.Anything, s.tenantID, id).
-        Return(NewNotFoundError("widget", id.String()))
+        Return(NewNotFoundError("Widget"))
 
     err := s.svc.Delete(s.ctx, id)
 
@@ -688,7 +688,7 @@ func TestGet_WrongTenant_ReturnsNotFound(t *testing.T) {
 
     cache.On("Get", mock.Anything, cacheKey).Return(nil, errors.New("miss"))
     repo.On("GetByID", mock.Anything, tenantB, widgetID).
-        Return(nil, NewNotFoundError("widget", widgetID.String()))
+        Return(nil, NewNotFoundError("Widget"))
 
     result, err := svc.Get(ctx, widgetID)
 

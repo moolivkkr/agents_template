@@ -155,25 +155,34 @@ broadcast_to_room_except(room_id, sender_id, message):
 
 ## Authentication on Upgrade
 
+Never put a bearer token (JWT, session ID, API key) in the WebSocket URL: query strings are written to
+ingress, proxy and access logs. See `security/secure-coding.md` §3.
+
 ```
-// Option 1: Token in query parameter (simpler, but token in access logs)
-ws://example.com/ws?token=eyJhbG...
+// Option 1 (recommended for browsers): single-use ticket
+//   1. Client: POST /api/v1/ws-tickets  (authenticated by the session cookie or Authorization header)
+//      Server: store ticket -> {user_id, tenant_id, roles}, TTL ≈ 30s, return { data: { ticket } }
+//   2. Client: wss://app.example.com/api/ws?ticket=<ticket>
+//      Server: atomically GET+DELETE the ticket; unknown/expired/used → close 4001
+//   The ticket is useless once consumed, so it appearing in a log is harmless.
 
-// Option 2: Token in first message after connect (more secure)
-// Client connects, then immediately sends: { "type": "auth", "token": "eyJhbG..." }
+// Option 2: Cookie-based (same-origin browser clients)
+//   The browser sends the session cookie on the upgrade. The server MUST check the Origin header
+//   against an allowlist, or any site the user visits can open an authenticated socket
+//   (cross-site WebSocket hijacking).
 
-// Option 3: Cookie-based (for same-origin only)
-// Browser sends cookies automatically on upgrade
-
-Recommended: Option 1 for simplicity with short-lived tokens,
-             or Option 2 for maximum security.
+// Option 3: Token in the first message (non-browser clients, e.g. mobile/services)
+//   Client connects, then immediately sends: { "type": "auth", "token": "<access token>" }
+//   The server closes the socket if no valid auth message arrives within ~5s.
 
 Authentication flow:
-    1. Extract token from query param or first message
-    2. Validate JWT (check signature, expiry, audience)
-    3. Extract user_id, tenant_id, roles
-    4. If invalid: close connection with 4001 code and reason
-    5. If valid: register connection with user context
+    1. Check Origin against the allowlist (browser clients)
+    2. Redeem the ticket (Option 1), read the cookie session (Option 2), or await the auth message (Option 3)
+    3. Validate the credential (signature, expiry, audience; pin the algorithm)
+    4. Extract user_id, tenant_id, roles
+    5. If invalid: close connection with 4001 code and reason
+    6. If valid: register connection with user context; re-check authorization per room/topic on subscribe
+    7. Close the socket when the session expires or is revoked (don't let a socket outlive its session)
 ```
 
 ### WebSocket Close Codes
