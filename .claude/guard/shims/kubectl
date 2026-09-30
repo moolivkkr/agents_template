@@ -1,0 +1,30 @@
+#!/bin/bash
+# PATH shim for kubectl/helm/limactl (installed as three links to this file). Re-applies sdlc-guard at
+# exec time, so calls made from scripts, make, npx or python subprocesses are checked too — the
+# PreToolUse hook only sees the top-level command. sdlc-guard-env.sh puts this directory first on PATH
+# for Claude's Bash tool. "ask" counts as deny here: a subprocess has no human to ask.
+# A seatbelt against accidents, not the security boundary (RBAC is): a script can still call the real
+# binary by absolute path, which is how scripts/k8s/env-reset.sh runs its namespaced bulk deletes.
+TOOL="$(basename "$0")"
+GUARD="${SDLC_GUARD_HOOK:-$HOME/.claude/hooks/sdlc-guard.sh}"
+SELF_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+
+REAL=""
+OLD_IFS="$IFS"; IFS=:
+for d in $PATH; do
+  [ -n "$d" ] || continue
+  [ "$(cd "$d" 2>/dev/null && pwd -P)" = "$SELF_DIR" ] && continue
+  if [ -x "$d/$TOOL" ]; then REAL="$d/$TOOL"; break; fi
+done
+IFS="$OLD_IFS"
+[ -n "$REAL" ] || { echo "sdlc-guard shim: no real $TOOL on PATH" >&2; exit 127; }
+
+CMD="$TOOL$(printf ' %q' "$@")"
+PAYLOAD="$(/usr/bin/python3 -c 'import json,os,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":os.getcwd()}))' "$CMD")"
+OUT="$(printf '%s' "$PAYLOAD" | bash "$GUARD" 2>&1)"; RC=$?
+if [ $RC -ne 0 ] || printf '%s' "$OUT" | grep -q '"permissionDecision": "ask"'; then
+  echo "sdlc-guard (exec-time): blocked: $CMD" >&2
+  printf '%s\n' "$OUT" | sed -n 's/.*"permissionDecisionReason": "\([^"]*\)".*/  \1/p' >&2
+  exit 126
+fi
+exec "$REAL" "$@"

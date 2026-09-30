@@ -16,6 +16,22 @@ if [ "${1:-}" = "--rule-board" ]; then
   echo "✅ $(find "$PROJECT/.claude/agents/rule_board" -name '*.md' | wc -l | tr -d ' ') rule board agents installed → $PROJECT/.claude/agents/rule_board/"
   exit 0
 fi
+# ./install.sh --guard : install only the user-level permission guard (docs/PERMISSIONS_GUIDE.md).
+# Copies files; never edits settings.json or writes the policy (both are human steps in the guide).
+if [ "${1:-}" = "--guard" ]; then
+  HOOKS="$HOME/.claude/hooks"; SHIMS="$HOOKS/sdlc-guard-shims"
+  mkdir -p "$SHIMS"
+  install -m 755 "$REPO_DIR/.claude/guard/sdlc-guard.sh"     "$HOOKS/sdlc-guard.sh"
+  install -m 755 "$REPO_DIR/.claude/guard/sdlc-guard-env.sh" "$HOOKS/sdlc-guard-env.sh"
+  install -m 755 "$REPO_DIR/.claude/guard/make-policy.py"    "$HOOKS/sdlc-guard-make-policy.py"
+  install -m 755 "$REPO_DIR/.claude/guard/shims/kubectl"     "$SHIMS/kubectl"
+  ln -sf kubectl "$SHIMS/helm"; ln -sf kubectl "$SHIMS/limactl"
+  echo "✅ sdlc-guard installed → $HOOKS/ (hook, env hook, policy generator, shims)"
+  [ -f "$HOME/.config/sdlc-guard/policy.json" ] \
+    && echo "   policy: $HOME/.config/sdlc-guard/policy.json" \
+    || echo "   ⚠ no policy yet: cluster commands are denied until you run sdlc-guard-make-policy.py (see docs/PERMISSIONS_GUIDE.md)"
+  exit 0
+fi
 CLAUDE_DIR="$HOME/.claude"
 DEST_COMMANDS="$CLAUDE_DIR/commands/startup"
 DEST_AGENTS_CORE="$CLAUDE_DIR/agents"
