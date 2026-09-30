@@ -253,10 +253,11 @@ fi
 # Code state the evidence must describe: the last commit touching code, ignoring paths that change with
 # every wave. Explicit-phase gates only (the passive Stop sweep doesn't judge freshness).
 CODE_EXCL=(':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude' ':(exclude)deploy/k8s/overlays')
-CUR_CODE_SHA=""; CODE_DIRTY="false"
+CUR_CODE_SHA=""; CODE_DIRTY="false"; DIRTY_PATHS=""
 if [ "$AUTODETECT" = "false" ] && git rev-parse --verify -q HEAD >/dev/null 2>&1; then
   CUR_CODE_SHA="$(git log -1 --format=%H -- . "${CODE_EXCL[@]}" 2>/dev/null)"
-  [ -n "$(git status --porcelain -- . "${CODE_EXCL[@]}" 2>/dev/null)" ] && CODE_DIRTY="true"
+  DIRTY_PATHS="$(git status --porcelain -- . "${CODE_EXCL[@]}" 2>/dev/null | cut -c4- | head -5 | tr '\n' ' ')"
+  [ -n "$DIRTY_PATHS" ] && CODE_DIRTY="true"
 fi
 TEST_AGENTS=(unit_test_agent integration_test_agent ui_test_agent mobile_test_agent e2e_orchestrator mobile_e2e_orchestrator acceptance_test_agent test_runner performance_agent spec_test_reconciler deploy_dev deploy_qa)
 SECURITY_AGENTS=(security_reviewer tenant_isolation_verifier dependency_scanner)
@@ -469,7 +470,7 @@ done
 
 # Evidence can only be bound to committed code (explicit-phase gate).
 if [ "$CODE_DIRTY" = "true" ]; then
-  fail "uncommitted code changes — commit them, re-run the final verification (Wave 5v), then gate; evidence can't describe uncommitted code."
+  fail "uncommitted code changes (${DIRTY_PATHS}) — commit them (untracked build/test output belongs in .gitignore or agent_state/), re-run the final verification (Wave 5v), then gate; evidence can't describe uncommitted code."
 fi
 
 # ---------------------------------------------------------------------------
