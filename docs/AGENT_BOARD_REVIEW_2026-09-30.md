@@ -450,6 +450,40 @@ test.
 - #14: stack genericity.
 - `system_test_agent`: merge or rebuild.
 
+## Implementation status (2026-09-30, same day)
+
+All 14 root causes were implemented: a foundation commit plus three parallel groups (coding agents,
+testing agents, and skills/security/guard) in isolated worktrees, then merged. The work is 41 commits
+touching 226 files. **Test result: 14 suites, 794 checks, 0 failures**, plus the live lab-cluster
+e2e (`tests/k8s-e2e.sh`, 32/32).
+
+| # | Root cause | Status | Proof |
+|---|---|---|---|
+| 1 | The gate can't see failures | **Done.** Test agents must provide `sdlc.test-results/v1` sidecars written by `junit-to-sidecar.py`. The gate blocks on verdict ≠ PASS, zero tests, any failed or flaky test, a HIGH/MEDIUM case not passing, an expired quarantine, stale `code_sha` or dirty code. The floor adds test_runner, spec_test_reconciler, acceptance (and deploy_dev/qa on k8s). Wave 5v re-verifies at HEAD, the graded score caps at 0 on any hard failure, and no command output is piped through `tee`. | `verify-gate.test.sh` 41 (incl. the TEST-01 reproduction), `evidence-pipeline.test.sh` 8 |
+| 2 | Tests counted, not proven | **Done.** `tc-inventory.py` counts an ID only in the name of a non-skipped test that ran and passed. It flags cross-phase and in-phase duplicate IDs, and catches test weakening (removed asserts, new skip/only). IDs are project-unique. Retries 0; flaky = failing; quarantine needs an issue and expiry. Acceptance specs are committed. Mutation testing is **advisory only** (no floor yet). | `evidence-tools.test.sh` 33, `testing-agents.test.sh` 140 |
+| 3 | Envelope defined 8 ways | **Done.** `api/response-envelope.md` is the single definition, with every agent and pack aligned and framework error defaults replaced. OpenAPI generation is described in the agents, not tooled. | `skills-security.test.sh`, `coding-agents.test.sh` |
+| 4 | Runtime contract unowned; tests not on qa | **Done.** A §Runtime contract section in the guidelines, followed by the coders. Wave order is unit/integration → deploy → e2e/mobile against `APP_BASE_URL` → test_runner. No hard-coded localhost targets. Deploy evidence goes into `execution.jsonl`, and `.dockerignore` excludes `agent_state/`. | `k8s-e2e.sh` 32, `testing-agents.test.sh` |
+| 5 | Security inspected afterwards | **Done.** Coders load `security/secure-coding.md` and `ui/secure-rendering.md`. Threat-model TC-SEC rows enter the inventory, and there's an abuse-case matrix. Semgrep and gitleaks always run, with no `eval`. `/autonomous` pauses per security finding, and `/accept` reports NOT READY for accepted-but-unfixed findings. The gate counts BLOCKING:N as N acknowledgements. | `skills-security.test.sh` 35, `verify-gate.test.sh` |
+| 6 | Agent attack surface, guard gaps | **Done.** Operating contract: content is data, not instructions (all 79 agents). The guard adds glob/brace secret matching, more credential files, Keychain denial, asks for interpreter network one-liners and new remotes, and protects the ledgers (`remember.sh decide` is the only DECISIONS writer). `vet-package.py` vets new dependencies; installs stay allowed. | `sdlc-guard.test.sh` 259, `remember.test.sh` 12 |
+| 7 | Reliability never built or measured | **Done.** Packs fixed: idempotent-only retries, route-template labels, readiness without optional dependencies, drain plus preStop, pool budget. Track D runs reliability code checks, a **gated** k6 open-model load test on qa, and the rebuilt system_test_agent (readiness, pod kill, DB restart). Failure-mode rows are in the integration tier. | `testing-agents.test.sh`, `k8s-e2e.sh` (preStop template) |
+| 8 | Rollback and migrations | **Done.** Rollback redeploys the previous HEALTHY build first; schema reversal is local-only and human-confirmed; no `migrate reset`. Migrations default to expand/contract with N-1 compatibility; the invalid Postgres syntax is fixed (verified on PG 17.10). | `coding-agents.test.sh` |
+| 9 | Coders ignore existing code; no build gate | **Done.** Ownership tables, audit and codebase map read first, minimal diffs, a Wave 2A build gate per step and in every DoD, Go tests colocated. | `coding-agents.test.sh` |
+| 10 | Untyped fix agents, candidate bypass | **Done.** Fixes go to the owning role agent, and the Wave 5v security re-review covers the post-Wave-4 diff. The 2B adopt pass produces the role artifacts. Every spawn names `subagent_type`. | `orchestrator-spawns.test.sh` 27 |
+| 11 | Optimizers break behaviour | **Done.** `/optimize` only. Tests and mocks are read-only, dead code is proven by static reachability, error handling is never removed, and scope comes from `base_sha`; no `git reset --hard`. | `coding-agents.test.sh` |
+| 12 | Unproduced hand-offs | **Done.** `ui_developer/manifest.json` is declared and produced, e2e scope comes from the spec inventory, and the depgraph matching is segment-aware (regression fixture). | `dependency-graph.test.sh` 54 |
+| 13 | Commands and versions drift | **Done.** A `## Commands and versions` table is parsed by `commands-table.py` and read by agents, test_runner, CI and gate check (e). The docker USER bug and CI Postgres ports are fixed, and test_runner's broken fallbacks are removed. | `evidence-tools.test.sh` (CT01-04), `coding-agents.test.sh` |
+| 14 | Stack and project leakage | **Partly.** Vertix and the browser-LLM sections are removed, and the coding rules are language-neutral. The per-language packs remain as they are. | `coding-agents.test.sh` |
+
+**Not executed here, so unverified:**
+- **Syntax and flags checked only against docs:** `GOFLAGS=-count=1 -race`, Vitest `--outputFile.junit=`, k6 `handleSummary` sub-metric parsing, Alembic `autocommit_block()`, Go `deadcode -test`, Spring Data `scroll()`.
+- **Archetype samples:** the ~30 per-language archetype code samples edited for the envelope and tenant rules were reviewed but not compiled.
+
+**Decisions to confirm:**
+- **Coders and existing tests.** A coder may change an *existing* test's expectation only when this
+  phase's spec changed that behaviour, citing the spec line. Coders may never delete, skip or loosen a
+  test.
+- **Mutation testing** is advisory. Turning it into a floor is a later step.
+
 ## Method
 
 - Six `general-purpose` reviewers, each with a hat-specific checklist, ran in parallel over the 22
