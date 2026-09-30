@@ -106,6 +106,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/test --traceability` | Check TC-* ID coverage |
 | `/test --mobile [--platform=ios\|android]` | React Native tiers: Jest+RNTL + device flows on iOS simulator / Android emulator |
 | `/demo` | Write, stand up, and rehearse a stakeholder demo of a completed phase |
+| `/design [--source=stitch]` / `/stitch <init\|generate\|variants\|edit\|theme\|sync\|status>` | UI design contract; Google Stitch renders (web DESKTOP / React Native MOBILE) normalized into wireframes behind the design gate |
 | `/review` | Code review on current changes |
 | `/diagnose` / `/hotfix` | Bug investigation / fast-track fix — both use reproduction-test-first |
 | `/deploy --target=local` | Deploy locally |

@@ -348,6 +348,9 @@ debate team (on-demand, any pipeline):
 | `/plan` | project_planner -> spec_writer (parallel) -> ux_designer -> design_quality_reviewer -> spec_verifier -> brd_spec_reconciler -> plan_goal_verifier -> adr_agent |
 | `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer ∥ mobile_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
 | `/test` | test_runner, e2e_orchestrator, mobile_e2e_orchestrator (--mobile), performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
+| `/design` | wireframe_generator -> ux_designer (Stitch renders normalized when --source=stitch) -> design_quality_reviewer (BLOCKING gate) |
+| `/stitch` | No agent for Stitch calls (parent drives the MCP per ui/stitch-design.md); `sync` -> ux_designer -> design_quality_reviewer |
+| `/demo` | demo_documenter -> demo_executor -> demo_validator |
 | `/review` | code_reviewer_I -> code_reviewer_II -> security_reviewer + dependency_scanner |
 | `/optimize` | code_optimizer + ui_code_optimizer (parallel) |
 | `/deploy` | deployment_agent + ci_cd_agent + observability_agent |

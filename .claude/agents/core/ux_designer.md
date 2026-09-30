@@ -43,6 +43,7 @@ skill_packs:
   - "~/.claude/skills/ui/error-handling-patterns.md"
   - "~/.claude/skills/testing/test-case-traceability.md"
   - "~/.claude/skills/testing/test-case-generation.md"
+  - "~/.claude/skills/ui/stitch-design.md"
 ---
 
 # Agent: UX Designer
@@ -283,6 +284,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/ui/error-handling-patterns.md`
 - `~/.claude/skills/testing/test-case-traceability.md`
 - `~/.claude/skills/testing/test-case-generation.md`
+- `~/.claude/skills/ui/stitch-design.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->

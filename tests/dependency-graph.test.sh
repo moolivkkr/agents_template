@@ -90,6 +90,22 @@ for t in "$ROOT"/.claude/agents/templates/*.tmpl; do
   grep -q "\"agent\":\"$role\"" "$t" && ok "$role: name + completion log use the bare role" || bad "$role: completion log does not use \"agent\":\"$role\""
 done
 
+# 8. Google Stitch: every mcp__stitch__* tool named in a command/skill/agent exists in the verified
+#    tool surface (stitch-design.md, verified 2026-09-29 against the live MCP), the fake bash probe is
+#    gone from commands, and generation calls always come with a deviceType rule.
+STITCH_TOOLS="list_projects create_project get_project delete_project list_screens get_screen generate_screen_from_text edit_screens generate_variants create_design_system update_design_system list_design_systems apply_design_system upload_design_md create_design_system_from_design_md"
+used="$(grep -rhoE 'mcp__stitch__[a-z_]+' "$ROOT/.claude" | sed 's/mcp__stitch__//' | sort -u)"
+unknown=0
+for t in $used; do printf ' %s ' "$STITCH_TOOLS" | grep -q " $t " || { bad "unknown Stitch tool referenced: mcp__stitch__$t"; unknown=1; }; done
+[ "$unknown" -eq 0 ] && ok "all referenced Stitch tools exist ($(printf '%s\n' $used | wc -l | tr -d ' ') used)"
+if grep -rn "mcp_stitch_probe" "$ROOT/.claude/commands" >/dev/null 2>&1; then bad "commands still call the nonexistent mcp_stitch_probe"; else ok "no fake Stitch probe in commands"; fi
+for f in "$ROOT/.claude/commands/design.md" "$ROOT/.claude/commands/stitch.md"; do
+  grep -q "stitch-design.md" "$f" && grep -q "deviceType" "$f" && ok "$(basename "$f") follows stitch-design.md with deviceType" \
+    || bad "$(basename "$f") does not reference stitch-design.md + deviceType"
+done
+grep -q "get_project" "$ROOT/.claude/commands/design.md" && ok "/design fetches the screen instance before create_design_system_from_design_md" \
+  || bad "/design calls create_design_system_from_design_md without get_project (missing selectedScreenInstance)"
+
 echo "────────────────────────────────────────────"
 echo "dependency-graph.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

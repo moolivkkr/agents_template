@@ -100,33 +100,29 @@ mkdir -p "docs/design/phases/${PHASE}/specs"
 ### UI-phase gate
 Determine whether this phase actually has UI screens:
 ```bash
-# frontend must be enabled AND the phase must have UI-flavored scope
-FRONTEND=$(grep -iE "frontend.*enabled|frontend:.*true" docs/IMPLEMENTATION_GUIDELINES.md 2>/dev/null | head -1)
+# a web frontend OR a React Native app must be enabled AND the phase must have UI-flavored scope
+FRONTEND=$(jq -r '(.tech_profile.frontend.enabled // false) or (.tech_profile.mobile.enabled // false)' agent_state/agent_registry.json 2>/dev/null | grep -x true \
+  || grep -iE "frontend.*enabled|frontend:.*true|Section 24: Mobile|React Native" docs/IMPLEMENTATION_GUIDELINES.md 2>/dev/null | head -1)
 HAS_UI_SCOPE=$(grep -iE "FR-UI-|UI|interface|screen|dashboard|component|widget|chat|graph|form|page" \
   "docs/design/phases/${PHASE}/PHASE_PLAN.md" 2>/dev/null | head -1)
 ```
-If frontend is disabled OR there is no UI scope:
+If neither a web frontend nor a mobile app is enabled, OR there is no UI scope:
 ```
 ▶ Phase ${PHASE} has no UI screens — skipping design.
 ```
 Exit 0. This is the graceful no-op for backend-only phases.
 
 ### `--source=stitch` availability probe (only when the flag is set)
-```bash
-STITCH_MODE="agent"   # default: pure-agent path
-if [ "$ARG_SOURCE" = "stitch" ]; then
-  # Probe the Stitch MCP with a cheap read call (list_projects).
-  # If the tool is unavailable / errors / times out → fall back, DO NOT block.
-  if mcp_stitch_probe; then
-    STITCH_MODE="stitch"
-    echo "✅ Stitch MCP available — enriching wireframes with Stitch renders."
-  else
-    STITCH_MODE="agent"
-    echo "⚠ Stitch MCP unavailable — falling back to pure-agent design (ux_designer). Logging fallback."
-    # In --auto: append to agent_state/autonomous/auto-resolved.jsonl (category: ux, would_block: false)
-  fi
-fi
-```
+
+The probe is an **MCP call made by this session**, not a shell function: call
+`mcp__stitch__list_projects` once.
+- It returns → `STITCH_MODE=stitch`, print `✅ Stitch MCP available — enriching wireframes with Stitch renders.`
+- It errors, times out, or the tool doesn't exist → `STITCH_MODE=agent`, print
+  `⚠ Stitch MCP unavailable — falling back to pure-agent design (ux_designer).` In `--auto`, append
+  `{"category":"ux","would_block":false,"reason":"stitch unavailable"}` to `agent_state/autonomous/auto-resolved.jsonl`.
+
+Without `--source=stitch`, `STITCH_MODE=agent` and Stitch is never contacted.
+
 > **Judgment call — headless safety:** the default path is `agent`. Stitch is only ever probed and used when the caller explicitly passes `--source=stitch`, and even then a missing/failed MCP degrades to the agent path rather than halting. Nothing in this command can block on an unavailable external MCP.
 
 ### Resume detection
@@ -153,6 +149,8 @@ HAS_REVIEW=$([ -f "docs/design/phases/${PHASE}/DESIGN_REVIEW.md" ] && echo true 
   - `~/.claude/skills/ui/professional-ui-standards.md` — spacing, typography, z-index, state discipline
   - `~/.claude/skills/ui/vertix-portal-design-system.md` — **house style (if the project uses it).** Semantic tokens + `@portal/components` primitives; overrides the generic standards on color/tokens/components.
   - `~/.claude/skills/ui/structured-wireframe-format.md` — wireframe file format
+  - `~/.claude/skills/ui/stitch-design.md` — **only when `STITCH_MODE=stitch`**: Stitch call sequences, device types, render → wireframe normalization
+  - React Native screens (`mobile.enabled`): `~/.claude/skills/frameworks/react-native-app-patterns.md` + `~/.claude/skills/testing/mobile-testing-strategy.md` §4 (testIDs); wireframes use a phone frame (and tablet if in BRD) instead of the 375/1280 web breakpoints
   - `~/.claude/skills/ui/accessibility-patterns.md` — heading hierarchy, landmarks, focus order, ARIA
   - `~/.claude/skills/ui/archetypes/` — page archetypes
   - `~/.claude/skills/testing/test-case-generation.md` + `test-case-traceability.md` — TC-UI-* matrices
@@ -201,14 +199,33 @@ The `.wireframe.md` MUST contain (per the `ux_designer` agent definition):
 
 ### Step 2s — Stitch Enrichment (only when `STITCH_MODE=stitch`)
 
-When and only when the flag resolved to Stitch-available, enrich each wireframe with a Google Stitch render. This runs the Stitch MCP tools **directly from this command** (there is no separate stitch agent):
+When and only when the probe succeeded, enrich each screen with a Google Stitch render. This session
+makes the MCP calls directly. **Every call sequence and rule is in
+`~/.claude/skills/ui/stitch-design.md`; follow it. The steps below are the order.**
 
-1. `mcp__stitch__list_projects` / `mcp__stitch__create_project` (title = "`<project> — Phase N`") — reuse or create the phase's Stitch project.
-2. If the project has a design system (`~/.claude/skills/ui/vertix-portal-design-system.md`): `mcp__stitch__upload_design_md` → `mcp__stitch__create_design_system_from_design_md` so Stitch renders in the house style; pass the resulting `designSystem` id to generation.
-3. Per screen: `mcp__stitch__generate_screen_from_text` with a prompt derived from the archetype + `data-contracts.md` bindings + BRD acceptance criteria. Generation can take minutes — **do not retry on timeout**; poll `mcp__stitch__get_screen` every ~30s (up to ~10 times).
-4. **Import/normalize:** feed the rendered screen back to `ux_designer`, which reconciles the Stitch output into the SAME two-file contract — extracting exact tokens/spacing into the `.wireframe.html` and keeping bindings/states/a11y/TC-IDs in the `.wireframe.md`. Stitch renders are a visual aid; the canonical artifact is always the wireframe pair, so downstream `ui_developer` consumes one format regardless of source.
+1. **Project + design system** (§2, §4): load `docs/design/stitch.json`, reuse the stored project
+   (verify with `get_project`), or match it by title in `list_projects`, else `create_project`
+   titled `"<PROJECT_NAME> — UI"`. One project per product, not per phase. If no design-system
+   asset is stored, resolve the source (`docs/design/DESIGN.md` → IMPLEMENTATION_GUIDELINES design
+   tokens → a project design-system skill → none) and create it. Use Path A (`create_design_system`,
+   then `update_design_system`) or Path B (`upload_design_md`, then `get_project` for the uploaded
+   screen instance, then `create_design_system_from_design_md` with `selectedScreenInstance`).
+   Store the asset id.
+2. **Per screen** (§3, §5): set `deviceType` from the platform (`MOBILE` for React Native screens,
+   `DESKTOP` for web). Build the prompt from the archetype, the `data-contracts.md` fields and the
+   FR-* acceptance criteria. Call `generate_screen_from_text` with `projectId`, `prompt`,
+   `deviceType` and `designSystem: "assets/<id>"`. **Do not retry** on timeout: poll `get_screen`
+   every ~30s up to 10 times (use `list_screens` to find the id if the call returned none). Record
+   each screen in `stitch.json` under `N/<screen>/<device>`.
+3. **Normalize** (§7): save each `get_screen` payload to `agent_state/stitch/phase-N/`, then feed
+   those files to `ux_designer`. It reconciles them into the SAME two-file contract: layout and
+   spacing from the render, colours and fonts replaced by semantic tokens, bindings/states/a11y/TC
+   IDs from the contracts, plus testIDs and Tier 4M TCs for mobile screens. The canonical artifact
+   is always the wireframe pair, so `ui_developer` and `mobile_developer` consume one format
+   regardless of source.
 
-If any Stitch call fails mid-run, log it and finish that screen on the pure-agent path — never leave a screen without a wireframe.
+If any Stitch call fails mid-run, log it in `stitch.json` and finish that screen on the pure-agent
+path. Never leave a screen without a wireframe.
 
 ---
 
@@ -227,7 +244,11 @@ Writes `docs/design/phases/${PHASE}/DESIGN_REVIEW.md` with per-screen verdicts a
 
 **Block loop:**
 1. `design_quality_reviewer` lists each BLOCK with location + required fix.
-2. `ux_designer` revises the specific wireframe(s).
+2. `ux_designer` revises the specific wireframe(s). If the screen came from Stitch
+   (`STITCH_MODE=stitch`) and the BLOCK is visual (contrast, density, missing label, layout), first
+   send the reviewer's fix list verbatim to `mcp__stitch__edit_screens` for that screen (same
+   `deviceType`; poll, don't retry), then re-normalize (stitch-design.md §7). Binding, state and
+   contract BLOCKs are fixed in the wireframe directly; Stitch doesn't own those.
 3. Re-run `design_quality_reviewer`. Max **2** revision cycles.
 4. **Interactive mode:** still BLOCK after 2 cycles → STOP and surface to the user with the exact gaps.
    **`--auto` mode:** still BLOCK after 2 cycles → downgrade to WARN, log to `agent_state/autonomous/auto-resolved.jsonl` (`"category":"ux","would_block":false`), and surface at the next human checkpoint. Do NOT halt the pipeline.
@@ -285,5 +306,6 @@ Print summary:
 - [ ] `DESIGN_INDEX.md` written; source (agent vs stitch) and any stitch fallback recorded.
 - [ ] A backend-only phase exits cleanly as a no-op (no empty artifacts left behind).
 - [ ] If `--source=stitch` was requested but the MCP was unavailable, the fallback is logged and the contract is complete on the pure-agent path anyway.
+- [ ] In Stitch mode: `docs/design/stitch.json` records the project, design-system asset and every screen id; every generation set `deviceType` + `designSystem`; no timed-out call was retried.
 
 **Anti-rationalization:** a present-but-empty `DESIGN_REVIEW.md` passes a file-exists check but ships an unreviewed design. Run the checklist — a stub is a failure, not a completion.
