@@ -9,6 +9,15 @@
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/inject-project-facts.sh"
           }
         ]
+      },
+      {
+        "matcher": "compact|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/autonomous-reorient.sh"
+          }
+        ]
       }
     ],
     "Stop": [
@@ -32,6 +41,16 @@
           {
             "type": "command",
             "command": "f=$(jq -r '.tool_input.file_path // empty'); case \"$f\" in */agent_state/phases/*/manifest.json) p=$(printf '%s' \"$f\" | sed -E 's#.*/agent_state/phases/([0-9]+)/manifest.json#\\1#'); \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/verify-gate.sh \"$p\" ;; *) exit 0 ;; esac"
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/autonomous-stopfailure.sh"
           }
         ]
       }

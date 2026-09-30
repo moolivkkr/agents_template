@@ -61,7 +61,13 @@ immediately with the next step of THIS file, in the same turn.
  "updated": "<iso8601>", "started": "<iso8601>", "args": "<the /autonomous args>"}
 ```
 Write it at Step 0 and after EVERY step: bump `updated`, and set `step` and `next_step` from the
-step list in *Resume Mode*. While `status` is `running`, `.claude/hooks/autonomous-continue.sh`
+step list in *Resume Mode*. `session_id` starts `null`; the Stop hook binds the run to the first
+session that stops, and ignores stops from any other session (so a status check in a second
+terminal can't interfere). While background agents are running, ending the turn is allowed — their
+completion wakes the session. Progress is judged from run.json, wave checkpoints, execution.jsonl
+and git state, so long steps with many turns are not mistaken for a stall. API errors are recorded
+into `last_error` by a StopFailure hook (permanent errors set `paused`), and after compaction or
+resume a SessionStart hook restates the run's position. While `status` is `running`, `.claude/hooks/autonomous-continue.sh`
 blocks the turn from ending and tells you the next step. It yields only when `status` is one of:
 - `awaiting_human` — the Step 3 checkpoint, `--confirm_each_phase`, or a security PAUSE;
 - `paused` — with a `reason`: escalation limit exceeded, catastrophic failure, or the user said stop;
@@ -122,7 +128,7 @@ fi
 mkdir -p agent_state/autonomous
 NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 if [ "${ARG_RESUME:-false}" != "true" ] || [ ! -f agent_state/autonomous/run.json ]; then
-  jq -n --arg now "$NOW" '{active:true,status:"running",phase:0,step:"preflight_complete",next_step:"init",started:$now,updated:$now}' > agent_state/autonomous/run.json
+  jq -n --arg now "$NOW" '{active:true,status:"running",session_id:null,phase:0,step:"preflight_complete",next_step:"init",started:$now,updated:$now}' > agent_state/autonomous/run.json
 fi
 
 echo "✅ Pre-flight passed"
@@ -558,7 +564,7 @@ RUN=agent_state/autonomous/run.json
 RESUME_PHASE=$(jq -r '.phase' "$RUN")
 RESUME_STEP=$(jq -r '.next_step' "$RUN")
 # re-arm the run (it may be paused / awaiting_human / stalled)
-tmp=$(mktemp); jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.active=true | .status="running" | .updated=$now | del(.nudges,.last_nudged_update,.stalled_reason)' "$RUN" > "$tmp" && mv "$tmp" "$RUN"
+tmp=$(mktemp); jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.active=true | .status="running" | .session_id=null | .updated=$now | del(.nudges,.last_nudged_update,.last_progress_fp,.stalled_reason,.reason)' "$RUN" > "$tmp" && mv "$tmp" "$RUN"
 ```
 
 **Step ids** (`step` = last completed, `next_step` = what runs next):
