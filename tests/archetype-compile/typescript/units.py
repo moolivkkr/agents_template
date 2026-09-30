@@ -26,7 +26,7 @@ FILES = {
     "backend/archetypes/dockerfile-typescript.md": 1,
     "backend/archetypes/error-handling-typescript.md": 7,
     "backend/archetypes/grpc-pattern-typescript.md": 5,
-    "backend/archetypes/migration-pattern-typescript.md": 6,
+    "backend/archetypes/migration-pattern-typescript.md": 7,
     "backend/archetypes/observability-typescript.md": 33,
     "backend/archetypes/performance-typescript.md": 32,
     "backend/archetypes/websocket-pattern-typescript.md": 5,
@@ -163,13 +163,19 @@ UNITS = [
         },
     },
     {
+        # migrate runner, prisma.config.ts, seed — and `prisma validate` of the doc's own ```prisma blocks
+        # (the schema and the multi-schema variant) with the doc's own prisma.config.ts
         "name": "migration-prisma",
-        "blocks": refs("migration-pattern-typescript", 1, 2),
+        "blocks": refs("migration-pattern-typescript", 1, 2, 3),
         "prisma": True,
+        "prisma_validate": [
+            {"doc": "backend/archetypes/migration-pattern-typescript.md", "langs": ["prisma"], "index": 1},
+            {"doc": "backend/archetypes/migration-pattern-typescript.md", "langs": ["prisma"], "index": 2},
+        ],
     },
     {
         "name": "migration-drizzle",
-        "blocks": refs("migration-pattern-typescript", 3, 4, 5, 6),
+        "blocks": refs("migration-pattern-typescript", 4, 5, 6, 7),
     },
     {
         # Express side: SDK setup, manual spans, middleware, Prisma/Drizzle/Redis spans, metrics, pino,
@@ -177,7 +183,8 @@ UNITS = [
         "name": "observability-express",
         "blocks": refs("observability-typescript", 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20,
                        21, 26, 27, 28, 30, 33)
-        + refs("error-handling-typescript", 1, 2, 7) + ["dockerfile-typescript#1"],
+        + refs("error-handling-typescript", 1, 2, 3, 7) + refs("auth-middleware-typescript", 1, 3)
+        + ["dockerfile-typescript#1"],
         "place": {
             "observability-typescript#2": {
                 "path": "src/instrumentation.prisma.ts",
@@ -215,6 +222,10 @@ UNITS = [
         },
         "prisma": True,
         "shims": ["obs-express"],
+        # run the auth ↔ request-context interop test (shims/obs-express); NODE_ENV=production keeps the
+        # sample logger on plain JSON (its dev branch wants the pino-pretty transport)
+        "vitest": ["src/auth-context.interop.test.ts"],
+        "vitest_env": {"NODE_ENV": "production", "LOG_LEVEL": "silent"},
     },
     {
         "name": "observability-nest",

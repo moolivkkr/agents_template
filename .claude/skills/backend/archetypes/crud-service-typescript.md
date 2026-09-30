@@ -586,8 +586,12 @@ export function createLogger(name: string): Logger {
   };
 }
 
-/** App-wide instance for middleware (error handler, auth, request logging). Services get theirs injected. */
-export const logger: Logger = createLogger("app");
+/**
+ * The app-wide pino instance for middleware (error handler, auth, request logging) — the same export as
+ * observability-typescript.md's src/lib/logger.ts, so middleware from either archetype compiles against
+ * both. pino's call order is (fields, message). Services get the Logger interface above injected.
+ */
+export const logger = pino({ name: "app" });
 ```
 
 ---

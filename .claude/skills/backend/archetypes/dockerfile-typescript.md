@@ -85,7 +85,7 @@ EXPOSE 3000
 
 # Health check — verify the app responds
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/healthz || exit 1
 
 # Start the application
 CMD ["node", "dist/index.js"]
@@ -147,7 +147,7 @@ ENV PORT=3000
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+  CMD wget --no-verbose --tries=1 --spider http://localhost:3000/healthz || exit 1
 
 CMD ["node", "dist/index.js"]
 ```
@@ -203,7 +203,7 @@ ENV PORT=3000
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD bun --eval "fetch('http://localhost:3000/health').then(r => { if (!r.ok) process.exit(1) })" || exit 1
+  CMD bun --eval "fetch('http://localhost:3000/healthz').then(r => { if (!r.ok) process.exit(1) })" || exit 1
 
 # Bun runs TypeScript directly — no transpilation needed
 CMD ["bun", "run", "src/index.ts"]
@@ -370,7 +370,7 @@ services:
         delay: 5s
         max_attempts: 3
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/health"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/healthz"]
       interval: 30s
       timeout: 5s
       start_period: 15s
@@ -387,60 +387,57 @@ services:
 ## Health Check Endpoint
 
 ```typescript
-// src/routes/health.ts — required by the Docker HEALTHCHECK
+// src/routes/health.ts — the runtime contract (core/implementation-guidelines-template.md §Runtime contract):
+// /healthz (liveness), /readyz (readiness), /api/version. Plain JSON, outside the response envelope.
 
+import { readdirSync } from "node:fs";
 import { Router } from "express";
 import type { PrismaClient } from "@prisma/client";
-import type { Redis } from "ioredis";
+
+/** The newest migration this image ships (prisma/migrations/<timestamp>_<name>) — read once at startup. */
+export function latestShippedMigration(dir = "prisma/migrations"): string | undefined {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort()
+    .at(-1);
+}
 
 export function createHealthRouter(deps: {
   prisma: PrismaClient;
-  redis: Redis;
+  requiredMigration: string | undefined; // latestShippedMigration()
 }): Router {
   const router = Router();
 
-  router.get("/health", async (_req, res) => {
-    const checks: Record<string, "ok" | "error"> = {};
-
-    // Database check
-    try {
-      await deps.prisma.$queryRaw`SELECT 1`;
-      checks.database = "ok";
-    } catch {
-      checks.database = "error";
-    }
-
-    // Redis check
-    try {
-      await deps.redis.ping();
-      checks.redis = "ok";
-    } catch {
-      checks.redis = "error";
-    }
-
-    const allHealthy = Object.values(checks).every((v) => v === "ok");
-
-    res.status(allHealthy ? 200 : 503).json({
-      status: allHealthy ? "healthy" : "degraded",
-      checks,
-      timestamp: new Date().toISOString(),
-    });
+  // Liveness — the process can answer. Never touches a dependency: a DB outage must not restart pods.
+  router.get("/healthz", (_req, res) => {
+    res.json({ status: "ok" });
   });
 
-  // Liveness probe — always returns 200 if the process is running
-  router.get("/health/live", (_req, res) => {
-    res.status(200).json({ status: "alive" });
+  // Readiness — hard dependencies the release needs: the DB, at this image's schema version. Never an
+  // optional one (the Redis cache): losing it degrades the service; it doesn't make it unready.
+  // New pods stay unready until the migrate Job lands this image's migrations; old pods keep serving.
+  router.get("/readyz", async (_req, res) => {
+    try {
+      const applied = await deps.prisma.$queryRaw<Array<{ applied: boolean }>>`
+        SELECT EXISTS (
+          SELECT 1 FROM _prisma_migrations
+          WHERE migration_name = ${deps.requiredMigration ?? ""}
+            AND finished_at IS NOT NULL AND rolled_back_at IS NULL
+        ) AS applied`;
+      if (deps.requiredMigration && applied[0]?.applied) {
+        res.json({ status: "ready" });
+        return;
+      }
+    } catch {
+      // DB unreachable, or no _prisma_migrations table yet — not ready (the cause stays out of the body)
+    }
+    res.status(503).json({ status: "not_ready" });
   });
 
-  // Readiness probe — returns 200 only when dependencies are ready
-  router.get("/health/ready", async (_req, res) => {
-    try {
-      await deps.prisma.$queryRaw`SELECT 1`;
-      await deps.redis.ping();
-      res.status(200).json({ status: "ready" });
-    } catch {
-      res.status(503).json({ status: "not ready" });
-    }
+  // Build identity — the deployed-sha preflights and smoke.sh read it
+  router.get("/api/version", (_req, res) => {
+    res.json({ git_sha: process.env.GIT_SHA ?? "unknown", env: process.env.APP_ENV ?? "unknown" });
   });
 
   return router;

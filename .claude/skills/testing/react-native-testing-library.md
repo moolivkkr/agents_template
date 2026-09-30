@@ -94,15 +94,16 @@ expect(await screen.findByText('Welcome')).toBeOnTheScreen();
 import { setupServer } from 'msw/node';
 export const server = setupServer();
 // jest.setup.ts
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));   // MSW 2: onUnhandledRequest
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 ```
 
 Jest tests run in Node, so `msw/node` is the correct entry point for the component and integration
 tiers. The separate `msw/native` entry (for mocking inside the running app, e.g. for demos) was
-removed in MSW 3.0.0. **Pin `msw@^2`** if the app itself uses in-app mocking. `onUnhandledRequest:
-'error'` makes an un-mocked call fail the test instead of hitting a real server.
+removed in MSW 3.0.0. **Pin `msw@^2`** if the app itself uses in-app mocking. `onUnhandledFrame:
+'error'` (MSW 2: `onUnhandledRequest`) makes an un-mocked call fail the test instead of hitting a real
+server; MSW 3 no longer has `onUnhandledRequest` (see `testing/msw.md`).
 
 ## Navigation
 

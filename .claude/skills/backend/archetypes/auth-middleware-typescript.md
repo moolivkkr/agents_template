@@ -127,10 +127,10 @@ export function authMiddleware(config: JwtConfig) {
         algorithms: config.algorithms as jwt.Algorithm[],
       }) as JwtCustomPayload;
     } catch (err) {
-      logger.warn("JWT verification failed", {
-        request_id: requestId,
-        error: err instanceof Error ? err.message : "unknown",
-      });
+      logger.warn(
+        { request_id: requestId, error: err instanceof Error ? err.message : "unknown" },
+        "JWT verification failed", // pino: fields first, message second
+      );
       throw unauthenticated(); // invalid or expired token
     }
 
@@ -603,28 +603,34 @@ export function logEnrichment(req: Request, res: Response, next: NextFunction): 
   const tenantId = (req as any).tenantId ?? "";
 
   // Log request start
-  logger.info("request started", {
-    request_id: requestId,
-    method: req.method,
-    path: req.path,
-    user_id: userId,
-    tenant_id: tenantId,
-    user_agent: req.headers["user-agent"],
-    remote_addr: req.ip,
-  });
+  logger.info(
+    {
+      request_id: requestId,
+      method: req.method,
+      path: req.path,
+      user_id: userId,
+      tenant_id: tenantId,
+      user_agent: req.headers["user-agent"],
+      remote_addr: req.ip,
+    },
+    "request started", // pino: fields first, message second
+  );
 
   // Log response on finish
   res.on("finish", () => {
     const duration = Date.now() - start;
-    logger.info("request completed", {
-      request_id: requestId,
-      method: req.method,
-      path: req.path,
-      status: res.statusCode,
-      duration_ms: duration,
-      user_id: userId,
-      tenant_id: tenantId,
-    });
+    logger.info(
+      {
+        request_id: requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        duration_ms: duration,
+        user_id: userId,
+        tenant_id: tenantId,
+      },
+      "request completed",
+    );
   });
 
   next();

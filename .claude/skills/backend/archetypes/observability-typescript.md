@@ -295,7 +295,8 @@ export function tracingMiddleware(req: Request, res: Response, next: NextFunctio
   }
 
   // Enrich auto-instrumented span with business attributes. req.tenantId comes from the verified
-  // token (requestContextMiddleware copies it from req.auth), never from a client header.
+  // token (requestContextMiddleware copies it from req.user, which the auth middleware sets), never from a
+  // client header.
   span.setAttribute('tenant_id', req.tenantId || 'unknown');
   span.setAttribute('request_id', String(req.id)); // pino-http types req.id as string | number | object
   if (req.userId) {
@@ -988,7 +989,7 @@ export const httpLogger = pinoHttp({
     }),
   },
 
-  // Add custom attributes to every request log (tenantId comes from the verified token, via req.auth)
+  // Add custom attributes to every request log (tenantId comes from the verified token, via req.user)
   customProps: (req) => ({
     tenant_id: (req as any).tenantId || 'unknown',
     request_id: req.id,
@@ -1204,12 +1205,13 @@ Create a child logger per request. This avoids passing tenant_id/request_id to e
 import { Request, Response, NextFunction } from 'express';
 import type pino from 'pino';
 import { logger } from '../lib/logger';
+import type { AuthUser } from '../types/auth';
 import { randomUUID } from 'node:crypto';
 
 declare global {
   namespace Express {
     interface Request {
-      auth?: { tenantId: string; userId: string }; // set by the auth middleware from the verified token
+      user?: AuthUser; // set from the verified token by the auth middleware (auth-middleware-typescript.md)
       tenantId: string;
       userId?: string;
       log: pino.Logger; // req.id (and log) are also declared by pino-http: id is string | number | object
@@ -1229,15 +1231,15 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
   req.id = requestId;
   res.setHeader('X-Request-ID', requestId);
 
-  // Tenant and user come from the VERIFIED token that the auth middleware put on req.auth. Never
+  // Tenant and user come from the VERIFIED token that the auth middleware put on req.user. Never
   // from a client header such as X-Tenant-ID: anyone can send one.
-  if (!req.auth?.tenantId) {
+  if (!req.user?.tenantId) {
     res.set('WWW-Authenticate', 'Bearer');
     res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Sign in to continue.', request_id: requestId, retryable: false } });
     return;
   }
-  req.tenantId = req.auth.tenantId;
-  req.userId = req.auth.userId;
+  req.tenantId = req.user.tenantId;
+  req.userId = req.user.id;
 
   // Child logger with request context — all subsequent logs include these fields
   req.log = logger.child({
@@ -1402,10 +1404,9 @@ import { requestContextMiddleware } from './middleware/request-context.middlewar
 import { tracingMiddleware } from './middleware/tracing.middleware';
 import { metricsMiddleware } from './middleware/metrics.middleware';
 import { errorHandler } from './middleware/error-handler.middleware';
-import { createHealthRouter } from './routes/health'; // dockerfile-typescript.md
+import { createHealthRouter, latestShippedMigration } from './routes/health'; // dockerfile-typescript.md
 import { orderRouter } from './routes/orders';
 import { prisma } from './lib/prisma';
-import { redis } from './lib/redis';
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
@@ -1419,16 +1420,16 @@ app.use(express.json({ limit: '1mb' }));
 app.use(httpLogger);
 
 // 3. Health checks (before auth/tenant — no tenant_id required)
-app.use(createHealthRouter({ prisma, redis }));
+app.use(createHealthRouter({ prisma, requiredMigration: latestShippedMigration() }));
 
 // 4. Metrics (duration histogram, active requests). They need nothing from auth, and sitting before it
 //    means 401s are counted too.
 app.use(metricsMiddleware);
 
-// 5. Auth: verifies the bearer token and sets req.auth = { tenantId, userId } from its claims
+// 5. Auth: verifies the bearer token and sets req.user (AuthUser: id, tenantId, roles, permissions) from its claims
 app.use(authMiddleware);
 
-// 6. Request context (request ID, tenant ID from req.auth, child logger)
+// 6. Request context (request ID, tenant ID from req.user, child logger)
 app.use(requestContextMiddleware);
 
 // 7. Tracing enrichment (adds tenant_id to active span)
@@ -1680,7 +1681,7 @@ process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 ## Critical Rules
 
 1. **`instrumentation.ts` is imported FIRST** — before Express, Prisma, or any other import. OTel must patch modules before they are loaded.
-2. **`tenant_id` on every log line and trace span, and on no metric** (at most a bounded `tenant.tier`). Use child loggers and span attributes. The tenant comes from the verified token (`req.auth`), never from an `X-Tenant-ID` header.
+2. **`tenant_id` on every log line and trace span, and on no metric** (at most a bounded `tenant.tier`). Use child loggers and span attributes. The tenant comes from the verified token (`req.user`, set by the auth middleware), never from an `X-Tenant-ID` header.
 3. **JSON logs in production** — `pino-pretty` is for development only. Never enable it in production.
 4. **Redact PII** — configure pino `redact` paths for passwords, tokens, SSNs, credit cards.
 5. **Log-trace correlation** — every log line includes `trace_id` and `span_id` so you can jump from logs to traces.
