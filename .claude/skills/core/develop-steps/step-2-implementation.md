@@ -66,7 +66,11 @@ Build-step B2a-check (COMPILE/TYPECHECK GATE — BLOCKING):
 
 **Purpose:** Catch compilation errors before downstream agents build on broken code. This is cheap (seconds to run) but prevents expensive downstream failures where api_developer builds on code that doesn't compile.
 
-**Language-specific commands:**
+**Command:** the `typecheck` row (falling back to `build`) of `agent_state/config/verify-commands.json` — the
+same command the orchestrator's 2A build gate and `verify-gate.sh` run. The table below only shows what
+that row typically holds per language; when the project's row differs, the row wins.
+
+**Typical rows:**
 | Language | Command | Pass Condition |
 |----------|---------|---------------|
 | Go | `go build ./...` | Exit code 0 |
@@ -75,12 +79,12 @@ Build-step B2a-check (COMPILE/TYPECHECK GATE — BLOCKING):
 | Java | `mvn compile -q` or `gradle compileJava` | Exit code 0 |
 | Rust | `cargo check` | Exit code 0 |
 
-**Detection:** Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the primary backend language, then run the corresponding command.
-
 ```bash
-# Detect language from IMPLEMENTATION_GUIDELINES and run compile check
-# The exact command depends on the project's tech stack
-# Examples:
+V=agent_state/config/verify-commands.json
+CMD="$(jq -r '.commands.typecheck // .commands.build // empty' "$V")"
+[ -n "$CMD" ] || echo "⛔ BLOCKED: no typecheck/build row in $V"
+PHASE="${PHASE}" bash -o pipefail -c "$CMD"
+# What such a row typically holds:
 #   Go:         go build ./...
 #   TypeScript: npx tsc --noEmit
 #   Python:     python -m py_compile $(git diff --name-only --diff-filter=AM HEAD -- '*.py')
@@ -197,7 +201,9 @@ Build-step B3-check (FRONTEND BUILD CHECK — BLOCKING, UI phases only):
 
 **Skip if:** `frontend.enabled = false` or this phase has no UI components (no Build-step B3).
 
-**Commands:**
+**Command:** the frontend's `build` row in `agent_state/config/verify-commands.json` (or an `x:` row the
+table defines for the UI). Typical rows:
+
 | Framework | Command | Pass Condition |
 |-----------|---------|---------------|
 | React (CRA) | `npm run build` | Exit code 0 |

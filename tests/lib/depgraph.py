@@ -239,8 +239,14 @@ for name, a in sorted(agents.items()):
 # Skills pulled in by name patterns at runtime (languages/frameworks/databases picked from the stack).
 RUNTIME_DIRS = ("languages/", "frameworks/", "databases/", "backend/archetypes/", "ui/archetypes/")
 FACTORY = agents.get("agent_factory", {}).get("text", "")
+# Packs the factory's skill-resolution table maps a stack value to ({{UI_COMPONENTS}} shadcn -> ui/shadcn.md, ...)
+# reach generated agents through that table, not by a literal path in any agent.
+_res = re.search(r"<!-- BEGIN skill-resolution -->(.*?)<!-- END skill-resolution -->", FACTORY, re.S)
+FACTORY_RESOLVED = set(re.findall(r"`([a-z0-9-]+/[a-z0-9-]+\.md)`", _res.group(1))) if _res else set()
 for rel in sorted(skills):
     stem = os.path.basename(rel)[:-3]
+    if rel in FACTORY_RESOLVED:
+        continue
     # Tool packs (testing/playwright.md, testing/pytest.md) are chosen by agent_factory from the stack
     # block via {{E2E_TOOL}} / {{TEST_FRAMEWORK}}; they count as referenced when the factory names them.
     if rel.startswith("testing/") and re.search(rf"\b{re.escape(stem)}\b", FACTORY):

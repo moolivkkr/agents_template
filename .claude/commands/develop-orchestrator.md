@@ -453,8 +453,11 @@ After rejoin, **continue to Wave 3 on the winner** (merged working tree). The ga
 
 **Verify before proceeding:**
 ```bash
-# New source files exist (Wave 2A: on HEAD; Wave 2B: after the winner merge)
-git diff --name-only HEAD~1 | grep -E '\.(ts|tsx|go)$' | head -5
+# Wave 2 committed code (Wave 2A: on HEAD; Wave 2B: after the winner merge). Any language — counted from
+# the phase's base commit, not HEAD~1, so a multi-commit wave or a Python/Java/Rust tree is seen too.
+CHANGED="$(git diff --name-only "$(cat agent_state/phases/${PHASE}/base_sha)"..HEAD -- . ':(exclude)agent_state' ':(exclude)docs')"
+echo "$CHANGED" | head -20
+[ -n "$CHANGED" ] || echo "⛔ BLOCKED: Wave 2 committed no code since base_sha — the role agents' completion lines are not evidence"
 # If Wave 2B ran: the selector report must exist and name a winner, and no dangling candidate worktrees remain.
 if [ "${N:-1}" -ge 2 ]; then
   test -f "agent_state/phases/${PHASE}/reports/candidate_selection.md" || echo "⛔ BLOCKED: candidate_selection.md missing — solution_selector did not complete"
@@ -558,8 +561,8 @@ Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the deployment strategy:
 |---|---|---|
 | **Has `deploy/k8s/app.env`** (lab cluster) | `scripts/k8s/deploy.sh dev`, then `scripts/k8s/deploy.sh qa` (promotes dev's digests) | The script's own verdict: smoke + digest parity; `HEALTHY` in `agent_state/deploy/last-deploy-status.json` |
 | Web API + UI | `docker compose up -d --build` | `curl -sf http://localhost:PORT/healthz` (runtime contract; `/readyz` for readiness) |
-| CLI tool | `go build ./cmd/...` or `npm run build` | Binary exists + `./bin/app --version` exits 0 |
-| Library/SDK | `go build ./...` or `npm run build` | Build succeeds (no runtime to health check) |
+| CLI tool | The `build` row of `verify-commands.json` (any language) | Build exits 0; the e2e tier (3c) then runs the built binary |
+| Library/SDK | The `build` row of `verify-commands.json` | Build exits 0 (no runtime to health check) |
 | WASM module | Build native + WASM targets | Both binaries exist |
 | React Native app (in addition to its backend row) | Build release binaries: iOS simulator `.app` + Android emulator `.apk` (commands from IMPLEMENTATION_GUIDELINES §Mobile) | Each installs on a booted device and cold-launches to its first screen with no native crash/red screen, and the first screen's API call reaches the backend (see `~/.claude/skills/frameworks/react-native.md` §Health check). `mobile_e2e_orchestrator` Step 1–3 does exactly this. |
 
@@ -568,8 +571,9 @@ Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the deployment strategy:
 ```bash
 echo "Wave 3.5: Local Deploy + Health Check"
 
-# Read deploy/build commands from IMPLEMENTATION_GUIDELINES
-# These are EXAMPLES — adapt to the project's actual stack
+# Build and migrate commands come from agent_state/config/verify-commands.json (the guidelines'
+# "Commands and versions" table), never from a guess about the language.
+V=agent_state/config/verify-commands.json
 
 # Kubernetes lab cluster (skill: infrastructure/lima-k8s-lab.md): dev is built from this tree, qa gets
 # dev's exact digests. Every later test tier (3c e2e, 3d mobile, Wave 4 acceptance) targets QA.
@@ -585,14 +589,17 @@ if [ -f "deploy/k8s/app.env" ]; then
 # For containerized projects:
 elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
   echo "  Building and deploying containers..."
-  docker compose build --no-cache 2>&1 | tail -5
+  # No pipe here: `| tail` would replace a failed build's exit code with 0 and start the stale image.
+  docker compose build --no-cache > "agent_state/phases/${PHASE}/junit/3.5-build.log" 2>&1 \
+    || { echo "  BUILD FAILED — see agent_state/phases/${PHASE}/junit/3.5-build.log"; tail -20 "agent_state/phases/${PHASE}/junit/3.5-build.log"; }
   docker compose up -d 2>&1
 
-  # Run pending migrations
-  # Migration command from IMPLEMENTATION_GUIDELINES
-  echo "  Running migrations..."
-  # e.g., docker compose exec api goose up
-  # e.g., docker compose exec api npx prisma migrate deploy
+  # Run pending migrations with the table's migrate row (written to run against this stack).
+  MIGRATE="$(jq -r '.commands.migrate // empty' "$V")"
+  if [ -n "$MIGRATE" ]; then
+    echo "  Running migrations..."
+    PHASE="${PHASE}" bash -o pipefail -c "$MIGRATE" || echo "  MIGRATIONS FAILED (exit $?)"
+  fi
 
   # Health check with retry (up to 60s)
   echo "  Health checking..."
@@ -618,18 +625,17 @@ elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
     curl -sf "$HEALTH_URL" > /dev/null 2>&1 || echo "  STILL UNHEALTHY after restart"
   fi
 
-# For CLI/library projects:
-elif [ -f "go.mod" ]; then
-  echo "  Building Go binary..."
-  go build ./cmd/... 2>&1 || echo "  Build failed"
-
-elif [ -f "package.json" ]; then
-  echo "  Building Node project..."
-  npm run build 2>&1 || echo "  Build failed"
-
-elif [ -f "Cargo.toml" ]; then
-  echo "  Building Rust project..."
-  cargo build 2>&1 || echo "  Build failed"
+# For CLI tools and libraries, in any language: the table's build row.
+else
+  HEALTHY=false
+  BUILD="$(jq -r '.commands.build // empty' "$V")"
+  if [ -z "$BUILD" ]; then
+    echo "  No build row in $V — add one to the Commands and versions table"
+  elif PHASE="${PHASE}" bash -o pipefail -c "$BUILD" > "agent_state/phases/${PHASE}/junit/3.5-build.log" 2>&1; then
+    HEALTHY=true
+  else
+    echo "  Build failed — see agent_state/phases/${PHASE}/junit/3.5-build.log"
+  fi
 fi
 ```
 
@@ -650,9 +656,9 @@ if [ ! -f "deploy/k8s/app.env" ] && { [ -f "docker-compose.yml" ] || [ -f "compo
   fi
 fi
 
-# For CLI projects: binary must exist
-if [ -f "go.mod" ] && [ ! -f "$(ls bin/* cmd/*/main.go 2>/dev/null | head -1)" ]; then
-  echo "BLOCKED: CLI binary not built — E2E/acceptance tests need a working binary"
+# For CLI tools and libraries: the build must pass
+if [ ! -f "deploy/k8s/app.env" ] && [ ! -f "docker-compose.yml" ] && [ ! -f "compose.yml" ] && [ "$HEALTHY" != true ]; then
+  echo "BLOCKED: build failed — E2E/acceptance tests need a working binary or package"
 fi
 ```
 

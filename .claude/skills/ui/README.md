@@ -24,8 +24,9 @@ tags:
 
 ```
 1. docs/PROJECT_FACTS.md + docs/DECISIONS.md        ← ground truth / settled decisions (always)
-2. PROJECT DESIGN SYSTEM                             ← if one exists for this project
-     ~/.claude/skills/ui/vertix-portal-design-system.md  (Vertix portal modules)
+2. PROJECT DESIGN SYSTEM                             ← only if the project NAMES one
+     agent_registry.json → tech_profile.frontend.design_system
+     (e.g. ui/vertix-portal-design-system.md, for Vertix portal projects only)
 3. docs/design/phases/N/specs/*.wireframe.{html,md}  ← the phase's concrete UI spec
 4. GENERIC HOUSE STANDARDS                           ← professional-ui-standards.md (defaults only)
 5. FRAMEWORK MECHANICS                               ← shadcn.md, tailwind.md, {{UI_FRAMEWORK}}.md
@@ -46,7 +47,7 @@ tokens/colors too.
 
 | Skill | AUTHORITATIVE for | Defers to |
 |---|---|---|
-| **vertix-portal-design-system.md** | Colors & semantic tokens (ICC + shadcn), the `@portal/components` library (reuse-before-build), theme (`data-theme`/`@portal/contracts`), severity/status scale + badges, card radius (14px) & shadows | — (top of UI stack when present) |
+| **the named project design system** (e.g. `vertix-portal-design-system.md` for Vertix portal projects) | Colors & semantic tokens, its component library (reuse-before-build), theme, severity/status scale + badges, radius & shadows | — (top of UI stack when named) |
 | **professional-ui-standards.md** | Spacing (4px grid), typography scale, z-index scale, state discipline (4-state rule), density, motion, anti-patterns. Its color/radius/shadow sections are **defaults, overridden by a project design system** | design system for tokens/colors/components |
 | **structured-wireframe-format.md** | The YAML/HTML wireframe spec format ux_designer emits | design system for component names |
 | **component-composition.md** | File/folder structure, compound-component patterns, prop conventions | design system for which components exist |
@@ -88,7 +89,9 @@ system's library is a BLOCKING dimension-11 finding.
 
 ## 4. Adding a new project design system
 
-For a non-Vertix project, drop a `*-design-system.md` here following the same shape as
-`vertix-portal-design-system.md` (tokens table + component inventory + theme + rules), and it slots
-into tier 2 automatically — the agents already load "the project design system if it exists." Record
-the choice as a decision in `docs/DECISIONS.md` so it's durable.
+Write a `<name>-design-system.md` following the same shape as `vertix-portal-design-system.md`
+(tokens table + component inventory + theme + rules). Keep it in the project repo (e.g.
+`docs/design/design-system.md`) or in this folder, then NAME it in the guidelines' Technology stack
+(or record it in `docs/DECISIONS.md`). `agent_factory` puts it in `tech_profile.frontend.design_system`,
+and only then does it become tier 2. Nothing is loaded just because a file sits in this folder: the
+folder is global, so it holds other products' design systems too.

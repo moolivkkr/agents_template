@@ -93,7 +93,7 @@
 | `ui/structured-wireframe-format.md` | Optional YAML-based wireframe format — typed data-source references, explicit UI states, validated against data-contracts.md | wireframe, yaml, specs, data-contracts, ui |
 | `ui/tailwind.md` | Tailwind CSS utility patterns for layout, spacing, flex/grid, and responsive design | tailwind, css, layout, responsive, ui |
 | `ui/type-generation-protocol.md` | Protocol — generate types/api.ts from data-contracts.md so UI code shares one type source with the API response schemas | types, codegen, data-contracts, type-safety, ui |
-| `ui/vertix-portal-design-system.md` | Vertix portal house style — tokens, component library, theme, severity scale, card radius/shadow; tier-2 override of generic UI standards | design-system, vertix, tokens, theme, ui |
+| `ui/vertix-portal-design-system.md` | Vertix portal house style — tokens, component library, theme, severity scale, card radius/shadow; tier-2 override of generic UI standards **only for projects that name it** (`tech_profile.frontend.design_system`) | design-system, vertix, tokens, theme, ui |
 
 ## UI — Archetypes (6)
 

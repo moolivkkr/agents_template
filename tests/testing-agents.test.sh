@@ -246,19 +246,19 @@ for row in pass:0:PASS latency:99:FAIL dropped:99:FAIL errors:99:FAIL nothreshol
 done
 
 echo "── tool flags verified by running them (2026-09-30) ──"
-if grep -rn 'playwright test[^|]*--reporter=junit' "$ROOT/.claude" >/dev/null; then
-  bad "a Playwright row uses --reporter=junit, which replaces the config reporters and writes no file: $(grep -rn 'playwright test[^|]*--reporter=junit' "$ROOT/.claude" | head -1 | cut -c1-120)"
+if grep -rn --exclude-dir=worktrees 'playwright test[^|]*--reporter=junit' "$ROOT/.claude" >/dev/null; then
+  bad "a Playwright row uses --reporter=junit, which replaces the config reporters and writes no file: $(grep -rn --exclude-dir=worktrees 'playwright test[^|]*--reporter=junit' "$ROOT/.claude" | head -1 | cut -c1-120)"
 else ok "Playwright rows write JUnit to a file (PLAYWRIGHT_JUNIT_OUTPUT_FILE + --reporter=list,junit)"; fi
-if grep -rn 'go-junit-report' "$ROOT/.claude" | grep -v 'parser gojson' >/dev/null; then
+if grep -rn --exclude-dir=worktrees 'go-junit-report' "$ROOT/.claude" | grep -v 'parser gojson' >/dev/null; then
   bad "a go-junit-report recipe lacks -parser gojson (the default parser drops packages that fail to build → PASS)"
 else ok "go-junit-report recipes use -parser gojson and keep go test's exit code"; fi
 grep -q 'races were NOT checked' "$A/core/test_runner.md" && ok "test_runner reports when the race detector was unavailable" \
   || bad "test_runner can silently drop -race"
 grep -q 'thresholds not evaluated' "$A/core/performance_agent.md" && ok "performance_agent fails a case whose thresholds were not evaluated" \
   || bad "performance_agent's parser trusts a summary with no thresholds"
-if grep -rn 'min-confidence 80' "$ROOT/.claude" >/dev/null; then bad "vulture --min-confidence 80 hides every unused function (all rated 60%)"
+if grep -rn --exclude-dir=worktrees 'min-confidence 80' "$ROOT/.claude" >/dev/null; then bad "vulture --min-confidence 80 hides every unused function (all rated 60%)"
 else ok "vulture runs at --min-confidence 60"; fi
-if grep -rn 'return Specification.where(null)' "$ROOT/.claude" >/dev/null; then bad "Java archetype uses Specification.where(null) (rejected since Spring Data JPA 4.0)"
+if grep -rn --exclude-dir=worktrees 'return Specification.where(null)' "$ROOT/.claude" >/dev/null; then bad "Java archetype uses Specification.where(null) (rejected since Spring Data JPA 4.0)"
 else ok "Java archetypes use a no-op predicate, not Specification.where(null)"; fi
 
 echo "────────────────────────────────────────────"

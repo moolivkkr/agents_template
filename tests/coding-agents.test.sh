@@ -195,6 +195,30 @@ check $? "github-actions.md maps the Postgres service port so localhost:5432 is 
 grep -q 'Commands and versions' "$A/deployment_agent.md" && grep -q 'Commands and versions' "$A/ci_cd_agent.md" && grep -q 'Runtime contract' "$A/deployment_agent.md"
 check $? "deployment_agent + ci_cd_agent read commands/versions (and the runtime contract) from the guidelines"
 
+echo "── Stack and project genericity (#14, ARCH-13, ARCH-14) ─────────────────────────"
+# A pack a project didn't choose must never be loaded because an agent's frontmatter names it:
+# component libraries come through {{UI_COMPONENTS}}, a design system only through the registry.
+hits=""
+for f in "$A"/*.md "$T"/*.tmpl; do
+  h="$(frontmatter "$f" | grep -nE 'skills/ui/(shadcn|tailwind|[a-z0-9-]+-design-system)\.md')" && hits="$hits $(basename "$f"):$h"
+done
+[ -z "$hits" ]; check $? "no core agent or template hard-loads a component library or a product design system (ARCH-14)${hits:+ —$hits}"
+grep -qE '^  design_system:' "$A/agent_factory.md"
+check $? "agent_factory's tech profile carries frontend.design_system (named by the project, never inferred)"
+for f in "$A/ux_designer.md" "$A/design_quality_reviewer.md" "$C/commands/design.md" "$C/skills/ui/README.md"; do
+  grep -q 'tech_profile.frontend.design_system' "$f"
+  check $? "$(basename "$f") resolves the design system from tech_profile.frontend.design_system"
+done
+grep -q 'without a ui_framework pack\|No pack for the UI framework' "$A/agent_factory.md"
+check $? "agent_factory warns when the UI framework has no pack (ui_developer's examples are React-flavoured)"
+# Build/verify steps run the Commands-and-versions rows, not a guess about the language.
+for f in "$C/commands/develop-orchestrator.md" "$C/commands/accept.md"; do
+  hits="$(grep -nE "grep -E '\\\\\.\((ts|go)|elif \[ -f \"(go\.mod|package\.json|Cargo\.toml)\" \]|^[[:space:]]*(go build|npm run build|cargo build)" "$f")"
+  [ -z "$hits" ]; check $? "$(basename "$f") builds and verifies via verify-commands.json, not per-language guesses (ARCH-13)${hits:+ — $hits}"
+done
+grep -q "base_sha)\"..HEAD -- . ':(exclude)agent_state'" "$C/commands/develop-orchestrator.md"
+check $? "Wave 2 counts changed code from base_sha in any language, not .ts/.go in HEAD~1 (ARCH-13)"
+
 echo "────────────────────────────────────────────"
 echo "coding-agents.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

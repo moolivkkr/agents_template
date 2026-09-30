@@ -80,6 +80,9 @@ frontend:
   enabled: <true | false>
   ui_framework: <e.g. react, nextjs, vue, angular> or null
   ui_components: <e.g. shadcn/ui, mui, antd, tailwind> or null
+  design_system: <the pack the guidelines' Technology stack or docs/DECISIONS.md NAME for this project,
+                  e.g. ui/acme-design-system.md (under ~/.claude/skills) or docs/design/design-system.md
+                  (in the repo)> or null   # never inferred; null = professional-ui-standards.md is the authority
   state_management: <e.g. react-query, pinia, redux> or null
   build_tool: <e.g. vite, webpack, turbopack> or null
   lang: typescript | javascript
@@ -150,6 +153,18 @@ Values that are directly a filename (`go` → `languages/go.md`, `gin` → `fram
 Always add `testing/testcontainers.md` to the integration test agent when the database or cache runs
 in Docker, and `testing/property-based.md` to the unit test agent when the phase has parsers,
 serializers, or numeric/financial logic.
+
+**Project design system.** Only `frontend.design_system` brings one in, and only when the guidelines
+or `docs/DECISIONS.md` name it. If the named file exists, add it to the UI agents' `skill_packs:` and
+to `active_skill_packs`; if it doesn't, list it in `missing_skill_packs` and report it. The core UX
+agents (`ux_designer`, `design_quality_reviewer`, `ui_standards_auditor`) read the same field from
+`agent_registry.json` at run time. Never pick up a design system because its file happens to sit in
+`~/.claude/skills/ui/` — that folder holds other products' packs too.
+
+**No pack for the UI framework.** `ui_developer`'s code examples are React-flavoured and rely on
+`frameworks/{{UI_FRAMEWORK}}.md` to translate them. When that pack is missing (e.g. `angular`), say so
+in the Step 5 report as a warning, not just in `missing_skill_packs`: the UI agents will work from
+generic patterns, and the human may want to add the pack before `/develop`.
 
 ## Step 2 — Select and Populate Templates
 
@@ -270,6 +285,7 @@ Print a summary:
   Tech stack detected:
     Backend:  {{LANG}} {{LANG_VERSION}} / {{FRAMEWORK}} / {{DB_TECH}}
     Frontend: {{UI_FRAMEWORK}} + {{UI_COMPONENTS}} (or: not configured)
+    Design system: <frontend.design_system> (or: none — professional-ui-standards.md)
     Cache:    {{CACHE_TECH}} (or: none)
 
   Agents generated (→ .claude/agents/generated/):
@@ -283,6 +299,7 @@ Print a summary:
     ✅ {{UI_FRAMEWORK}}_ui_test_agent_{{PROJECT_NAME}}.md    (if frontend)
 
   Skill packs activated: N
+  ⚠ Missing packs: <each missing_skill_packs value, and which agents lose it> (omit when none)
   Registry: agent_state/agent_registry.json
 
   ▶ Ready for /plan --phase=1

@@ -12,10 +12,10 @@ tags:
 
 # Professional UI Standards — Generic House Defaults
 
-> **⛔ Precedence (see `~/.claude/skills/ui/README.md`).** If the project has a design system
-> (e.g. `vertix-portal-design-system.md`), **that file OVERRIDES the Colors, Border-Radius, and
-> Shadow sections below** — use its tokens (`bg-panel`, `text-ink`, `text-crit`, `rounded-card`,
-> `shadow-card`) instead of the generic shadcn ones here. This file remains authoritative for the
+> **⛔ Precedence (see `~/.claude/skills/ui/README.md`).** If the project names a design system
+> (`agent_registry.json` → `tech_profile.frontend.design_system`), **that file OVERRIDES the Colors,
+> Border-Radius, and Shadow sections below** — use its semantic tokens instead of the generic shadcn
+> ones here. This file remains authoritative for the
 > topics a design system typically doesn't restate: **spacing (4px grid), typography scale, z-index,
 > state discipline, density, motion, and anti-patterns.** When there is NO project design system,
 > the token sections below are the authority.

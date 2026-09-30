@@ -88,7 +88,7 @@ from a wireframe to its render. Read the file first, write it after every change
 **Source, first match wins:**
 1. `docs/design/DESIGN.md` (project-owned design system markdown)
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design / design tokens
-3. A project design-system skill named in IMPLEMENTATION_GUIDELINES (e.g. `ui/vertix-portal-design-system.md` for Vertix portal projects)
+3. The project design-system pack named in IMPLEMENTATION_GUIDELINES (`agent_registry.json` → `tech_profile.frontend.design_system`); never a pack that merely exists in `~/.claude/skills/ui/`
 4. None → use Stitch's default; `DESIGN_INDEX.md` records "no house style"
 
 **Path A (preferred): structured tokens.** Use this when the source gives a primary colour, fonts, roundness and mode:

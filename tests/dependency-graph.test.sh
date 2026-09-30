@@ -123,7 +123,7 @@ done
 #    tool surface (stitch-design.md, verified 2026-09-29 against the live MCP), the fake bash probe is
 #    gone from commands, and generation calls always come with a deviceType rule.
 STITCH_TOOLS="list_projects create_project get_project delete_project list_screens get_screen generate_screen_from_text edit_screens generate_variants create_design_system update_design_system list_design_systems apply_design_system upload_design_md create_design_system_from_design_md"
-used="$(grep -rhoE 'mcp__stitch__[a-z_]+' "$ROOT/.claude" | sed 's/mcp__stitch__//' | sort -u)"
+used="$(grep -rhoE --exclude-dir=worktrees 'mcp__stitch__[a-z_]+' "$ROOT/.claude" | sed 's/mcp__stitch__//' | sort -u)"
 unknown=0
 for t in $used; do printf ' %s ' "$STITCH_TOOLS" | grep -q " $t " || { bad "unknown Stitch tool referenced: mcp__stitch__$t"; unknown=1; }; done
 [ "$unknown" -eq 0 ] && ok "all referenced Stitch tools exist ($(printf '%s\n' $used | wc -l | tr -d ' ') used)"

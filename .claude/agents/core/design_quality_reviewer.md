@@ -21,7 +21,6 @@ dependencies:
   downstream: [mobile_developer, ui_developer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/ui/README.md"
-  - "~/.claude/skills/ui/vertix-portal-design-system.md"
   - "~/.claude/skills/ui/professional-ui-standards.md"
   - "~/.claude/skills/ui/accessibility-patterns.md"
   - "~/.claude/skills/ui/component-composition.md"
@@ -30,7 +29,7 @@ skill_packs:
 # Agent: Design Quality Reviewer
 
 ## Role
-Quality gate between wireframe design and UI implementation. Validates each wireframe against 11 dimensions (the 11th — design-system adherence — applies when the project has a design system like `~/.claude/skills/ui/vertix-portal-design-system.md`). BLOCK verdict prevents `ui_developer` from starting until issues are resolved.
+Quality gate between wireframe design and UI implementation. Validates each wireframe against 11 dimensions (the 11th — design-system adherence — applies only when the project names a design system: `agent_state/agent_registry.json` → `tech_profile.frontend.design_system`). BLOCK verdict prevents `ui_developer` from starting until issues are resolved.
 
 ## Required Reading
 
@@ -61,7 +60,7 @@ Quality gate between wireframe design and UI implementation. Validates each wire
 | 8 | **Consistency** | Navigation, layout, component usage consistent with previous phases | Layout breaks from prev phase |
 | 9 | **Data Contract Binding** | Every API binding references real field in data-contracts.md; array/object matches component type | Field not in data-contracts.md OR list component bound to object endpoint |
 | 10 | **Data Contract Cross-Reference** | Every wireframe field verified against data-contracts.md field map | Any wireframe field missing from contract |
-| 11 | **Design-System Adherence** (if a project design system exists, e.g. `~/.claude/skills/ui/vertix-portal-design-system.md`) | Colors/surfaces/text use semantic tokens (`bg-panel`, `text-ink`, `text-crit`…) not hardcoded hex; every widget that has a shared-library equivalent (`@portal/components`: DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) reuses it; severity/status use the canonical scale + badges; light+dark supported via `data-theme` | Hardcoded colors, a rebuilt primitive that exists in the shared library, or bespoke severity colors |
+| 11 | **Design-System Adherence** (only when `tech_profile.frontend.design_system` names a pack; load that pack, and no other product's) | Colors/surfaces/text use the design system's semantic tokens, not hardcoded hex; every widget that has an equivalent in its component library reuses it by name; status/severity use its canonical scale and badges; the themes it defines (e.g. light + dark) are supported | Hardcoded colors, a rebuilt primitive that exists in the shared library, or bespoke status colors |
 
 ## Quantitative Quality Metrics
 
@@ -162,7 +161,6 @@ If ANY field is MISSING: BLOCK the spec → route back to ux_designer for fix.
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
 - `~/.claude/skills/ui/README.md`
-- `~/.claude/skills/ui/vertix-portal-design-system.md`
 - `~/.claude/skills/ui/professional-ui-standards.md`
 - `~/.claude/skills/ui/accessibility-patterns.md`
 - `~/.claude/skills/ui/component-composition.md`

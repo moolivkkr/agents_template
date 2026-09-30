@@ -179,21 +179,19 @@ elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
     fi
   fi
 
-elif [ -f "go.mod" ]; then
-  # ── Go CLI/library ─────────────────────────────────────────────────
-  echo "  Building Go project..."
-  if go build ./... 2>&1; then HEALTHY=true; go build -o bin/ ./cmd/... 2>&1 || true
-  else echo "  BUILD FAILED"; HEALTHY=false; fi
-
-elif [ -f "package.json" ]; then
-  # ── Node project ───────────────────────────────────────────────────
-  echo "  Building Node project..."
-  if npm ci 2>&1 && npm run build 2>&1; then HEALTHY=true; else echo "  BUILD FAILED"; HEALTHY=false; fi
-
-elif [ -f "Cargo.toml" ]; then
-  # ── Rust project ───────────────────────────────────────────────────
-  echo "  Building Rust project..."
-  if cargo build --release 2>&1; then HEALTHY=true; else echo "  BUILD FAILED"; HEALTHY=false; fi
+else
+  # ── CLI tool / library, any language: the Commands and versions table's install + build rows ──
+  V=agent_state/config/verify-commands.json
+  HEALTHY=false
+  INSTALL="$(jq -r '.commands.install // empty' "$V" 2>/dev/null)"
+  BUILD="$(jq -r '.commands.build // empty' "$V" 2>/dev/null)"
+  if [ -z "$BUILD" ]; then
+    echo "  BUILD NOT RUN — no build row in $V (IMPLEMENTATION_GUIDELINES → Commands and versions)"
+  elif { [ -z "$INSTALL" ] || bash -o pipefail -c "$INSTALL"; } && bash -o pipefail -c "$BUILD"; then
+    HEALTHY=true
+  else
+    echo "  BUILD FAILED"
+  fi
 fi
 
 # Record deploy status for the acceptance report

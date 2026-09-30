@@ -310,7 +310,7 @@ Each UI spec contains:
 8. Consistency — matches previous phase screens
 9. Data Contract Binding — every field references real type in data-contracts.md, array/object matches component type
 10. Data Contract Cross-Reference — every wireframe field verified against the contract field map
-11. Design-System Adherence — semantic tokens (not hardcoded colors) + reuse of the shared component library (if a project design system exists, e.g. `~/.claude/skills/ui/vertix-portal-design-system.md`)
+11. Design-System Adherence — semantic tokens (not hardcoded colors) + reuse of the shared component library (only when the project names a design system: `agent_registry.json` → `tech_profile.frontend.design_system`)
 
 BLOCK → `ux_designer` revises (max 2 retries) → escalate to user if still blocked (auto mode: downgrade to WARN, log `category: ux`, carry to the checkpoint).
 

@@ -32,10 +32,7 @@ dependencies:
   downstream: [brd_spec_reconciler, design_quality_reviewer, mobile_developer, spec_verifier, ui_developer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/ui/README.md"
-  - "~/.claude/skills/ui/vertix-portal-design-system.md"
   - "~/.claude/skills/ui/professional-ui-standards.md"
-  - "~/.claude/skills/ui/shadcn.md"
-  - "~/.claude/skills/ui/tailwind.md"
   - "~/.claude/skills/ui/responsive-patterns.md"
   - "~/.claude/skills/ui/loading-states.md"
   - "~/.claude/skills/ui/component-composition.md"
@@ -61,7 +58,8 @@ Produces wireframe specification files for UI screens scoped to the current phas
 4. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack — UI framework and component library
 5. `docs/design/phases/{{PHASE}}/specs/` — backend TRDs (interface contracts, data models)
 6. Previous phase UI specs (if any) — maintain consistent navigation and design language
-7. `~/.claude/skills/ui/vertix-portal-design-system.md` — **project design system (if it exists).** Map every widget in the wireframe to a REAL `@portal/components` primitive (DataTable, FilterBar, FormBuilder, Modal, EmptyState, SeverityBadge, KPICard, charts…) by name, and specify surfaces/text/severity using the house-style semantic tokens — never invent component names or colors. This makes the wireframe directly implementable and passes design-review dimension 11.
+7. **This project's UI stack packs** — the `ui/*` and `frameworks/*` entries in `agent_state/agent_registry.json` → `active_skill_packs` (for example `ui/shadcn.md` and `ui/tailwind.md` when the stack uses them). Load only those; a component library the project doesn't use is noise.
+8. **The project design system, only if the project names one** — `agent_registry.json` → `tech_profile.frontend.design_system` (a pack the guidelines or `docs/DECISIONS.md` named). When set, map every widget in the wireframe to a REAL component of that library by name, and specify surfaces, text and status colours with its semantic tokens — never invent component names or colours. This makes the wireframe directly implementable and passes design-review dimension 11. When it is null, `professional-ui-standards.md` is the authority. Never load another product's design system because its file sits in `~/.claude/skills/ui/`.
 
 **STOP CONDITION:** If `data-contracts.md` does not exist, do NOT proceed. Report: `⛔ Blocked: data-contracts.md missing — run /plan Step 2b first.`
 
@@ -278,10 +276,7 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
 - `~/.claude/skills/ui/README.md`
-- `~/.claude/skills/ui/vertix-portal-design-system.md`
 - `~/.claude/skills/ui/professional-ui-standards.md`
-- `~/.claude/skills/ui/shadcn.md`
-- `~/.claude/skills/ui/tailwind.md`
 - `~/.claude/skills/ui/responsive-patterns.md`
 - `~/.claude/skills/ui/loading-states.md`
 - `~/.claude/skills/ui/component-composition.md`

@@ -158,7 +158,7 @@ HAS_REVIEW=$([ -f "docs/design/phases/${PHASE}/DESIGN_REVIEW.md" ] && echo true 
 - `docs/design/phases/$((PHASE-1))/specs/` — previous phase wireframes (navigation continuity), when PHASE > 1
 - Design skills (precedence per `~/.claude/skills/ui/README.md`):
   - `~/.claude/skills/ui/professional-ui-standards.md` — spacing, typography, z-index, state discipline
-  - `~/.claude/skills/ui/vertix-portal-design-system.md` — **house style (if the project uses it).** Semantic tokens + `@portal/components` primitives; overrides the generic standards on color/tokens/components.
+  - The project design system — **only if the project names one** (`agent_state/agent_registry.json` → `tech_profile.frontend.design_system`). Its semantic tokens and component library override the generic standards on color/tokens/components. None named → the generic standards rule; never load another product's pack from `~/.claude/skills/ui/`.
   - `~/.claude/skills/ui/structured-wireframe-format.md` — wireframe file format
   - `~/.claude/skills/ui/stitch-design.md` — **only when `STITCH_MODE=stitch`**: Stitch call sequences, device types, render → wireframe normalization
   - React Native screens (`mobile.enabled`): `~/.claude/skills/frameworks/react-native-app-patterns.md` + `~/.claude/skills/testing/mobile-testing-strategy.md` §4 (testIDs); wireframes use a phone frame (and tablet if in BRD) instead of the 375/1280 web breakpoints
