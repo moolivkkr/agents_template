@@ -196,6 +196,12 @@ For each data-fetching component on the screen, specify:
 
 ## UI Test Case Inventory (MANDATORY — TC-* IDs)
 
+> **Mobile screens (React Native, when `mobile.enabled`):** use the Tier 4M matrices in
+> `test-case-generation.md` instead of the web page matrix: TC-MCMP / TC-MINT / TC-MA11Y / TC-MVIS
+> per screen, TC-ME2E per workflow, and the per-app TC-MPLT matrix (deep links, permissions,
+> lifecycle, offline). List every interactive element's **testID** (`<screen>.<element>`) in the
+> screen spec. `mobile_test_agent` cannot automate a TC whose element has no testID or accessible name.
+
 Enumerate ALL UI test cases for this screen using the per-page, per-form, and per-component matrices from `~/.claude/skills/testing/test-case-generation.md`. These TC-* IDs are tracked through implementation and gated at phase completion.
 
 ### Page-Level Tests

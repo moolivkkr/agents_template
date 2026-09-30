@@ -770,6 +770,8 @@ PREREQUISITE: Wave 3.5 deployed the app locally. Verify it is running before tes
 If the app is NOT running, report BLOCKED immediately — do NOT write fake PASS results.
 
 Test against the LIVE running app. Validate every FR-* acceptance criterion.
+For FR-* delivered through the React Native app, execute the persona flows on the device tier
+(the mobile_e2e_orchestrator's tool, on BOTH iOS and Android) and report per-platform results.
 Test per persona. Verify OTEL traces, API contracts, accessibility.
 Produce: agent_state/phases/${PHASE}/reports/acceptance_report.md"
 ```

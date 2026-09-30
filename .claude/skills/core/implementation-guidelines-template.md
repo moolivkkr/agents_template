@@ -72,6 +72,7 @@ tags:
 21. [Internationalization](#21-internationalization)
 22. [Accessibility](#22-accessibility)
 23. [Monitoring & Alerting](#23-monitoring--alerting)
+24. [Mobile (React Native — iOS + Android)](#24-mobile-react-native--ios--android)
 
 ---
 ```
@@ -1378,6 +1379,47 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - **Rotation:** {{ONCALL_ROTATION}} (e.g., weekly rotation, 2-person team)
 - **Escalation:** {{ESCALATION_POLICY}} (e.g., 5 min → secondary, 15 min → engineering lead)
 - **Tools:** {{ONCALL_TOOLS}} (e.g., PagerDuty, OpsGenie, Grafana OnCall)
+```
+
+---
+
+## Section 24: Mobile (React Native — iOS + Android)
+
+> Omit this section (write `Mobile: not applicable`) when the product has no native app. When
+> present, `agent_factory` sets `mobile.enabled = true` and generates `mobile_test_agent`; `/develop`
+> then runs `mobile_e2e_orchestrator` + `mobile_platform_auditor`. Testing strategy:
+> `~/.claude/skills/testing/mobile-testing-strategy.md`.
+
+## 24. Mobile (React Native — iOS + Android)
+
+```markdown
+### 24.1 App
+- **App directory:** {{MOBILE_APP_DIR}} (e.g., apps/mobile)
+- **Workflow:** {{MOBILE_WORKFLOW}} (expo | bare)
+- **React Native / Expo SDK:** {{RN_VERSION}} / {{EXPO_SDK}}
+- **Bundle id (iOS) / applicationId (Android):** {{IOS_BUNDLE_ID}} / {{ANDROID_APP_ID}}
+- **Minimum OS:** iOS {{MIN_IOS}}, Android API {{MIN_ANDROID_API}}
+
+### 24.2 Testing
+- **Component/integration:** Jest + @testing-library/react-native (+ MSW v2 via msw/node)
+- **Device E2E tool:** {{MOBILE_E2E_TOOL}} (maestro | detox | appium) — record the choice + reason in DECISIONS.md
+- **testID convention:** `<screen>.<element>` on every interactive element and assertion target
+- **Device matrix:** {{DEVICE_MATRIX}} (Latest + Minimum slot per platform; tablet only if in BRD)
+
+### 24.3 Builds and local backend
+- **iOS simulator build:** {{IOS_SIM_BUILD_CMD}}
+- **Android emulator build:** {{ANDROID_EMU_BUILD_CMD}}
+- **Backend URL:** iOS simulator `http://localhost:{{APP_PORT}}`, Android emulator `http://10.0.2.2:{{APP_PORT}}`
+- **E2E build cleartext:** allowed to 10.0.2.2/localhost only; never in release config
+
+### 24.4 CI
+- **iOS:** {{IOS_CI_RUNNER}} (macOS runner with Xcode) · **Android:** {{ANDROID_CI_RUNNER}} (Linux + KVM emulator)
+- **Expo:** EAS Build profiles + EAS Workflows maestro job (if workflow = expo)
+
+### 24.5 Platform requirements
+- **Permissions requested:** {{PERMISSIONS}} (each needs an iOS usage string + a denial path)
+- **Deep links:** scheme {{URL_SCHEME}}, universal/app-link domains {{LINK_DOMAINS}}
+- **Secure storage:** {{SECURE_STORAGE_LIB}} (tokens never in AsyncStorage)
 ```
 
 ---

@@ -55,6 +55,18 @@ Jobs (in order):
 
 Each job: cache dependencies using lock file hash.
 
+## Mobile Pipeline (`mobile.yml`) — only when IMPLEMENTATION_GUIDELINES §24 is present
+
+- `mobile-unit`: Jest + RNTL on ubuntu (`npx jest --ci --coverage` in the app dir). Runs on every PR.
+- `mobile-e2e-android`: ubuntu + KVM, `ReactiveCircus/android-emulator-runner` with a matrix over
+  the Latest and Minimum API levels; build a release APK, then run the device flows (Maestro:
+  `maestro test --format junit`).
+- `mobile-e2e-ios`: macOS runner (`macos-26` or newer); `xcodebuild` a simulator release build, boot
+  the Latest and Minimum simulators, run the same flows.
+- Expo projects may use EAS Build + an EAS Workflows `maestro` job instead of the two e2e jobs.
+- Upload JUnit XML, screenshots and device logs as artifacts on every run. Recipes:
+  `~/.claude/skills/testing/maestro.md` §CI, `detox.md`, `mobile-testing-strategy.md` §5.
+
 ## CD Pipeline (`cd.yml`)
 
 Triggers: push to main (after CI passes), manual dispatch

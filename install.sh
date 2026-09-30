@@ -55,6 +55,10 @@ fi
 cp "$REPO_DIR/.claude/agents/_sync-contract.sh" "$DEST_AGENTS_CORE/_sync-contract.sh"
 chmod +x "$DEST_AGENTS_CORE/_sync-contract.sh"
 echo "  ✅ _sync-contract.sh installed"
+for h in _sync-deps.py _add-packs.py; do
+  cp "$REPO_DIR/.claude/agents/$h" "$DEST_AGENTS_CORE/$h" && chmod +x "$DEST_AGENTS_CORE/$h"
+done
+echo "  ✅ _sync-deps.py + _add-packs.py installed (dependency-graph maintenance)"
 
 # ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"

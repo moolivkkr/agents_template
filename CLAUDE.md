@@ -93,6 +93,8 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/recon` | Two-way reconcile requirements↔BRD↔TRD↔code↔tests. Bare = report drift only; `--fix=code` = specs win (code catch-up, alias `/converge`); `--fix=docs` = as-built wins (update docs, alias `/reconcile`) |
 | `/test --e2e` | Run e2e tests standalone |
 | `/test --traceability` | Check TC-* ID coverage |
+| `/test --mobile [--platform=ios\|android]` | React Native tiers: Jest+RNTL + device flows on iOS simulator / Android emulator |
+| `/demo` | Write, stand up, and rehearse a stakeholder demo of a completed phase |
 | `/review` | Code review on current changes |
 | `/diagnose` / `/hotfix` | Bug investigation / fast-track fix (reproduction-test-first) |
 | `/deploy --target=local` | Deploy locally |
@@ -147,7 +149,7 @@ Specs must exhaustively enumerate TC-* IDs for ALL tiers using matrices from `.c
 
 ### Per-Phase Enforcement (during /develop — `/develop-orchestrator` is the canonical executor)
 - Wave 0b: parent writes `roster.json` (the agents this phase MUST run) — the execution guarantee.
-- Wave 3: separate agents per tier (unit/integration/E2E) — all run in parallel.
+- Wave 3: separate agents per tier, spawned by role name (unit/integration/ui/E2E, + mobile_test_agent → mobile_e2e_orchestrator for React Native on iOS AND Android) — parallel tracks; then Wave 3v test_runner independently re-runs every suite and cross-checks the writers' counts.
 - Wave 4: **separate NAMED agents** — code_reviewer_I/II, security_reviewer, dependency_scanner,
   code_quality_verifier, tenant_isolation_verifier, spec_impl_reconciler, spec_test_reconciler,
   acceptance_test_agent (never one bundled "review" agent — that's how reviews got dropped). Each has
@@ -161,6 +163,12 @@ Specs must exhaustively enumerate TC-* IDs for ALL tiers using matrices from `.c
 - Regression: unit + integration + E2E re-run for affected phases
 - Gate: full all-tier regression before gate.passed
 - `/accept`: full regression + global acceptance + TC-* inventory across all phases
+
+### Dependency graph (agents ↔ commands ↔ skills)
+`upstream`/`runs_after` are authored; `downstream` is DERIVED by `.claude/agents/_sync-deps.py`.
+After adding or editing an agent run `python3 .claude/agents/_sync-deps.py && .claude/agents/_sync-contract.sh`,
+then `bash tests/run-all.sh`. `tests/dependency-graph.test.sh` fails on dangling agents/skills,
+one-sided deps, wave-order violations, unproduced inputs, report-name drift, orphans, and TC-regex regressions.
 
 ---
 
