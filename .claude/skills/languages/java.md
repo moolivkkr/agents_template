@@ -113,11 +113,9 @@ public class OrderController {
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public ApiResponse<OrderResponse> createOrder(
-        @AuthenticationPrincipal TenantContext tenant,
-        @Valid @RequestBody CreateOrderRequest request
-    ) {
-        var order = orderService.createOrder(tenant.getTenantId(), request);
+    public ApiResponse<OrderResponse> createOrder(@Valid @RequestBody CreateOrderRequest request) {
+        // set by TenantFilter from the verified JWT — never from a request header or body
+        var order = orderService.createOrder(TenantContext.getCurrentTenantId(), request);
         return ApiResponse.success(OrderMapper.toResponse(order));
     }
 }
@@ -248,27 +246,45 @@ public class TenantContext {
     }
 }
 
-// Filter sets and clears tenant context
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
+// Filter sets and clears tenant context. The tenant comes from the VERIFIED JWT, never from a
+// client-supplied header on its own (anyone can send one: cross-tenant access).
+// Not a @Component: Boot would also register it as a servlet filter that runs BEFORE authentication.
+// SecurityConfig adds it after BearerTokenAuthenticationFilter, once the token's signature is checked.
 public class TenantFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(
         HttpServletRequest request, HttpServletResponse response, FilterChain chain
     ) throws ServletException, IOException {
         try {
-            String tenantHeader = request.getHeader("X-Tenant-ID");
-            if (tenantHeader == null) {
-                response.sendError(401, "Missing tenant context");
+            if (!(SecurityContextHolder.getContext().getAuthentication() instanceof JwtAuthenticationToken auth)) {
+                chain.doFilter(request, response); // no token: authorizeHttpRequests answers 401 (envelope)
                 return;
             }
-            TenantContext.setCurrentTenantId(UUID.fromString(tenantHeader));
-            MDC.put("tenant_id", tenantHeader); // structured logging
+            UUID tenantId = resolveTenant(auth.getToken(), request.getHeader("X-Tenant-ID"));
+            if (tenantId == null) {
+                // Filters run outside @RestControllerAdvice, and sendError() would render Spring Boot's
+                // /error body, which is not the envelope — write the envelope directly.
+                ErrorResponse.of("FORBIDDEN", "You don't have permission to do this.", List.of(), false)
+                    .writeTo(response, 403);
+                return;
+            }
+            TenantContext.setCurrentTenantId(tenantId);
+            MDC.put("tenant_id", tenantId.toString()); // structured logging
             chain.doFilter(request, response);
         } finally {
             TenantContext.clear();
             MDC.remove("tenant_id");
         }
+    }
+
+    // The token's tenant_id claim. For users who belong to several tenants, X-Tenant-ID may only
+    // SELECT one the token already lists in tenant_ids; it can never add a tenant. Otherwise → 403.
+    private static UUID resolveTenant(Jwt jwt, String requested) {
+        String home = jwt.getClaimAsString("tenant_id");
+        List<String> allowed = Optional.ofNullable(jwt.getClaimAsStringList("tenant_ids")).orElse(List.of());
+        String chosen = requested == null ? home : requested;
+        boolean permitted = chosen != null && (chosen.equals(home) || allowed.contains(chosen));
+        return permitted ? UUID.fromString(chosen) : null;
     }
 }
 ```
@@ -281,10 +297,21 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
+        // Security's 401/403 happen in the filter chain, outside @RestControllerAdvice — write the envelope here
+        AuthenticationEntryPoint unauthenticated = (req, res, e) -> ErrorResponse
+            .of("UNAUTHENTICATED", "Sign in to continue.", List.of(), false).writeTo(res, 401);
+        AccessDeniedHandler forbidden = (req, res, e) -> ErrorResponse
+            .of("FORBIDDEN", "You don't have permission to do this.", List.of(), false).writeTo(res, 403);
         return http
-            .addFilterBefore(tenantFilter, UsernamePasswordAuthenticationFilter.class)
+            // after the bearer token is verified — TenantFilter reads the tenant from that token
+            .addFilterAfter(new TenantFilter(), BearerTokenAuthenticationFilter.class)
             .oauth2ResourceServer(oauth2 -> oauth2
                 .jwt(jwt -> jwt.jwtAuthenticationConverter(tenantJwtConverter()))
+                .authenticationEntryPoint(unauthenticated) // invalid/expired bearer token
+            )
+            .exceptionHandling(ex -> ex
+                .authenticationEntryPoint(unauthenticated)
+                .accessDeniedHandler(forbidden)
             )
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/health").permitAll()
@@ -295,13 +322,9 @@ public class SecurityConfig {
 
     private JwtAuthenticationConverter tenantJwtConverter() {
         var converter = new JwtAuthenticationConverter();
-        converter.setJwtGrantedAuthoritiesConverter(jwt -> {
-            // Extract tenant_id from JWT claims and set context
-            String tenantId = jwt.getClaimAsString("tenant_id");
-            TenantContext.setCurrentTenantId(UUID.fromString(tenantId));
-            // Extract roles/permissions
-            return extractAuthorities(jwt);
-        });
+        // Roles/permissions only. The tenant is set (and cleared) per request by TenantFilter —
+        // setting a ThreadLocal here would never be cleared.
+        converter.setJwtGrantedAuthoritiesConverter(jwt -> extractAuthorities(jwt));
         return converter;
     }
 }
@@ -309,147 +332,271 @@ public class SecurityConfig {
 
 ---
 
+## API Response Envelope
+
+Every body is the envelope in `api/response-envelope.md`; if anything here disagrees, that file wins.
+
+```java
+// Success: {"data": …, "meta": {"request_id": …}}; lists add meta.pagination (cursor only, never offset)
+public record ApiResponse<T>(T data, Meta meta) {
+
+    public record Meta(
+        @JsonProperty("request_id") String requestId,
+        @JsonInclude(JsonInclude.Include.NON_NULL) Pagination pagination // lists only
+    ) {}
+
+    public record Pagination(
+        @JsonProperty("next_cursor") String nextCursor, // serialized as null when hasMore is false
+        @JsonProperty("has_more") boolean hasMore,
+        int limit,
+        @JsonProperty("total_count") @JsonInclude(JsonInclude.Include.NON_NULL) Long totalCount // only if cheap and shown
+    ) {}
+
+    public static <T> ApiResponse<T> success(T data) {
+        return new ApiResponse<>(data, new Meta(RequestId.current(), null));
+    }
+
+    public static <T> ApiResponse<List<T>> page(List<T> data, String nextCursor, int limit) {
+        return new ApiResponse<>(data, new Meta(RequestId.current(),
+            new Pagination(nextCursor, nextCursor != null, limit, null)));
+    }
+}
+
+// Error: {"error": {code, message, details?, request_id, retryable}} — no data key, no stack, no cause
+public record ErrorResponse(Body error) {
+
+    public record Body(
+        String code,    // UPPER_SNAKE, stable: VALIDATION_FAILED, NOT_FOUND, …
+        String message, // user-safe catalog text
+        @JsonInclude(JsonInclude.Include.NON_EMPTY) List<FieldError> details, // VALIDATION_FAILED only
+        @JsonProperty("request_id") String requestId,
+        boolean retryable
+    ) {}
+
+    public record FieldError(String field, String code, String message) {} // code is lower_snake
+
+    public static ErrorResponse of(String code, String message, List<FieldError> details, boolean retryable) {
+        return new ErrorResponse(new Body(code, message, details, RequestId.current(), retryable));
+    }
+
+    private static final ObjectMapper MAPPER = new ObjectMapper();
+
+    // For servlet filters and Spring Security handlers, which run outside @RestControllerAdvice
+    public void writeTo(HttpServletResponse response, int status) throws IOException {
+        response.setStatus(status);
+        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+        if (status == 401) response.setHeader(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+        MAPPER.writeValue(response.getOutputStream(), this);
+    }
+}
+
+// RequestId.current(): the id a first-in-chain filter took from X-Request-Id (or generated), put in MDC
+// as "request_id" and echoed on the response header, so the body and the header always match.
+
+// List endpoint: ?cursor=<opaque>&limit=<n>
+@GetMapping
+public ApiResponse<List<OrderResponse>> listOrders(
+    @RequestParam(required = false) String cursor,
+    @RequestParam(defaultValue = "20") int limit
+) {
+    int size = Math.clamp(limit, 1, 100);
+    var page = orderService.listOrders(TenantContext.getCurrentTenantId(), cursor, size); // from the verified JWT
+    return ApiResponse.page(page.items().stream().map(OrderMapper::toResponse).toList(), page.nextCursor(), size);
+}
+```
+
 ## Error Handling
 
-### @ControllerAdvice with @ExceptionHandler
+### @RestControllerAdvice with @ExceptionHandler
 ```java
-@ControllerAdvice
-public class GlobalExceptionHandler {
+@RestControllerAdvice
+public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     private static final Logger log = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(AppException.class)
     public ResponseEntity<ErrorResponse> handleAppException(AppException ex) {
-        log.warn("app_error: code={}, message={}", ex.getCode(), ex.getMessage());
-        return ResponseEntity
-            .status(ex.getStatusCode())
-            .body(ErrorResponse.of(ex.getCode(), ex.getMessage()));
+        if (ex.getStatusCode() >= 500) {
+            log.error("request_failed code={} request_id={}", ex.getCode(), RequestId.current(), ex); // cause: logs only
+        } else {
+            log.warn("app_error code={} request_id={}", ex.getCode(), RequestId.current());
+        }
+        var response = ResponseEntity.status(ex.getStatusCode());
+        if (ex.getRetryAfterSeconds() > 0) {
+            response.header(HttpHeaders.RETRY_AFTER, String.valueOf(ex.getRetryAfterSeconds()));
+        }
+        if (ex.getStatusCode() == 401) {
+            response.header(HttpHeaders.WWW_AUTHENTICATE, "Bearer");
+        }
+        return response.body(ErrorResponse.of(ex.getCode(), ex.getUserMessage(), ex.getDetails(), ex.isRetryable()));
     }
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex) {
+    // @Valid body → 400 VALIDATION_FAILED. The constraint becomes a stable lower_snake code with a catalog
+    // message; getDefaultMessage() is never sent (it isn't written for your users).
+    @Override
+    protected ResponseEntity<Object> handleMethodArgumentNotValid(
+        MethodArgumentNotValidException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request
+    ) {
         var details = ex.getBindingResult().getFieldErrors().stream()
-            .map(e -> new FieldError(e.getField(), e.getDefaultMessage()))
+            .map(e -> FieldErrorCatalog.of(e.getField(), e.getCode())) // "NotBlank" → required, "Email" → invalid_format
             .toList();
-        return ResponseEntity
-            .status(HttpStatus.BAD_REQUEST)
-            .body(ErrorResponse.validation(details));
+        return ResponseEntity.badRequest()
+            .body(ErrorResponse.of("VALIDATION_FAILED", "Some fields are invalid.", details, false));
     }
 
+    // Every other Spring MVC exception (unreadable JSON, wrong content type, missing or mistyped param,
+    // unknown route, wrong method, …) lands here. Its default body is a ProblemDetail, not the envelope:
+    // replace it, keep the framework's status (405 keeps its Allow header), and log the framework's text.
+    @Override
+    protected ResponseEntity<Object> handleExceptionInternal(
+        Exception ex, Object body, HttpHeaders headers, HttpStatusCode status, WebRequest request
+    ) {
+        log.info("framework_error status={} request_id={}", status.value(), RequestId.current(), ex);
+        ErrorResponse error;
+        if (status.value() == 404) {
+            error = ErrorResponse.of("NOT_FOUND", "Not found.", List.of(), false);
+        } else if (status.is4xxClientError()) {
+            error = ErrorResponse.of("MALFORMED_REQUEST", "The request could not be read.", List.of(), false);
+        } else {
+            error = ErrorResponse.of("INTERNAL", "Something went wrong.", List.of(), false);
+        }
+        return ResponseEntity.status(status).headers(headers).body(error);
+    }
+
+    // Anything else → 500 INTERNAL with a generic message; the cause is logged under request_id
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleUnexpected(Exception ex) {
-        log.error("unhandled_error", ex);
-        return ResponseEntity
-            .status(HttpStatus.INTERNAL_SERVER_ERROR)
-            .body(ErrorResponse.of("INTERNAL_ERROR", "Something went wrong"));
+        log.error("unhandled_error request_id={}", RequestId.current(), ex);
+        return ResponseEntity.internalServerError()
+            .body(ErrorResponse.of("INTERNAL", "Something went wrong.", List.of(), false));
+    }
+}
+
+// Constraint → stable lower_snake code + fixed catalog message (document the codes in data-contracts.md).
+// e.getField() is the Java property path — make it the JSON field name if your naming strategy differs.
+final class FieldErrorCatalog {
+    private record Entry(String code, String message) {}
+
+    private static final Map<String, Entry> BY_CONSTRAINT = Map.of(
+        "NotNull",  new Entry("required", "This field is required."),
+        "NotBlank", new Entry("required", "This field is required."),
+        "Email",    new Entry("invalid_format", "Enter a valid email address."),
+        "Size",     new Entry("invalid_length", "This value is too short or too long."),
+        "Pattern",  new Entry("invalid_format", "This value has the wrong format."));
+    private static final Entry FALLBACK = new Entry("invalid", "This value is invalid.");
+
+    static ErrorResponse.FieldError of(String field, String constraint) {
+        var entry = BY_CONSTRAINT.getOrDefault(constraint, FALLBACK);
+        return new ErrorResponse.FieldError(field, entry.code(), entry.message());
     }
 }
 ```
 
 ### Custom Exception Hierarchy
 ```java
-// Base exception
+// Base exception — code, status and user message follow api/response-envelope.md
 public abstract class AppException extends RuntimeException {
-    private final String code;
+    private final String code;        // UPPER_SNAKE, stable
+    private final String userMessage; // user-safe catalog text: the only text a client sees
     private final int statusCode;
+    private final boolean retryable;
 
-    protected AppException(String code, String message, int statusCode) {
-        super(message);
+    // logMessage and cause are server-side only: they reach logs, never the response body
+    protected AppException(String code, String userMessage, int statusCode, boolean retryable,
+                           String logMessage, Throwable cause) {
+        super(logMessage, cause);
         this.code = code;
+        this.userMessage = userMessage;
         this.statusCode = statusCode;
+        this.retryable = retryable;
     }
 
-    protected AppException(String code, String message, int statusCode, Throwable cause) {
-        super(message, cause);
-        this.code = code;
-        this.statusCode = statusCode;
+    protected AppException(String code, String userMessage, int statusCode) {
+        this(code, userMessage, statusCode, false, code + ": " + userMessage, null);
     }
 
     public String getCode() { return code; }
+    public String getUserMessage() { return userMessage; }
     public int getStatusCode() { return statusCode; }
+    public boolean isRetryable() { return retryable; }
+    public List<ErrorResponse.FieldError> getDetails() { return List.of(); } // ValidationException overrides
+    public int getRetryAfterSeconds() { return 0; }                          // 429/503 override
 }
 
-// 8 domain error types matching the shared contract
-public class ValidationException extends AppException {
-    private final List<FieldError> fields;
-    public ValidationException(List<FieldError> fields) {
-        super("VALIDATION_ERROR", "Validation failed", 400);
-        this.fields = fields;
+// One domain error type per row of the envelope's status table
+public class MalformedRequestException extends AppException {  // 400: unreadable body, wrong content type
+    public MalformedRequestException(Throwable cause) {
+        super("MALFORMED_REQUEST", "The request could not be read.", 400, false, "malformed request", cause);
     }
-    public List<FieldError> getFields() { return fields; }
 }
 
-public class NotFoundException extends AppException {
+public class ValidationException extends AppException {        // 400: details[] lists the fields
+    private final List<ErrorResponse.FieldError> details;
+    public ValidationException(List<ErrorResponse.FieldError> details) {
+        super("VALIDATION_FAILED", "Some fields are invalid.", 400);
+        this.details = List.copyOf(details);
+    }
+    @Override public List<ErrorResponse.FieldError> getDetails() { return details; }
+}
+
+public class UnauthenticatedException extends AppException {   // 401: missing/invalid/expired credentials
+    public UnauthenticatedException() {
+        super("UNAUTHENTICATED", "Sign in to continue.", 401);
+    }
+}
+
+public class ForbiddenException extends AppException {         // 403: authenticated, not allowed
+    public ForbiddenException(String action) {
+        super("FORBIDDEN", "You don't have permission to do this.", 403, false, "forbidden: " + action, null);
+    }
+}
+
+public class NotFoundException extends AppException {          // 404: missing OR another tenant's (never 403)
     public NotFoundException(String resource, String id) {
-        super("NOT_FOUND", resource + " " + id + " not found", 404);
+        super("NOT_FOUND", resource + " not found.", 404, false, resource + " " + id + " not found", null);
     }
 }
 
-public class ConflictException extends AppException {
-    public ConflictException(String message) {
+public class ConflictException extends AppException {          // 409: duplicate, version mismatch
+    public ConflictException(String message) {                  // message: user-safe catalog text
         super("CONFLICT", message, 409);
     }
 }
 
-public class UnauthorizedException extends AppException {
-    public UnauthorizedException() {
-        super("UNAUTHORIZED", "Authentication required", 401);
+public class BusinessRuleException extends AppException {      // 422: valid shape, rejected by a domain rule
+    public BusinessRuleException(String message) {
+        super("BUSINESS_RULE_VIOLATION", message, 422);
     }
 }
 
-public class ForbiddenException extends AppException {
-    public ForbiddenException(String action) {
-        super("FORBIDDEN", "Not allowed to perform: " + action, 403);
-    }
-}
-
-public class RateLimitException extends AppException {
+public class RateLimitException extends AppException {         // 429: Retry-After, retryable
     private final int retryAfter;
     public RateLimitException(int retryAfterSeconds) {
-        super("RATE_LIMITED", "Rate limit exceeded", 429);
+        super("RATE_LIMITED", "Too many requests. Try again shortly.", 429, true, "rate limited", null);
         this.retryAfter = retryAfterSeconds;
     }
-    public int getRetryAfter() { return retryAfter; }
+    @Override public int getRetryAfterSeconds() { return retryAfter; }
 }
 
-public class UpstreamException extends AppException {
-    public UpstreamException(String service, Throwable cause) {
-        super("UPSTREAM_ERROR", "Upstream service " + service + " failed", 502, cause);
+public class UnavailableException extends AppException {       // 503: a dependency failed or timed out
+    public UnavailableException(String service, Throwable cause) {
+        super("UNAVAILABLE", "The service is temporarily unavailable.", 503, true,
+              "upstream " + service + " failed", cause);        // the service name goes to logs only
     }
+    @Override public int getRetryAfterSeconds() { return 5; }
 }
 
-public class InternalException extends AppException {
+public class InternalException extends AppException {          // 500: generic message; detail goes to logs
     public InternalException(String detail, Throwable cause) {
-        super("INTERNAL_ERROR", detail, 500, cause);
+        super("INTERNAL", "Something went wrong.", 500, false, detail, cause);
     }
 }
 ```
 
-### ProblemDetail (RFC 7807) — Spring 6+
-```java
-@ControllerAdvice
-public class ProblemDetailExceptionHandler extends ResponseEntityExceptionHandler {
-
-    @ExceptionHandler(NotFoundException.class)
-    public ProblemDetail handleNotFound(NotFoundException ex) {
-        ProblemDetail detail = ProblemDetail.forStatusAndDetail(
-            HttpStatus.NOT_FOUND, ex.getMessage()
-        );
-        detail.setType(URI.create("https://api.myapp.com/errors/not-found"));
-        detail.setTitle("Resource Not Found");
-        detail.setProperty("code", ex.getCode());
-        return detail;
-    }
-}
-// Response:
-// {
-//   "type": "https://api.myapp.com/errors/not-found",
-//   "title": "Resource Not Found",
-//   "status": 404,
-//   "detail": "Order abc123 not found",
-//   "code": "NOT_FOUND"
-// }
-```
+### Not ProblemDetail
+Spring 6's `ProblemDetail` (RFC 7807: `type`, `title`, `status`, `detail`) is a different error shape. Don't
+return it from API handlers: `handleExceptionInternal` above replaces it for Spring's own exceptions. Leave
+`spring.mvc.problemdetails.enabled` at its default (`false`).
 
 ---
 
@@ -592,7 +739,7 @@ class OrderServiceTest {
 
         assertThatThrownBy(() -> orderService.createOrder(TENANT_ID, request))
             .isInstanceOf(ValidationException.class)
-            .extracting(e -> ((ValidationException) e).getFields())
+            .extracting(e -> ((ValidationException) e).getDetails())
             .asList()
             .hasSize(1);
     }
@@ -657,11 +804,12 @@ class OrderApiIntegrationTest {
 
     @Autowired private TestRestTemplate restTemplate;
 
+    // TestTokens: signs JWTs with the test key that the test profile's JwtDecoder trusts
     @Test
     void createOrder_returns201() {
         var request = new CreateOrderRequest(List.of(new LineItem("SKU-001", 1, BigDecimal.TEN)));
         var headers = new HttpHeaders();
-        headers.set("X-Tenant-ID", TENANT_ID.toString());
+        headers.setBearerAuth(TestTokens.forTenant(TENANT_ID)); // tenant comes from the token's claim
 
         var response = restTemplate.exchange(
             "/api/v1/orders", HttpMethod.POST,
@@ -669,6 +817,20 @@ class OrderApiIntegrationTest {
         );
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+    }
+
+    @Test
+    void tenantHeaderForAnotherTenant_returns403() {
+        var headers = new HttpHeaders();
+        headers.setBearerAuth(TestTokens.forTenant(TENANT_ID));
+        headers.set("X-Tenant-ID", OTHER_TENANT_ID.toString()); // not in the token's tenants
+
+        var response = restTemplate.exchange(
+            "/api/v1/orders", HttpMethod.GET, new HttpEntity<>(headers), ErrorResponse.class
+        );
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN);
+        assertThat(response.getBody().error().code()).isEqualTo("FORBIDDEN");
     }
 }
 ```
@@ -718,12 +880,14 @@ assertThat(orders)
     .extracting(Order::getStatus)
     .containsOnly(OrderStatus.PENDING, OrderStatus.CONFIRMED);
 
-// Exception assertions
+// Exception assertions — the field name is in details[], not in the (catalog) message
 assertThatThrownBy(() -> service.processPayment(TENANT_ID, invalidRequest))
     .isInstanceOf(ValidationException.class)
-    .hasMessageContaining("amount")
+    .satisfies(e -> assertThat(((ValidationException) e).getDetails())
+        .extracting(ErrorResponse.FieldError::field)
+        .contains("amount"))
     .extracting("code")
-    .isEqualTo("VALIDATION_ERROR");
+    .isEqualTo("VALIDATION_FAILED");
 ```
 
 ---
@@ -820,7 +984,9 @@ public TomcatProtocolHandlerCustomizer<?> protocolHandlerVirtualThreadExecutorCu
 @RestController
 public class StreamController {
     @GetMapping(value = "/stream/orders", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public Flux<OrderEvent> streamOrders(@RequestParam UUID tenantId) {
+    public Flux<OrderEvent> streamOrders(@AuthenticationPrincipal Jwt jwt) {
+        // tenant from the verified token — a tenantId query param would let anyone subscribe to any tenant
+        UUID tenantId = UUID.fromString(jwt.getClaimAsString("tenant_id"));
         return orderEventService.subscribe(tenantId)
             .filter(event -> event.getTenantId().equals(tenantId));
     }

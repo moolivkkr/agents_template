@@ -48,7 +48,8 @@ type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E }
 
 function parseConfig(raw: unknown): Result<Config, ValidationError> {
   const parsed = ConfigSchema.safeParse(raw)
-  if (!parsed.success) return { ok: false, error: new ValidationError(parsed.error) }
+  // toFieldErrors: zod issues → envelope details[] (stable code + catalog message; see Error Handling below)
+  if (!parsed.success) return { ok: false, error: new ValidationError(toFieldErrors(parsed.error.issues)) }
   return { ok: true, value: parsed.data }
 }
 ```
@@ -111,16 +112,15 @@ export function calculateTotal(items: readonly LineItem[]): number {
   return items.reduce((sum, item) => sum + item.price * item.quantity, 0);
 }
 
-// Discriminated unions over type assertions
-type ApiResponse =
-  | { status: "success"; data: User }
-  | { status: "error"; error: { code: string; message: string } };
+// Discriminated unions over type assertions — e.g. the API envelope (api/response-envelope.md):
+// a body is success XOR error, so `"error" in res` narrows it (there is no status/ok field)
+type ApiResult<T> =
+  | { data: T; meta: { request_id: string } }
+  | { error: { code: string; message: string; details?: FieldError[]; request_id: string; retryable: boolean } };
 
-function handleResponse(res: ApiResponse) {
-  switch (res.status) {
-    case "success": return res.data;   // TypeScript narrows to success branch
-    case "error": throw new AppError(res.error.code, res.error.message);
-  }
+function handleResponse(res: ApiResult<User>) {
+  if ("error" in res) throw new AppError(res.error.code, res.error.message); // narrows to the error body
+  return res.data;                                                           // narrows to success
 }
 
 // `satisfies` for type-safe object literals with inferred narrow types
@@ -225,13 +225,17 @@ useEffect(() => {
 ## Error Handling
 
 ```typescript
-// Custom error classes with machine-readable codes
+// Custom error classes with machine-readable codes (statuses/codes: api/response-envelope.md)
+type FieldError = { field: string; code: string; message: string }; // code is lower_snake
+
 class AppError extends Error {
   constructor(
-    public readonly code: string,
-    message: string,
+    public readonly code: string,                // UPPER_SNAKE, stable: NOT_FOUND, VALIDATION_FAILED, …
+    message: string,                             // user-safe catalog text, never a caught error's .message
     public readonly statusCode: number = 500,
-    options?: ErrorOptions,
+    options?: ErrorOptions,                      // `cause` is logged, never serialized
+    public readonly details: FieldError[] = [],  // VALIDATION_FAILED only
+    public readonly retryable: boolean = false,  // true for RATE_LIMITED / UNAVAILABLE
   ) {
     super(message, options);
     this.name = "AppError";
@@ -239,17 +243,15 @@ class AppError extends Error {
 }
 
 class NotFoundError extends AppError {
-  constructor(resource: string, id: string) {
-    super("NOT_FOUND", `${resource} ${id} not found`, 404);
+  constructor(resource: string) {
+    super("NOT_FOUND", `${resource} not found.`, 404); // also for another tenant's object — never 403
     this.name = "NotFoundError";
   }
 }
 
 class ValidationError extends AppError {
-  constructor(
-    public readonly fields: Array<{ field: string; message: string }>,
-  ) {
-    super("VALIDATION_ERROR", "Validation failed", 422);
+  constructor(details: FieldError[]) {
+    super("VALIDATION_FAILED", "Some fields are invalid.", 400, undefined, details);
     this.name = "ValidationError";
   }
 }
@@ -262,30 +264,33 @@ type Result<T, E = Error> =
 function parseConfig(raw: unknown): Result<Config, ValidationError> {
   const parsed = ConfigSchema.safeParse(raw);
   if (!parsed.success) {
-    return {
-      ok: false,
-      error: new ValidationError(
-        parsed.error.issues.map((i) => ({ field: i.path.join("."), message: i.message })),
-      ),
-    };
+    // zod issue → stable code + catalog message (toFieldErrors, Error Handling below) — not issue.message
+    return { ok: false, error: new ValidationError(toFieldErrors(parsed.error.issues)) };
   }
   return { ok: true, value: parsed.data };
 }
 
-// try/catch only at boundaries (API handlers, event handlers)
+// try/catch only at boundaries (API handlers, event handlers) — both bodies are the envelope
 app.post("/users", async (req, res) => {
+  const requestId = res.locals.requestId as string; // set by the request-id middleware; = X-Request-Id
   try {
     const user = await userService.create(req.body);
-    res.status(201).json({ data: user });
+    res.status(201).json({ data: user, meta: { request_id: requestId } });
   } catch (err) {
     if (err instanceof AppError) {
       res.status(err.statusCode).json({
-        error: { code: err.code, message: err.message },
+        error: {
+          code: err.code,
+          message: err.message,
+          ...(err.details.length > 0 ? { details: err.details } : {}),
+          request_id: requestId,
+          retryable: err.retryable,
+        },
       });
     } else {
-      logger.error("Unhandled error", { err });
+      logger.error("Unhandled error", { err, request_id: requestId }); // the cause stays in the log
       res.status(500).json({
-        error: { code: "INTERNAL_ERROR", message: "Something went wrong" },
+        error: { code: "INTERNAL", message: "Something went wrong.", request_id: requestId, retryable: false },
       });
     }
   }
@@ -316,7 +321,7 @@ class ErrorBoundary extends React.Component<
 - Custom error classes extending `Error` with machine-readable `code` and `statusCode`
 - `Result<T, E>` for expected failures — reserves exceptions for truly unexpected errors
 - `try/catch` only at system boundaries — API handlers, event handlers, top-level
-- Typed error responses from APIs: `{ error: { code, message, details? } }`
+- Error responses are the envelope `{ error: { code, message, details?, request_id, retryable } }`; success is `{ data, meta: { request_id } }` (`api/response-envelope.md`)
 - `ErrorBoundary` wraps React component trees — prevents full-page crashes
 - Never swallow errors silently — always log, report, or propagate
 
@@ -335,7 +340,7 @@ function fetchUser(id: string): Promise<User> {
   return new Promise((resolve, reject) => {
     db.query("SELECT * FROM users WHERE id = $1", [id])
       .then((rows) => {
-        if (rows.length === 0) reject(new NotFoundError("user", id));
+        if (rows.length === 0) reject(new NotFoundError("User"));
         else resolve(rows[0] as User);
       })
       .catch(reject);
@@ -353,7 +358,7 @@ async function createOrder(input: CreateOrderInput): Promise<Order> {
     return order;
   } catch (err) {
     if (err instanceof UniqueConstraintError) {
-      throw new ConflictError("order", "duplicate order reference");
+      throw new ConflictError("An order with this reference already exists."); // catalog text, not err.message
     }
     throw err; // re-throw unexpected errors
   }
@@ -440,7 +445,7 @@ async function* paginateAll<T>(
 }
 
 // Usage
-for await (const batch of paginateAll((cursor) => widgetService.list(tenantId, { cursor, pageSize: 100 }))) {
+for await (const batch of paginateAll((cursor) => widgetService.list(tenantId, { cursor, limit: 100 }))) {
   await processBatch(batch);
 }
 
@@ -506,10 +511,13 @@ function createInstance<T>(ctor: new () => T): T {
   return new ctor();
 }
 
-// Generic with default type parameter
+// Generic with default type parameter — the success envelope (api/response-envelope.md)
 interface ApiResponse<T = unknown> {
-  data: T;
-  meta: { requestId: string; timestamp: string };
+  data: T; // an array for lists — [] when empty, never null
+  meta: {
+    request_id: string;
+    pagination?: { next_cursor: string | null; has_more: boolean; limit: number; total_count?: number };
+  };
 }
 
 // --- Conditional types ---
@@ -859,6 +867,8 @@ class WidgetService {
 
 import { Controller, Get, Param, Query } from "@nestjs/common";
 
+// Handlers return the payload; a global interceptor wraps it as { data, meta: { request_id } } and a global
+// exception filter writes the error envelope (api/response-envelope.md) — never Nest's default error body
 @Controller("widgets")
 class WidgetController {
   @Get(":id")
@@ -927,77 +937,107 @@ class RolesGuard implements CanActivate {
 ## Error Handling
 
 ```typescript
-// --- Custom error class hierarchy ---
+// --- Custom error class hierarchy — serializes to the error envelope (api/response-envelope.md) ---
+type FieldError = { field: string; code: string; message: string }; // code is lower_snake
+type AppErrorOptions = ErrorOptions & { details?: FieldError[]; retryable?: boolean; retryAfterSec?: number };
+
 class AppError extends Error {
+  readonly details: FieldError[];
+  readonly retryable: boolean;
+  readonly retryAfterSec: number | undefined;
+
   constructor(
-    public readonly code: string,
-    message: string,
+    public readonly code: string,             // UPPER_SNAKE, stable: VALIDATION_FAILED, NOT_FOUND, …
+    message: string,                          // user-safe catalog text — never a caught error's .message
     public readonly statusCode: number = 500,
-    options?: ErrorOptions, // supports `cause` for error chaining
+    options: AppErrorOptions = {},            // `cause` is for logs and is never serialized
   ) {
     super(message, options);
     this.name = this.constructor.name;
+    this.details = options.details ?? [];
+    this.retryable = options.retryable ?? false;
+    this.retryAfterSec = options.retryAfterSec;
 
     // Fix prototype chain for instanceof checks (TypeScript target < ES6)
     Object.setPrototypeOf(this, new.target.prototype);
   }
 
-  /** Serializes for API responses — never leaks stack traces. */
-  toJSON(): { code: string; message: string } {
-    return { code: this.code, message: this.message };
-  }
-}
-
-class NotFoundError extends AppError {
-  constructor(resource: string, id: string) {
-    super("NOT_FOUND", `${resource} ${id} not found`, 404);
-  }
-}
-
-class ValidationError extends AppError {
-  constructor(
-    public readonly field: string,
-    detail: string,
-  ) {
-    super("VALIDATION_ERROR", `Validation failed: ${field} — ${detail}`, 422);
-  }
-}
-
-class MultiValidationError extends AppError {
-  constructor(public readonly fieldErrors: Record<string, string>) {
-    super("VALIDATION_ERROR", "Validation failed", 422);
-  }
-
-  override toJSON() {
+  /** The error envelope body — no stack, no cause, no `data` key. */
+  toBody(requestId: string) {
     return {
-      code: this.code,
-      message: this.message,
-      details: this.fieldErrors,
+      error: {
+        code: this.code,
+        message: this.message,
+        ...(this.details.length > 0 ? { details: this.details } : {}),
+        request_id: requestId,
+        retryable: this.retryable,
+      },
     };
   }
 }
 
-class ConflictError extends AppError {
-  constructor(resource: string, detail: string) {
-    super("CONFLICT", `${resource} conflict: ${detail}`, 409);
+// One class per row of the envelope's status table
+class MalformedRequestError extends AppError {   // 400: unparseable JSON, wrong content type, body too large
+  constructor(cause?: unknown) {
+    super("MALFORMED_REQUEST", "The request could not be read.", 400, { cause });
   }
 }
 
-class UnauthorizedError extends AppError {
-  constructor(detail: string = "authentication required") {
-    super("UNAUTHORIZED", detail, 401);
+class ValidationError extends AppError {        // 400: details[] lists the fields
+  constructor(details: FieldError[]) {
+    super("VALIDATION_FAILED", "Some fields are invalid.", 400, { details });
   }
 }
 
-class ForbiddenError extends AppError {
-  constructor(detail: string = "insufficient permissions") {
-    super("FORBIDDEN", detail, 403);
+class UnauthenticatedError extends AppError {   // 401: missing, invalid or expired credentials
+  constructor() {
+    super("UNAUTHENTICATED", "Sign in to continue.", 401);
   }
 }
 
-class InternalError extends AppError {
-  constructor(cause?: Error) {
-    super("INTERNAL_ERROR", "An internal error occurred", 500, { cause });
+class ForbiddenError extends AppError {         // 403: authenticated, not allowed
+  constructor() {
+    super("FORBIDDEN", "You don't have permission to do this.", 403);
+  }
+}
+
+class NotFoundError extends AppError {          // 404: missing OR another tenant's object (never 403)
+  constructor(resource: string) {
+    super("NOT_FOUND", `${resource} not found.`, 404);
+  }
+}
+
+class ConflictError extends AppError {          // 409: duplicate, version mismatch, state conflict
+  constructor(message: string) {
+    super("CONFLICT", message, 409);
+  }
+}
+
+class BusinessRuleError extends AppError {      // 422: valid shape, rejected by a domain rule
+  constructor(message: string) {
+    super("BUSINESS_RULE_VIOLATION", message, 422);
+  }
+}
+
+class RateLimitedError extends AppError {       // 429: Retry-After header, retryable
+  constructor(retryAfterSec: number) {
+    super("RATE_LIMITED", "Too many requests. Try again shortly.", 429, { retryable: true, retryAfterSec });
+  }
+}
+
+class InternalError extends AppError {          // 500: generic message; the cause goes to the log
+  constructor(cause?: unknown) {
+    super("INTERNAL", "Something went wrong.", 500, { cause });
+  }
+}
+
+class UnavailableError extends AppError {       // 503: a dependency failed or timed out
+  constructor(service: string, cause?: unknown) {
+    super("UNAVAILABLE", "The service is temporarily unavailable.", 503, {
+      cause: new Error(`upstream ${service}`, { cause }), // the service name reaches logs, not the client
+      retryable: true,
+      retryAfterSec: 5,
+    });
   }
 }
 
@@ -1006,7 +1046,7 @@ class InternalError extends AppError {
 // THROW pattern: Use in service/handler layers where errors are exceptional
 async function getWidget(tenantId: string, id: string): Promise<Widget> {
   const widget = await repo.findById(tenantId, id);
-  if (!widget) throw new NotFoundError("widget", id);
+  if (!widget) throw new NotFoundError("Widget");
   return widget;
 }
 
@@ -1018,7 +1058,7 @@ function parseConfig(raw: unknown): Result<Config, ValidationError> {
   if (!parsed.success) {
     return {
       ok: false,
-      error: new ValidationError("config", parsed.error.message),
+      error: new ValidationError(toFieldErrors(parsed.error.issues)),
     };
   }
   return { ok: true, value: parsed.data };
@@ -1051,8 +1091,8 @@ function logErrorChain(err: Error): void {
     depth++;
   }
 }
-// Output:
-// [] InternalError: An internal error occurred
+// Output (server log only — the client sees just the INTERNAL envelope):
+// [] InternalError: Something went wrong.
 // [  ] PrismaClientKnownRequestError: Unique constraint violated
 
 // --- Zod for runtime validation at system boundaries ---
@@ -1069,15 +1109,32 @@ const CreateWidgetSchema = z.object({
 
 type CreateWidgetInput = z.infer<typeof CreateWidgetSchema>;
 
+// Zod issue → envelope details[] entry. Zod's issue codes are already stable lower_snake ids
+// (invalid_type, too_small, …; zod 4 renames some, e.g. invalid_string → invalid_format — pin them in
+// data-contracts.md). issue.message is NOT sent: custom refinements can carry anything, and it isn't
+// written for your users. Each code maps to a fixed catalog message.
+const FIELD_MESSAGES: Record<string, string> = {
+  invalid_type: "This field is required or has the wrong type.",
+  too_small: "This value is too short or too small.",
+  too_big: "This value is too long or too large.",
+  invalid_string: "This value has the wrong format.",
+  invalid_format: "This value has the wrong format.",
+  invalid_enum_value: "Choose one of the allowed values.",
+};
+
+function toFieldErrors(issues: z.ZodIssue[]): FieldError[] {
+  return issues.map((issue) => ({
+    field: issue.path.join("."),
+    code: issue.code,
+    message: FIELD_MESSAGES[issue.code] ?? "This value is invalid.",
+  }));
+}
+
 // Validation — safeParse returns Result-like structure
 function validateInput(raw: unknown): CreateWidgetInput {
   const result = CreateWidgetSchema.safeParse(raw);
   if (!result.success) {
-    const fieldErrors: Record<string, string> = {};
-    for (const issue of result.error.issues) {
-      fieldErrors[issue.path.join(".")] = issue.message;
-    }
-    throw new MultiValidationError(fieldErrors);
+    throw new ValidationError(toFieldErrors(result.error.issues)); // → 400 VALIDATION_FAILED
   }
   return result.data;
 }
@@ -1097,25 +1154,33 @@ export const env = EnvSchema.parse(process.env);
 
 // Zod transform — parse and transform in one step
 const DateStringSchema = z.string().transform((s) => new Date(s));
+// List query params: cursor pagination only — ?cursor=<opaque next_cursor>&limit=<n>
 const PaginationSchema = z.object({
-  page: z.coerce.number().int().min(1).default(1),
-  per_page: z.coerce.number().int().min(1).max(100).default(20),
+  cursor: z.string().min(1).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 // --- Express error middleware ---
 import type { Request, Response, NextFunction } from "express";
 
-function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction): void {
-  if (err instanceof AppError) {
-    res.status(err.statusCode).json({ error: err.toJSON() });
-    return;
-  }
+// express.json() failures (bad JSON, body too large) carry `type: "entity.*"` — 400 MALFORMED_REQUEST, not 500
+const isBodyParserError = (e: Error): boolean =>
+  "type" in e && typeof e.type === "string" && e.type.startsWith("entity.");
 
-  // Unknown error — log full details, return generic message
-  logger.error("Unhandled error", { error: err.message, stack: err.stack });
-  res.status(500).json({
-    error: { code: "INTERNAL_ERROR", message: "An internal error occurred" },
-  });
+function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunction): void {
+  const requestId = res.locals.requestId as string; // set by the request-id middleware; = X-Request-Id
+  const appErr =
+    err instanceof AppError ? err
+    : isBodyParserError(err) ? new MalformedRequestError(err)
+    : new InternalError(err); // unknown error: generic 500, its message never reaches the client
+
+  if (appErr.statusCode >= 500) {
+    // full details (message, stack, cause chain) go to the log under the same request_id
+    logger.error("Request failed", { request_id: requestId, code: appErr.code, err });
+  }
+  if (appErr.retryAfterSec !== undefined) res.set("Retry-After", String(appErr.retryAfterSec));
+  if (appErr.statusCode === 401) res.set("WWW-Authenticate", "Bearer");
+  res.status(appErr.statusCode).json(appErr.toBody(requestId));
 }
 ```
 
@@ -1124,8 +1189,9 @@ function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunct
 - `Result<T, E>` pattern in library/utility code — no exceptions for expected failures
 - Error `cause` (ES2022) for chaining: `new Error("msg", { cause: originalError })`
 - `Object.setPrototypeOf(this, new.target.prototype)` fixes `instanceof` for transpiled classes
-- `toJSON()` on error classes controls API response serialization — never exposes stack traces
-- Zod `safeParse` at system boundaries (API input, env vars, config) — returns structured errors
+- `toBody(requestId)` on `AppError` is the only error serialization — the envelope, never a stack trace or cause
+- Zod `safeParse` at system boundaries (API input, env vars, config) — map issues to `details[]` with `toFieldErrors`
+- Error codes/statuses are exactly the table in `api/response-envelope.md` (400 `MALFORMED_REQUEST`/`VALIDATION_FAILED`, 401 `UNAUTHENTICATED`, 403 `FORBIDDEN`, 404 `NOT_FOUND`, 409 `CONFLICT`, 422 `BUSINESS_RULE_VIOLATION`, 429 `RATE_LIMITED`, 500 `INTERNAL`, 503 `UNAVAILABLE`)
 - Express error middleware MUST be a 4-argument function `(err, req, res, next)` — Express uses arity detection
 - Internal errors MUST return generic messages to clients — log full details server-side
 - Never `catch` and swallow errors silently — always log, rethrow, or return a meaningful Result

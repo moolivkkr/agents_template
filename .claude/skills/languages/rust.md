@@ -49,34 +49,63 @@ tests/            # integration tests
 
 ### thiserror for Library/Domain Errors
 ```rust
+use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
+/// One entry of error.details[] (api/response-envelope.md): stable lower_snake `code`, catalog `message`.
+#[derive(Debug, Clone, Serialize)]
+pub struct FieldError {
+    pub field: String,
+    pub code: &'static str,
+    pub message: &'static str, // fixed catalog text — never a validator's or driver's message
+}
+
+impl FieldError {
+    pub fn new(field: impl Into<String>, code: &'static str) -> Self {
+        let message = match code {
+            "required" => "This field is required.",
+            "invalid_format" => "This value has the wrong format.",
+            "too_long" => "This value is too long.",
+            "invalid_reference" => "This refers to something that doesn't exist.",
+            _ => "This value is invalid.",
+        };
+        Self { field: field.into(), code, message }
+    }
+}
+
+// Display (#[error]) is server-side log text. The response body uses the catalog in `into_response`.
 #[derive(Debug, Error)]
 pub enum DomainError {
-    #[error("validation failed: {field} — {message}")]
-    Validation { field: String, message: String },
+    #[error("malformed request")]
+    MalformedRequest,
+
+    #[error("validation failed: {0:?}")]
+    Validation(Vec<FieldError>),
 
     #[error("{resource} {id} not found")]
     NotFound { resource: &'static str, id: Uuid },
 
     #[error("conflict: {0}")]
-    Conflict(String),
+    Conflict(String), // user-safe text, shown as-is
 
-    #[error("unauthorized")]
-    Unauthorized,
+    #[error("business rule violated: {0}")]
+    BusinessRule(String), // user-safe text, shown as-is
 
-    #[error("forbidden: {0}")]
-    Forbidden(String),
+    #[error("unauthenticated")]
+    Unauthenticated,
+
+    #[error("forbidden")]
+    Forbidden,
 
     #[error("rate limited, retry after {retry_after_secs}s")]
     RateLimited { retry_after_secs: u64 },
 
-    #[error("upstream service {service} failed: {detail}")]
-    Upstream { service: String, detail: String },
+    #[error("dependency {service} unavailable: {cause:#}")]
+    Unavailable { service: &'static str, cause: anyhow::Error },
 
-    #[error("internal error: {0}")]
-    Internal(String),
+    #[error("internal error: {0:#}")]
+    Internal(anyhow::Error),
 }
 ```
 
@@ -104,59 +133,127 @@ fn run() -> Result<()> {
 // Convert infrastructure errors to domain errors at boundaries
 impl From<sqlx::Error> for DomainError {
     fn from(err: sqlx::Error) -> Self {
-        match err {
-            sqlx::Error::RowNotFound => DomainError::NotFound {
-                resource: "entity",
-                id: Uuid::nil(),
-            },
-            sqlx::Error::Database(ref db_err) => {
-                if let Some(code) = db_err.code() {
-                    match code.as_ref() {
-                        "23505" => DomainError::Conflict("duplicate entry".into()),
-                        "23503" => DomainError::Validation {
-                            field: "reference".into(),
-                            message: "foreign key violation".into(),
-                        },
-                        _ => DomainError::Internal(err.to_string()),
-                    }
-                } else {
-                    DomainError::Internal(err.to_string())
-                }
-            }
-            _ => DomainError::Internal(err.to_string()),
+        if matches!(err, sqlx::Error::RowNotFound) {
+            return DomainError::NotFound { resource: "entity", id: Uuid::nil() };
         }
+        let pg_code = err.as_database_error().and_then(|e| e.code()).map(|c| c.into_owned());
+        match pg_code.as_deref() {
+            Some("23505") => DomainError::Conflict("This already exists.".into()),
+            Some("23503") => DomainError::Validation(vec![FieldError::new("reference", "invalid_reference")]),
+            // Anything else: the driver's text stays in the source chain for the log, never in the body
+            _ => DomainError::Internal(err.into()),
+        }
+    }
+}
+```
+
+### Response Envelope
+```rust
+use serde::Serialize;
+
+// Every body is the envelope in api/response-envelope.md.
+tokio::task_local! {
+    /// Set for the whole request by the request-id middleware (outermost layer); = the X-Request-Id header.
+    pub static REQUEST_ID: String;
+}
+pub fn current_request_id() -> String {
+    REQUEST_ID.try_with(Clone::clone).unwrap_or_default()
+}
+
+/// Success: {"data": …, "meta": {"request_id": …}}; lists add meta.pagination (cursor only).
+#[derive(Serialize)]
+pub struct ApiResponse<T> {
+    pub data: T,
+    pub meta: Meta,
+}
+
+#[derive(Serialize)]
+pub struct Meta {
+    pub request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pagination: Option<Pagination>,
+}
+
+#[derive(Serialize)]
+pub struct Pagination {
+    pub next_cursor: Option<String>, // serialized as null when has_more is false
+    pub has_more: bool,
+    pub limit: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_count: Option<i64>, // only when cheap and the UI shows it
+}
+
+impl<T: Serialize> ApiResponse<T> {
+    pub fn success(data: T) -> Self {
+        Self { data, meta: Meta { request_id: current_request_id(), pagination: None } }
+    }
+}
+
+impl<T: Serialize> ApiResponse<Vec<T>> {
+    pub fn paginated(data: Vec<T>, next_cursor: Option<String>, limit: i64) -> Self {
+        let has_more = next_cursor.is_some();
+        let pagination = Pagination { next_cursor, has_more, limit, total_count: None };
+        Self { data, meta: Meta { request_id: current_request_id(), pagination: Some(pagination) } }
     }
 }
 ```
 
 ### HTTP Error Mapping (Axum)
 ```rust
-use axum::{http::StatusCode, response::{IntoResponse, Response}, Json};
+use axum::{http::{header, HeaderValue, StatusCode}, response::{IntoResponse, Response}, Json};
 use serde_json::json;
+
+impl DomainError {
+    /// (status, code, user-safe message, retryable) — the table in api/response-envelope.md
+    fn parts(&self) -> (StatusCode, &'static str, String, bool) {
+        match self {
+            DomainError::MalformedRequest => (StatusCode::BAD_REQUEST, "MALFORMED_REQUEST", "The request could not be read.".into(), false),
+            DomainError::Validation(_) => (StatusCode::BAD_REQUEST, "VALIDATION_FAILED", "Some fields are invalid.".into(), false),
+            DomainError::Unauthenticated => (StatusCode::UNAUTHORIZED, "UNAUTHENTICATED", "Sign in to continue.".into(), false),
+            DomainError::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", "You don't have permission to do this.".into(), false),
+            // also for another tenant's object — never 403, don't confirm it exists
+            DomainError::NotFound { resource, .. } => (StatusCode::NOT_FOUND, "NOT_FOUND", format!("{resource} not found."), false),
+            DomainError::Conflict(msg) => (StatusCode::CONFLICT, "CONFLICT", msg.clone(), false),
+            DomainError::BusinessRule(msg) => (StatusCode::UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION", msg.clone(), false),
+            DomainError::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED", "Too many requests. Try again shortly.".into(), true),
+            DomainError::Unavailable { .. } => (StatusCode::SERVICE_UNAVAILABLE, "UNAVAILABLE", "The service is temporarily unavailable.".into(), true),
+            DomainError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL", "Something went wrong.".into(), false),
+        }
+    }
+}
 
 impl IntoResponse for DomainError {
     fn into_response(self) -> Response {
-        let (status, code) = match &self {
-            DomainError::Validation { .. } => (StatusCode::BAD_REQUEST, "VALIDATION_ERROR"),
-            DomainError::NotFound { .. } => (StatusCode::NOT_FOUND, "NOT_FOUND"),
-            DomainError::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
-            DomainError::Unauthorized => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
-            DomainError::Forbidden(_) => (StatusCode::FORBIDDEN, "FORBIDDEN"),
-            DomainError::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED"),
-            DomainError::Upstream { .. } => (StatusCode::BAD_GATEWAY, "UPSTREAM_ERROR"),
-            DomainError::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
-        };
+        let (status, code, message, retryable) = self.parts();
+        let request_id = current_request_id();
+        if status.is_server_error() {
+            // the only place the cause (driver/upstream text) goes: the log, under the same request_id
+            tracing::error!(%request_id, code, error = %self, "request failed");
+        }
 
-        let body = json!({
-            "error": {
-                "code": code,
-                "message": self.to_string(),
+        let mut error = json!({ "code": code, "message": message, "request_id": request_id, "retryable": retryable });
+        if let DomainError::Validation(details) = &self {
+            error["details"] = json!(details);
+        }
+        let mut res = (status, Json(json!({ "error": error }))).into_response();
+
+        match &self {
+            DomainError::RateLimited { retry_after_secs } => {
+                res.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(*retry_after_secs));
             }
-        });
-
-        (status, Json(body)).into_response()
+            DomainError::Unavailable { .. } => {
+                res.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+            }
+            DomainError::Unauthenticated => {
+                res.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+            }
+            _ => {}
+        }
+        res
     }
 }
+// Axum's own extractor rejections (bad JSON, bad query/path) have plain-text bodies —
+// map them to DomainError as shown in frameworks/axum.md.
 ```
 
 ### Error Rules
@@ -165,6 +262,8 @@ impl IntoResponse for DomainError {
 - Never `.unwrap()` or `.expect()` in production code — only in tests or provably unreachable paths
 - Use `?` operator everywhere — it calls `From::from()` automatically
 - Add `.context("what was happening")` at every boundary crossing
+- A domain error's `Display` output is log text: it never goes into a response body
+  (codes/statuses: `api/response-envelope.md`)
 
 ---
 
@@ -191,19 +290,21 @@ async fn create_order(
     ))
 }
 
-// List with pagination
+// List with cursor pagination: ?cursor=<opaque>&limit=<n>
 async fn list_orders(
     State(state): State<AppState>,
     tenant: TenantId,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<Vec<OrderResponse>>>, DomainError> {
+    let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let (orders, next_cursor) = state.order_service
-        .list_orders(tenant.0, params.cursor.as_deref(), params.limit.unwrap_or(20))
+        .list_orders(tenant.0, params.cursor.as_deref(), limit)
         .await?;
 
     Ok(Json(ApiResponse::paginated(
         orders.into_iter().map(OrderResponse::from).collect(),
         next_cursor,
+        limit,
     )))
 }
 
@@ -218,35 +319,56 @@ fn order_routes() -> Router<AppState> {
 ### Custom Axum Extractors
 ```rust
 use axum::{extract::FromRequestParts, http::request::Parts};
+use serde::Deserialize;
 use uuid::Uuid;
 
 pub struct TenantId(pub Uuid);
+
+/// Claims of a JWT the auth middleware has already verified (signature, expiry, audience) and
+/// inserted into the request extensions.
+#[derive(Clone, Debug, Deserialize)]
+pub struct Claims {
+    pub sub: Uuid,
+    pub tenant_id: Uuid,        // the token's tenant
+    #[serde(default)]
+    pub tenant_ids: Vec<Uuid>,  // multi-tenant users only: tenants X-Tenant-ID may select from
+}
+
+impl Claims {
+    /// The token's tenant, or one the X-Tenant-ID header SELECTS from the token's own list.
+    /// A client header never grants a tenant on its own: anyone can send one.
+    pub fn resolve_tenant(&self, requested: Option<&str>) -> Option<Uuid> {
+        match requested {
+            None => Some(self.tenant_id),
+            Some(raw) => {
+                let id = Uuid::parse_str(raw).ok()?;
+                (id == self.tenant_id || self.tenant_ids.contains(&id)).then_some(id)
+            }
+        }
+    }
+}
 
 #[async_trait]
 impl<S: Send + Sync> FromRequestParts<S> for TenantId {
     type Rejection = DomainError;
 
     async fn from_request_parts(parts: &mut Parts, _state: &S) -> Result<Self, Self::Rejection> {
-        let tenant_str = parts
-            .headers
-            .get("X-Tenant-ID")
-            .and_then(|v| v.to_str().ok())
-            .ok_or(DomainError::Unauthorized)?;
+        let claims = parts
+            .extensions
+            .get::<Claims>() // inserted by the auth middleware only after the JWT verified
+            .ok_or(DomainError::Unauthenticated)?;
 
-        let tenant_id = Uuid::parse_str(tenant_str)
-            .map_err(|_| DomainError::Validation {
-                field: "X-Tenant-ID".into(),
-                message: "invalid UUID".into(),
-            })?;
+        let requested = parts.headers.get("X-Tenant-ID").and_then(|v| v.to_str().ok());
+        let tenant_id = claims.resolve_tenant(requested).ok_or(DomainError::Forbidden)?;
 
         Ok(TenantId(tenant_id))
     }
 }
 
-// Pagination params
+// Pagination params — cursor + limit only, never page numbers or offsets
 #[derive(Debug, Deserialize)]
 pub struct PaginationParams {
-    pub cursor: Option<String>,
+    pub cursor: Option<String>, // meta.pagination.next_cursor from the previous page
     pub limit: Option<i64>,
 }
 ```
@@ -255,6 +377,7 @@ pub struct PaginationParams {
 ```rust
 use actix_web::{web, HttpResponse, middleware};
 
+// DomainError implements actix's ResponseError with the same envelope mapping (frameworks/actix-web.md)
 // Handler with Path and JSON extractors
 async fn get_order(
     path: web::Path<Uuid>,
@@ -292,24 +415,27 @@ fn app(state: AppState) -> Router {
         .merge(user_routes())
         .layer(
             ServiceBuilder::new()
+                // first = outermost: runs the request inside REQUEST_ID.scope(..) so every envelope
+                // (success meta and error body) carries the id it echoes as X-Request-Id — frameworks/axum.md
+                .layer(middleware::from_fn(request_id_middleware))
                 .layer(TraceLayer::new_for_http())
                 .layer(TimeoutLayer::new(Duration::from_secs(30)))
                 .layer(CorsLayer::permissive()) // tighten for production
+                // verifies the JWT and inserts Claims — must come before tenant_middleware
+                .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
                 .layer(middleware::from_fn(tenant_middleware))
         )
         .with_state(state)
 }
 
-// Custom middleware function
+// Custom middleware function — the tenant comes from the verified Claims, never from a header alone
 async fn tenant_middleware(
     mut req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Result<Response, DomainError> {
-    let tenant_id = req.headers()
-        .get("X-Tenant-ID")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| Uuid::parse_str(v).ok())
-        .ok_or(DomainError::Unauthorized)?;
+    let claims = req.extensions().get::<Claims>().cloned().ok_or(DomainError::Unauthenticated)?;
+    let requested = req.headers().get("X-Tenant-ID").and_then(|v| v.to_str().ok());
+    let tenant_id = claims.resolve_tenant(requested).ok_or(DomainError::Forbidden)?; // header can only select
 
     req.extensions_mut().insert(TenantId(tenant_id));
 
@@ -326,16 +452,16 @@ async fn tenant_middleware(
 ```rust
 // The TenantId extractor (shown above) is the primary mechanism
 // Every handler that needs tenant context includes it as a parameter
-// Axum extracts it from the request before the handler runs
+// Axum extracts it from the VERIFIED JWT claims before the handler runs
 
 async fn create_order(
     State(state): State<AppState>,
-    tenant: TenantId,              // extracted from X-Tenant-ID header
+    tenant: TenantId,              // from the verified token's claims (a header may only select among them)
     Json(request): Json<CreateOrderRequest>,
 ) -> Result<impl IntoResponse, DomainError> {
     // tenant.0 is the UUID — pass it through every layer
     let order = state.order_service.create_order(tenant.0, request).await?;
-    Ok((StatusCode::CREATED, Json(order)))
+    Ok((StatusCode::CREATED, Json(ApiResponse::success(OrderResponse::from(order)))))
 }
 ```
 
@@ -790,10 +916,10 @@ async fn main() -> anyhow::Result<()> {
 // CPU-bound work: use spawn_blocking to avoid blocking the async runtime
 async fn hash_password(password: String) -> Result<String, DomainError> {
     tokio::task::spawn_blocking(move || {
-        bcrypt::hash(password, 12).map_err(|e| DomainError::Internal(e.to_string()))
+        bcrypt::hash(password, 12).map_err(|e| DomainError::Internal(e.into()))
     })
     .await
-    .map_err(|e| DomainError::Internal(e.to_string()))?
+    .map_err(|e| DomainError::Internal(e.into()))?
 }
 ```
 

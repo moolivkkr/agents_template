@@ -22,11 +22,20 @@ const app = Fastify({
 await app.register(dbPlugin);
 await app.register(authPlugin);
 
+// Every response echoes the id its body carries (meta.request_id / error.request_id)
+app.addHook("onRequest", async (request, reply) => {
+  reply.header("x-request-id", request.id);
+});
+
+// Global error handler + unknown routes — both answer with the error envelope (see Error Handling).
+// Set them before registering routes so every route plugin inherits them.
+app.setErrorHandler(errorHandler);
+app.setNotFoundHandler((request, reply) => {
+  reply.status(404).send(errorBody(new AppError("NOT_FOUND", "Not found.", 404), request.id));
+});
+
 // Register route modules with prefix
 await app.register(widgetRoutes, { prefix: "/api/v1/widgets" });
-
-// Global error handler
-app.setErrorHandler(errorHandler);
 
 await app.listen({ port: 8080, host: "0.0.0.0" });
 ```
@@ -63,7 +72,7 @@ const authPluginImpl: FastifyPluginAsync = async (fastify) => {
   fastify.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
     const token = request.headers.authorization?.replace("Bearer ", "");
     if (!token) {
-      throw new AppError("UNAUTHORIZED", "missing authorization header", 401);
+      throw new AppError("UNAUTHENTICATED", "Sign in to continue.", 401);
     }
     const claims = await verifyJwt(token);
     request.user = claims;
@@ -134,9 +143,9 @@ const createWidgetSchema: FastifySchema = {
         },
         meta: {
           type: "object",
+          required: ["request_id"],
           properties: {
-            requestId: { type: "string" },
-            timestamp: { type: "string" },
+            request_id: { type: "string" },
           },
         },
       },
@@ -144,12 +153,13 @@ const createWidgetSchema: FastifySchema = {
   },
 };
 
+// List query params: cursor pagination only — ?cursor=<opaque>&limit=<n>
 const listWidgetsSchema: FastifySchema = {
   querystring: {
     type: "object",
     properties: {
       cursor: { type: "string" },
-      page_size: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+      limit: { type: "integer", minimum: 1, maximum: 100, default: 20 },
       sort_by: { type: "string", enum: ["created_at", "updated_at", "name"], default: "created_at" },
       sort_dir: { type: "string", enum: ["asc", "desc"], default: "desc" },
     },
@@ -166,7 +176,10 @@ const getWidgetSchema: FastifySchema = {
   },
 };
 ```
-- JSON Schema validation runs before the handler — invalid requests never reach business logic
+- JSON Schema validation runs before the handler — invalid requests never reach business logic; the error
+  handler turns a schema failure into 400 `VALIDATION_FAILED` with `details[]`
+- A response schema strips any property it doesn't list — every envelope key (`meta.request_id`,
+  `meta.pagination`) must be in it
 - `additionalProperties: false` rejects unexpected fields — catches typos early
 - Response schemas enable serialization optimization — Fastify compiles fast serializers
 - Ajv validates request schemas; fast-json-stringify serializes responses
@@ -188,7 +201,7 @@ interface WidgetParams {
 
 interface ListWidgetsQuery {
   cursor?: string;
-  page_size?: number;
+  limit?: number;
   sort_by?: string;
   sort_dir?: "asc" | "desc";
 }
@@ -209,7 +222,7 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
       );
       return reply.status(201).send({
         data: widget,
-        meta: { requestId: request.id, timestamp: new Date().toISOString() },
+        meta: { request_id: request.id },
       });
     },
   );
@@ -224,9 +237,10 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
         request.params.id,
       );
       if (!widget) {
-        throw new AppError("NOT_FOUND", `widget '${request.params.id}' not found`, 404);
+        // also when it belongs to another tenant — never 403, don't confirm it exists
+        throw new AppError("NOT_FOUND", "Widget not found.", 404);
       }
-      return { data: widget, meta: { requestId: request.id, timestamp: new Date().toISOString() } };
+      return { data: widget, meta: { request_id: request.id } };
     },
   );
 
@@ -234,20 +248,21 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
     "/",
     { schema: listWidgetsSchema },
     async (request, reply) => {
-      const { cursor, page_size = 20, sort_by = "created_at", sort_dir = "desc" } = request.query;
+      const { cursor, limit = 20, sort_by = "created_at", sort_dir = "desc" } = request.query;
       const result = await WidgetService.list(
         fastify.db,
         request.user.tenantId,
-        { cursor, pageSize: page_size, sortBy: sort_by, sortDir: sort_dir },
+        { cursor, limit, sortBy: sort_by, sortDir: sort_dir },
       );
       return {
-        data: result.items,
+        data: result.items, // always an array — [] when empty
         meta: {
-          cursor: result.cursor,
-          hasMore: result.hasMore,
-          total: result.total,
-          requestId: request.id,
-          timestamp: new Date().toISOString(),
+          request_id: request.id,
+          pagination: {
+            next_cursor: result.nextCursor, // null on the last page
+            has_more: result.nextCursor !== null,
+            limit,
+          },
         },
       };
     },
@@ -289,12 +304,10 @@ fastify.addHook("preHandler", async (request, reply) => {
 
 // preSerialization: transform response data before JSON serialization
 fastify.addHook("preSerialization", async (request, reply, payload) => {
-  // Add request metadata to all responses
-  if (typeof payload === "object" && payload !== null) {
-    (payload as Record<string, unknown>).meta = {
-      ...(payload as Record<string, unknown>).meta,
-      requestId: request.id,
-    };
+  // Stamp meta.request_id on success bodies only — an error body carries error.request_id and has no meta
+  if (typeof payload === "object" && payload !== null && "data" in payload) {
+    const body = payload as { data: unknown; meta?: Record<string, unknown> };
+    body.meta = { ...body.meta, request_id: request.id };
   }
   return payload;
 });
@@ -315,7 +328,8 @@ fastify.addHook("onError", async (request, reply, error) => {
 - Hooks run in registration order within each lifecycle stage
 - `onRequest` hooks run before parsing — use for auth, rate limiting
 - `preHandler` hooks run after validation — use for authorization
-- `preSerialization` hooks can transform response before JSON encoding
+- `preSerialization` hooks can transform response before JSON encoding (e.g. stamp `meta.request_id` on
+  success bodies — never add `meta` to an error body)
 
 ## Decorators (DI Pattern)
 ```typescript
@@ -334,59 +348,102 @@ fastify.addHook("onRequest", async (request) => {
 - Decorators must be registered before routes that use them
 
 ## Error Handling
+Every error body is the envelope in `api/response-envelope.md`:
+`{ error: { code, message, details?, request_id, retryable } }` — no `data`, no `meta`, no exception text.
 ```typescript
+import type { FastifyError, FastifySchemaValidationError } from "fastify";
+
+type FieldError = { field: string; code: string; message: string }; // code is lower_snake
+
 class AppError extends Error {
   constructor(
-    public code: string,
-    message: string,
+    public code: string,                // UPPER_SNAKE, stable: NOT_FOUND, CONFLICT, …
+    message: string,                    // user-safe catalog text — never a caught error's message
     public statusCode: number,
-    public details?: Record<string, unknown>,
+    public details: FieldError[] = [],  // VALIDATION_FAILED only
+    public retryable = false,           // true for RATE_LIMITED / UNAVAILABLE
   ) {
     super(message);
     this.name = "AppError";
   }
 }
 
-function errorHandler(error: Error, request: FastifyRequest, reply: FastifyReply): void {
-  if (error instanceof AppError) {
-    reply.status(error.statusCode).send({
-      error: {
-        code: error.code,
-        message: error.statusCode >= 500 ? "an unexpected error occurred" : error.message,
-        details: error.details,
-      },
-    });
-    return;
-  }
-
-  // Fastify validation errors (from JSON Schema)
-  if ("validation" in error) {
-    reply.status(422).send({
-      error: {
-        code: "VALIDATION_ERROR",
-        message: "request validation failed",
-        details: { issues: (error as any).validation },
-      },
-    });
-    return;
-  }
-
-  // Unknown errors — never expose internals
-  request.log.error({ err: error }, "unhandled error");
-  reply.status(500).send({
+// The only shape an error body takes
+function errorBody(err: AppError, requestId: string) {
+  return {
     error: {
-      code: "INTERNAL_ERROR",
-      message: "an unexpected error occurred",
+      code: err.code,
+      message: err.message,
+      ...(err.details.length > 0 ? { details: err.details } : {}),
+      request_id: requestId,
+      retryable: err.retryable,
     },
+  };
+}
+
+// Ajv keyword → stable lower_snake code + catalog message. Ajv's own `message` is not sent.
+const AJV_FIELD_ERRORS: Record<string, { code: string; message: string }> = {
+  required: { code: "required", message: "This field is required." },
+  minLength: { code: "too_short", message: "This value is too short." },
+  maxLength: { code: "too_long", message: "This value is too long." },
+  minimum: { code: "too_small", message: "This value is too small." },
+  maximum: { code: "too_large", message: "This value is too large." },
+  format: { code: "invalid_format", message: "This value has the wrong format." },
+  enum: { code: "invalid_choice", message: "Choose one of the allowed values." },
+  type: { code: "invalid_type", message: "This value has the wrong type." },
+  additionalProperties: { code: "unknown_field", message: "This field is not allowed." },
+};
+
+function toFieldErrors(validation: FastifySchemaValidationError[]): FieldError[] {
+  return validation.map((v) => {
+    // "/address/city" → "address.city"; `required`/`additionalProperties` name the field in params
+    const path = v.instancePath.replace(/^\//, "").replaceAll("/", ".");
+    const named = (v.params.missingProperty ?? v.params.additionalProperty) as string | undefined;
+    const field = [path, named].filter(Boolean).join(".");
+    return { field, ...(AJV_FIELD_ERRORS[v.keyword] ?? { code: "invalid", message: "This value is invalid." }) };
   });
+}
+
+// Fastify's and plugins' own 4xx errors, by status (their message is parser/plugin text — never sent)
+function fromStatus(status: number): AppError {
+  switch (status) {
+    case 401: return new AppError("UNAUTHENTICATED", "Sign in to continue.", 401);
+    case 403: return new AppError("FORBIDDEN", "You don't have permission to do this.", 403);
+    case 404: return new AppError("NOT_FOUND", "Not found.", 404);
+    case 429: return new AppError("RATE_LIMITED", "Too many requests. Try again shortly.", 429, [], true);
+    default:  return new AppError("MALFORMED_REQUEST", "The request could not be read.", 400); // bad JSON, 413, 415 …
+  }
+}
+
+function errorHandler(error: FastifyError, request: FastifyRequest, reply: FastifyReply): void {
+  let appErr: AppError;
+  if (error instanceof AppError) {
+    appErr = error;
+  } else if (error.validation) {
+    // JSON Schema (Ajv) failure on body/querystring/params → 400 VALIDATION_FAILED with details[]
+    appErr = new AppError("VALIDATION_FAILED", "Some fields are invalid.", 400, toFieldErrors(error.validation));
+  } else if (error.statusCode !== undefined && error.statusCode < 500) {
+    request.log.info({ err: error }, "request rejected");
+    appErr = fromStatus(error.statusCode);
+  } else {
+    appErr = new AppError("INTERNAL", "Something went wrong.", 500); // unknown: generic message only
+  }
+
+  if (appErr.statusCode >= 500) {
+    request.log.error({ err: error }, "request failed"); // cause + stack: logs only, under request.id
+  }
+  if (appErr.statusCode === 401) reply.header("www-authenticate", "Bearer");
+  reply.status(appErr.statusCode).send(errorBody(appErr, request.id));
 }
 
 // Register globally
 app.setErrorHandler(errorHandler);
 ```
 - `setErrorHandler` catches all thrown/rejected errors from handlers and hooks
-- Fastify validation errors have a `validation` property — map to 422
-- Never expose internal error details in 500 responses
+- Fastify validation errors have a `validation` property — map to 400 `VALIDATION_FAILED` with `details[]`
+  (not 422, and not Ajv's raw error objects)
+- `setNotFoundHandler` too — unknown routes also answer with the envelope
+- Never expose internal error details — no exception, parser or plugin text in any error body
 
 ## Testing with inject()
 ```typescript
@@ -416,7 +473,8 @@ describe("Widget API", () => {
     assert.strictEqual(response.statusCode, 201);
     const body = JSON.parse(response.body);
     assert.strictEqual(body.data.name, "New Widget");
-    assert.ok(body.meta.requestId);
+    assert.ok(body.meta.request_id);
+    assert.strictEqual(response.headers["x-request-id"], body.meta.request_id);
   });
 
   test("GET /api/v1/widgets/:id — not found returns 404", async () => {
@@ -429,6 +487,8 @@ describe("Widget API", () => {
     assert.strictEqual(response.statusCode, 404);
     const body = JSON.parse(response.body);
     assert.strictEqual(body.error.code, "NOT_FOUND");
+    assert.ok(body.error.request_id);
+    assert.strictEqual(body.data, undefined); // error bodies never carry data
   });
 
   test("POST /api/v1/widgets — validation error on missing name", async () => {
@@ -439,7 +499,12 @@ describe("Widget API", () => {
       payload: { description: "no name" },
     });
 
-    assert.strictEqual(response.statusCode, 422);
+    assert.strictEqual(response.statusCode, 400);
+    const body = JSON.parse(response.body);
+    assert.strictEqual(body.error.code, "VALIDATION_FAILED");
+    assert.deepStrictEqual(body.error.details, [
+      { field: "name", code: "required", message: "This field is required." },
+    ]);
   });
 
   test("GET /api/v1/widgets — unauthenticated returns 401", async () => {
@@ -449,6 +514,7 @@ describe("Widget API", () => {
     });
 
     assert.strictEqual(response.statusCode, 401);
+    assert.strictEqual(JSON.parse(response.body).error.code, "UNAUTHENTICATED");
   });
 });
 ```
@@ -484,12 +550,24 @@ fastify.addSchema({
   },
 });
 
+// The envelope's meta (api/response-envelope.md). fast-json-stringify drops unlisted keys, so pagination
+// must be declared here for list responses to keep it.
 fastify.addSchema({
   $id: "meta",
   type: "object",
+  required: ["request_id"],
   properties: {
-    requestId: { type: "string" },
-    timestamp: { type: "string" },
+    request_id: { type: "string" },
+    pagination: {
+      type: "object",
+      required: ["next_cursor", "has_more", "limit"],
+      properties: {
+        next_cursor: { type: ["string", "null"] },
+        has_more: { type: "boolean" },
+        limit: { type: "integer" },
+        total_count: { type: "integer" }, // optional
+      },
+    },
   },
 });
 ```
@@ -501,7 +579,8 @@ fastify.addSchema({
 - Response schemas enable fast-json-stringify — define them for performance
 - `fastify-plugin` (fp) to break encapsulation — use for shared decorators (db, auth)
 - Hooks for cross-cutting concerns — `onRequest` for auth, `preSerialization` for envelope
-- `setErrorHandler` for global error mapping — one handler catches all errors
+- `setErrorHandler` for global error mapping — one handler catches all errors and writes the envelope
+- List endpoints take `?cursor=` + `?limit=` and answer `meta.pagination` (`next_cursor`, `has_more`, `limit`)
 - `inject()` for testing — no HTTP server needed, no port conflicts
 - TypeScript generics on routes for type-safe `request.body`, `request.params`, `request.query`
 - Decorators for DI — `decorate()` for singletons, `decorateRequest()` for per-request state
