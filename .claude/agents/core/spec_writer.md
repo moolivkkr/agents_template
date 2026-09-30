@@ -248,6 +248,25 @@ component spec (edit that spec's criteria table and inventory). Without this mer
 reach no one and the inventory reports 100% while every TC-SEC is missing (board review SEC-06,
 TEST-13).
 
+### Acceptance-amend mode (a requirement changed or was added after its phase was planned)
+
+Spawned by `/develop`'s Wave 4 pre-step, `/accept` Step 1a, or after a change request, with
+`MODE: acceptance-amend` and a list from `acceptance-map.py`: `FR-xxx CHANGED|NEW|PARTIAL phases=<n> <detail>`.
+Touch only the TC-ACC rows of the listed FRs:
+- **Where:** the phase that owns the FR (`phases=`; the first listed). For an FR in no phase (NEW
+  "in no phase plan"), the phase you were launched for.
+- **CHANGED:** re-read the FR in `docs/BRD.md` and rewrite its rows to match it. Keep a row's ID when
+  its SHALL still exists (update the description and priority), allocate new IDs from that phase's
+  block for new SHALLs or personas (*Allocating IDs* above), and delete rows for SHALLs that no longer
+  exist.
+- **NEW / PARTIAL:** add the missing rows (one per SHALL per persona, plus the negative
+  permission-boundary rows).
+- Append to the spec an `## Amendments` line per FR: `<date> FR-xxx <status>: <what changed> —
+  rows kept/added/retired: <ids>`. The acceptance agent needs the retired IDs to remove their tests.
+- Then `tc-inventory.py --phase <n> --spec-only` for each phase you touched must list the new rows.
+The FR's other tiers (unit, integration) belong to the owning component's next implementation. Note
+them under the amendment if they're needed; don't write them here.
+
 ### Unit Tests
 - [ ] Happy path for each public function
 - [ ] Each error path with correct error type returned

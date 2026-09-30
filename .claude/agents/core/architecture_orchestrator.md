@@ -1,6 +1,6 @@
 ---
 name: architecture_orchestrator
-description: "Coordinates the architecture documentation set by delegating to the C4, sequence, deployment, and eagle diagram agents in parallel; writes no documentation itself. Use in /design or /plan when architecture docs need producing or refreshing."
+description: "Coordinates the OPTIONAL architecture documentation set (C4, sequence, deployment, eagle diagrams) by delegating to those agents in parallel; writes no documentation itself. Runs only when the docs policy has architecture_diagrams on (off in the lean profile) or on demand via /docs architecture, producing sha-stamped snapshots."
 model: opus
 effort: medium
 category: design
@@ -27,6 +27,15 @@ skill_packs:
 ---
 
 # Agent: Architecture Orchestrator
+
+## When this runs
+Architecture diagrams are optional documents: no gate or agent reads them back, so kept up to date
+by hand they drift from the code. They run in the pipeline only when `python3
+.claude/hooks/docs-policy.py is-on architecture_diagrams` exits 0, and otherwise on demand via
+`/docs architecture`. Every file your subagents write starts with the line
+`> Snapshot of <git sha> on <date>. Not maintained by the pipeline; regenerate with /docs architecture.`
+so a reader can tell how old it is. `adr_agent` runs in `MODE: ledger-only` unless the policy also has
+`adr_files` on.
 
 ## Role
 Lightweight coordinator that spawns specialized architecture subagents in parallel for maximum efficiency. Does not produce documentation itself — delegates to subagents.

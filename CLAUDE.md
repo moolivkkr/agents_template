@@ -85,7 +85,8 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 
 | Command | When to use |
 |---------|------------|
-| `/init` | Project setup (run once) |
+| `/init` | Project setup (run once). `--from-code` adopts an EXISTING codebase with no BRD: BRD + guidelines written from the code, then `/plan --phase=1 --as-built` builds the spec + acceptance baseline |
+| `/docs` | Optional documents (architecture diagrams, ADR files, developer docs, sketches…) — lean/off by default; `/docs <what>` makes a fresh sha-stamped snapshot, `--enable=<key>` turns one back on |
 | `/autonomous [--resume]` | Full pipeline init → map → discuss → plan → design → develop → accept with ONE human checkpoint; kept running by the autonomous-continue Stop hook (see docs/AUTONOMOUS_GUIDE.md) |
 | `/remember <fact>` | Record a Tier 0 ground-truth fact (retired/renamed component, hard constraint) — propagates to every session + subagent |
 | `/worklog` | Consolidate all phase artifacts into one human-readable ledger (`docs/WORKLOG.md`) — what was implemented, decided (and why), and pending, across every agent |
@@ -101,7 +102,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/review` | Code review on current changes |
 | `/diagnose` / `/hotfix` | Bug investigation / fast-track fix (reproduction-test-first) |
 | `/deploy --target=local` | Deploy locally |
-| `/accept` | Global acceptance after all phases |
+| `/accept` | Global acceptance after all phases — re-proves the BRD as it is now: `acceptance-map.py` flags FRs whose text changed since their tests were recorded (CHANGED), FRs with no TC-ACC rows (NEW) and missing SHALLs (PARTIAL); none may remain for READY |
 | `/consolidate` | Off-path memory maintenance (dedup lessons, audit Tier 0 facts) |
 | `/eval --compare` | Measure whether a framework change improved/regressed output quality |
 | `/status` | Check project progress |

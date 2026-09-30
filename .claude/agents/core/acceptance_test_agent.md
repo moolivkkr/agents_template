@@ -164,6 +164,12 @@ fi
    for `spec_writer`.
 4. **EARS split:** each SHALL is one check. The trigger (WHEN/WHILE/IF/WHERE) is the precondition to
    set up; the SHALL is the assertion. Never collapse several SHALLs into one "it works" test.
+5. **Changed requirements (`CHANGED_FRS` in your prompt).** A requirement changed after its tests
+   were written, and `spec_writer` amended its TC-ACC rows (see the spec's `## Amendments`). Your scope
+   includes those FRs, whatever phase wrote their tests: update each test to its amended row (a
+   `TEST-CHANGE` comment citing `spec:` the row), add tests for new rows, and delete tests for retired
+   IDs with an entry in `agent_state/phases/{{PHASE}}/test-changes.json`. A test that still passes
+   against the old criterion is not evidence for the new one.
 
 ## Step 2 — Test data, the safe way
 
@@ -226,6 +232,15 @@ python3 .claude/hooks/junit-to-sidecar.py --tier acceptance --command "$CMD" --e
   --env "${DEPLOY_ENV:-qa}" --base-url "${APP_BASE_URL:-}" --priorities "$P/tc_priorities.json" \
   --out "$P/reports/acceptance_report.json" "$P/junit/acceptance.xml"
 ```
+
+Then merge the requirement map. It checks every FR delivered so far plus this phase's, not only the
+rows you wrote: a Must/Should FR with no TC-ACC row, a SHALL with no row, a changed FR or a failing FR
+becomes an UNTESTED case with the FR's priority, which the gate blocks on:
+```bash
+python3 .claude/hooks/acceptance-map.py --phase {{PHASE}} --results "$P/reports/acceptance_report.json" \
+  --merge-into "$P/reports/acceptance_report.json" --out "$P/reports/acceptance_map.json"
+```
+In `/accept` mode use `--all` and the `/accept` paths instead.
 
 Then complete the sidecar, and write the use-case view the report and `/accept` read:
 - **Every in-scope TC-ACC row** that no executed test covered → a case with `verdict: "UNTESTED"` and
@@ -350,6 +365,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every in-scope FR criterion × persona has a COMMITTED test under `tests/acceptance/` named with its TC-ACC ID (or an explicit spec-gap case), one EARS SHALL per case, asserting the SHALL and the envelope/data-contracts shape; each persona's security boundaries are tested.
 - [ ] Test data came from the seed command/job + the product API as the bootstrap admin, with run-unique IDs; no seed HTTP endpoint used (a reachable one is reported as a security finding); no credentials committed or written to reports; cleanup executed.
 - [ ] The suite ran with `commands."x:acceptance"` (or BLOCKED naming the missing row); `acceptance_report.json` came from `junit-to-sidecar.py` plus UNTESTED cases and `use_cases[]` — cases carry priority (HIGH for MUST FRs) and verdict PASS/FAIL/BLOCKED/UNTESTED.
+- [ ] `acceptance-map.py --merge-into` ran on the sidecar (every FR delivered so far + this phase's); every `CHANGED_FRS` entry has its tests updated to the amended rows, and retired IDs' tests are removed with a test-changes.json entry.
 - [ ] Every failure names the criterion, expected vs actual, request_id and owning role; I did not edit product code or weaken an assertion.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 

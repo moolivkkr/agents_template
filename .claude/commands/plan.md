@@ -17,6 +17,10 @@ arguments:
     required: false
     default: false
     description: "Auto-assign FR-* to phases by dependency analysis. No user prompts for scope decisions."
+  - name: as_built
+    required: false
+    default: false
+    description: "Baseline an EXISTING codebase (after /init --from-code): the phase's scope is the BRD's as-built FR-*, specs describe the code as it is, and /develop's job is the test + acceptance baseline, not new features."
 ---
 
 # /plan — Phase Specification Generation
@@ -133,9 +137,50 @@ HAS_PLAN_CHECK=$([ -f "agent_state/phases/${PHASE}/plan_check.md" ] && echo true
 
 ---
 
+## As-built mode (`--as-built`): baselining an existing codebase
+
+Run once, right after `/init --from-code`, for the first phase. It turns "code with no specs" into
+specs + a test and acceptance baseline, so `/recon` and `/accept` have something to check against.
+What changes in the steps below:
+
+- **Step 1:** `project_planner` scopes the phase to every BRD FR-* whose `Source` is `as-built`, plus
+  the NFR-* the code already meets. PHASE_PLAN.md carries `Mode: as-built` under its title. Its
+  implementation waves list only the FR-* the BRD marks `Status: gap` (stubs the code has, L1/L2 in
+  the capability inventory); every other FR is "exists — tests only".
+- **Step 2:** each `spec_writer` prompt starts with `MODE: as-built`. Document the component **as
+  implemented**: read the code the BRD `Source` cites and `agent_state/codebase/*`; write the
+  contracts and the edge-case behaviour the code actually has, and EARS criteria matching the BRD.
+  Write the full TC inventory (unit, integration, e2e, TC-ACC); it's the baseline the tests are written
+  to. Where the code does something that looks wrong, specify what it does and list it under
+  `## As-built observations` (suspected bugs, for the user), rather than "fixing" it in the spec.
+- **Step 2b:** data-contracts.md is extracted from the real handlers and response types.
+- **Step 3 (UI):** `ux_designer` documents the existing screens (component tree, bindings, states)
+  instead of designing new ones. `design_quality_reviewer` findings on existing screens are WARN
+  (they go to the backlog), not BLOCK.
+- **Steps 3b–4b:** unchanged.
+
+Then `/develop --phase=N` runs audit → gap work only → every test tier → acceptance → gate. When the
+gate passes, every as-built FR has passing, committed acceptance tests.
+
+---
+
 ## Step 1 — Phase Scope Definition
 
 **Agent:** `project_planner`
+
+**First, what the acceptance suite doesn't cover yet** (deterministic; pass the output to `project_planner`):
+```bash
+python3 .claude/hooks/acceptance-map.py --out agent_state/accept/acceptance_map.json || true
+jq -r '.unplanned[] | "\(.fr) \(.priority)\(if .as_built then " as-built" else "" end)"' agent_state/accept/acceptance_map.json
+```
+- **Unplanned as-built FR-*** (BRD `Source` says `as-built` — added by `/init --from-code` or
+  `/recon --fix=docs --apply`): the code exists but no acceptance test proves it. Put them in THIS
+  phase's scope as **acceptance-only** items (spec rows + tests, no implementation task), unless the
+  user assigns them elsewhere.
+- **Unplanned FR-* that are not as-built** (e.g. added by a `product_manager` change request): assign
+  them to this phase or a later one, as for any FR.
+- **CHANGED FR-* from delivered phases** are not re-planned here; `/develop`'s Wave 4 pre-step and
+  `/accept` Step 1a update their TC-ACC rows and tests in the phase that owns them.
 
 Reads BRD requirements and previous manifests. Determines scope for this phase:
 - Which FR-* requirements belong to this phase (from BRD traceability matrix or by assignment)
@@ -435,22 +480,31 @@ plan_goal_verifier → agent_state/phases/${PHASE}/plan_check.md
 
 ---
 
-## Step 4c — Architecture Decision Records (parallel with Step 4)
+## Step 4c — Architecture Decisions (parallel with Step 4)
 
 **Agent:** `adr_agent`
 **When:** Any spec introduces a significant architectural decision
 
+Optional documents follow the project's docs policy (lean by default — see `/docs`). Define once:
+```bash
+docs_on() { local s=.claude/hooks/docs-policy.py; [ -f "$s" ] || s="$HOME/.claude/hooks/startup/docs-policy.py"; python3 "$s" is-on "${1}" 2>/dev/null; }   # 0 = produce it; else skip (lean)
+```
+
 Reads all specs from Steps 2-3. For each significant architectural decision:
-- Writes an ADR in `docs/adr/` using the format: `ADR-NNN-<decision-slug>.md`
-- Captures: decision, context, options considered, rationale, consequences
+- **Always:** records it in `docs/DECISIONS.md` with `remember.sh decide` (decision + rationale + the
+  runner-up rejected). This is the ledger every agent reads, so the decision is never lost.
+- **Only if `docs_on adr_files`:** also writes the long-form ADR `docs/adr/ADR-NNN-<decision-slug>.md`
+  (context, options considered, consequences). Otherwise spawn it with `MODE: ledger-only` in the prompt.
 
 Does NOT block `/develop`. Runs in parallel with spec verification.
 
 ---
 
-## Step 4d — Future Phase Sketches (Progressive Planning)
+## Step 4d — Future Phase Sketches (optional: `docs_on phase_sketches`)
 
-**When:** Phase being planned is NOT the last phase in the BRD scope
+**When:** `docs_on phase_sketches` is on (off in the lean profile) AND the phase being planned is NOT
+the last phase in the BRD scope. When off, skip this step: the BRD traceability matrix already says
+which FR-* belong to later phases, and `/plan` writes each phase properly when it gets there.
 **Purpose:** Sketch future phases to capture intent without over-planning
 
 For each future phase (N+1, N+2):

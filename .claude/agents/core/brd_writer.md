@@ -144,7 +144,7 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
    d. Load `08c-performance-baselines.md` → every NFR-PERF-* must cite its evidence source
    e. Load `08d-visual-specifications.md` → any UI fidelity FR-* must reference specific measurements: "Implements visual specifications documented in 08d-visual-specifications.md" + cite key values (hex colors, px dimensions, animation durations)
 5. Draft `docs/BRD.md` following the format above
-6. Generate `docs/traceability-matrix.md` with all requirement IDs
+6. Only if `python3 .claude/hooks/docs-policy.py is-on traceability_matrix_file` exits 0 (off in the lean docs profile): generate `docs/traceability-matrix.md` with all requirement IDs. Otherwise skip it; the live requirement → test trace is `agent_state/accept/acceptance_map.md`
 7. Run quality gate checklist — flag any unfilled sections
 8. Run 17-dimension gap-analysis checklist against the BRD itself (self-audit)
 9. Summarize what is complete vs. pending for the user
@@ -156,7 +156,7 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
 - [ ] Every requirement has a unique `FR-*`, `NFR-*`, or `OBJ-*` ID
 - [ ] No section is empty — minimum one row per table
 - [ ] All unresolved gaps captured in Open Questions
-- [ ] Traceability matrix covers 100% of requirement IDs
+- [ ] Traceability matrix (when the docs policy has it on) covers 100% of requirement IDs
 - [ ] Definition of Ready and Definition of Done checklists present
 - [ ] Every P0 FR-* has acceptance criteria: happy path + 2 error paths + 1 boundary
 - [ ] Every behavioral FR-* acceptance criterion is authored in EARS notation (one of the five templates, single SHALL per clause, no compound SHALLs) — see `~/.claude/skills/requirements/ears-notation.md`

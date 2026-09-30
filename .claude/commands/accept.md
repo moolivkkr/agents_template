@@ -333,6 +333,27 @@ cross_persona_flows:
 
 ---
 
+## Step 1a — Requirements → Acceptance Map (the BRD as it is TODAY)
+
+`/accept` proves the current BRD, not the BRD each phase saw. Requirements change between phases
+(change requests, `/recon --fix=docs --apply`, hand edits) and phases add FRs, so first compute which
+FRs have tests that match their current text:
+```bash
+python3 .claude/hooks/acceptance-map.py --all --out agent_state/accept/acceptance_map.json || true
+jq -r '.frs[] | select(.status=="CHANGED" or .status=="NEW" or .status=="PARTIAL") | "\(.fr) \(.status) [\(.priority)] phases=\(.phases|join(",")) \(.issues|join("; "))"' agent_state/accept/acceptance_map.json
+```
+
+| Status | What it means | What `/accept` does now |
+|---|---|---|
+| CHANGED | the FR's text changed after its tests were recorded; they check the old criteria | `spec_writer` `MODE: acceptance-amend` rewrites its TC-ACC rows in the owning phase; Step 3 updates the tests |
+| NEW / PARTIAL, as-built or in a gated phase | behaviour exists, rows are missing | same: amend rows, then Step 3 writes the tests |
+| NEW, in no phase plan, not as-built | a requirement nobody has built yet | not fixable here: it stays blocking; the report says "run `/plan`" |
+
+Spawn `spec_writer` (subagent_type: spec_writer) once with `MODE: acceptance-amend` and the fixable
+lines, wait for it, and pass the same list to Step 3's `acceptance_test_agent` as `CHANGED_FRS`.
+
+---
+
 ## Step 2 — Prepare Global Seed Data
 
 ### Priority order for seed data:
@@ -380,7 +401,13 @@ Write applied seed to `agent_state/accept/seed-applied.yaml` for traceability.
 
 ## Step 3 — Execute Global Use Cases
 
-**Agent:** `acceptance_test_agent`
+**Agent:** `acceptance_test_agent` (its `/accept` mode), with `CHANGED_FRS` from Step 1a.
+
+It runs the **whole committed suite** (`tests/acceptance/`, every phase's TC-ACC tests, through
+`commands."x:acceptance"`) against the release candidate, after updating the tests for the
+`CHANGED_FRS` rows. Sidecar: `agent_state/accept/acceptance_report.json`. New phases' tests are in
+the suite because each phase committed them; changed requirements' tests were brought up to date in
+Step 1a; the coverage check after the run (below) proves both.
 
 Execute use cases in this order:
 1. **Foundation use cases** — auth, basic CRUD (unblocks all other tests)
@@ -413,6 +440,21 @@ Acceptance criteria:
 ### Iteration on failure
 - Fix → re-test → max 2 rounds per use case
 - Failures after 2 rounds: logged as unresolved, product owner must accept risk before release
+
+### Requirement coverage check (after the run)
+```bash
+S=agent_state/accept/acceptance_report.json    # the acceptance_test_agent sidecar for this run
+python3 .claude/hooks/acceptance-map.py --all --results "$S" --merge-into "$S" --out agent_state/accept/acceptance_map.json
+MAP_RC=$?   # 0 = every Must/Should FR in the BRD has current, passing acceptance tests
+```
+`agent_state/accept/acceptance_map.md` is the live requirement → test matrix (it replaces the old
+`docs/traceability-matrix.md`). `MAP_RC != 0` caps release readiness at `NOT READY` and lists the FRs.
+When the release verdict is READY, record the baseline so the next requirement change is detected:
+```bash
+python3 .claude/hooks/acceptance-map.py --all --results "$S" --record --out agent_state/accept/acceptance_map.json
+```
+An FR the product owner says still holds after a wording-only change: `--ack FR-xxx "<why the tests
+still hold>"` (human decision; it is kept in the baseline).
 
 ---
 
@@ -637,8 +679,11 @@ Reconciliation gaps: N/N resolved
 Full report: agent_state/accept/pipeline_completeness_report.md
 Traceability matrix: agent_state/accept/traceability_matrix.md
 
+## Requirements → Acceptance (agent_state/accept/acceptance_map.md)
+FRs: N · COVERED N · CHANGED N · NEW N · PARTIAL N · FAILING N · UNTESTED N · orphan TC-ACC rows N
+
 ## Release Readiness
-READY — all use cases pass AND pipeline completeness >= 95%
+READY — all use cases pass AND every Must/Should FR is COVERED in the acceptance map AND pipeline completeness >= 95%
 NOT READY — N failures must be resolved OR pipeline completeness < 80%
 CONDITIONAL — N partial passes OR pipeline completeness 80-94%, product owner acceptance required
 ```
@@ -647,7 +692,9 @@ CONDITIONAL — N partial passes OR pipeline completeness 80-94%, product owner 
 
 ## Step 6 — Release Notes Generation
 
-After acceptance report is produced, auto-generate release notes from project artifacts:
+Runs when `python3 .claude/hooks/docs-policy.py is-on release_notes` exits 0 (on in the lean profile:
+generated from manifests, not maintained by hand). After the acceptance report is produced,
+auto-generate release notes from project artifacts:
 
 1. **Read all phase manifests** — extract `brd_requirements_met` per phase
    ```bash

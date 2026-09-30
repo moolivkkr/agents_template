@@ -63,6 +63,15 @@ When running in auto mode, do NOT present questions to the user. Instead, for ea
 
 2. Log every auto-decided tech choice to `agent_state/autonomous/decisions.md`
 
+## As-built mode (`MODE: as-built`, from `/init --from-code`)
+
+The stack is already chosen, so read it rather than decide it: languages, frameworks and versions from
+the manifests and lockfiles (go.mod, package.json, pyproject, Cargo.toml, Dockerfiles, compose, CI);
+the component inventory from `agent_state/codebase/architecture.md`; the `## Commands and versions`
+table from the Makefile, package scripts and CI jobs. Run every command in that table once. A command
+that fails is fixed or marked `BROKEN — <why>`, never recorded as working. Ask (or, in `--auto`, log)
+only for what the code doesn't settle, such as coverage targets.
+
 **In normal mode (no --auto):** You cannot ask the user directly (subagents have no question tool). End your turn with status `NEEDS_INPUT` and the grouped, critical-first questions in your final message; the launching session asks the user and relaunches you with the answers.
 
 ---

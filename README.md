@@ -204,7 +204,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 |---------|-------------|
 | `/startup:product-workflows` | **NEW** Product workflow intelligence — researches docs, videos, APIs, forums for a named product. Produces screen-by-screen workflows, config schemas, dependency graphs, API coverage matrix, persona flows |
 | `/startup:research` | Ultra-deep market & product research — vendors, capabilities, personas, moats. Produces `requirements/research/` that feeds `/init` |
-| `/startup:init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode |
+| `/startup:init` | Reads `requirements/`, creates BRD + IMPL_GUIDELINES, generates project-specific agents. Supports `--auto` for autonomous research mode. **`--from-code`** adopts an existing codebase with no BRD: maps the code, builds an as-built capability inventory, and writes the BRD (every FR sourced to file:line) + guidelines from it; then `/plan --phase=1 --as-built` → `/develop --phase=1` builds the spec + acceptance baseline |
 | `/startup:map` | **NEW** Analyzes codebase with 4 parallel mapper agents (tech, architecture, quality, concerns). Produces persistent knowledge base in `agent_state/codebase/` |
 | `/startup:discuss` | **NEW** Pre-planning context gathering — surfaces assumptions (CONFIRMED/DEDUCED/HYPOTHESIZED), researches gray area decisions, identifies risks. Run before `/plan` |
 | `/startup:plan` | Creates TRDs, typed data contracts, component-level UI specs, and **goal-backward verification** per phase. Supports `--auto` |
@@ -212,12 +212,13 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup:develop` | Implements phase end-to-end: audit → build checks → code → tests → review + acceptance (parallel) → gate. Supports `--auto`. Executed wave by wave through `/startup:develop-orchestrator` |
 | `/startup:develop-orchestrator` | The canonical `/develop` executor: the parent session spawns one named agent per wave step and verifies between waves. Supports `--auto` |
 | `/startup:autonomous` | Runs the full pipeline end-to-end — `/init` → `/map` → `/discuss` → `/plan` → `/design` → `/develop` for all phases, then `/accept`. One human checkpoint. Auto-researches all decisions. See [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
-| `/startup:accept` | Runs full-product acceptance tests + contract shape assertions after all phases. Supports `--auto` |
+| `/startup:accept` | Runs full-product acceptance tests + contract shape assertions after all phases, against the BRD as it is now: Step 1a amends TC-ACC rows for changed/new FRs, the whole committed suite runs, and `acceptance-map.py --all` must show every Must/Should FR COVERED for READY. Supports `--auto` |
 | `/startup:test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system / traceability / mobile) |
 | `/startup:stitch` | Google Stitch workbench — `init` (project + house-style design system), `generate`, `variants`, `edit`, `theme`, `sync` (into the wireframe contract, behind the design gate), `status` |
 | `/startup:ui-audit` | Audits every page of the running web + React Native UI against the design standards and its Stitch baseline. Report-only by default; `--fix=design\|code\|all`, `--approve=<pages>` |
 | `/startup:demo` | Prepares and dry-runs a stakeholder demo of a completed phase (`demo_documenter` → `demo_executor` → `demo_validator`) |
-| `/startup:recon` | Two-way reconcile requirements ↔ BRD ↔ TRD ↔ code ↔ tests. Bare = report only; `--fix=code` (spec wins, alias `/converge`); `--fix=docs` (as-built wins, alias `/reconcile`) |
+| `/startup:recon` | Two-way reconcile requirements ↔ BRD ↔ TRD ↔ code ↔ tests. Bare = report only; `--fix=code` (spec wins, alias `/converge`); `--fix=docs` (as-built wins, alias `/reconcile`). Doc changes flow on to acceptance: changed FRs show CHANGED and backfilled ones NEW in `acceptance-map.py` until their tests match |
+| `/startup:docs` | Which optional documents the pipeline maintains. Lean by default: architecture diagrams, ADR files (decisions still go to `docs/DECISIONS.md`), developer docs, phase sketches, `docs/traceability-matrix.md` and user stories are off. `/docs` shows each one's staleness (code commits since last update); `/docs architecture\|adr\|developer` writes a fresh sha-stamped snapshot; `--enable/--disable/--profile=full` change it |
 | `/startup:remember` | Records a Tier 0 ground-truth fact in `docs/PROJECT_FACTS.md` that every session and subagent honours |
 | `/startup:worklog` | Consolidates every phase's artifacts into one ledger, `docs/WORKLOG.md` |
 | `/startup:consolidate` | Off-path memory maintenance — dedup lessons/patterns, audit Tier 0 facts. Non-destructive |

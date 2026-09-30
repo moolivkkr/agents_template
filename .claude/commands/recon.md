@@ -77,6 +77,22 @@ requirement.
    - `--fix=docs` → run the **as-built doc update**: propose BRD/TRD/requirement edits; with `--apply`,
      write and commit them per repo. (Implementation: see [`/reconcile`](reconcile.md).)
 4. **Report:** always write the drift report; `--fix` modes append what they changed (or proposed).
+5. **Acceptance follow-through (`--fix=docs --apply`):** an FR the docs gained or changed is only
+   proven once acceptance tests exist for its current text. Run
+   `python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json` and
+   append its non-COVERED FRs to the report with the next step. Backfilled (UNSPEC) FRs carry
+   `Source: as-built: <file:line>`, so the next `/plan` pulls them in as acceptance-only scope.
+   DRIFT-DOC FRs in delivered phases show as CHANGED, and the next `/develop` gate (Wave 4 pre-step)
+   or `/accept` (Step 1a) updates their TC-ACC rows and tests.
+
+## Where each path starts
+
+| Situation | Start with |
+|---|---|
+| Code exists, no BRD/specs at all | `/init --from-code` → `/plan --phase=1 --as-built` → `/develop --phase=1` (builds the spec + acceptance baseline) |
+| BRD/specs exist; code moved on without them | `/recon --fix=docs --apply` → acceptance follow-through above |
+| BRD/specs exist; code is behind them | `/recon --fix=code --apply` → `/develop` |
+| A requirement changes on purpose | `product_manager` change request → the gate / `/accept` update its acceptance tests |
 
 **Non-destructive by default.** Bare `/recon` and both `--fix` modes without `--apply` change
 nothing — they only report/propose. Doc edits and code catch-up land only under `--apply`.
