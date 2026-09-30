@@ -1,0 +1,4 @@
+# Blocks in the UI framework packs that run.sh does NOT compile, each with the reason.
+# Format: <pack file>\t<the block's first non-empty line, exactly>\t<reason>
+# A row that matches no block fails the run (stale excuse); a block with neither a `file:` marker nor a
+# row here fails the run (unchecked example).

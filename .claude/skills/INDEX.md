@@ -240,11 +240,12 @@
 | `languages/rust.md` | Rust patterns — ownership, Result/Option error handling, traits, async with tokio, cargo layout, testing conventions | rust, ownership, async, traits, testing |
 | `languages/typescript.md` | TypeScript patterns — strict compiler config, discriminated unions, generics, type-safe API contracts, error handling, testing | typescript, types, generics, patterns, testing |
 
-## Frameworks (20)
+## Frameworks (21)
 
 | File | Description | Tags |
 |------|-------------|------|
 | `frameworks/actix-web.md` | Actix-web framework patterns for Rust HTTP APIs. | — |
+| `frameworks/angular.md` | Angular 22 patterns for ui_developer and ui_test_agent — HttpClient + interceptor for the one envelope, httpResource cursor lists, 4 states, Signal Forms with server details[], XSRF/cookie session/guards, [innerHTML] rules, route focus, Testing Library + MSW + axe (compile-checked) | angular, frontend, signals, httpresource, signal-forms, rxjs |
 | `frameworks/axum.md` | Axum framework patterns for Rust HTTP APIs. | — |
 | `frameworks/chi.md` | chi v5 patterns for Go HTTP APIs. | — |
 | `frameworks/django.md` | Django patterns for production-ready Python web applications. | — |
@@ -260,10 +261,10 @@
 | `frameworks/quarkus.md` | Quarkus framework patterns for Java cloud-native APIs. | — |
 | `frameworks/react.md` | React patterns for functional, accessible, maintainable UIs. | — |
 | `frameworks/spring-boot.md` | Spring Boot framework patterns — project structure, dependency injection, configuration, exception handling, validation, security, testing conventions | java, spring-boot, framework, backend |
-| `frameworks/svelte.md` | SvelteKit patterns — file-based routing, load functions, runes ($state/$derived/$effect), form actions, and server/client data boundaries | svelte, sveltekit, frontend, runes, ssr |
+| `frameworks/svelte.md` | SvelteKit 2 + Svelte 5 patterns for ui_developer and ui_test_agent — typed envelope client (load fetch + handleFetch), streamed cursor lists / Svelte Query, 4 states, Superforms actions with server details[], cookie session in hooks, {@html} rules, Testing Library + MSW + axe (compile-checked) | svelte, sveltekit, frontend, runes, ssr, superforms |
 | `frameworks/tanstack-query.md` | TanStack Query v5 patterns for React data fetching. | — |
 | `frameworks/trpc.md` | tRPC patterns — end-to-end type-safe procedures, Zod input validation, routers/context/middleware, and TanStack Query client integration | trpc, typescript, type-safety, api, zod |
-| `frameworks/vue.md` | Vue 3 Composition API patterns for reactive, maintainable UIs. | — |
+| `frameworks/vue.md` | Vue 3 patterns for ui_developer and ui_test_agent — typed envelope client, TanStack Vue Query cursor lists, 4 states, VeeValidate + Zod forms with server details[], cookie session + guards, v-html rules, route focus, Testing Library + MSW + axe (compile-checked) | vue, frontend, composition-api, tanstack-query, vee-validate, pinia |
 
 ## Infrastructure (10)
 
