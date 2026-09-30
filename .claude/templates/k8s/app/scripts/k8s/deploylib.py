@@ -6,6 +6,8 @@
   pick        <history.jsonl> [--differs name=ref ...]         print the newest HEALTHY entry (JSON);
                                                                with --differs, the newest HEALTHY one
                                                                whose images differ (= rollback target)
+  keep        <history.jsonl> [--n N]                          print the image refs of the newest N HEALTHY
+                                                               deploys (registry-prune.sh keeps these)
   stuck       [--digests sha256:...]  < kubectl get pods -o json
                                                                print "pod/container: reason: message" for
                                                                containers stuck in a state that never
@@ -68,6 +70,16 @@ def pick(path, differs):
     sys.exit(1)
 
 
+def keep(path, n):
+    try:
+        entries = [json.loads(l) for l in open(path) if l.strip()]
+    except FileNotFoundError:
+        return
+    for e in [e for e in entries if e.get("verdict") == "HEALTHY"][-n:]:
+        for ref in e.get("images", {}).values():
+            print(ref)
+
+
 STUCK = {"CreateContainerConfigError", "CreateContainerError", "ErrImagePull", "ImagePullBackOff",
          "InvalidImageName", "CrashLoopBackOff", "ErrImageNeverPull"}
 
@@ -114,6 +126,7 @@ def main():
     p = sub.add_parser("set-images"); p.add_argument("path"); p.add_argument("images", nargs="*")
     p = sub.add_parser("get-images"); p.add_argument("path")
     p = sub.add_parser("pick"); p.add_argument("history"); p.add_argument("--differs", nargs="*")
+    p = sub.add_parser("keep"); p.add_argument("history"); p.add_argument("--n", type=int, default=5)
     p = sub.add_parser("stuck"); p.add_argument("--digests", nargs="*")
     p = sub.add_parser("record")
     for k in ("root", "env", "ns", "sha", "url", "verdict", "steps", "smoke"):
@@ -123,6 +136,7 @@ def main():
     if a.cmd == "set-images": set_images(a.path, a.images)
     elif a.cmd == "get-images": get_images(a.path)
     elif a.cmd == "pick": pick(a.history, a.differs)
+    elif a.cmd == "keep": keep(a.history, a.n)
     elif a.cmd == "stuck": stuck(a.digests)
     else: record(a)
 

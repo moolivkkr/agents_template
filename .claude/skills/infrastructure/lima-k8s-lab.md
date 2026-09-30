@@ -76,6 +76,21 @@ errors.
 9. **dev and qa are isolated** by the `env-isolation` NetworkPolicy, which allows ingress only from
    the same namespace and from kube-system. Don't delete it, even though `admin` technically can.
 
+## Keeping it clean (automatic — don't add ad-hoc cleanup)
+
+| What accumulates | Who cleans it | When |
+|---|---|---|
+| Local Docker copies of pushed images | `deploy.sh` removes each tag right after `crane push` (build cache stays, so rebuilds stay fast) | every build |
+| Registry images for the app | `scripts/k8s/registry-prune.sh`. Keeps digests in use in `<app>-dev`/`<app>-qa` plus the newest 5 HEALTHY deploys per env (rollback targets), and deletes failed, dirty and superseded builds | after every HEALTHY deploy; by hand with `--dry-run` / `--keep N` |
+| Registry disk (layers of deleted images) | CronJob `sdlc-system/registry-gc` (`registry garbage-collect --delete-untagged`) | nightly 04:30 |
+| Old generated ConfigMaps/Secrets (`<name>-<hash>`) | `deploy.sh` deletes those of its own generators that the current render doesn't reference | after every HEALTHY deploy |
+| Finished migrate/seed Jobs and their pods | `ttlSecondsAfterFinished: 3600` (results are in `history.jsonl`) | 1 h after finishing |
+| Old ReplicaSets | `revisionHistoryLimit: 3` (rollback is by digest, not ReplicaSet) | on rollout |
+| `-dirty` image tags | only produced when a *build context* has uncommitted changes. Keep logs and outputs out of `services/*` | — |
+
+Cleanup never runs after a failed or DEGRADED deploy, so everything is left in place for debugging.
+Nothing ever deletes a namespace or a database volume except `env-reset.sh`.
+
 ## Endpoints
 
 | | dev | qa |

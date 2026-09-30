@@ -11,10 +11,12 @@ metadata: {name: db-migrate}
 spec:
   suspend: true
   schedule: "0 0 1 1 *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 2
-      ttlSecondsAfterFinished: 86400
+      ttlSecondsAfterFinished: 3600   # results live in agent_state/deploy/*/history.jsonl
       template:
         spec:
           restartPolicy: Never
@@ -40,10 +42,12 @@ metadata: {name: db-seed}
 spec:
   suspend: true
   schedule: "0 0 1 1 *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
   jobTemplate:
     spec:
       backoffLimit: 2
-      ttlSecondsAfterFinished: 86400
+      ttlSecondsAfterFinished: 3600   # results live in agent_state/deploy/*/history.jsonl
       template:
         spec:
           restartPolicy: Never

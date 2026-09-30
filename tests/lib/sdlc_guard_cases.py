@@ -105,6 +105,18 @@ CASES = [
  ("K52", "allow","Bash", "helm template ./charts/pg"),
  ("K53", "deny", "Bash", "k=kubectl; $k delete ns shop-qa"),                                    # command name via variable
  ("K54", "ask",  "Bash", "$KUBECTL get pods -n shop-dev"),                                      # unresolved command name
+ ("K55", "allow","Bash", f"export KUBECONFIG={PIN}; kubectl -n shop-dev rollout restart deploy/api"),  # export carries over
+ ("K56", "deny", "Bash", "export KUBECONFIG=~/.kube/config && kubectl get pods"),
+ ("K57", "deny", "Bash", f"export KUBECONFIG={PIN}; kubectl delete ns shop-dev"),
+ # --- heredocs: bodies are data unless a shell reads them or an unquoted body has $(...)
+ ("HD1", "allow","Bash", "python3 - <<'EOF'\nprint('kubectl delete ns shop-qa')\nEOF"),
+ ("HD2", "allow","Bash", "cat > notes.md <<'EOF'\nnever run: kubectl delete ns shop-qa; sudo rm -rf /\nEOF\necho done"),
+ ("HD3", "deny", "Bash", "bash <<'EOF'\nkubectl delete ns shop-qa\nEOF"),
+ ("HD4", "deny", "Bash", "cat <<EOF\n$(kubectl delete ns shop-qa)\nEOF"),
+ ("HD5", "allow","Bash", "cat <<EOF > x.txt\nhost=$HOSTNAME\nEOF"),
+ ("HD6", "deny", "Bash", "sh -s <<-'X'\n\tkubectl -n kube-system delete pod a\n\tX"),
+ ("HD7", "allow","Bash", "grep -c x <<< \"kubectl delete ns y\""),
+ ("HD8", "deny", "Bash", "cat > a.py <<'EOF'\nprint(1)\nEOF\nkubectl delete ns shop-qa"),    # command AFTER the body
  # --- namespace patterns (policy: "*-dev", "*-qa")
  ("NS1", "deny", "Bash", "kubectl apply -f x.yaml -n default"),
  ("NS2", "deny", "Bash", "kubectl apply -f x.yaml -n kube-dev"),                                # matches *-dev, but kube-* is reserved

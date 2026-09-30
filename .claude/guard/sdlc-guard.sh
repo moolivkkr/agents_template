@@ -120,6 +120,32 @@ def nested_bodies(tok):
     bodies += re.findall(r"`([^`]*)`", tok)
     return bodies
 
+# Heredoc bodies are DATA (file contents, python source, notes), not shell commands — except when a
+# shell reads them (`bash <<EOF`), and except for $(...) / backticks in an UNQUOTED heredoc, which run.
+HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
+SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+def split_heredocs(cmd):
+    """Return (cmd without heredoc bodies, bodies a shell executes, unquoted bodies to scan for $(...))."""
+    lines, out, shell_bodies, subst_bodies, i = cmd.split("\n"), [], [], [], 0
+    while i < len(lines):
+        line = lines[i]; out.append(line); i += 1
+        for m in HEREDOC_RE.finditer(line):
+            dash, quote, delim = m.group(1), m.group(2), m.group(3)
+            body = []
+            while i < len(lines):
+                l = lines[i]; i += 1
+                if (l.lstrip("\t") if dash else l).rstrip() == delim: break
+                body.append(l)
+            text = "\n".join(body)
+            words = re.split(r"\|\||&&|[|;&(]", line[:m.start()])[-1].split()
+            words = [w for w in words if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", w)]
+            consumer = os.path.basename(words[0]) if words else ""
+            if consumer in SHELLS and not any(w == "-c" for w in words):
+                shell_bodies.append(text)
+            elif not quote:
+                subst_bodies.append(text)
+    return "\n".join(out), shell_bodies, subst_bodies
+
 WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", "noglob", "exec", "caffeinate"}
 def strip_wrappers(argv, env):
     changed = True
@@ -136,6 +162,13 @@ def strip_wrappers(argv, env):
                     k, v = argv[0].split("=", 1); env[k] = expand(v, env)
                 argv = argv[1:]
             changed = True
+        elif a0 in ("export", "declare", "typeset", "local", "readonly") and all(
+                re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", a) or a.startswith("-") for a in argv[1:]):
+            # `export KUBECONFIG=...; kubectl ...` — the assignment applies to later segments
+            for a in argv[1:]:
+                if "=" in a and not a.startswith("-"):
+                    k, v = a.split("=", 1); env[k] = expand(v, env)
+            argv = []
         elif a0 in ("sudo", "doas", "su"):
             deny("sudo/su is never run by agents (user rule: system-wide changes need the human)")
         elif a0 in WRAPPERS:
@@ -530,6 +563,12 @@ KUBE_TOOLS = {"kubectl", "kubecolor", "oc", "stern"}
 def check_command(cmd, cwd, scratch, depth=0, env=None):
     if depth > 4: ask("command nesting too deep to analyse")
     env = dict(env or {})
+    cmd, shell_bodies, subst_bodies = split_heredocs(cmd)
+    for b in shell_bodies:
+        check_command(b, cwd, scratch, depth + 1, env)
+    for b in subst_bodies:
+        for body in nested_bodies(b):
+            check_command(body, cwd, scratch, depth + 1, env)
     for seg in segments(cmd, env):
         for tok in seg:
             for body in nested_bodies(tok):

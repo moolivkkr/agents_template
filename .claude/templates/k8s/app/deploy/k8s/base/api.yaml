@@ -6,6 +6,7 @@ kind: Deployment
 metadata: {name: api}
 spec:
   replicas: 1
+  revisionHistoryLimit: 3        # rollback is by digest (deploy.sh --rollback); old ReplicaSets are clutter
   selector: {matchLabels: {app: api}}
   template:
     metadata: {labels: {app: api}}

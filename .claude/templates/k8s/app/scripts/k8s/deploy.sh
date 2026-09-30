@@ -48,9 +48,10 @@ SHA="$(git_sha)"
 case "$MODE" in
   build)
     curl -sf -m 5 "http://$REGISTRY/v2/" >/dev/null || die "registry $REGISTRY not reachable (lab cluster forward down?)"
-    # the overlay digest blocks and agent_state/ evidence change on every deploy; they are not "source"
-    [ -z "$(git -C "$ROOT" status --porcelain -- . ':!deploy/k8s/overlays' ':!agent_state' 2>/dev/null)" ] \
-      || { SHA="$SHA-dirty"; log "working tree has uncommitted source changes: tagging $SHA"; }
+    # "-dirty" only when what goes INTO an image differs from HEAD: the build contexts, tracked or not
+    CTXS=(); while read -r name ctx _; do case "$name" in ''|'#'*) ;; *) CTXS+=("$ctx") ;; esac; done < "$K8S_DIR/images.txt"
+    [ -z "$(git -C "$ROOT" status --porcelain -- ${CTXS[@]+"${CTXS[@]}"} 2>/dev/null)" ] \
+      || { SHA="$SHA-dirty"; log "uncommitted changes in a build context: tagging $SHA"; }
     while read -r name ctx dockerfile; do
       case "$name" in ''|'#'*) continue ;; esac
       ref="$REGISTRY/$APP/$name:$SHA"
@@ -58,6 +59,7 @@ case "$MODE" in
       docker build -q --build-arg "GIT_SHA=$SHA" -t "$ref" -f "$ROOT/$ctx/${dockerfile:-Dockerfile}" "$ROOT/$ctx" >/dev/null
       docker save "$ref" -o "$TMP/$name.tar"
       pushed="$(crane push "$TMP/$name.tar" "$ref" 2>"$TMP/crane.err")" || die "push $ref failed: $(cat "$TMP/crane.err")"
+      docker image rm "$ref" >/dev/null 2>&1 || true   # the registry holds it now; build cache keeps rebuilds fast
       IMAGES+=("$name=$pushed"); log "pushed $pushed"
     done < "$K8S_DIR/images.txt"
     ;;
@@ -144,4 +146,20 @@ python3 "$DL" record --root "$ROOT" --env "$ENV_NAME" --ns "$NS" --sha "$SHA" --
   --verdict "$VERDICT" --mode "$MODE" --steps "{$STEPS}" --smoke "$SMOKE" \
   ${PHASE:+--phase "$PHASE"} --images "${IMAGES[@]}"
 log "$NS: $VERDICT ($MODE, $SHA) — $BASE_URL"
+
+# ── housekeeping (only after HEALTHY: nothing a working env needs is touched) ─────────────────────
+if [ "$VERDICT" = HEALTHY ]; then
+  # kustomize renames generated ConfigMaps/Secrets (<name>-<hash>) on every content change and `apply`
+  # never deletes: remove generated objects the current render no longer references.
+  current="$(kc apply -f "$TMP/rendered.yaml" --dry-run=client -o name 2>/dev/null | grep -E '^(configmap|secret)/' || true)"
+  prefixes="$(printf '%s\n' "$current" | sed -nE 's#^(configmap|secret)/(.*)-[a-z0-9]{10}$#\1/\2#p' | sort -u)"
+  for obj in $(kc get configmaps,secrets -o name 2>/dev/null); do
+    base="$(printf '%s' "$obj" | sed -nE 's#^(configmap|secret)/(.*)-[a-z0-9]{10}$#\1/\2#p')"
+    [ -n "$base" ] || continue
+    printf '%s\n' "$prefixes" | grep -qxF "$base" || continue          # not one of our generators
+    printf '%s\n' "$current" | grep -qxF "$obj" && continue             # the one in use
+    kc delete "$obj" --wait=false >/dev/null 2>&1 && log "removed stale $obj"
+  done
+  "$HERE/registry-prune.sh" >&2 || log "registry prune skipped (see above)"
+fi
 [ "$VERDICT" = HEALTHY ]

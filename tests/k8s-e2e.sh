@@ -24,7 +24,7 @@ bad() { echo "  ✗ FAIL: $1"; FAIL=$((FAIL+1)); }
 last() { tail -1 "$W/agent_state/deploy/$1/history.jsonl" | python3 -c "import json,sys; e=json.load(sys.stdin); print($2)"; }
 items() { curl -s -m 5 "http://hello-$1.localhost:18080/api/items" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["items"]))' 2>/dev/null; }
 
-W="$(mktemp -d "${TMPDIR:-/tmp}/k8s-e2e.XXXXXX")"
+W="$(mktemp -d "${TMPDIR:-/tmp}/k8s-e2e.XXXXXX")"; L="$(mktemp -d "${TMPDIR:-/tmp}/k8s-e2e-logs.XXXXXX")"   # logs OUTSIDE the project: an untracked file there would make every build "-dirty"
 cp -R "$REPO/tests/fixtures/k8s-hello/services" "$W/"
 bash "$REPO/.claude/templates/k8s/app/instantiate.sh" "$W" hello >/dev/null
 cd "$W" && git init -q && git add -A && git -c user.name=e2e -c user.email=e2e@localhost commit -qm "fixture v1"
@@ -37,7 +37,7 @@ for e in dev qa; do
   K="$(bash -c ". scripts/k8s/lib.sh; real_kubectl")"
   "$K" -n "hello-$e" delete deployments,statefulsets,cronjobs,jobs,services,ingresses,secrets,persistentvolumeclaims --all --wait=true --timeout=180s >/dev/null 2>&1
 done
-PHASE=1 bash scripts/k8s/deploy.sh dev >/dev/null 2>"$W/dev1.log" && ok "deploy.sh dev exit 0" || { bad "deploy.sh dev: $(tail -5 "$W/dev1.log")"; }
+PHASE=1 bash scripts/k8s/deploy.sh dev >/dev/null 2>"$L/dev1.log" && ok "deploy.sh dev exit 0" || { bad "deploy.sh dev: $(tail -5 "$L/dev1.log")"; }
 [ "$(last dev 'e["verdict"]')" = HEALTHY ] && ok "dev verdict HEALTHY" || bad "dev verdict $(last dev 'e["verdict"]')"
 [ "$(items dev)" = "alpha,beta,gamma" ] && ok "dev serves seeded items via ingress" || bad "dev items: '$(items dev)'"
 V=agent_state/phases/1/reports/deploy_verification.json
@@ -46,7 +46,7 @@ python3 -c "import json; d=json.load(open('$V')); assert d['verdict']=='PASS' an
 DEV1="$(last dev 'e["images"]["api"]')"
 
 echo "== 2 promote to qa"
-bash scripts/k8s/deploy.sh qa >/dev/null 2>"$W/qa1.log" && ok "deploy.sh qa exit 0" || bad "deploy.sh qa: $(tail -5 "$W/qa1.log")"
+bash scripts/k8s/deploy.sh qa >/dev/null 2>"$L/qa1.log" && ok "deploy.sh qa exit 0" || bad "deploy.sh qa: $(tail -5 "$L/qa1.log")"
 [ "$(last qa 'e["images"]["api"]')" = "$DEV1" ] && ok "qa runs dev's exact digest" || bad "qa digest $(last qa 'e["images"]["api"]') != $DEV1"
 [ "$(last qa 'e["steps"].get("digest_parity")')" = ok ] && ok "qa pods' imageIDs match the digest" || bad "qa digest parity"
 [ "$(curl -s -m 5 http://hello-qa.localhost:18080/api/version | python3 -c 'import json,sys; print(json.load(sys.stdin)["env"])')" = qa ] \
@@ -70,22 +70,43 @@ kubectl -n kube-system delete pod x >/dev/null 2>&1; [ $? = 126 ] && ok "shim re
 
 echo "== 5 env-reset qa"
 PVC1="$(kubectl -n hello-qa get pvc -o jsonpath='{.items[0].metadata.uid}')"
-bash scripts/k8s/env-reset.sh qa >/dev/null 2>"$W/reset.log" && ok "env-reset.sh qa exit 0" || bad "env-reset qa: $(tail -5 "$W/reset.log")"
+bash scripts/k8s/env-reset.sh qa >/dev/null 2>"$L/reset.log" && ok "env-reset.sh qa exit 0" || bad "env-reset qa: $(tail -5 "$L/reset.log")"
 PVC2="$(kubectl -n hello-qa get pvc -o jsonpath='{.items[0].metadata.uid}')"
 [ -n "$PVC2" ] && [ "$PVC1" != "$PVC2" ] && ok "qa database volume replaced" || bad "qa PVC not replaced ($PVC1 -> $PVC2)"
 [ "$(items qa)" = "alpha,beta,gamma" ] && ok "qa re-seeded after reset" || bad "qa items after reset: '$(items qa)'"
 
 echo "== 6 v2 to dev, then rollback"
+# plant a stale generated ConfigMap (what a changed configMapGenerator leaves behind) and an unrelated one
+kubectl -n hello-dev create configmap app-config-zzzzzzzzzz --from-literal=APP_ENV=stale >/dev/null
+kubectl -n hello-dev create configmap notes-abcde12345 --from-literal=k=v >/dev/null
 sed -i '' "s/('gamma')/('gamma'), ('delta')/" services/api/main.go && git -c user.name=e2e -c user.email=e2e@localhost commit -qam "v2: seed delta"
-bash scripts/k8s/deploy.sh dev >/dev/null 2>"$W/dev2.log" && ok "deploy.sh dev (v2) exit 0" || bad "deploy v2: $(tail -5 "$W/dev2.log")"
+bash scripts/k8s/deploy.sh dev >/dev/null 2>"$L/dev2.log" && ok "deploy.sh dev (v2) exit 0" || bad "deploy v2: $(tail -5 "$L/dev2.log")"
 DEV2="$(last dev 'e["images"]["api"]')"
 [ "$DEV2" != "$DEV1" ] && ok "v2 has a new digest" || bad "v2 digest unchanged"
 [ "$(items dev)" = "alpha,beta,gamma,delta" ] && ok "v2 seed applied" || bad "dev items v2: '$(items dev)'"
-bash scripts/k8s/deploy.sh dev --rollback >/dev/null 2>"$W/rb.log" && ok "deploy.sh dev --rollback exit 0" || bad "rollback: $(tail -5 "$W/rb.log")"
+bash scripts/k8s/deploy.sh dev --rollback >/dev/null 2>"$L/rb.log" && ok "deploy.sh dev --rollback exit 0" || bad "rollback: $(tail -5 "$L/rb.log")"
 [ "$(last dev 'e["images"]["api"]')" = "$DEV1" ] && [ "$(last dev 'e["mode"]')" = rollback ] && ok "dev rolled back to the v1 digest" || bad "rollback digest $(last dev 'e["images"]["api"]')"
 [ "$(python3 -c "import json; print(json.load(open('agent_state/deploy/last-deploy-status.json'))['status'])")" = HEALTHY ] \
   && ok "last-deploy-status.json HEALTHY" || bad "last-deploy-status.json not HEALTHY"
 
+echo "== 7 nothing left behind"
+n=0; for s in $(python3 -c "import json; [print(json.loads(l)['git_sha']) for l in open('agent_state/deploy/dev/history.jsonl')]" | sort -u); do
+  docker images -q "localhost:5001/hello/api:$s" | grep -q . && n=$((n + 1))
+done
+[ "$n" = 0 ] && ok "no local docker copies of this run's pushed images" || bad "$n of this run's images still in local docker"
+kubectl -n hello-dev get configmap app-config-zzzzzzzzzz >/dev/null 2>&1 && bad "stale generated ConfigMap not removed" || ok "stale generated ConfigMap removed after HEALTHY deploy"
+kubectl -n hello-dev get configmap notes-abcde12345 >/dev/null 2>&1 && ok "unrelated ConfigMap left alone" || bad "unrelated ConfigMap deleted"
+kubectl -n hello-dev delete configmap notes-abcde12345 --wait=false >/dev/null 2>&1
+for e in dev qa; do
+  c="$(kubectl -n "hello-$e" get configmaps,secrets -o name | grep -cE '/(app-config|db-credentials)-')"
+  [ "$c" = 2 ] && ok "hello-$e: exactly one app-config + one db-credentials" || bad "hello-$e: $c generated objects (want 2)"
+done
+tags="$(crane ls localhost:5001/hello/api 2>/dev/null | wc -l | tr -d ' ')"
+[ "$tags" -ge 1 ] && [ "$tags" -le 2 ] && ok "registry holds only v1+v2 ($tags tags) — earlier runs pruned" || bad "registry has $tags hello/api tags"
+[ -z "$(git status --porcelain -- services)" ] && ok "build contexts clean (no -dirty tags)" || bad "build context dirty"
+case "$(last dev 'e["git_sha"]')" in *-dirty) bad "dev deployed a -dirty build" ;; *) ok "deployed builds are not -dirty" ;; esac
+
 echo "────────────────────────────────────────────"
-echo "k8s-e2e.sh: $PASS passed, $FAIL failed   (project left at $W; envs stay up: http://hello-dev.localhost:18080 http://hello-qa.localhost:18080)"
+if [ "$FAIL" -eq 0 ]; then rm -rf "$W" "$L"; WHERE="temp project removed"; else WHERE="project kept for debugging: $W, logs: $L"; fi
+echo "k8s-e2e.sh: $PASS passed, $FAIL failed   ($WHERE; envs stay up: http://hello-dev.localhost:18080 http://hello-qa.localhost:18080)"
 [ "$FAIL" -eq 0 ]

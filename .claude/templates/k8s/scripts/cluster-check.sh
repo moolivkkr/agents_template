@@ -8,7 +8,7 @@
 #   pod-ip    pod -> pod across nodes, both directions, ROUNDS times
 #   svc-dns   pod -> Service by DNS name across nodes, both directions, ROUNDS times
 #   ingress   http://sdlc-check.localhost:18080 from this Mac (Traefik via the Lima forward)
-# Everything it creates lives in namespace sdlc-system and is deleted at the end.
+# Everything it creates (pods, services, ingress in sdlc-system, and its registry image) is deleted at the end.
 set -uo pipefail
 ADMIN_KC="${ADMIN_KC:-$HOME/.kube/sdlc-lab-admin.yaml}"
 REGISTRY="${REGISTRY:-localhost:5001}"
@@ -21,7 +21,10 @@ PASS=0; FAIL=0
 ok()  { echo "  PASS $1"; PASS=$((PASS+1)); }
 bad() { echo "  FAIL $1"; FAIL=$((FAIL+1)); }
 fetch() { "${K[@]}" exec "$1" -- wget -qO- -T 5 "$2" 2>/dev/null | grep -q '<title>Welcome'; }
-cleanup() { "${K[@]}" delete pod,svc,ingress -l sdlc-check=1 --ignore-not-found --wait=false >/dev/null 2>&1; }
+cleanup() {
+  "${K[@]}" delete pod,svc,ingress -l sdlc-check=1 --ignore-not-found --wait=false >/dev/null 2>&1
+  d="$(crane digest "$IMG" 2>/dev/null)" && crane delete "${IMG%:*}@$d" >/dev/null 2>&1   # leave the registry as found
+}
 trap cleanup EXIT
 
 echo "== nodes"
