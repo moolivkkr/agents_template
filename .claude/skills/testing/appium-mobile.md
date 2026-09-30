@@ -46,8 +46,8 @@ npx appium --port 4723
 - Avoid XPath: it is slow on iOS and breaks with every layout change.
 
 ```ts
-// TC-ME2E-001
-await $('~login.email').setValue('qa@example.com');
+// inside it('TC-ME2E-20101 signs in and shows orders', …) — the ID goes in the test title
+await $('~login.email').setValue(process.env.E2E_BUYER_EMAIL);
 await $('~login.submit').click();
 await $('~orders.list').waitForDisplayed({ timeout: 15000 });
 ```

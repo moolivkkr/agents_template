@@ -13,15 +13,29 @@ export default defineConfig({
     environment: "jsdom",             // DOM APIs for component tests
     setupFiles: ["./src/test/setup.ts"],
     css: true,                        // process CSS imports
+    allowOnly: false,                 // a committed it.only fails the run instead of silencing its siblings
+    retry: 0,                         // no retries to green: a flaky test is a failing test
     coverage: {
       provider: "v8",
-      reporter: ["text", "lcov"],
+      reporter: ["text", "lcov", "json-summary"],
       include: ["src/**/*.{ts,tsx}"],
       exclude: ["src/**/*.test.*", "src/test/**"],
     },
   },
 })
 ```
+
+**Evidence for the pipeline:** the command in `agent_state/config/verify-commands.json` writes JUnit
+under the phase's junit directory, for example
+`vitest run --reporter=default --reporter=junit --outputFile.junit=agent_state/phases/$PHASE/junit/ui.xml`.
+`junit-to-sidecar.py` turns that into the gate's sidecar (`test-results-sidecar.md`).
+
+**Jest** has no `allowOnly` switch. Use `eslint-plugin-jest`'s `no-focused-tests` and
+`no-disabled-tests` rules as errors, and `jest --ci` (which refuses to write new snapshots). For JUnit
+output use `jest-junit` with `JEST_JUNIT_OUTPUT_FILE=agent_state/phases/$PHASE/junit/ui.xml`.
+
+Default test file names are `*.test.ts(x)` / `*.spec.ts(x)`. Vitest's default `include` doesn't match
+`foo_test.ts`, so a file named that way silently never runs.
 
 ## Setup File
 ```typescript
@@ -136,6 +150,9 @@ vitest run -t "formats"    # run tests matching name pattern
 ```
 
 ## Rules
+- Put the TC ID at the start of the test title: `it("TC-UI-20107 shows a skeleton while loading", …)` (`test-case-traceability.md`)
+- API mocks (MSW) are typed from the envelope (`msw.md`); `vi.mock` of the API client is for unit tests of non-UI modules only
+- Snapshots never replace behaviour assertions, and a snapshot update needs a reason in `test-changes.json`
 - Use `screen.getByRole` over `getByTestId` — tests should mirror how users interact
 - Use `userEvent` over `fireEvent` — it simulates real browser behavior (focus, blur, typing)
 - Use `findBy*` (async) for elements that appear after state updates or fetches

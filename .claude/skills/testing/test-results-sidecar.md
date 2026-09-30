@@ -2,7 +2,8 @@
 
 Every agent that runs tests (`unit_test_agent`, `integration_test_agent`, `ui_test_agent`,
 `mobile_test_agent`, `e2e_orchestrator`, `mobile_e2e_orchestrator`, `acceptance_test_agent`,
-`performance_agent`, `test_runner`) writes a **JSON sidecar** next to its markdown report. The same goes
+`performance_agent`, `system_test_agent`, `test_runner`) writes a **JSON sidecar** next to its markdown
+report. The same goes
 for `scripts/k8s/deploy.sh` and `spec_test_reconciler`: the report path it logs in `execution.jsonl` is
 `reports/<name>.md`, and the sidecar is `reports/<name>.json`.
 
@@ -28,17 +29,22 @@ python3 .claude/hooks/junit-to-sidecar.py --tier unit --command "<the command yo
 | Playwright | `reporter: [['junit', { outputFile: 'e2e.xml' }]]`, with `failOnFlakyTests: true` in CI |
 | Maestro | `maestro test --format junit --output mobile.xml .maestro/` |
 | Rust | `cargo nextest run --profile ci` (JUnit enabled in `.config/nextest.toml`) |
-| k6 / load | `performance_agent` writes the sidecar directly from k6's `--summary-export` (see its agent file) |
+| k6 / load | `performance_agent` builds the sidecar from k6's `handleSummary()` JSON, one case per NFR threshold (see its agent file). `--summary-export` inverts the threshold flag and is marked for deprecation. |
 
-Hand-written sidecars are allowed only where no runner exists: acceptance use cases run by the agent,
-and deploys (written by `deploylib.py`). Both must still carry `code_sha` and per-case verdicts.
+Acceptance and system tests are committed, runnable specs too, so their sidecars also come from JUnit.
+The agent then adds an `UNTESTED` case for every in-scope TC row of its tier that no executed test
+covered. A sidecar is hand-written only in two cases:
+- a tier that couldn't run at all (verdict `BLOCKED`, every case `UNTESTED`, with the reason);
+- deploys (written by `deploylib.py`).
+
+Both still carry `code_sha` and per-case verdicts.
 
 ## Schema — `sdlc.test-results/v1`
 
 ```json
 {
   "schema": "sdlc.test-results/v1",
-  "tier": "unit|integration|ui|e2e|mobile|acceptance|performance|a11y|deploy|tc-inventory|all",
+  "tier": "unit|integration|ui|e2e|mobile|device|acceptance|performance|system|a11y|deploy|tc-inventory|all",
   "verdict": "PASS|FAIL|ERROR|BLOCKED",
   "total": 42, "passed": 41, "failed": 1, "skipped": 0, "flaky": 0,
   "code_sha": "<full sha of the last commit touching code — see below>",

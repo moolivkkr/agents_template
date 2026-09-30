@@ -20,9 +20,83 @@
 | **Error rate** | Percentage of failed requests | < 0.1% under load |
 | **Concurrent users** | Simultaneous active connections | Service-dependent |
 
+## Open vs closed model — and why the gate uses open
+
+A load model decides **when the next request starts**:
+
+| Model | Next request starts… | k6 executors | Use for |
+|---|---|---|---|
+| **Closed** | when a virtual user's previous request finishes (+ think time) | `constant-vus`, `ramping-vus`, `per-vu-iterations`, `shared-iterations` | "how many concurrent sessions can we hold" |
+| **Open** | on a schedule, at a fixed arrival rate, whether earlier requests finished or not | `constant-arrival-rate`, `ramping-arrival-rate` | **NFR targets stated as a rate** ("p95 < 300 ms at 50 req/s"): the pipeline's gated load test |
+
+**Coordinated omission.** In a closed model, a slow server slows the load generator down with it.
+Each virtual user waits for its stuck request, so fewer requests are sent exactly while latency is
+bad. The slow period is under-sampled, and p95/p99 look better than what users feel. An open model
+keeps sending at the target rate, so the queueing shows up in the percentiles (see k6 docs, "Open and
+closed models").
+
+When the system can't keep up, k6 reports **`dropped_iterations`**: it had no free VU to start an
+iteration on schedule. A run with dropped iterations did not apply the target rate. Treat that as a
+failed run (threshold `dropped_iterations: ["count==0"]`) and raise `maxVUs`, not the rate.
+
+## The gated NFR load test (performance_agent)
+
+One scenario per NFR-PERF target, at the NFR's own rate, against the **deployed qa build**, with the
+NFR's limits as thresholds. Each scenario has a warm-up first: a short low-rate phase whose samples
+are excluded by tag.
+
+```javascript
+// tests/perf/nfr-perf.js — committed; run by commands."x:perf" (or `k6 run tests/perf/nfr-perf.js`)
+import http from "k6/http";
+import { check } from "k6";
+
+const BASE = __ENV.APP_BASE_URL;                     // the deployed build (qa); required
+if (!BASE) throw new Error("APP_BASE_URL not set");
+const TOKEN = __ENV.PERF_TOKEN;                      // from the environment, never committed
+
+export const options = {
+  scenarios: {
+    // TC-PERF-20101 / NFR-PERF-003: GET /orders at 50 req/s — p95 < 300 ms, p99 < 800 ms, errors < 0.1 %
+    warmup_orders: { executor: "constant-arrival-rate", rate: 10, timeUnit: "1s", duration: "30s",
+                     preAllocatedVUs: 20, maxVUs: 100, exec: "listOrders", tags: { phase: "warmup" } },
+    TC_PERF_20101: { executor: "constant-arrival-rate", rate: 50, timeUnit: "1s", duration: "5m",
+                     startTime: "30s", preAllocatedVUs: 50, maxVUs: 400, exec: "listOrders",
+                     tags: { tc: "TC-PERF-20101", phase: "measure" } },
+  },
+  thresholds: {
+    "http_req_duration{tc:TC-PERF-20101,phase:measure}": ["p(95)<300", "p(99)<800"],
+    "http_req_failed{tc:TC-PERF-20101,phase:measure}": ["rate<0.001"],
+    "dropped_iterations{scenario:TC_PERF_20101}": ["count==0"],
+  },
+  summaryTrendStats: ["avg", "med", "p(90)", "p(95)", "p(99)", "max"],
+};
+
+export function listOrders() {
+  const r = http.get(`${BASE}/api/v1/orders?limit=20`, { headers: { Authorization: `Bearer ${TOKEN}` } });
+  check(r, { "200": (res) => res.status === 200 });
+}
+
+export function handleSummary(data) {             // the machine-readable result performance_agent converts
+  return { [__ENV.K6_SUMMARY || "k6-summary.json"]: JSON.stringify(data) };
+}
+```
+
+- **Duration:** at least 5 minutes at the target rate. 100 samples can't give a stable p99. At 50
+  req/s, 5 minutes gives 15,000.
+- **Thresholds are the NFR, verbatim.** Never loosen a threshold to pass. A miss is a finding for the
+  owning developer, or a DECISIONS.md entry that changes the NFR.
+- **k6 exits 99 when a threshold fails.** Keep the exit code (`rc=$?`, no pipe into `tee`).
+- **Read results from `handleSummary`.** In its data, `metrics["<metric>{<tags>}"].thresholds["<expr>"].ok`
+  is `true` when the threshold held. The older `--summary-export` file uses the opposite convention
+  (`true` = failed), and k6 marks it for future deprecation.
+- **Record the conditions** with the numbers: environment and URL, deployed code sha, replicas, CPU
+  and memory limits, the dataset size, and the k6 version.
+- Test on qa, never production. qa's resources are small (lab pods request 50m CPU), so a qa pass
+  proves the code has no gross inefficiency at the stated rate. It doesn't prove production capacity.
+
 ## k6 (JavaScript — Recommended for REST APIs)
 
-### Basic Load Test
+### Basic Load Test (closed model — capacity exploration, not the NFR gate)
 ```javascript
 import http from "k6/http";
 import { check, sleep } from "k6";
@@ -47,8 +121,8 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || "http://localhost:8080";
-const AUTH_TOKEN = __ENV.AUTH_TOKEN || "test-token";
+const BASE_URL = __ENV.APP_BASE_URL;   // the deployed build; no localhost default
+const AUTH_TOKEN = __ENV.AUTH_TOKEN;   // from the environment; never a committed default
 
 export default function () {
   const headers = {
@@ -126,33 +200,39 @@ export const options = {
 
 ### Running k6
 ```bash
-# Local execution
-k6 run --env BASE_URL=http://localhost:8080 load-test.js
+# Against the deployed build
+k6 run --env APP_BASE_URL="$APP_BASE_URL" load-test.js
 
-# With HTML report
+# Raw per-request samples (large) for later analysis
 k6 run --out json=results.json load-test.js
-# Convert to HTML: k6-reporter results.json
 
-# CI execution with exit code
-k6 run --quiet --summary-export=summary.json load-test.js
-# Exit code 99 if thresholds fail — use in CI to fail the pipeline
+# CI / pipeline: keep the exit code (99 = a threshold failed); results via handleSummary()
+k6 run --quiet --env APP_BASE_URL="$APP_BASE_URL" --env K6_SUMMARY=k6-summary.json tests/perf/nfr-perf.js; rc=$?
 ```
 
 ## Locust (Python)
 
 ```python
+import os
+import time
+
 from locust import HttpUser, task, between
 
 class WidgetUser(HttpUser):
-    wait_time = between(1, 3)  # think time between tasks
-    host = "http://localhost:8080"
+    wait_time = between(1, 3)  # think time between tasks (closed model)
+    host = os.environ["APP_BASE_URL"]
 
     def on_start(self):
-        """Called once per simulated user — setup auth."""
+        """Called once per simulated user — setup auth and one widget to read."""
         self.headers = {
-            "Authorization": f"Bearer {self.environment.parsed_options.auth_token}",
+            "Authorization": f"Bearer {os.environ['AUTH_TOKEN']}",
             "Content-Type": "application/json",
         }
+        response = self.client.post(
+            "/api/v1/widgets", json={"name": f"widget-{time.time()}", "description": "load test"},
+            headers=self.headers,
+        )
+        self.widget_id = response.json()["data"]["id"] if response.status_code == 201 else None
 
     @task(3)  # weight: 3x more likely than other tasks
     def list_widgets(self):
@@ -160,7 +240,8 @@ class WidgetUser(HttpUser):
 
     @task(2)
     def get_widget(self):
-        self.client.get(f"/api/v1/widgets/{self.widget_id}", headers=self.headers)
+        if self.widget_id:
+            self.client.get(f"/api/v1/widgets/{self.widget_id}", headers=self.headers)
 
     @task(1)
     def create_widget(self):
@@ -189,8 +270,8 @@ import scala.concurrent.duration._
 
 class WidgetSimulation extends Simulation {
   val httpProtocol = http
-    .baseUrl("http://localhost:8080")
-    .header("Authorization", "Bearer test-token")
+    .baseUrl(sys.env("APP_BASE_URL"))
+    .header("Authorization", s"Bearer ${sys.env("AUTH_TOKEN")}")
     .header("Content-Type", "application/json")
 
   val scn = scenario("Widget CRUD")
@@ -326,8 +407,11 @@ Duration: Hold steady state for at least 5 minutes before measuring
 ```
 
 ## Rules
-- Always ramp up gradually — never start at full load (cold caches, connection pools)
-- Include think time (sleep/pause) — real users don't fire requests continuously
+- Gate NFR-PERF targets with an **open model** (`constant-arrival-rate`) at the NFR's rate; a closed-model result under-reports tail latency (coordinated omission)
+- A run with `dropped_iterations > 0` didn't apply the target load — it's a failed run, not a pass
+- Warm up before measuring (a low-rate phase excluded from the thresholds by tag) — cold caches and pools are not the steady state
+- Think time (sleep/pause) belongs in closed-model capacity and soak tests; an arrival-rate scenario sets the rate directly
+- Credentials and the base URL come from the environment (`APP_BASE_URL`, a token variable) — never a committed default
 - Tag requests by name — enables per-endpoint metric analysis
 - Set thresholds and fail CI on breach — p95 latency and error rate are the minimum
 - Test against staging, not production — unless you have traffic replay capability
