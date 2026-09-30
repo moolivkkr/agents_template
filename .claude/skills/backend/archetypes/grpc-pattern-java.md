@@ -13,6 +13,8 @@ tags:
 
 # gRPC Pattern — Java
 
+> Java samples compile-checked 2026-09-30 against code generated from `grpc-pattern.md`'s protos: JDK 25.0.4.1, Spring Boot 4.1.1 (grpc-java 1.83.1, protobuf 4.35.1), Maven 3.9.16; the Gradle snippet generates and compiles with Gradle 9.8.0 (`tests/archetype-compile/java/run.sh`).
+
 > **Canonical reference**: This is the Java counterpart to `grpc-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Java gRPC uses `grpc-java` for the runtime, `protobuf-gradle-plugin` or `protobuf-maven-plugin` for code generation, and optionally `grpc-spring-boot-starter` for Spring Boot integration.

@@ -153,8 +153,12 @@ BLOCKS[f"{EH}#2"] = File(package="com.example.app.exception",
 SKIP[f"{EH}#5"] = "comment-only: the wrapping rules as prose (every line is a // comment)"
 BLOCKS[f"{EH}#6"] = File(package="com.example.app.controller", test=True, imports=(
     "com.example.app.exception.ConflictException", "com.example.app.exception.ResourceNotFoundException",
-    "com.example.app.service.WidgetService", "org.junit.jupiter.api.Test",
-    "org.springframework.beans.factory.annotation.Autowired",
+    "com.example.app.service.WidgetService", "com.example.app.config.SecurityConfig",
+    "com.example.app.security.SecurityErrorDelegate", "com.example.app.security.UserPrincipal",
+    "org.junit.jupiter.api.Test", "org.springframework.beans.factory.annotation.Autowired",
+    "org.springframework.context.annotation.Import", "org.springframework.test.context.TestPropertySource",
+    "org.springframework.security.core.authority.SimpleGrantedAuthority", "java.util.List",
+    S + "org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user",
     "org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest",
     "org.springframework.http.MediaType",
     "org.springframework.test.context.bean.override.mockito.MockitoBean",
@@ -405,7 +409,7 @@ PREVIEW_POM = """  <build>
 # ── units ──────────────────────────────────────────────────────────────────────────────────────────
 UNITS = [
     Unit("error-handling-java", own=ids(EH, 1, 2, 3, 4, 6),
-         deps=ENTITY + DTO + ENVELOPE + CONTROLLER + ids(HANDLER, 7) + SERVICE_API),
+         deps=ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3)),
     Unit("crud-repository-java", own=rng(REPO, 1, 10), deps=EXCEPTIONS + ENVELOPE, stubs=("crud-repository",)),
     Unit("crud-handler-java-entity", own=ids(HANDLER, 1),
          deps=[(f"{REPO}#2", File(only=("WidgetStatus",)))]),
@@ -489,7 +493,13 @@ BUILD_SNIPPETS = {
         name="grpc-gradle-codegen", template="grpc-groovy", build_file="build.gradle",
         tasks=("compileJava",), protos=PROTOS),
 }
-SKIP[f"{OBS}#xml2"] = ("logback-spring.xml is runtime logging config, not a build file; its <springProfile> "
-                       "tags need Spring Boot's LoggingSystem, so it is not loaded here")
-SKIP[f"{PERF}#xml1"] = ("caffeine-cache.xml is runtime JCache config, not a build file (not verified: see the "
-                        "harness README note)")
+SKIP[f"{OBS}#xml2"] = ("logback-spring.xml is runtime logging config, not a build file; its <springProfile> tags "
+                       "need Spring Boot's LoggingSystem, so this harness does not load it. (Loaded once on 2026-09-30: "
+                       "logback 1.5.38 + logstash-logback-encoder 9.0 took the production profile without warnings "
+                       "and <decorator> redacted a structured `password` field.)")
+SKIP[f"{PERF}#xml1"] = ("caffeine-cache.xml is runtime JCache config, not a build file. NOT verified, and likely "
+                        "wrong: Caffeine's JCache provider is configured with Typesafe Config (application.conf), "
+                        "not jsr107 XML")
+SKIP[f"{PERF}#scala1"] = ("Gatling simulation (Scala), outside this Java harness. Not compiled. Reviewed by eye only: it "
+                          "sends the tenant as an X-Tenant-ID header (the tenant comes from the verified token) and "
+                          "reads $.id where the envelope puts it at $.data.id")

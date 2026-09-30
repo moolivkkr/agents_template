@@ -22,10 +22,11 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
 ARCH = ROOT / ".claude" / "skills" / "backend" / "archetypes"
 sys.path.insert(0, str(HERE))
+sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import units as U  # noqa: E402
 
 FENCE = re.compile(r"^```([A-Za-z0-9_+-]*)\s*$")
-JVM_LANGS = {"java", "kotlin", "groovy", "xml"}
+JVM_LANGS = {"java", "kotlin", "groovy", "xml", "scala"}   # non-Java ones: BUILD_SNIPPETS or SKIP
 
 
 # ─────────────────────────────── markdown extraction ───────────────────────────────
@@ -86,7 +87,7 @@ def inventory():
     for md in sorted(p.name for p in ARCH.glob("*.md")):
         blocks = read_blocks(md)
         n = sum(1 for b in blocks if b.lang == "java")
-        jvm = [b for b in blocks if b.lang in JVM_LANGS - {"java"}]
+        jvm = [b for b in blocks if b.lang in JVM_LANGS - {"java"}] if md.endswith("-java.md") else []
         if n or md in U.JAVA_BLOCKS:
             found[md] = n
             want = U.JAVA_BLOCKS.get(md)
@@ -130,12 +131,11 @@ def inventory():
 
 TYPE_DECL = re.compile(r"\b(class|interface|enum|record)\s+([A-Z]\w*)")
 IMPORT = re.compile(r"^\s*import\s+(static\s+)?[\w.]+(\.\*)?\s*;\s*(//.*)?$")
-PACKAGE = re.compile(r"^\s*package\s+([\w.]+)\s*;\s*$")
 
 
 def strip_code(lines):
-    """Per line: the code with comments and literal contents blanked, plus depth bookkeeping.
-    Returns list of (code_only_text, paren_delta, brace_delta)."""
+    """Per line: the code with comments removed and string/char/text-block contents blanked, so braces and
+    parentheses can be counted."""
     out = []
     in_block = in_text = False
     for line in lines:
@@ -192,7 +192,7 @@ def chunks(lines):
     """Split source lines into top-level chunks: (kind, start, end_exclusive, name).
     kind: package | import | type | member (a method/field/statement at top level) | blank."""
     code = strip_code(lines)
-    res, start, paren, brace, pending_type = [], 0, 0, 0, False
+    res, start, paren, brace = [], 0, 0, 0
     for i, c in enumerate(code):
         for ch in c:
             if ch == "(":
@@ -372,8 +372,7 @@ def layout_unit(unit, dest):
     """Write one Maven module. Returns {generated_path: line_map}."""
     mod = dest / unit.name
     files, hosts, into = {}, {}, []
-    all_blocks = [(b, False) for b in unit.own] + [(b, True) for b in unit.deps]
-    for d, is_dep in all_blocks:
+    for d in list(unit.own) + list(unit.deps):
         bid = dep_id(d)
         blk = block(bid)
         spec = d[1] if isinstance(d, tuple) else U.BLOCKS.get(bid, U.File())
@@ -382,8 +381,11 @@ def layout_unit(unit, dest):
         lines = transformed(blk, spec)
         segs = split_segments(blk, spec, lines) if isinstance(spec, U.Split) else [(0, len(lines), spec)]
         block_imports = [(i, l) for i, l in enumerate(lines) if IMPORT.match(l)]
-        for lo, hi, sub in segs:
-            emit(unit, mod, blk, lines, lo, hi, sub, block_imports, files, hosts, into)
+        produced = sum(emit(unit, mod, blk, lines, lo, hi, sub, block_imports, files, hosts, into)
+                       for lo, hi, sub in segs)
+        if produced == 0 and d in unit.own:
+            raise SystemExit(f"FAIL layout: {bid} produced no source, so nothing of it would be compiled — "
+                             f"skip it with a reason or give it a layout")
     for (host_id, blk, lines, lo, hi, imports) in into:
         if host_id not in hosts:
             raise SystemExit(f"FAIL config: {blk.id} goes Into {host_id}, which is not laid out in {unit.name}")
@@ -438,7 +440,7 @@ def emit(unit, mod, blk, lines, lo, hi, spec, block_imports, files, hosts, into)
     if isinstance(spec, U.Into):
         extra_imports = [(None, f"import {x};") for x in spec.imports]
         into.append((spec.host, blk, lines, lo, hi, block_imports + extra_imports))
-        return
+        return 1
     root = "src/test/java" if spec.test else "src/main/java"
     seg = lines[lo:hi]
     extra = [f"import {x};" for x in spec.imports]
@@ -475,25 +477,20 @@ def emit(unit, mod, blk, lines, lo, hi, spec, block_imports, files, hosts, into)
             s, e = strays[0]
             raise SystemExit(f"FAIL layout: {blk.id} line {blk.md_line(lo + s)}: top-level code outside a type "
                              f"({lines[lo + s].strip()[:60]!r}) — lay it out as Members/Statements or Split it")
-        pre = 0  # leading comments before the first type attach to it
-        for kind, s, e, name in parts:
-            if kind != "type":
-                if kind == "blank":
-                    pass
-                pre = pre if kind in ("package", "import") else pre
-                continue
-            if spec.only and name not in spec.only:
+        emitted = 0
+        for kind, s, e, name in parts:   # comments above a type are part of its chunk
+            if kind != "type" or (spec.only and name not in spec.only):
                 continue
             out = Out(f"{root}/{pkg.replace('.', '/')}/{name}.java")
             header(out, pkg)
             out.add("")
-            # attach comment lines directly above this chunk that belong to no other chunk
             out.add_block_lines(blk, lo + s, lo + e, lines)
-            close = [len(out.lines) - 1]
+            close = [len(out.lines) - 1]   # the type's closing brace: Into blocks are inserted before it
             while close[0] > 0 and "}" not in out.lines[close[0]]:
                 close[0] -= 1
             register(out.rel, out, close)
-        return
+            emitted += 1
+        return emitted
 
     if isinstance(spec, (U.Members, U.Statements)):
         pkg = spec.package
@@ -522,7 +519,7 @@ def emit(unit, mod, blk, lines, lo, hi, spec, block_imports, files, hosts, into)
             out.add("    }")
         out.add("}")
         register(out.rel, out, [len(out.lines) - 1])
-        return
+        return 1
     raise SystemExit(f"unknown spec {spec!r} for {blk.id}")
 
 
@@ -622,8 +619,8 @@ def layout(dest):
     (dest / "gradle.json").write_text(json.dumps(gradle))
     (dest / "snippets.json").write_text(json.dumps(snippets))
     (dest / "units.json").write_text(json.dumps(
-        [{"name": u.name, "own": u.own} for u in U.UNITS] +
-        [{"name": s["name"], "own": [s["block"]]} for s in snippets]))
+        [{"name": u.name, "own": u.own, "kind": "java"} for u in U.UNITS] +
+        [{"name": s["name"], "own": [s["block"]], "kind": "snippet"} for s in snippets]))
     print(f"layout: {len(U.UNITS)} Java units, {len(snippets)} Maven build-snippet modules, "
           f"{len(gradle)} Gradle build-snippet projects → {dest}")
 
@@ -679,13 +676,14 @@ def report(dest, log):
             last[0][last[1]] += f" ({' '.join(raw.split())})"
         elif not raw.startswith("  "):
             last = None
-    failed = 0
+    failed, java_failed = 0, 0
     for u in units:
         st = status.get(u["name"], "NOT RUN")
         if st == "SUCCESS" and errs.get(u["name"]):
             st = "uses an API marked for removal"
         ok = st == "SUCCESS"
         failed += not ok
+        java_failed += (not ok) and u["kind"] == "java"
         own = ", ".join(sorted({b.split('#')[0] for b in u["own"]}))
         print(f"{'PASS' if ok else 'FAIL'}  {u['name']:<34} {len(u['own']):>3} block(s) from {own}"
               + ("" if ok else f"   [{st}]"))
@@ -693,7 +691,10 @@ def report(dest, log):
             print(f"        error: {e}")
         for w in warns.get(u["name"], {}).values():
             print(f"        warning: {w}")
-    print(f"java units: {len(units) - failed} PASS / {failed} FAIL")
+    n_java = sum(1 for u in units if u["kind"] == "java")
+    n_snip, snip_failed = len(units) - n_java, failed - java_failed
+    print(f"java units: {n_java - java_failed} PASS / {java_failed} FAIL; "
+          f"maven build-snippet modules: {n_snip - snip_failed} PASS / {snip_failed} FAIL")
     return failed
 
 

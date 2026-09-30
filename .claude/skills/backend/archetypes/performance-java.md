@@ -17,6 +17,8 @@ tags:
 
 # Performance Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`; the structured-concurrency sample with `--enable-preview`). The Gatling (Scala) and YAML/XML config blocks are not checked.
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Java/Spring Boot performance patterns. All other Java skill packs that mention connection pooling, caching, JVM tuning, or profiling should defer to this file.
 
 Complete performance optimization patterns for Spring Boot services. Apply these patterns from day one — retrofitting performance is expensive.

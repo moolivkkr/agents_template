@@ -17,6 +17,8 @@ tags:
 
 # Observability Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16; the Gradle and Maven dependency snippets resolve and compile (Gradle 9.8.0) with no OpenTelemetry API downgrade (`tests/archetype-compile/java/run.sh`).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Java/Spring Boot observability patterns. All other Java skill packs that mention tracing, metrics, or structured logging should defer to this file. For language-agnostic concepts (error taxonomy, SLOs and alerting, log levels), see `observability-patterns.md`.
 
 Complete OpenTelemetry integration for Spring Boot services. Every generated service MUST follow this pattern.
@@ -1069,7 +1071,9 @@ public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
     private static class MaskingJsonGenerator extends JsonGeneratorDelegate {
 
         MaskingJsonGenerator(JsonGenerator delegate) {
-            super(delegate);
+            // false: POJO values (structured arguments like kv("password", …), markers) are serialized through
+            // THIS generator; with true the wrapped one writes them and nothing is masked
+            super(delegate, false);
         }
 
         @Override

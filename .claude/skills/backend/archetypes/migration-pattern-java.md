@@ -15,6 +15,8 @@ tags:
 
 # Flyway Migration Pattern Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Flyway migration template for Spring Boot projects. Every generated migration MUST follow this pattern.
 
 ## Flyway Configuration (application.yml)

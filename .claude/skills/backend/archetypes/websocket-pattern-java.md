@@ -14,6 +14,8 @@ tags:
 
 # WebSocket Pattern — Java (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 > **Canonical reference**: This is the Java counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Spring Boot provides two WebSocket approaches: raw WebSocket handlers and STOMP over WebSocket. STOMP is recommended for most applications as it provides built-in pub/sub, message routing, and Spring Security integration.

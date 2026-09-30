@@ -14,6 +14,8 @@ tags:
 
 # Dockerfile Archetype (Java / Spring Boot)
 
+> The Gradle and Maven layered-JAR and native-image build snippets were checked 2026-09-30 with Spring Boot 4.1.1, Gradle 9.8.0 and Maven 3.9.16 on JDK 25.0.4.1 (`tests/archetype-compile/java/run.sh`); the Dockerfiles themselves were not built.
+
 Complete, production-ready Docker build template for Spring Boot applications. Every generated Dockerfile MUST follow this pattern.
 
 ## Multi-Stage Dockerfile (Gradle)

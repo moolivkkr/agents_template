@@ -14,6 +14,8 @@ tags:
 
 # CRUD Handler Test Archetype (Spring Boot)
 
+> Java samples compile-checked (test-compile) 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Spring Boot controller test template. Every generated controller test MUST follow this pattern.
 
 ## Test File Location
@@ -52,6 +54,7 @@ import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
 import tools.jackson.databind.ObjectMapper;
@@ -75,6 +78,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 // The app's filter chain, wired to SecurityErrorDelegate so 401/403 use the error envelope (error-handling-java.md).
 // GlobalExceptionHandler (@RestControllerAdvice) and RequestIdFilter (a Filter bean) are picked up by @WebMvcTest.
 @Import({SecurityConfig.class, SecurityErrorDelegate.class})
+// JwtAuthenticationFilter (auth-middleware-java.md) is a Filter bean, so the slice builds it: give it a test-only key
+@TestPropertySource(properties = {
+    "app.jwt.secret=test-only-hmac-key-of-at-least-32-bytes", "app.jwt.issuer=test", "app.jwt.audience=test"})
 @DisplayName("WidgetController")
 class WidgetControllerTest {
 
@@ -701,10 +707,11 @@ class AuthenticationTests {
     @Test
     @DisplayName("403 FORBIDDEN — user lacks required role for admin endpoint")
     void insufficientRole_Returns403() throws Exception {
-        // Assuming an admin-only endpoint exists
+        // SecurityConfig: /api/v1/admin/** needs ROLE_ADMIN. The rule answers before any controller is chosen,
+        // so no handler has to exist. (/api/v1/widgets/admin/... would only need authentication → 404.)
         var regularUser = testPrincipal(); // has ROLE_USER only
 
-        mockMvc.perform(post(BASE_URL + "/admin/bulk-delete")
+        mockMvc.perform(post("/api/v1/admin/widgets/bulk-delete")
                 .with(user(regularUser))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("{}"))

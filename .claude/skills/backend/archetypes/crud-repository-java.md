@@ -13,6 +13,8 @@ tags:
 
 # CRUD Repository Archetype (Spring Data JPA)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Spring Data JPA repository template. Every generated repository MUST follow this pattern.
 
 ## Entity Base Class
