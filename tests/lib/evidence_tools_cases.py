@@ -160,6 +160,17 @@ p = subprocess.run([sys.executable, TCI, "--phase", "9", "--root", C, "--out", f
 check("TC02", (1, "BLOCKED"), (p.returncode, json.load(open(f"{C}/none.json"))["verdict"]), "no spec inventory = BLOCKED, never a vacuous PASS")
 
 
+# ─── an inventory row wins over a passing mention; an ID in two inventory rows of one phase is flagged ─
+D = tempfile.mkdtemp(prefix="evidence-dup.")
+os.makedirs(f"{D}/docs/design/phases/1"); os.makedirs(f"{D}/pkg")
+open(f"{D}/docs/design/phases/1/a.md", "w").write("| Related | Note |\n|---|---|\n| TC-E-001 | see inventory |\n\n| TC ID | Priority | Tier |\n|---|---|---|\n| TC-E-001 | LOW | unit |\n| TC-E-002 | HIGH | unit |\n| TC-E-002 | HIGH | unit |\n")
+open(f"{D}/pkg/a_test.go", "w").write('package pkg\nimport "testing"\nfunc TestA(t *testing.T) { t.Run("TC-E-002 ok", func(t *testing.T) {}) }\n')
+p = subprocess.run([sys.executable, TCI, "--phase", "1", "--root", D, "--out", f"{D}/inv.json"], capture_output=True, text=True)
+dj = json.load(open(f"{D}/inv.json")); pr = {c["name"]: c["priority"] for c in dj["cases"]}
+check("TD01", "LOW", pr.get("TC-E-001"), "a bare mention in a non-inventory table doesn't shadow the inventory row's Priority")
+check("TD02", (1, ["TC-E-002"]), (p.returncode, list(dj["duplicate_in_phase"])), "an ID defined by two inventory rows in one phase is flagged")
+shutil.rmtree(D, ignore_errors=True)
+
 # ─── commands-table.py ───────────────────────────────────────────────────────────────────────────
 CT = os.path.join(REPO, ".claude", "hooks", "commands-table.py")
 G = tempfile.mkdtemp(prefix="cmdtable.")

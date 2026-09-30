@@ -67,8 +67,16 @@ def spec_rows(phase_dir):
                 pr = (cells[pj].upper() if pj is not None and pj < len(cells) else "") or "MEDIUM"
                 pr = pr if pr in ("HIGH", "MEDIUM", "LOW") else "MEDIUM"
                 tier = cells[tj].lower() if tj is not None and tj < len(cells) else ""
-                out.setdefault(idc, {"priority": pr, "tier": tier, "where": f"{path}:{i + 1}"})
+                row = {"priority": pr, "tier": tier, "where": f"{path}:{i + 1}", "inventory": pj is not None}
+                prev = out.get(idc)
+                if prev is None or (row["inventory"] and not prev["inventory"]):
+                    out[idc] = row                       # an inventory row (has Priority) beats a passing mention
+                elif row["inventory"] and prev["inventory"]:
+                    DUP_IN_PHASE.setdefault(idc, [prev["where"]]).append(row["where"])
     return out
+
+
+DUP_IN_PHASE = {}   # ID → inventory rows defining it more than once within the scanned phase
 
 
 # ─── test cases ───────────────────────────────────────────────────────────────────────────────────
@@ -301,6 +309,7 @@ def main():
     design = os.path.join(root, "docs", "design", "phases")
     phase_dir = os.path.join(design, str(a.phase))
     spec = spec_rows(phase_dir) if os.path.isdir(phase_dir) else {}
+    dup_in_phase = dict(DUP_IN_PHASE)
     if a.spec_only:
         os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
         json.dump({k: v["priority"] for k, v in spec.items()}, open(a.out, "w"), indent=1)
@@ -363,7 +372,7 @@ def main():
     unack = [w for w in weak if not any(x.get("file") == w["file"] and x.get("kind") == w["kind"] and x.get("reason") for x in acks)]
 
     blocking_ids = [k for k, m in spec.items() if m["priority"] in ("HIGH", "MEDIUM")]
-    failed = len(set(missing) | set(failing)) + len(dups) + len(ranges) + len(unack)
+    failed = len(set(missing) | set(failing)) + len(dups) + len(dup_in_phase) + len(ranges) + len(unack)
     sha, dirty = code_state(root)
     verdict = "PASS" if spec and failed == 0 else ("BLOCKED" if not spec else "FAIL")
     out = {
@@ -372,7 +381,7 @@ def main():
         "failed": failed, "skipped": len(skipped_only), "flaky": 0,
         "code_sha": sha, "dirty": dirty, "mode": "results" if a.results else "source",
         "missing": missing, "failing": failing, "skipped_only": skipped_only, "comment_only": comment_only,
-        "duplicate_ids": dups, "range_annotations": ranges, "weakening": weak, "weakening_unacknowledged": unack,
+        "duplicate_ids": dups, "duplicate_in_phase": dup_in_phase, "range_annotations": ranges, "weakening": weak, "weakening_unacknowledged": unack,
         "cases": out_cases,
         "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -380,7 +389,7 @@ def main():
     json.dump(out, open(a.out, "w"), indent=1)
     print(f"tc-inventory phase {a.phase} ({out['mode']}): {verdict} — {out['passed']}/{out['total']} HIGH+MEDIUM covered; "
           f"missing {len(missing)}, failing {len(failing)}, skipped-only {len(skipped_only)}, comment-only {len(comment_only)}, "
-          f"duplicate ids {len(dups)}, range annotations {len(ranges)}, unacknowledged test weakening {len(unack)}")
+          f"duplicate ids {len(dups)} (+{len(dup_in_phase)} within phase), range annotations {len(ranges)}, unacknowledged test weakening {len(unack)}")
     if not spec:
         print(f"  no TC inventory tables found under docs/design/phases/{a.phase}/")
     sys.exit(0 if verdict == "PASS" else 1)

@@ -259,7 +259,7 @@ if [ "$AUTODETECT" = "false" ] && git rev-parse --verify -q HEAD >/dev/null 2>&1
   DIRTY_PATHS="$(git status --porcelain -- . "${CODE_EXCL[@]}" 2>/dev/null | cut -c4- | head -5 | tr '\n' ' ')"
   [ -n "$DIRTY_PATHS" ] && CODE_DIRTY="true"
 fi
-TEST_AGENTS=(unit_test_agent integration_test_agent ui_test_agent mobile_test_agent e2e_orchestrator mobile_e2e_orchestrator acceptance_test_agent test_runner performance_agent spec_test_reconciler deploy_dev deploy_qa)
+TEST_AGENTS=(unit_test_agent integration_test_agent ui_test_agent mobile_test_agent e2e_orchestrator mobile_e2e_orchestrator acceptance_test_agent test_runner performance_agent system_test_agent spec_test_reconciler deploy_dev deploy_qa)
 SECURITY_AGENTS=(security_reviewer tenant_isolation_verifier dependency_scanner)
 is_test_agent() { printf '%s\n' "${TEST_AGENTS[@]}" | grep -qxF "$1"; }
 is_security_agent() { printf '%s\n' "${SECURITY_AGENTS[@]}" | grep -qxF "$1"; }
