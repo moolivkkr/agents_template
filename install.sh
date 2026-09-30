@@ -24,6 +24,7 @@ if [ "${1:-}" = "--guard" ]; then
   install -m 755 "$REPO_DIR/.claude/guard/sdlc-guard.sh"     "$HOOKS/sdlc-guard.sh"
   install -m 755 "$REPO_DIR/.claude/guard/sdlc-guard-env.sh" "$HOOKS/sdlc-guard-env.sh"
   install -m 755 "$REPO_DIR/.claude/guard/make-policy.py"    "$HOOKS/sdlc-guard-make-policy.py"
+  install -m 755 "$REPO_DIR/.claude/guard/vet-package.py"    "$HOOKS/vet-package.py"      # secure-coding §5: vet new dependencies
   install -m 755 "$REPO_DIR/.claude/guard/shims/kubectl"     "$SHIMS/kubectl"
   ln -sf kubectl "$SHIMS/helm"; ln -sf kubectl "$SHIMS/limactl"
   echo "✅ sdlc-guard installed → $HOOKS/ (hook, env hook, policy generator, shims)"
@@ -78,6 +79,7 @@ echo "  ✅ _sync-deps.py + _add-packs.py installed (dependency-graph maintenanc
 # ── Hooks (copied into each project by new-project.sh / /autonomous Step 0; settings reference $CLAUDE_PROJECT_DIR/.claude/hooks) ──
 mkdir -p "$CLAUDE_DIR/hooks/startup"
 cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$CLAUDE_DIR/hooks/startup/" && chmod +x "$CLAUDE_DIR/hooks/startup/"*.sh "$CLAUDE_DIR/hooks/startup/"*.py
+install -m 755 "$REPO_DIR/.claude/guard/vet-package.py" "$CLAUDE_DIR/hooks/vet-package.py"   # agents call ~/.claude/hooks/vet-package.py
 cp "$REPO_DIR/.claude/settings.json" "$CLAUDE_DIR/hooks/startup/project-settings.json"
 echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by new-project.sh / /autonomous)"
 

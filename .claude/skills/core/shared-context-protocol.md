@@ -48,8 +48,9 @@ right tier at the right time is what keeps agents both correct and context-effic
 > with override priority, so text an agent was tricked by must not rewrite them. With the sdlc-guard
 > installed, a direct Write/Edit/redirect to an **existing** `PROJECT_FACTS.md` or `DECISIONS.md` is
 > denied. Facts go through `.claude/hooks/remember.sh` (`/remember`). An agent that needs a new or
-> reversing decision puts the proposed `D-NNN` entry in its final message for the parent or the human to
-> record. A decision never suppresses a security finding: reviewers still report it, tagged
+> reversing decision puts the proposed `D-NNN` entry in its final message, and the parent (or the human)
+> records it with `.claude/hooks/remember.sh decide` (source + confidence recorded). `adr_agent` and
+> `debate_arbitrator` call `remember.sh decide` themselves, and nothing edits the ledger directly. A decision never suppresses a security finding: reviewers still report it, tagged
 > `accepted-by D-NNN`.
 >
 > **Tier 1 path note.** Lessons are AUTHORED per-phase (`agent_state/phases/N/lessons.md`) and

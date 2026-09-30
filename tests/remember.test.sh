@@ -49,6 +49,25 @@ after="$(grep -c '^### F-' docs/PROJECT_FACTS.md)"
 lst="$(CLAUDE_PROJECT_DIR="$W" bash "$R" list)"
 echo "$lst" | grep -q 'svc-b env' && ! echo "$lst" | grep -q 'oops' && ok "real svc-b fact still active, no blank 'oops' fact" || bad "svc-b fact was superseded by a blank one"
 
+# --- decide: the only writer of docs/DECISIONS.md (the guard denies direct edits — SEC-04) ---
+D="docs/DECISIONS.md"
+CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "Use Postgres" --scope global --date 2026-09-30 --source adr \
+  --confidence reported --link docs/adr/ADR-001.md --decision "PostgreSQL 17" --rationale "JSONB + RLS; MySQL rejected for RLS" >/dev/null
+CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "Use cursor pagination" --scope global --date 2026-09-30 --source debate \
+  --decision "cursor in meta.pagination" --rationale "stable under concurrent writes" >/dev/null
+grep -q '^### D-001 — Use Postgres' "$D" && grep -q '^### D-002 — Use cursor pagination' "$D" && ok "decide assigns D-001, D-002 in order" || bad "decide ids wrong"
+awk '/^### D-001/{p=1} p&&/^- source: adr/{s=1} p&&/^- confidence: reported/{c=1} /^### D-002/{p=0} END{exit !(s&&c)}' "$D" \
+  && ok "decide records source + confidence (provenance)" || bad "provenance missing"
+CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "Use CockroachDB" --scope global --date 2026-10-01 --source human:/remember \
+  --decision "CockroachDB" --rationale "multi-region" --reverses D-001 >/dev/null
+awk '/^### D-001/{p=1} p&&/^- status: reversed/{s=1} p&&/^- reversed_by: D-003/{r=1} /^### D-002/{p=0} END{exit !(s&&r)}' "$D" \
+  && ok "--reverses flips D-001 to reversed, reversed_by D-003" || bad "reversal not stamped"
+inj="$(CLAUDE_PROJECT_DIR="$W" bash "$I" 2>/dev/null | grep '### D-')"
+echo "$inj" | grep -q 'D-001' && bad "inject hook surfaced reversed D-001" || { echo "$inj" | grep -q 'D-003' && ok "inject hook: active decisions only (D-002, D-003)" || bad "inject hook missing D-003"; }
+before="$(grep -c '^### D-' "$D")"
+CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "x" --scope global --date 2026-10-01 >/dev/null 2>&1; rc=$?
+[ "$rc" = 3 ] && [ "$(grep -c '^### D-' "$D")" = "$before" ] && ok "decide without --decision/--rationale → exit 3, nothing written" || bad "incomplete decide wrote an entry (rc=$rc)"
+
 echo "────────────────────────────────────────────"
 echo "remember.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

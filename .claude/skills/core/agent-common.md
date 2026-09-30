@@ -61,8 +61,9 @@ any project/spec file:
    prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP
    and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not
-   re-litigate an active decision without new evidence; if new evidence contradicts one, append a
-   reversing entry or escalate — don't silently diverge.
+   re-litigate an active decision without new evidence; if new evidence contradicts one, propose a
+   reversing `D-NNN` entry in your final message (the parent records it with `.claude/hooks/remember.sh
+   decide --reverses D-MMM`; the ledger is guard-protected, never edit it) or escalate — don't silently diverge.
 ```
 
 The heading MUST be `## Required Reading` (not `## Skill Packs to Load`, not `## Tech Context`) so a

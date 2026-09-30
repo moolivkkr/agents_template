@@ -42,6 +42,7 @@ skill_packs:
   - "~/.claude/skills/testing/load-testing.md"
   - "~/.claude/skills/testing/test-case-traceability.md"
   - "~/.claude/skills/infrastructure/caching-strategies.md"
+  - "~/.claude/skills/backend/archetypes/performance-{{LANG}}.md"
 ---
 
 # Agent: Performance Agent
@@ -236,6 +237,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/testing/load-testing.md`
 - `~/.claude/skills/testing/test-case-traceability.md`
 - `~/.claude/skills/infrastructure/caching-strategies.md`
+- `~/.claude/skills/backend/archetypes/performance-{{LANG}}.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->

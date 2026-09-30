@@ -396,6 +396,8 @@ check_report() {  # $1 agent, $2 report path from execution.jsonl
     nb="$(printf '%s' "$COUNT_LINE" | sed -E 's/^BLOCKING:[[:space:]]*([0-9]+).*/\1/')"
     if [ "${nb:-0}" -gt 0 ] 2>/dev/null; then
       fail "report '$report' (agent '$agent') count line reports BLOCKING:$nb."
+      # a security report's BLOCKING:N is N findings — each needs its own acknowledgement to be forced
+      is_security_agent "$agent" && [ "$nb" -gt 1 ] 2>/dev/null && SECURITY_FAILS=$((SECURITY_FAILS + nb - 1))
       REPORT_ISSUES=$((REPORT_ISSUES + 1))
     else
       ok "report OK (count line ${COUNT_LINE}): $report (agent '$agent')"

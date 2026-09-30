@@ -1,6 +1,5 @@
 {
   "permissions": {
-    "disableBypassPermissionsMode": "disable",
     "deny": [
       "Bash(sudo *)",
       "Bash(kubectl delete namespace *)",

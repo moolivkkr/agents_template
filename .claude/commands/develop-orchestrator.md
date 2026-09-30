@@ -1187,7 +1187,7 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
 
    **Conditional reports (required only when the phase has the relevant surface — otherwise recorded
    `not_applicable` in the manifest, never silently omitted; this matches `/develop` Step 6):**
-   - sast_scan.md — when a SAST command is configured in IMPLEMENTATION_GUIDELINES (security-relevant code)
+   - (SAST and secret scanning run inside `code_quality_verifier` → `quality_gate.md`, always; there is no separate sast_scan.md)
    - migration_safety.md — when the phase adds/changes DB migrations (migration_safety_reviewer)
    - breaking_change_review.md — when the phase changes a contract an earlier phase consumes (breaking_change_reviewer)
    - visual_validation.md — when `*.wireframe.html` files exist for this phase
@@ -1452,3 +1452,5 @@ DECISIONS + execution.jsonl and rewrites `docs/WORKLOG.md`). Commit `docs/WORKLO
 `agent_state/phases/${PHASE}/decision-log.md` that has lasting scope has a `D-NNN` entry in
 `docs/DECISIONS.md` (debate/ADR agents do this automatically; sweep here for dev/reconciler
 deviations that weren't promoted). This is what makes decisions survive into the next session.
+Record each missing entry with `bash .claude/hooks/remember.sh decide … --source agent:<name> --confidence reported` —
+the guard denies direct edits to the ledger.

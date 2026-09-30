@@ -105,10 +105,14 @@ HYPOTHESIZED assumptions, phase 1 scope, tech stack, and UI designs. Reply `go` 
 describe changes, or `stop`.
 
 **What approval also covers — the force-gate policy.** The review states: *in autonomous mode, a
-phase gate that still fails after 3 fix cycles is force-gated with full logging, except a
-structurally incomplete roster (a required agent never ran), which pauses the run.* Approving the
-checkpoint is the explicit approval that `/develop --force_gate` requires; it is recorded as
-`"force_gate_policy": "approved"` in `agent_state/autonomous/approved.json`. A forced gate writes
+phase gate that still fails after 3 fix cycles is force-gated with full logging, except (1) a
+structurally incomplete roster (a required agent never ran) and (2) any security finding, which both
+pause the run.* Approving the checkpoint is the explicit approval that `/develop --force_gate` requires
+for **non-security** blockers only. It is recorded as `"force_gate_policy": "approved_non_security"` in
+`agent_state/autonomous/approved.json`. A security finding (security_reviewer,
+tenant_isolation_verifier, dependency_scanner) pauses for a per-finding decision: fix, accept or stop.
+An accepted one becomes a `gate.forced.security_acknowledged[]` entry naming you, and `/accept` reports
+NOT READY while it is unfixed. A forced gate writes
 `gate.forced` with the remaining blockers, and the next phase's audit surfaces them as
 carried-forward items. `verify-gate.sh` still refuses to force past a roster whose required agent
 never ran — that pauses the run with the missing agent named.

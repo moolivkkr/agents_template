@@ -49,5 +49,5 @@ if [ -n "$active_decisions" ]; then
   echo ""
 fi
 
-echo "(Add/change facts with /remember; decisions are appended by ADR/debate/reconcile agents or"
-echo " directly. Both propagate to every session and subagent.)"
+echo "(Add/change facts with /remember; decisions are recorded only via .claude/hooks/remember.sh decide"
+echo " (ADR/debate agents do it; others propose, the parent records). Both reach every session and subagent.)"

@@ -88,9 +88,9 @@ for v in $(grep -ohE 'skills/[a-z]+/\{\{[A-Z0-9_]+\}\}\.md' "$ROOT"/.claude/agen
 done
 
 # 5. TC-ID scanners must accept digits in the category (TC-E2E-001, TC-A11Y-001, TC-ME2E-001).
-if grep -rnE "TC-\[A-Z\]\+|TC-\\\\K\[A-Z\]\+" "$ROOT/.claude" >/dev/null 2>&1; then
+if grep -rnE "TC-\[A-Z\]\+|TC-\\\\K\[A-Z\]\+" "$ROOT/.claude" --exclude-dir=worktrees >/dev/null 2>&1; then
   bad "a TC-ID scanner uses TC-[A-Z]+ (misses TC-E2E/TC-A11Y/TC-ME2E):"
-  grep -rnE "TC-\[A-Z\]\+|TC-\\\\K\[A-Z\]\+" "$ROOT/.claude" | head -5 | sed 's/^/      /'
+  grep -rnE "TC-\[A-Z\]\+|TC-\\\\K\[A-Z\]\+" "$ROOT/.claude" --exclude-dir=worktrees | head -5 | sed 's/^/      /'
 else
   ok "all TC-ID scanners accept digits in the category"
 fi

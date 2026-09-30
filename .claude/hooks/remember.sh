@@ -17,6 +17,13 @@
 #   remember.sh retire --subject <s> --date <YYYY-MM-DD> --title "<t>" --fact "<t>"   # relation=lifecycle
 #   remember.sh list                     # print active fact headings
 #   remember.sh history --subject <s>    # print active + superseded blocks for a subject
+#   remember.sh decide --title "<t>" --scope <global|phase-N|component:x> --date <YYYY-MM-DD> \
+#                   --decision "<what was chosen>" --rationale "<why; runner-up rejected because…>" \
+#                   [--source adr|debate|human:/remember|agent:<name>] [--confidence confirmed|reported] \
+#                   [--link <path>] [--reverses D-NNN]          # appends to docs/DECISIONS.md
+#     The ONLY writer of docs/DECISIONS.md: the sdlc-guard denies direct edits to an existing ledger
+#     (board review SEC-04), so ADR/debate agents and the parent record decisions through this.
+#     --reverses flips that entry to `status: reversed` and stamps reversed_by deterministically.
 #
 # Prints the new F-id and what it superseded to stdout. Exit 0 on success, non-zero on usage error.
 # Dependencies: bash, awk. No jq (PROJECT_FACTS.md is markdown, not JSON).
@@ -45,9 +52,50 @@ while [ $# -gt 0 ]; do
     --confidence) CONFIDENCE="${2:-}"; shift 2 ;;
     --source)     SOURCE="${2:-}"; shift 2 ;;
     --file)       FILE="${2:-}"; shift 2 ;;
+    --scope)      D_SCOPE="${2:-}"; shift 2 ;;
+    --link)       D_LINK="${2:-}"; shift 2 ;;
+    --decision)   D_DECISION="${2:-}"; shift 2 ;;
+    --rationale)  D_RATIONALE="${2:-}"; shift 2 ;;
+    --reverses)   D_REVERSES="${2:-}"; shift 2 ;;
     *) echo "remember: unknown arg '$1'"; exit 3 ;;
   esac
 done
+
+# --- decide: append a D-NNN entry to the decision ledger (Tier 0.5) ---
+if [ "$ACTION" = "decide" ]; then
+  [ "$FILE" = "docs/PROJECT_FACTS.md" ] && FILE="docs/DECISIONS.md"
+  for v in TITLE:"$TITLE" DATE:"$DATE" SCOPE:"${D_SCOPE:-}" DECISION:"${D_DECISION:-}" RATIONALE:"${D_RATIONALE:-}"; do
+    k="${v%%:*}"; val="${v#*:}"
+    if [ -z "$val" ]; then echo "remember decide: --$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]') is required"; exit 3; fi
+  done
+  exec python3 - "$FILE" "$TITLE" "$DATE" "$D_SCOPE" "$D_DECISION" "$D_RATIONALE" "$SOURCE" "$CONFIDENCE" "${D_LINK:-—}" "${D_REVERSES:-}" <<'PY'
+import os, re, sys
+path, title, date, scope, decision, rationale, source, confidence, link, reverses = sys.argv[1:11]
+text = open(path).read() if os.path.exists(path) else "# DECISIONS\n\nSettled decisions with rationale (Tier 0.5). Written only by `.claude/hooks/remember.sh decide`.\n\n"
+live = re.sub(r"<!--.*?-->", "", text, flags=re.S)                       # ignore commented examples
+ids = [int(n) for n in re.findall(r"^### D-(\d+)", live, re.M)]
+new = f"D-{(max(ids) + 1 if ids else 1):03d}"
+if reverses:
+    m = re.search(rf"^### {re.escape(reverses)}\b.*?(?=^### |\Z)", text, re.M | re.S)
+    if not m:
+        sys.exit(f"remember decide: --reverses {reverses} not found in {path}")
+    block = m.group(0)
+    if "- status: active" not in block:
+        sys.exit(f"remember decide: {reverses} is not active (nothing to reverse)")
+    block2 = block.replace("- status: active", "- status: reversed", 1)
+    block2 = re.sub(r"^- reversed_by: .*$", f"- reversed_by: {new}", block2, count=1, flags=re.M)
+    text = text[:m.start()] + block2 + text[m.end():]
+entry = (f"### {new} — {title}\n- status: active\n- scope: {scope}\n- date: {date}\n- source: {source}\n"
+         f"- confidence: {confidence}\n- reverses: {reverses or '—'}\n- reversed_by: —\n- link: {link}\n"
+         f"- decision: > {decision}\n- rationale: > {rationale}\n")
+text = text.rstrip("\n") + "\n\n" + entry
+os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+tmp = path + ".tmp"
+open(tmp, "w").write(text)
+os.replace(tmp, path)
+print(f"{new} recorded" + (f"; {reverses} → reversed" if reverses else ""))
+PY
+fi
 
 ensure_file() {
   if [ ! -f "$FILE" ]; then
@@ -80,7 +128,7 @@ case "$ACTION" in
     ' "$FILE"
     exit 0 ;;
   add|retire) : ;;
-  *) echo "remember: usage — add|retire|list|history (got '$ACTION')"; exit 3 ;;
+  *) echo "remember: usage — add|retire|list|history|decide (got '$ACTION')"; exit 3 ;;
 esac
 
 [ "$ACTION" = "retire" ] && RELATION="lifecycle"

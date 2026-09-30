@@ -12,7 +12,7 @@ or waits for you. No single mechanism does this; each layer below catches what t
 | **PATH shims** | `~/.claude/hooks/sdlc-guard-shims/` (SessionStart) | kubectl/helm/limactl called by name from scripts, make, npx or python | a script calling a binary by absolute path |
 | **allow / ask / deny rules** | `~/.claude/settings.json` | the usual spellings, even if hooks are disabled | anything spelled differently |
 | **Auto mode classifier** | `~/.claude/settings.json` → `autoMode` | intent across steps, prod deploys, exfiltration, self-modification | probabilistic |
-| **Managed settings** (optional) | `/Library/Application Support/ClaudeCode/` | tampering: root-owned guard and policy; bypass mode disabled | — |
+| **Managed settings** (optional) | `/Library/Application Support/ClaudeCode/` | tampering: root-owned guard and policy | — |
 
 ## What the guard enforces
 
@@ -96,7 +96,7 @@ install -m 755 .claude/guard/vet-package.py ~/.claude/hooks/vet-package.py
 python3 .claude/guard/apply-user-settings.py --github <your-github-owner> --dry-run | less
 python3 .claude/guard/apply-user-settings.py --github <your-github-owner>
 
-# 4. (optional, recommended) Managed layer: root-owned guard + policy, bypass mode disabled
+# 4. (optional, recommended) Managed layer: root-owned guard + policy
 sudo mkdir -p "/Library/Application Support/ClaudeCode/sdlc-guard"
 sudo install -m 755 -o root -g wheel .claude/guard/sdlc-guard.sh        "/Library/Application Support/ClaudeCode/sdlc-guard/sdlc-guard.sh"
 sudo install -m 644 -o root -g wheel ~/.config/sdlc-guard/policy.json  "/Library/Application Support/ClaudeCode/sdlc-guard/policy.json"
@@ -127,6 +127,15 @@ human). After that, agents deploy with `/deploy --target=dev|qa` and need no pro
   (then re-copy it to the managed location if you use step 4).
 - **The agent kubeconfig is recreated** when `cluster-up.sh` rebuilds the cluster. It also rewrites
   the policy, so the CA and credential pins follow automatically.
+
+## Bypass mode
+
+`claude --dangerously-skip-permissions` stays available: the template no longer disables it. That's
+safe with this setup because **PreToolUse hooks run before the permission mode is checked**. The
+guard's *deny* still blocks prod, secrets, cluster-admin and destructive commands in bypass mode, and
+its *ask* still prompts for your CLAUDE.md "ask first" list. Bypass removes Claude Code's own prompts
+(including the always-on `.claude/` folder protection). It doesn't remove the guard. To forbid bypass
+on a machine, add `"disableBypassPermissionsMode": "disable"` to the managed file's `permissions`.
 
 ## Limits, stated plainly
 

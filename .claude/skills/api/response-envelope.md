@@ -44,6 +44,9 @@ the stack supports it).
   stable sort key.
 - `next_cursor` is `null` when `has_more` is `false`.
 - `total_count` is optional. Include it only when it's cheap and the UI shows it.
+- `limit` has a documented default and maximum. A value outside `1..max` is a **400
+  `VALIDATION_FAILED`** with a `details[]` entry for `limit`. Never clamp silently: a client asking for
+  500 and getting 100 can't tell it was truncated.
 
 ## Error
 

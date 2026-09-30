@@ -15,7 +15,7 @@ output:
   primary: agent_state/debates/{topic}-verdict.json
   artifacts:
     - agent_state/debates/{topic}-verdict-detailed.md
-    - docs/DECISIONS.md  # appends a D-NNN ledger entry per verdict
+    - docs/DECISIONS.md  # a D-NNN entry per verdict, recorded via .claude/hooks/remember.sh decide
 skill_packs:
   - "~/.claude/skills/core/debate-protocol.md"
 ---
@@ -166,7 +166,15 @@ and subagent:
 - decision: > <verdict_label — what was chosen>
 - rationale: > <decisive_factor + why the runner-up was rejected>
 ```
-Use the next free `D-NNN`. For LOW-confidence verdicts, still record the entry but note
+Record it with the ledger's only writer (the sdlc-guard denies direct edits to an existing
+`docs/DECISIONS.md` — board review SEC-04):
+```bash
+bash .claude/hooks/remember.sh decide --title "<title>" --scope <global|phase-N|component:name> --date <YYYY-MM-DD> \
+  --source debate --confidence reported --link <link> --decision "<what was chosen>" --rationale "<why; runner-up rejected because…>" \
+  [--reverses D-MMM]   # when this overturns a prior decision — flips it to reversed and stamps reversed_by
+```
+It assigns the next `D-NNN` and writes the block below. Don't hand-edit the file.
+For LOW-confidence verdicts, still record the entry but note
 `(confidence: LOW — revisit if <reconsider_if>)` in the rationale so future sessions know it's soft.
 
 ## Rules

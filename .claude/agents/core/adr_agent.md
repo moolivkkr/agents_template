@@ -19,7 +19,7 @@ output:
   artifacts:
     - docs/adr/ADR-NNN-<slug>.md
     - docs/adr/README.md
-    - docs/DECISIONS.md  # appends a D-NNN ledger entry per ADR
+    - docs/DECISIONS.md  # a D-NNN entry per ADR, recorded via .claude/hooks/remember.sh decide
 dependencies:
   upstream: [architecture_orchestrator, spec_writer]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
@@ -107,13 +107,20 @@ to durable Tier 0.5 memory:
 - decision: > <one line — what was chosen>
 - rationale: > <one line — why, key alternative rejected>
 ```
-Use the next free `D-NNN`. If this ADR supersedes a prior one, also set the prior D-entry's
-`status: reversed` and `reversed_by:` — mirror the ADR's `Superseded by` status.
+Record it with the ledger's only writer (the sdlc-guard denies direct edits to an existing
+`docs/DECISIONS.md` — board review SEC-04):
+```bash
+bash .claude/hooks/remember.sh decide --title "<title>" --scope <global|phase-N|component:name> --date <YYYY-MM-DD> \
+  --source adr --confidence reported --link <link> --decision "<what was chosen>" --rationale "<why; runner-up rejected because…>" \
+  [--reverses D-MMM]   # when this overturns a prior decision — flips it to reversed and stamps reversed_by
+```
+It assigns the next `D-NNN` and writes the block below. Don't hand-edit the file.
+If this ADR supersedes a prior one, pass `--reverses D-MMM` — it mirrors the ADR's `Superseded by` status.
 
 ## Output
 Produce one ADR per warranting decision found in the in-scope specs + IMPLEMENTATION_GUIDELINES
 Sections 1–2. Write `docs/adr/README.md` as an index (ADR-NNN → title → status → related FR-*).
-Append the matching `D-NNN` entries to `docs/DECISIONS.md`.
+Record the matching `D-NNN` entries with `remember.sh decide` (one per ADR).
 
 <!-- BEGIN reference-packs -->
 ## Reference packs
@@ -149,5 +156,5 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every warranting decision has an ADR at `docs/adr/ADR-NNN-<slug>.md` (correct path).
 - [ ] Every ADR cites its motivating FR-*/NFR-*/spec in `## Related Requirements`.
 - [ ] `docs/adr/README.md` index is updated and lists all ADRs.
-- [ ] A `D-NNN` ledger entry was appended to `docs/DECISIONS.md` for each ADR.
+- [ ] A `D-NNN` ledger entry was recorded with `remember.sh decide` for each ADR (its output names the id).
 - [ ] Superseded ADRs and their D-entries are marked (`Superseded by` / `status: reversed`).

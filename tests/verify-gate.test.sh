@@ -318,6 +318,15 @@ D=$(new_phase docs_after); full_phase "$D"; mkdir -p "$D/docs"; echo notes > "$D
 git -C "$D" add docs && git -C "$D" -c user.email=t@t -c user.name=t commit -qm docs
 LAST_OUT="$(run_hook "$D" 1)"; check "a docs-only commit after testing does not make evidence stale" 0 "$?"
 
+# SEC-01 follow-up: a security report with BLOCKING:3 needs 3 acknowledgements, not 1
+D=$(new_phase forced_security_count)
+echo '{"phase":1,"required":["security_reviewer"]}' > "$D/agent_state/phases/1/roster.json"
+echo '{"agent":"security_reviewer","phase":1,"status":"completed","report":"reports/security_review.md","ts":"t"}' > "$D/agent_state/phases/1/execution.jsonl"
+printf 'Findings\nBLOCKING:3 WARNING:0 INFO:0\n' > "$D/agent_state/phases/1/reports/security_review.md"
+echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
+echo '{"phase":1,"blockers":[{"x":1}],"user_rationale":"r","security_acknowledged":[{"finding":"IDOR","approved_by":"owner","reason":"flagged off"}]}' > "$D/agent_state/phases/1/gate.forced"
+LAST_OUT="$(run_hook "$D" 1)"; check "one acknowledgement cannot force a BLOCKING:3 security report" 2 "$?" "3 security finding"
+
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -120,7 +120,7 @@ fi
 
 # 5. Framework hooks present in THIS project (Stop hook keeps the run going; SessionStart injects facts)
 if [ ! -x ".claude/hooks/autonomous-continue.sh" ] && [ -d "$HOME/.claude/hooks/startup" ]; then
-  mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/"*.sh .claude/hooks/ && chmod +x .claude/hooks/*.sh
+  mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/"*.sh "$HOME/.claude/hooks/startup/"*.py .claude/hooks/ && chmod +x .claude/hooks/*.sh .claude/hooks/*.py
   [ -f .claude/settings.json ] || cp "$HOME/.claude/hooks/startup/project-settings.json" .claude/settings.json
   echo "✅ Installed framework hooks into .claude/ (takes effect for Stop checks from the next turn)"
 fi

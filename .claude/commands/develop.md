@@ -199,38 +199,37 @@ echo "Running full regression test suite (all phases, all tiers)..."
 # latent footgun: the old `read_from_guidelines "..." || echo "go test ./..."` fallback made the
 # whole regression gate green on any non-Go project.
 #
-# read_cmd_from_guidelines <label-regex> — greps the guidelines for a labelled command and echoes it.
-# Prints nothing (and returns non-zero) if not found. It invents NO default.
-read_cmd_from_guidelines() {
-  local label="${1}" file="docs/IMPLEMENTATION_GUIDELINES.md"
-  [ -f "$file" ] || return 1
-  # Accept either a table row  | Run unit tests | `<cmd>` |  or a line  unit_test_command: <cmd>
-  # Extract the first backtick-quoted command on a line matching the label.
-  grep -iE "$label" "$file" | grep -oE '`[^`]+`' | head -1 | tr -d '`'
+# read_cmd_from_guidelines <purpose> — the command from the confirmed §Commands and versions table
+# (skills/core/commands-and-versions.md). Prints nothing if absent. It invents NO default, and the
+# result is run with `bash -o pipefail -c`, never `eval`ed from prose (board review SEC-13).
+read_cmd_from_guidelines() {   # ${1} = purpose in IMPLEMENTATION_GUIDELINES §Commands and versions (test:unit, …)
+  local key="${1}" v="agent_state/config/verify-commands.json"
+  [ -f "$v" ] || python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out "$v" >/dev/null || return 1
+  jq -r --arg k "$key" '.commands[$k] // empty' "$v"
 }
 
 MISSING_CMDS=()
-UNIT_CMD=$(read_cmd_from_guidelines 'unit[ _-]?test');           [ -z "$UNIT_CMD" ]  && MISSING_CMDS+=("unit")
-INTEG_CMD=$(read_cmd_from_guidelines 'integration[ _-]?test');   [ -z "$INTEG_CMD" ] && MISSING_CMDS+=("integration")
-E2E_CMD=$(read_cmd_from_guidelines 'e2e|end[ _-]?to[ _-]?end');  [ -z "$E2E_CMD" ]   && MISSING_CMDS+=("e2e")
+UNIT_CMD=$(read_cmd_from_guidelines 'test:unit');           [ -z "$UNIT_CMD" ]  && MISSING_CMDS+=("unit")
+INTEG_CMD=$(read_cmd_from_guidelines 'test:integration');   [ -z "$INTEG_CMD" ] && MISSING_CMDS+=("integration")
+E2E_CMD=$(read_cmd_from_guidelines 'test:e2e');  [ -z "$E2E_CMD" ]   && MISSING_CMDS+=("e2e")
 
 if [ ${#MISSING_CMDS[@]} -gt 0 ]; then
   echo "⛔ GATE BLOCKED: could not determine the ${MISSING_CMDS[*]} test command(s) from"
-  echo "   docs/IMPLEMENTATION_GUIDELINES.md. Add them under '## Common Tasks' (as \`backtick\` commands)"
-  echo "   e.g.  | Run unit tests | \`pytest\` |  /  | Run e2e tests | \`npx playwright test\` |"
+  echo "   docs/IMPLEMENTATION_GUIDELINES.md. Add them to the '## Commands and versions' table"
+  echo "   (| test:unit | pytest --junitxml=… |) — see ~/.claude/skills/core/commands-and-versions.md"
   echo "   Refusing to run a silent default — a wrong-language default would pass the gate by testing"
   echo "   nothing. Fix the guidelines, then re-run the gate."
   exit 1
 fi
 
 # Tier 1: Unit tests (all phases)
-eval "$UNIT_CMD" > /tmp/gate-unit-results.txt 2>&1; UNIT_EXIT=$?; tail -40 /tmp/gate-unit-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
+PHASE="${PHASE:-all}" bash -o pipefail -c "$UNIT_CMD" > /tmp/gate-unit-results.txt 2>&1; UNIT_EXIT=$?; tail -40 /tmp/gate-unit-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
 
 # Tier 2: Integration tests (all phases — requires infra running)
-eval "$INTEG_CMD" > /tmp/gate-integ-results.txt 2>&1; INTEG_EXIT=$?; tail -40 /tmp/gate-integ-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
+PHASE="${PHASE:-all}" bash -o pipefail -c "$INTEG_CMD" > /tmp/gate-integ-results.txt 2>&1; INTEG_EXIT=$?; tail -40 /tmp/gate-integ-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
 
 # Tier 3: E2E tests (all phases — project-type-aware: browser for web, CLI/pipeline for CLI/libs)
-eval "$E2E_CMD" > /tmp/gate-e2e-results.txt 2>&1; E2E_EXIT=$?; tail -40 /tmp/gate-e2e-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
+PHASE="${PHASE:-all}" bash -o pipefail -c "$E2E_CMD" > /tmp/gate-e2e-results.txt 2>&1; E2E_EXIT=$?; tail -40 /tmp/gate-e2e-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
 
 if [ $UNIT_EXIT -ne 0 ] || [ $INTEG_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ]; then
     echo "⛔ GATE BLOCKED: Full regression test suite has failures"
