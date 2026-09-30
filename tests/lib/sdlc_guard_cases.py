@@ -319,6 +319,25 @@ def main():
     check("EN1", True, f'export PATH="{shims}:$PATH"' in body and f'export KUBECONFIG="{PIN}"' in body,
           "env hook exports shim PATH and pinned KUBECONFIG", body)
 
+    # apply-user-settings.py against a SYNTHETIC home (never the real ~/.claude/settings.json)
+    fh = os.path.join(W, "home"); os.makedirs(os.path.join(fh, ".claude", "hooks")); os.makedirs(os.path.join(fh, ".config", "sdlc-guard"))
+    for f in ("sdlc-guard.sh", "sdlc-guard-env.sh"): open(os.path.join(fh, ".claude", "hooks", f), "w").close()
+    shutil.copy(POLICY, os.path.join(fh, ".config", "sdlc-guard", "policy.json"))
+    sp = os.path.join(fh, ".claude", "settings.json")
+    json.dump({"model": "opus", "permissions": {"allow": ["Read", "Bash", "Bash(git push*)"], "deny": ["Bash(git push* --force*)"]}}, open(sp, "w"))
+    aenv = dict(os.environ, HOME=fh); aenv.pop("SDLC_GUARD_POLICY", None)
+    AUS = os.path.join(GUARD_DIR, "apply-user-settings.py")
+    for _ in range(2):  # second run must be a no-op apart from the backup
+        p = subprocess.run([sys.executable, AUS, "--github", "someone"], capture_output=True, text=True, env=aenv)
+    s = json.load(open(sp)); pm = s["permissions"]
+    check("AS1", True, p.returncode == 0 and "Bash" not in pm["allow"] and "Bash(git push*)" in pm["allow"]
+          and "Bash(git push* --force*)" in pm["deny"] and s["model"] == "opus", "apply-user-settings: drops bare Bash, keeps existing keys/rules", p.stderr)
+    check("AS2", True, pm["defaultMode"] == "auto" and "Bash(sudo *)" in pm["deny"] and "Bash(git reset --hard*)" in pm["ask"]
+          and "https://10.10.10.2:6443" in json.dumps(s["autoMode"]), "apply-user-settings: mode, deny/ask lists, autoMode from policy")
+    check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")
+    check("AS4", True, len(pm["allow"]) == len(set(pm["allow"])) and any(f.startswith("settings.json.bak-") for f in os.listdir(os.path.join(fh, ".claude"))),
+          "apply-user-settings: no duplicate rules, backup written")
+
     shutil.rmtree(W, ignore_errors=True)
     print(f"\n{total - fails}/{total} passed")
     sys.exit(1 if fails else 0)

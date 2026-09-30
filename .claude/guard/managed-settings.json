@@ -1,0 +1,32 @@
+{
+  "permissions": {
+    "disableBypassPermissionsMode": "disable",
+    "deny": [
+      "Bash(sudo *)",
+      "Bash(kubectl delete namespace *)",
+      "Bash(kubectl delete ns *)",
+      "Bash(kubectl config use-context *)",
+      "Bash(gcloud *)",
+      "Bash(az *)",
+      "Bash(eksctl *)",
+      "Bash(doctl *)",
+      "Read(~/.kube/sdlc-lab-admin.yaml)",
+      "Read(~/.ssh/**)",
+      "Read(~/.aws/**)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Monitor|Skill|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SDLC_GUARD_POLICY='/Library/Application Support/ClaudeCode/sdlc-guard/policy.json' '/Library/Application Support/ClaudeCode/sdlc-guard/sdlc-guard.sh'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
