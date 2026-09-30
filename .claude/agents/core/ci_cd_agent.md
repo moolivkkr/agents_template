@@ -27,6 +27,7 @@ skill_packs:
   - "~/.claude/skills/infrastructure/github-actions.md"
   - "~/.claude/skills/infrastructure/docker.md"
   - "~/.claude/skills/infrastructure/secrets-management.md"
+  - "~/.claude/skills/infrastructure/lima-k8s-lab.md"
   - "~/.claude/skills/core/git-workflow.md"
 ---
 
@@ -52,6 +53,11 @@ Jobs (in order):
 3. **integration-test** — spin up DB/cache services, run integration tests
 4. **build** — build production artifact or Docker image
 5. **security-scan** — dependency vulnerability scan
+6. **k8s-manifests** (only when `deploy/k8s/` exists) — for each overlay `dev` and `qa`: write a dummy
+   `secrets.env`, `kubectl kustomize deploy/k8s/overlays/<env>` must render, and
+   `kubeconform -strict -summary` must pass on the output. No cluster is needed; the lab-cluster
+   deploy itself stays local (`scripts/k8s/deploy.sh`, skill `lima-k8s-lab.md`). A CI job can't
+   reach it, and shouldn't.
 
 Each job: cache dependencies using lock file hash.
 
@@ -91,6 +97,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/infrastructure/github-actions.md`
 - `~/.claude/skills/infrastructure/docker.md`
 - `~/.claude/skills/infrastructure/secrets-management.md`
+- `~/.claude/skills/infrastructure/lima-k8s-lab.md`
 - `~/.claude/skills/core/git-workflow.md`
 <!-- END reference-packs -->
 

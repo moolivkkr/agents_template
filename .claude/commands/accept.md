@@ -110,7 +110,18 @@ Pre-flight audit:
 echo "Deploying locally for acceptance testing..."
 
 # Determine project type from IMPLEMENTATION_GUIDELINES
-if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+if [ -f "deploy/k8s/app.env" ]; then
+  # ── Kubernetes lab cluster (skill: infrastructure/lima-k8s-lab.md) ──
+  # Release candidate = this tree, built once in dev; qa is RESET (fresh database), re-promoted with
+  # dev's exact digests and re-seeded, so acceptance runs on a clean, byte-identical deployment.
+  . deploy/k8s/app.env
+  DEPLOY_TYPE=k8s; HEALTHY=false
+  HEALTH_URL="http://${APP}-qa.localhost:${INGRESS_PORT}"
+  if scripts/k8s/deploy.sh dev && scripts/k8s/env-reset.sh qa; then HEALTHY=true; fi
+  # deploy.sh qa's verdict already includes smoke + digest parity (qa pods run dev's digests)
+  cat agent_state/deploy/last-deploy-status.json
+
+elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
   # ── Containerized project ──────────────────────────────────────────
   echo "  Building containers (--no-cache for clean acceptance run)..."
   docker compose build --no-cache 2>&1 | tail -5
@@ -188,7 +199,7 @@ cat > agent_state/accept/deploy_status.json << EOF
 {
   "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "healthy": $( [ "$HEALTHY" = true ] && echo true || echo false ),
-  "deploy_type": "$( [ -f docker-compose.yml ] && echo 'docker' || echo 'binary' )",
+  "deploy_type": "${DEPLOY_TYPE:-$( [ -f docker-compose.yml ] && echo 'docker' || echo 'binary' )}",
   "health_url": "${HEALTH_URL:-N/A}"
 }
 EOF

@@ -26,6 +26,8 @@ output:
     - path: docker-compose.ha.yml
     - path: scripts/failover-test.sh
     - path: localstack/init/
+    - path: deploy/k8s/
+    - path: scripts/k8s/
 dependencies:
   upstream: [backend_developer, ui_developer]
   downstream: [ci_cd_agent, observability_agent, reliability_agent]  # derived by _sync-deps.py — do not hand-edit
@@ -34,6 +36,7 @@ skill_packs:
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"
   - "~/.claude/skills/infrastructure/localstack-aws-local.md"
   - "~/.claude/skills/infrastructure/kubernetes.md"
+  - "~/.claude/skills/infrastructure/lima-k8s-lab.md"
   - "~/.claude/skills/infrastructure/terraform.md"
   - "~/.claude/skills/infrastructure/secrets-management.md"
   - "~/.claude/skills/infrastructure/feature-flags.md"
@@ -202,6 +205,42 @@ Auto-generated from discovered services:
 4. Verify OTEL traces from all regions
 5. Summary with pass/fail count
 
+### 3g: Kubernetes deploy layer (targets `dev` / `qa` on the lab cluster)
+
+When `deploy/k8s/app.env` is missing and the target is dev/qa (or the guidelines name Kubernetes for
+non-prod), create the layer from the framework template, then adapt it. Skill: `lima-k8s-lab.md`.
+
+```bash
+APP="<project slug: a DNS label, e.g. from the repo name>"
+bash ~/.claude/templates/k8s/app/instantiate.sh . "$APP"     # never overwrites existing files
+```
+
+Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/*`, which are shared.
+- **One `deploy/k8s/base/<service>.yaml` per stateless service**, following `api.yaml`:
+  - a Deployment plus a Service;
+  - the image name is a bare placeholder that equals its `images.txt` name;
+  - readiness checks what the release needs (for example, the schema version), and liveness is cheap;
+  - `runAsNonRoot` is set.
+  Delete `api.yaml` if the project has no service by that name.
+- **`deploy/k8s/images.txt`**: one line per built image, `<name> <build-context> [dockerfile]`.
+- **Dockerfiles**: multi-stage, with a **numeric** `USER` (e.g. `65532:65532`) and `ARG GIT_SHA`
+  exposed as `ENV GIT_SHA`, so smoke can check the deployed commit.
+- **`jobs.yaml`**:
+  - point `db-migrate` and `db-seed` at the service that owns the schema, with its real migrate and
+    seed commands;
+  - keep the `wait-for-db` init containers;
+  - the commands must retry the DB connection for about 60 s and treat auth errors as fatal;
+  - seeds must be idempotent upserts.
+- **Postgres**: keep `postgres.yaml` if the project uses Postgres; otherwise replace it with the
+  project's datastore (StatefulSet + PVC + Service). Add a cache or queue the same way.
+- **Ingress**: one host per env. Put extra paths on the same host rather than adding hosts.
+- **`app.env`**: set `SMOKE_PATHS` to the health endpoints and `VERSION_PATH` if the app exposes
+  its git sha.
+- **Verify** that `kubectl kustomize deploy/k8s/overlays/dev` and `…/qa` render, then run
+  `scripts/k8s/deploy.sh dev`.
+- If the namespace doesn't exist, report BLOCKED and ask the human to run
+  `app-namespaces.sh $APP`. Never try to create it.
+
 ---
 
 ## Step 4: Deployment Execution
@@ -214,6 +253,8 @@ Auto-generated from discovered services:
 | `--target=local-dev` | `docker compose -f docker-compose.yml -f docker-compose.local.yml up -d` — dev mode with hot reload |
 | `--target=ha-local` | `docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d` — multi-region HA |
 | `--failover-test` | `./scripts/failover-test.sh` — validate HA failover |
+| `--target=dev` | `scripts/k8s/deploy.sh dev` — build, push by digest, migrate, seed, rollout, smoke on `<app>-dev` (lab cluster) |
+| `--target=qa` | `scripts/k8s/deploy.sh qa` — promote dev's HEALTHY digests to `<app>-qa`, same checks + digest parity |
 | `--target=staging` | Build production images, push to registry, deploy to staging (requires CI/CD config) |
 | `--target=prod` | ⚠ Requires explicit confirmation. Blue/green deployment with rollback. |
 
@@ -308,6 +349,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/infrastructure/saas-tenancy-models.md`
 - `~/.claude/skills/infrastructure/localstack-aws-local.md`
 - `~/.claude/skills/infrastructure/kubernetes.md`
+- `~/.claude/skills/infrastructure/lima-k8s-lab.md`
 - `~/.claude/skills/infrastructure/terraform.md`
 - `~/.claude/skills/infrastructure/secrets-management.md`
 - `~/.claude/skills/infrastructure/feature-flags.md`
@@ -337,6 +379,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Deployment artifacts written under `deployment/` and repo root (exact frontmatter `output.primary` + artifacts): Dockerfile, compose files, failover-test script, localstack init — all real, non-stub.
 - [ ] The app actually deploys AND passes a health check on the target — I verified a healthy `/health` (or equivalent), not just that containers started.
 - [ ] For HA targets, the failover-test script was run and failover was observed — I did not claim HA without exercising it.
+- [ ] For dev/qa targets: both overlays render, `scripts/k8s/deploy.sh <env>` exited 0, and `agent_state/deploy/last-deploy-status.json` says HEALTHY for that env (the script's verdict, not mine).
 - [ ] Every config value (ports, env, region) matches IMPLEMENTATION_GUIDELINES; no hardcoded placeholder that would break a real deploy.
 - [ ] If the deploy or health check failed, I report NOT READY with the specific failure — I do NOT emit a green report over an unhealthy deploy.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).

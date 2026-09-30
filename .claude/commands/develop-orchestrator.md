@@ -613,6 +613,7 @@ Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the deployment strategy:
 
 | Project Type | Deploy Strategy | Health Check |
 |---|---|---|
+| **Has `deploy/k8s/app.env`** (lab cluster) | `scripts/k8s/deploy.sh dev`, then `scripts/k8s/deploy.sh qa` (promotes dev's digests) | The script's own verdict: smoke + digest parity; `HEALTHY` in `agent_state/deploy/last-deploy-status.json` |
 | Web API + UI | `docker compose up -d --build` | `curl -sf http://localhost:PORT/health` |
 | CLI tool | `go build ./cmd/...` or `npm run build` | Binary exists + `./bin/app --version` exits 0 |
 | Library/SDK | `go build ./...` or `npm run build` | Build succeeds (no runtime to health check) |
@@ -627,8 +628,19 @@ echo "Wave 3.5: Local Deploy + Health Check"
 # Read deploy/build commands from IMPLEMENTATION_GUIDELINES
 # These are EXAMPLES — adapt to the project's actual stack
 
+# Kubernetes lab cluster (skill: infrastructure/lima-k8s-lab.md): dev is built from this tree, qa gets
+# dev's exact digests. Every later test tier (3c e2e, 3d mobile, Wave 4 acceptance) targets QA.
+if [ -f "deploy/k8s/app.env" ]; then
+  HEALTHY=false
+  if PHASE="${PHASE}" scripts/k8s/deploy.sh dev && PHASE="${PHASE}" scripts/k8s/deploy.sh qa; then HEALTHY=true; fi
+  . deploy/k8s/app.env
+  export APP_BASE_URL="http://${APP}-qa.localhost:${INGRESS_PORT}"     # hand this to test agents
+  echo "  deploy: $(python3 -c 'import json; d=json.load(open("agent_state/deploy/last-deploy-status.json")); print(d["target"], d["status"], d.get("failing",""))')"
+  # UNHEALTHY → read the script's log lines (it names the failing pod/job and reason), fix, re-run.
+  # If a namespace is missing the script says so: that is a human step (app-namespaces.sh), BLOCK.
+
 # For containerized projects:
-if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+elif [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
   echo "  Building and deploying containers..."
   docker compose build --no-cache 2>&1 | tail -5
   docker compose up -d 2>&1
@@ -680,8 +692,12 @@ fi
 ### Verification gate
 
 ```bash
+# For the k8s lab cluster: dev AND qa must be HEALTHY (the script's verdict)
+if [ -f "deploy/k8s/app.env" ] && [ "$HEALTHY" != true ]; then
+  echo "BLOCKED: dev/qa deploy not HEALTHY — see agent_state/deploy/last-deploy-status.json"
+fi
 # For web apps: health endpoint must respond
-if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
+if [ ! -f "deploy/k8s/app.env" ] && { [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; }; then
   if [ "$HEALTHY" != true ]; then
     echo "BLOCKED: App not healthy — acceptance tests will fail against a dead service"
     echo "  Fix the deployment before proceeding to Wave 4"
@@ -696,7 +712,7 @@ if [ -f "go.mod" ] && [ ! -f "$(ls bin/* cmd/*/main.go 2>/dev/null | head -1)" ]
 fi
 ```
 
-**Auto-checkpoint:** Write `checkpoints/wave-3.5.json` with `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: docker|cli|library|mobile`, and for mobile `mobile_binaries: {ios: built|failed|blocked, android: built|failed|blocked}`.
+**Auto-checkpoint:** Write `checkpoints/wave-3.5.json` with `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: k8s|docker|cli|library|mobile` (k8s adds `app_base_url` = the qa URL and `digests` from `agent_state/deploy/qa/history.jsonl`), and for mobile `mobile_binaries: {ios: built|failed|blocked, android: built|failed|blocked}`.
 
 ---
 

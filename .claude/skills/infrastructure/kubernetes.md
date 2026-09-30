@@ -5,8 +5,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: api
-  namespace: production
+  name: api            # namespace comes from the kustomize overlay (<app>-dev, <app>-qa, …), never hardcoded
 spec:
   replicas: 3
   selector:
@@ -17,7 +16,7 @@ spec:
     spec:
       containers:
         - name: api
-          image: myapp/api:v1.2.3      # always pin to digest or tag, never latest
+          image: registry/app/api@sha256:<digest>   # pin by DIGEST (overlay images block); never latest
           ports: [{ containerPort: 8080 }]
           resources:
             requests: { cpu: "100m", memory: "128Mi" }
@@ -73,8 +72,15 @@ spec:
 
 ## Rules
 - Always set resource `requests` AND `limits` — prevents noisy neighbor issues
-- `minReplicas: 2` minimum — no single point of failure
-- Namespaces per environment (`development`, `staging`, `production`)
+- `minReplicas: 2` minimum in staging/production — no single point of failure (dev/qa on the lab cluster may run 1)
+- Namespaces per app per environment (`<app>-dev`, `<app>-qa`, …), set by kustomize overlays; RBAC per namespace
+- Images declare a NUMERIC user (`USER 65532:65532`) so `runAsNonRoot: true` can be enforced
+- Migrations/seeds as Jobs created from suspended CronJob templates (`kubectl create job --from=cronjob/…`),
+  with a wait-for-db init container; promote environments by digest, not by rebuilding
 - Rolling update strategy (default) — `maxSurge: 1, maxUnavailable: 0` for zero-downtime
 - Never use `latest` image tag — use SHA digest or semantic version tag
 - `PodDisruptionBudget` for critical services to prevent all pods being disrupted simultaneously
+
+## Non-prod lab cluster
+Local dev/qa environments (Lima + k3s, per-app namespaces, digest promotion, reset, rollback, and the
+gotchas measured there): see `lima-k8s-lab.md` in this directory.

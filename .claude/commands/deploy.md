@@ -1,11 +1,11 @@
 ---
 command: deploy
-description: Deploy the application. Reads IMPLEMENTATION_GUIDELINES for infra config. Supports local, staging, and production targets.
+description: Deploy the application. Reads IMPLEMENTATION_GUIDELINES for infra config. Supports local (compose), dev/qa (lab Kubernetes cluster), staging, and production targets.
 arguments:
   - name: target
     required: false
     default: local
-    description: "Deployment target: local | ha-local | staging | prod"
+    description: "Deployment target: local | ha-local | dev | qa | staging | prod  (dev/qa = the Lima k3s lab cluster)"
   - name: failover_test
     required: false
     default: false
@@ -24,6 +24,46 @@ arguments:
 Deploys the application to the specified target using the infrastructure configuration from `docs/IMPLEMENTATION_GUIDELINES.md`.
 
 **⚠ Production deployments always require explicit confirmation.**
+
+---
+
+## Targets `dev` and `qa` — the Kubernetes lab cluster
+
+For projects with `deploy/k8s/app.env`, `--target=dev|qa` deploys to the namespaces `<app>-dev` and
+`<app>-qa` on the lab cluster (skill: `infrastructure/lima-k8s-lab.md`). One script does build,
+push, migrate, seed, rollout, smoke and evidence, so **Steps 1–5 below do not apply** to these
+targets. Agents run it unattended; the permission guard and RBAC confine it to the app's namespaces.
+
+```bash
+TARGET=${ARG_TARGET:-local}
+case "$TARGET" in dev|qa)
+  [ -f deploy/k8s/app.env ] || { echo "no deploy/k8s/ — deployment_agent instantiates it first (Step 3g)"; exit 1; }
+  PHASE="${ARG_PHASE:-}" scripts/k8s/deploy.sh "$TARGET"; RC=$?     # PHASE set → gate sidecar
+  cat agent_state/deploy/last-deploy-status.json
+  exit $RC ;;
+esac
+```
+
+| | `dev` | `qa` |
+|---|---|---|
+| Images | built from the working tree, pushed to `localhost:5001`, pinned **by digest** | **promoted**: the newest HEALTHY dev deploy's digests, never rebuilt |
+| Data | own Postgres (PVC) per env; migrate Job then seed Job (static reference data, idempotent) on every deploy | same, separate database |
+| URL | `http://<app>-dev.localhost:18080` | `http://<app>-qa.localhost:18080` |
+| Verdict | HEALTHY / DEGRADED / FAILED; exit 0 only when HEALTHY | + running pods' image IDs must equal the promoted digests |
+
+- **Evidence (written by the script, not by prose):** `agent_state/deploy/<env>/history.jsonl`,
+  `agent_state/deploy/last-deploy-status.json` (read by `/accept` and `/status`), and with `--phase=N`
+  `agent_state/phases/N/reports/deploy_verification.json` for the phase gate.
+- **Reset** (approved, no prompt): `scripts/k8s/env-reset.sh <env>` wipes workloads and volumes, keeps
+  the namespace, redeploys (dev: same digests; qa: re-promote) and re-seeds.
+- **Rollback:** `scripts/k8s/deploy.sh <env> --rollback` (newest earlier HEALTHY digests; schema is
+  forward-only). `/rollback --target=dev|qa` calls it.
+- **Human-only (the guard denies agents):** creating the cluster (`cluster-up.sh`), creating an app's
+  namespaces (`app-namespaces.sh <app>`), anything with the admin kubeconfig. If the namespace is
+  missing, stop and ask for `app-namespaces.sh <app>`; do not try to create it.
+- **Failure handling:** read the log lines the script prints (it fails fast with the pod's exact
+  reason, e.g. `CreateContainerConfigError`, `ImagePullBackOff`, a migrate error); fix the cause;
+  re-run. A DEGRADED dev deploy blocks promotion to qa.
 
 ---
 

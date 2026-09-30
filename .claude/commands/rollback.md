@@ -4,7 +4,7 @@ description: "Roll back a deployment to the previous known-good state. Reverses 
 arguments:
   - name: target
     required: true
-    description: "Deployment target to roll back: local | staging | prod"
+    description: "Deployment target to roll back: local | dev | qa | staging | prod  (dev/qa = lab Kubernetes cluster)"
   - name: confirm
     required: false
     default: false
@@ -16,6 +16,26 @@ arguments:
 Rolls back a deployment to the previous known-good state. Identifies the last successful deploy, reverses any migrations applied since then, redeploys the previous build, and validates health.
 
 **Safety:** Production rollbacks ALWAYS require `--confirm`. This is non-negotiable.
+
+---
+
+## Targets `dev` and `qa` (lab Kubernetes cluster)
+
+For projects with `deploy/k8s/app.env`, rollback is one script call and needs no confirmation (the
+environments are disposable and the previous state is recorded):
+
+```bash
+case "${ARG_TARGET}" in dev|qa)
+  scripts/k8s/deploy.sh "${ARG_TARGET}" --rollback; RC=$?
+  tail -1 "agent_state/deploy/${ARG_TARGET}/history.jsonl"; exit $RC ;;
+esac
+```
+
+It redeploys the newest earlier HEALTHY deploy of that env whose digests differ (from
+`agent_state/deploy/<env>/history.jsonl`), then re-runs migrate/seed, rollout, smoke and digest
+parity, and records the result with `mode: rollback`. **Schema is not reversed.** Migrations are
+forward-only. If the old code can't run on the new schema, fix forward, or `env-reset.sh <env>`
+for a clean database. Steps 0–5 below are for local/staging/prod.
 
 ---
 

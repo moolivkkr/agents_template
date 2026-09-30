@@ -105,6 +105,8 @@ echo "Installing project templates → $CLAUDE_DIR/templates/"
 mkdir -p "$CLAUDE_DIR/templates"
 if ls "$REPO_DIR/.claude/templates/"*.template &>/dev/null; then
   cp "$REPO_DIR/.claude/templates/"*.template "$CLAUDE_DIR/templates/"
+  # k8s lab cluster + per-project deploy layer (deployment_agent runs templates/k8s/app/instantiate.sh)
+  rsync -a --delete --exclude '__pycache__' "$REPO_DIR/.claude/templates/k8s/" "$CLAUDE_DIR/templates/k8s/"
   PROJ_TMPL_COUNT=$(ls "$REPO_DIR/.claude/templates/"*.template | wc -l | tr -d ' ')
   echo "  ✅ $PROJ_TMPL_COUNT project templates installed"
 fi
