@@ -117,10 +117,17 @@ Prisma 7 reads the Migrate connection URL and the seed command from `prisma.conf
 root: not from `schema.prisma`, and not from `package.json#prisma.seed`, which `prisma db seed` ignores
 ("No seed command configured"). The CLI no longer loads `.env` on its own, hence `dotenv/config`.
 
+Read `DATABASE_URL` with `process.env`, not the `env()` helper: `env()` throws `PrismaConfigEnvError` as the
+config loads, so `prisma generate` in an image build (which has no database URL) fails. Prisma's config
+reference recommends `process.env` for exactly this case. Commands that need the URL still fail without it:
+`prisma migrate deploy` exits 1 ("The datasource.url property is required in your Prisma config file").
+If the app image runs the migrate Job, `prisma` and `dotenv` belong in `dependencies`
+(`dockerfile-typescript.md`).
+
 ```typescript
 // prisma.config.ts
 import "dotenv/config"; // Prisma 7 doesn't load .env itself; in a cluster the env var is injected
-import { defineConfig, env } from "prisma/config";
+import { defineConfig } from "prisma/config";
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -129,7 +136,9 @@ export default defineConfig({
     seed: "tsx prisma/seed.ts", // run by `prisma db seed` and `prisma migrate reset`
   },
   datasource: {
-    url: env("DATABASE_URL"), // throws PrismaConfigEnvError when unset — no default URL
+    // process.env, not env(): `prisma generate` must work without a URL (image builds); migrate/seed
+    // still fail without one. No default URL.
+    url: process.env.DATABASE_URL,
   },
 });
 ```
