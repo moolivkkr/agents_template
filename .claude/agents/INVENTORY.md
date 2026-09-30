@@ -181,6 +181,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `migration_safety_reviewer` | opus/high | migration files | migration_safety.md | Destructive/irreversible ops, backfill safety, lock risk, rollback correctness |
 | `threat_model_agent` | opus/high | phase specs, data flows | threat_model.md (+ .json) | Design-time STRIDE per trust boundary; threat→mitigation→TC-SEC-* (runs in /plan for security-relevant phases) |
 | `accessibility_auditor` | opus/high | built UI, wireframes | accessibility_audit.md (+ .json) | WCAG-AA pass/fail per rule against the BUILT UI (axe/keyboard/contrast/ARIA); runs in /develop UI phases |
+| `ui_standards_auditor` | opus/high | running web + RN app, wireframes, stitch.json | ui_standards_audit.md (+ .json) + ui_standards_stitch_requests.json | Every page vs design standards + its Stitch baseline; maintains all-pages Stitch coverage; routes drift → developers, gaps → Stitch |
 | `mobile_platform_auditor` | opus/high | native config, device, mobile_e2e_results | mobile_platform_audit.md (+ .json) | VoiceOver/TalkBack + touch targets + text scale, permissions, secure storage, cleartext/ATS, deep links, iOS/Android parity; runs in /develop mobile phases |
 | `code_quality_verifier` | opus/high | guidelines, manifest | quality_gate_verification.md | TODO/stub/secret/import checks |
 | `design_quality_reviewer` | opus/medium | wireframes, guidelines | design quality report | UI spec quality validation |
@@ -295,7 +296,7 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
   W3.5 local deploy + health (web/API; mobile = binaries build, install, cold-launch)
   W4  parallel: code_reviewer_I · code_reviewer_II (reads I's report if present) · security_reviewer ·
       dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] ·
-      [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] ·
+      [mobile_platform_auditor] · [ui_standards_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] ·
       spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent
   W5  collective feedback + fix loop     W6 gate (roster ⊆ execution.jsonl)
   documentation_agent (Step 6b, non-blocking)
@@ -349,6 +350,7 @@ debate team (on-demand, any pipeline):
 | `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer ∥ mobile_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
 | `/test` | test_runner, e2e_orchestrator, mobile_e2e_orchestrator (--mobile), performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
 | `/design` | wireframe_generator -> ux_designer (Stitch renders normalized when --source=stitch) -> design_quality_reviewer (BLOCKING gate) |
+| `/ui-audit` | ui_standards_auditor -> (--fix=design) parent Stitch calls -> ux_designer -> design_quality_reviewer; (--fix=code) ui_developer / mobile_developer -> test_runner -> re-audit |
 | `/stitch` | No agent for Stitch calls (parent drives the MCP per ui/stitch-design.md); `sync` -> ux_designer -> design_quality_reviewer |
 | `/demo` | demo_documenter -> demo_executor -> demo_validator |
 | `/review` | code_reviewer_I -> code_reviewer_II -> security_reviewer + dependency_scanner |
@@ -369,10 +371,10 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 68 |
+| Core agents (`.claude/agents/core/`) | 69 |
 | Generation templates (`~/.claude/agents/templates/`) | 10 |
 | Generated agents (`.claude/agents/generated/`) | 0 in repo — populated at `/init` by `agent_factory` (gitignored) |
-| **Total agents (repo)** | **78** |
+| **Total agents (repo)** | **79** |
 
 | Category | Count |
 |---|---|
@@ -383,7 +385,7 @@ debate team (on-demand, any pipeline):
 | Design | 8 (incl. `eagle_diagram_agent` — 10,000-ft strategic overview) |
 | Implementation (generated) | 5 (incl. `mobile_developer` — React Native iOS + Android) |
 | Testing | 7 (+ `mobile_test_agent` template) |
-| Review & Security | 11 (incl. `mobile_platform_auditor`, `breaking_change_reviewer`, `migration_safety_reviewer`, `threat_model_agent` STRIDE, `accessibility_auditor` WCAG-AA) |
+| Review & Security | 12 (incl. `ui_standards_auditor`, `mobile_platform_auditor`, `breaking_change_reviewer`, `migration_safety_reviewer`, `threat_model_agent` STRIDE, `accessibility_auditor` WCAG-AA) |
 | Reconciliation | 6 |
 | Decision Support | 5 (incl. `solution_selector` — candidate-selection winner) |
 | Infrastructure | 4 (incl. `reliability_agent` — SLO/error-budget/runbooks) |

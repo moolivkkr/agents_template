@@ -27,7 +27,7 @@ output:
       description: "JUnit XML, screenshots, device logs, videos per platform/device slot"
 dependencies:
   upstream: [mobile_test_agent]
-  downstream: [mobile_platform_auditor]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [mobile_platform_auditor, ui_standards_auditor]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/testing/mobile-testing-strategy.md"
   - "~/.claude/skills/frameworks/react-native.md"

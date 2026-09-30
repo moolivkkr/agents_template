@@ -29,7 +29,7 @@ quality_gates:
 dependencies:
   upstream: [api_developer, architecture_orchestrator]
   runs_after: [design_quality_reviewer, ui_audit_agent, ux_designer]
-  downstream: [accessibility_auditor, breaking_change_reviewer, code_quality_verifier, code_reviewer_I, code_reviewer_II, demo_documenter, dependency_scanner, deployment_agent, spec_impl_reconciler, ui_code_optimizer, ui_test_agent]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [accessibility_auditor, breaking_change_reviewer, code_quality_verifier, code_reviewer_I, code_reviewer_II, demo_documenter, dependency_scanner, deployment_agent, spec_impl_reconciler, ui_code_optimizer, ui_standards_auditor, ui_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/frameworks/{{UI_FRAMEWORK}}.md"
   - "~/.claude/skills/frameworks/{{STATE_MANAGEMENT}}.md"

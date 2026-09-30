@@ -57,6 +57,11 @@ from a wireframe to its render. Read the file first, write it after every change
     "3/orders-list/DESKTOP": { "screenId": "98b50e2d...", "prompt_hash": "sha1:…", "synced_to": "docs/design/phases/3/specs/orders-list.wireframe.html", "updated": "2026-09-29" },
     "3/orders-list/MOBILE":  { "screenId": "…", "synced_to": null }
   },
+  "pages": {
+    "web:/orders|DESKTOP":    { "screenKey": "3/orders-list/DESKTOP", "baseline": "spec", "last_audit": "2026-09-29", "status": "conformant" },
+    "mobile:/orders|MOBILE":  { "screenKey": "3/orders-list/MOBILE",  "baseline": "spec", "status": "drift" },
+    "web:/settings|DESKTOP":  { "screenKey": null, "baseline": null, "status": "no_baseline" }
+  },
   "log": [ { "ts": "…", "op": "generate", "key": "3/orders-list/DESKTOP", "result": "ok" } ]
 }
 ```
@@ -212,7 +217,60 @@ is updated.
 A render that contradicts the data contracts (e.g. shows a field the API doesn't return) loses: the
 wireframe follows the contract, and the discrepancy goes in the log.
 
-## 8. Anti-patterns
+## 8. Stitch as the design baseline for EVERY page
+
+When a project makes Stitch its design source of truth (recorded by `/stitch init` in
+`docs/DECISIONS.md` as *"Stitch holds the design baseline for every page"*), every page of every
+app must have a Stitch screen: not only the pages a phase designed through `/design`. `pages` in
+`stitch.json` is that map, keyed `<app>:<route>|<deviceType>`, and `ui_standards_auditor` keeps it
+honest.
+
+**Page inventory**, the union of three sources (anything in only one of them is a finding):
+1. **Routes in code.**
+   - Web: Next.js `app/**/page.tsx` or `pages/**`, React Router route config, Vue Router.
+   - React Native: Expo Router `app/**/*.tsx` (excluding `_layout` and `+`-prefixed files), or the screens registered in the navigators.
+2. **Wireframes:** `docs/design/phases/*/specs/*.wireframe.md`.
+3. **Stitch:** `stitch.json` `screens`.
+
+**Baseline status per page:**
+
+| status | meaning | action |
+|---|---|---|
+| `conformant` | built page matches its baseline and the standards | none |
+| `drift` | built page deviates from its baseline (layout, tokens, states, components) | code fix → `ui_developer` / `mobile_developer` |
+| `design_gap` | baseline itself violates a standard (e.g. a missing state or off-brand) | `edit_screens` on the baseline → re-normalize → design gate |
+| `no_baseline` | page exists in code but has no Stitch screen | create a baseline (below) |
+| `orphan` | Stitch screen or wireframe with no route in code | report: unbuilt page or stale design |
+
+**Creating a baseline for an existing page (no image input).** Stitch cannot ingest a screenshot or
+HTML (it generates from text, or edits Stitch screens), so the auditor bridges the gap:
+1. Capture the running page, as a screenshot plus its structure (DOM / accessibility tree for web,
+   `maestro hierarchy` for mobile).
+2. Write a **page description**: purpose, the regions top to bottom, every component with its data
+   fields (checked against `data-contracts.md`), actions, and navigation.
+3. Add the **standards corrections** (the auditor's findings) to that description.
+4. `generate_screen_from_text` with that description, the page's `deviceType` and the project
+   `designSystem`. The result is the page as it *should* look, in house style.
+5. Normalize it into a wireframe pair (§7) and pass it through the design gate. It is now the page's baseline.
+
+For pages where no one has decided the target, record the baseline as `baseline: "reconstructed"`,
+so a human can review reconstructed baselines before code is changed to match them.
+
+**Consistency across pages.** One design system asset serves every page. After a theme change,
+`apply_design_system` to **all** screen instances in the project, not just the edited ones. Mark
+every page `stale`, so the next audit re-compares every page. Screens with the same page archetype
+(list, detail, form, dashboard, settings) must share layout patterns; the auditor flags a page
+whose baseline diverges from its archetype siblings.
+
+**Comparing built vs baseline.** Download the baseline `screenshot.downloadUrl` and capture the built
+page at the same viewport (390pt phone / 1280px desktop). Compare the two visually (read both
+images) for layout, hierarchy, component choice and density. Compare them programmatically for
+tokens: computed colours must be in the token set (the project tokens plus Stitch `namedColors`
+mapped to them), font sizes on the type scale, spacing on the spacing scale. Report the
+difference, not a pixel percentage: "`OrdersList` uses a 13px secondary label; scale is
+12/14/16 — `src/features/orders/OrderRow.tsx:41`".
+
+## 9. Anti-patterns
 
 - Creating a new Stitch project on every run (duplicates, lost design system). Use `stitch.json`.
 - Generating without `designSystem`, which gives off-brand renders that then fail design-gate dimension 11.
@@ -220,3 +278,5 @@ wireframe follows the contract, and the discrepancy goes in the log.
 - Treating a Stitch render as the spec, so `ui_developer` builds from a screenshot and skips states and bindings.
 - `DEVICE_TYPE_UNSPECIFIED` for a React Native screen, which renders a web layout that the mobile app can't match.
 - Calling `delete_project` to "clean up".
+- Auditing only the pages the current phase touched, when Stitch is the design source of truth. Unaudited pages drift silently; the page inventory covers the whole app.
+- Changing code to match a `reconstructed` baseline nobody reviewed. That locks in whatever Stitch guessed.

@@ -63,6 +63,10 @@ thing never done without explicit confirmation is `delete_project`, and this com
    or Path B (DESIGN.md upload, then `get_project` for the screen instance, then
    `create_design_system_from_design_md`). Store `designSystem.assetId`.
 3. Write `stitch.json`. Print the project id, the design-system source and asset id, and any font substitutions.
+4. Unless it is already present, append to `docs/DECISIONS.md`: *"Stitch holds the design baseline
+   for every page (project <id>, design system assets/<id>). `/ui-audit` keeps the page coverage map in
+   stitch.json complete; pages with no baseline are BLOCKING findings."* Then suggest
+   `/ui-audit --fix=design` to baseline every existing page.
 
 ## generate — render screens for a phase
 
@@ -119,7 +123,10 @@ next `sync` re-normalizes them.
 ## status — no outbound calls
 
 Print from `stitch.json`: project, design system and source, and per phase each screen key with its
-render id, sync state (`synced | stale | not synced`) and last update. Flag wireframes that exist
+render id, sync state (`synced | stale | not synced`) and last update. Then print the **page
+coverage** from `pages`: count per status (`conformant | drift | design_gap | no_baseline | orphan |
+stale | pending_sync`), coverage %, and the reconstructed baselines awaiting approval. The data is
+as fresh as the last `/ui-audit`, and the date of that audit is shown. Flag wireframes that exist
 with no render (agent-only screens), and renders that were never synced.
 
 ---

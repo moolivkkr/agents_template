@@ -96,6 +96,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/test --mobile [--platform=ios\|android]` | React Native tiers: Jest+RNTL + device flows on iOS simulator / Android emulator |
 | `/demo` | Write, stand up, and rehearse a stakeholder demo of a completed phase |
 | `/design [--source=stitch]` / `/stitch <init\|generate\|variants\|edit\|theme\|sync\|status>` | UI design contract; Google Stitch renders (web DESKTOP / React Native MOBILE) normalized into wireframes behind the design gate |
+| `/ui-audit [--fix=design\|code\|all]` | Audit every built page (web + React Native) against design standards and its Stitch baseline; Stitch keeps the design for all pages |
 | `/review` | Code review on current changes |
 | `/diagnose` / `/hotfix` | Bug investigation / fast-track fix (reproduction-test-first) |
 | `/deploy --target=local` | Deploy locally |

@@ -141,7 +141,7 @@ WAVE = {
     "e2e_orchestrator": 3.2, "mobile_e2e_orchestrator": 3.2, "test_runner": 3.4,
     "code_reviewer_I": 4, "code_reviewer_II": 4, "security_reviewer": 4, "tenant_isolation_verifier": 4,
     "dependency_scanner": 4, "code_quality_verifier": 4, "accessibility_auditor": 4,
-    "mobile_platform_auditor": 4, "migration_safety_reviewer": 4, "breaking_change_reviewer": 4,
+    "mobile_platform_auditor": 4, "ui_standards_auditor": 4, "migration_safety_reviewer": 4, "breaking_change_reviewer": 4,
     "spec_impl_reconciler": 4, "spec_test_reconciler": 4, "acceptance_test_agent": 4,
 }
 

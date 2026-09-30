@@ -157,6 +157,8 @@ mkdir -p "agent_state/phases/${PHASE}"
 #    touches mobile screens: ADD mobile_developer, mobile_test_agent, mobile_e2e_orchestrator,
 #    mobile_platform_auditor. All four are required whenever a mobile screen changed: device flows on BOTH iOS and Android are
 #    the only proof a native app works. (Web e2e_orchestrator never covers native screens.)
+#  - web UI or mobile screens changed: ADD ui_standards_auditor (built pages vs design standards and
+#    each page's Stitch baseline, whole app; see /ui-audit).
 #  - touches auth/PII/trust-boundary: ADD threat_model_agent (design-time STRIDE; usually run in /plan
 #    but list it here if the phase itself introduces the security-relevant surface).
 #  - adds/changes a service with an NFR-PERF-*/availability target: ADD reliability_agent.
@@ -704,6 +706,7 @@ Wave 4 Track A (parallel):
   ├─ Agent: code_quality_verifier    → reports/quality_gate.md         (TODOs, stubs, secrets, dead code)
   ├─ Agent: accessibility_auditor    → reports/accessibility_audit.md  (only if web UI; WCAG-AA against the BUILT UI)
   ├─ Agent: mobile_platform_auditor  → reports/mobile_platform_audit.md (only if mobile screens changed; iOS + Android)
+  ├─ Agent: ui_standards_auditor     → reports/ui_standards_audit.md   (web/mobile UI phases; every page vs standards + Stitch baseline)
   ├─ Agent: migration_safety_reviewer → reports/migration_safety.md    (only if the phase adds migrations)
   └─ Agent: breaking_change_reviewer → reports/breaking_change_review.md (only if a cross-phase contract changed)
 ```
@@ -791,6 +794,7 @@ in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${P
 in_roster tenant_isolation_verifier && REQUIRED_W4="$REQUIRED_W4 tenant_isolation.md"
 in_roster accessibility_auditor     && REQUIRED_W4="$REQUIRED_W4 accessibility_audit.md"
 in_roster mobile_platform_auditor   && REQUIRED_W4="$REQUIRED_W4 mobile_platform_audit.md"
+in_roster ui_standards_auditor      && REQUIRED_W4="$REQUIRED_W4 ui_standards_audit.md"
 in_roster migration_safety_reviewer && REQUIRED_W4="$REQUIRED_W4 migration_safety.md"
 in_roster breaking_change_reviewer  && REQUIRED_W4="$REQUIRED_W4 breaking_change_review.md"
 for R in $REQUIRED_W4; do
@@ -814,6 +818,10 @@ finding is "addressed" without proof.
 
 ```
 For each report with BLOCKING findings:
+  0. ui_standards_audit.md: run /ui-audit Steps 2–3 on its findings. The PARENT executes
+     ui_standards_stitch_requests.json (Stitch design gaps and missing baselines, then ux_designer,
+     then the design gate), and code drift goes to ui_developer / mobile_developer. Unapproved
+     reconstructed baselines are carried forward, not code-fixed.
   1. Spawn a scoped fix agent for that report's findings.
   2. Re-spawn ONLY the reviewer/reconciler that raised them.
   3. Repeat max 2 rounds per report. If still BLOCKING after 2 rounds → carry to Wave 5 as a
@@ -1006,6 +1014,8 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    - visual_validation.md — when `*.wireframe.html` files exist for this phase
    - ui_test_results.md / ui_code_optimization.md — when `frontend.enabled = true`
    - accessibility_audit.md — when `accessibility_auditor` is in the roster (web UI phases)
+   - ui_standards_audit.md (+ .json) — when `ui_standards_auditor` is in the roster; `blocking` must be 0
+     or each remaining item carried forward (e.g. a reconstructed baseline awaiting approval)
    - test_results.md + test_results.json — always (Wave 3v `test_runner`); `blocking` must be 0
    - mobile_test_results.md · mobile_e2e_results.md (+ .json) · mobile_platform_audit.md — when the
      mobile agents are in the roster. `mobile_e2e_results.json` must show BOTH iOS and Android run

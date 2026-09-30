@@ -38,7 +38,7 @@ quality_gates:
 dependencies:
   upstream: [api_developer, architecture_orchestrator]
   runs_after: [design_quality_reviewer, ui_audit_agent, ux_designer]
-  downstream: [breaking_change_reviewer, code_quality_verifier, demo_documenter, dependency_scanner, mobile_platform_auditor, mobile_test_agent, spec_impl_reconciler]  # derived by _sync-deps.py — do not hand-edit
+  downstream: [breaking_change_reviewer, code_quality_verifier, demo_documenter, dependency_scanner, mobile_platform_auditor, mobile_test_agent, spec_impl_reconciler, ui_standards_auditor]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/frameworks/react-native-app-patterns.md"
   - "~/.claude/skills/frameworks/react-native.md"
