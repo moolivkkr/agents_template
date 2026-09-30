@@ -1,6 +1,6 @@
 ---
 command: rollback
-description: "Roll back a deployment to the previous known-good state. Reverses migrations, redeploys previous build, and validates health."
+description: "Roll back a deployment to the previous known-good build and validate health. Code only: the schema stays, because migrations are forward-only and N-1 compatible. Reversing a migration is a separate, explicit, human-confirmed step that exists for local only."
 arguments:
   - name: target
     required: true
@@ -9,11 +9,19 @@ arguments:
     required: false
     default: false
     description: "Required for production rollbacks. Prevents accidental prod rollbacks."
+  - name: reverse_schema
+    required: false
+    default: false
+    description: "local only: after the code rollback, offer to run the DOWN migrations newer than the rolled-back build — shown first, run only after the human confirms. Refused for every other target."
 ---
 
 # /rollback — Deployment Rollback
 
-Rolls back a deployment to the previous known-good state. Identifies the last successful deploy, reverses any migrations applied since then, redeploys the previous build, and validates health.
+Rolls back a deployment to the previous known-good state: identifies the last HEALTHY deploy from the
+recorded deploy history, **redeploys that build first**, and validates health. The schema is not
+reversed. Migrations are expand/contract and N-1 compatible (`migration_agent`), so the previous
+build runs on the current schema; reversing the schema first would break the code that is still
+serving and can drop data written since the deploy.
 
 **Safety:** Production rollbacks ALWAYS require `--confirm`. This is non-negotiable.
 
@@ -39,205 +47,114 @@ for a clean database. Steps 0–5 below are for local/staging/prod.
 
 ---
 
-## Step 0 — Read Last Deploy Manifest
+## Step 0 — Safety gate and deploy history
 
 ```bash
 TARGET=${ARG_TARGET}
-```
-
-### Production safety gate
-```bash
 if [ "$TARGET" = "prod" ] && [ "${ARG_CONFIRM}" != "true" ]; then
   echo "⛔ Production rollback requires --confirm flag"
   echo ""
   echo "  /rollback --target=prod --confirm"
   echo ""
   echo "  This will:"
-  echo "    1. Reverse migrations applied in the last deploy"
-  echo "    2. Redeploy the previous build"
-  echo "    3. Run health checks"
-  echo ""
-  echo "  Make sure you understand the impact before confirming."
+  echo "    1. Redeploy the previous HEALTHY build recorded for prod"
+  echo "    2. Run health checks"
+  echo "  It will NOT change the database schema."
+  exit 1
+fi
+if [ "${ARG_REVERSE_SCHEMA}" = "true" ] && [ "$TARGET" != "local" ]; then
+  echo "⛔ --reverse_schema is local only. For $TARGET: fix forward, or restore from a verified backup (a human operation)."
   exit 1
 fi
 ```
 
-Read the deploy state:
-```bash
-DEPLOY_STATE="agent_state/deploy/"
-```
+Read the recorded history — never a file nothing writes:
+1. `agent_state/deploy/${TARGET}/history.jsonl` — one JSON line per deploy (`ts`, `git_sha`, image refs
+   or digests, `status`). The current deploy is the newest line; the rollback target is the newest
+   earlier line with `status: HEALTHY` whose images differ.
+2. Otherwise, the deploy platform's own release history for staging/prod (the previous release or
+   revision recorded by the platform named in IMPLEMENTATION_GUIDELINES §11).
+3. Otherwise, git tags `deploy-${TARGET}-*` if the project creates them.
 
-From the deploy state, identify:
-- **Current deploy:** timestamp, git SHA, image tag, migrations applied
-- **Previous deploy:** timestamp, git SHA, image tag (the rollback target)
-
-If no previous deploy exists:
+If none of these names a previous HEALTHY build:
 ```
-⛔ No previous deploy found in agent_state/deploy/
+⛔ No previous HEALTHY deploy recorded for ${TARGET}
    Cannot roll back — there is no known-good state to roll back to.
 
    Options:
-     1. Fix the issue manually
-     2. /diagnose --symptom="<describe the problem>"
+     1. Fix forward: /diagnose --symptom="<describe the problem>" then /hotfix
+     2. Redeploy a specific commit you know is good: /deploy --target=${TARGET} from that commit
 ```
 
 ```
 Rollback plan:
-  Target:           ${TARGET}
-  Current deploy:   ${CURRENT_SHA} (${CURRENT_TIMESTAMP})
-  Rollback to:      ${PREVIOUS_SHA} (${PREVIOUS_TIMESTAMP})
-  Migrations to reverse: [list or "none"]
+  Target:         ${TARGET}
+  Current deploy: ${CURRENT_SHA} (${CURRENT_TS})  images: ${CURRENT_IMAGES}
+  Rollback to:    ${PREVIOUS_SHA} (${PREVIOUS_TS}) images: ${PREVIOUS_IMAGES}
+  Schema:         unchanged (forward-only migrations)
 ```
 
 ---
 
-## Step 1 — Identify Previous Good State
-
-Find the git tag from the last successful deployment:
+## Step 1 — Check the previous build can run on the current schema
 
 ```bash
-# Look for deploy tags
-PREVIOUS_TAG=$(git tag -l "deploy-${TARGET}-*" | sort -r | sed -n '2p')
-
-# If no deploy tags, use the SHA from deploy state
-if [ -z "$PREVIOUS_TAG" ]; then
-  PREVIOUS_SHA=$(cat agent_state/deploy/previous-sha.txt 2>/dev/null)
-fi
+git cat-file -e "${PREVIOUS_SHA}^{commit}" 2>/dev/null || { echo "⛔ ${PREVIOUS_SHA} not in git history — deploy state is corrupted; manual intervention"; exit 1; }
+# Migrations added since the previous build:
+git diff --name-only --diff-filter=A "${PREVIOUS_SHA}" "${CURRENT_SHA}" -- migrations/
 ```
-
-Verify the previous state is valid:
-```bash
-# Check that the commit exists
-git cat-file -t "${PREVIOUS_SHA}" > /dev/null 2>&1
-if [ $? -ne 0 ]; then
-  echo "⛔ Previous deploy SHA ${PREVIOUS_SHA} not found in git history"
-  echo "  Deploy state may be corrupted. Manual intervention required."
-  exit 1
-fi
-```
-
-```
-Rollback target:
-  SHA:   ${PREVIOUS_SHA}
-  Tag:   ${PREVIOUS_TAG:-none}
-  Date:  ${PREVIOUS_TIMESTAMP}
-```
+For each migration listed, read its header and `migrations/registry.yaml`: every one should say
+`n_minus_1_compatible: true`. If any says `false` (a contract step, or an accepted exception), the
+previous build may not run on this schema — say so in the plan, and for staging/prod stop and
+escalate to a human (fix forward or restore from backup); don't proceed on a guess.
 
 ---
 
-## Step 2 — Reverse Migrations
-
-Check if any database migrations were applied in the current deploy:
-
-```bash
-# Read migration state from deploy manifest
-MIGRATIONS_APPLIED=$(cat agent_state/deploy/last-migrations.json 2>/dev/null)
-```
-
-### If migrations were applied:
-
-**Agent:** Generated `migration_agent`
-
-```bash
-# Run DOWN migrations for each migration applied in the current deploy (reverse order)
-# e.g. goose down, flyway undo, alembic downgrade, prisma migrate reset
-```
-
-**Dry run first:**
-```
-Migrations to reverse:
-  1. 003_add_user_preferences.sql (DOWN)
-  2. 002_add_analytics_table.sql (DOWN)
-
-Confirm reversal? [auto-confirmed for local, requires --confirm for prod]
-```
-
-For local target: proceed automatically.
-For staging: proceed with warning.
-For prod: require `--confirm` (already checked in Step 0).
-
-### Migration Reversal Failure
-
-If DOWN migration fails:
-```
-⛔ Migration reversal failed
-
-  Failed migration: ${MIGRATION_FILE}
-  Error: ${ERROR_MESSAGE}
-
-  The database is in a partially rolled-back state.
-  DO NOT proceed with redeployment.
-
-  Manual intervention required:
-    1. Check database state: <connection command>
-    2. Review failed migration: ${MIGRATION_FILE}
-    3. Apply manual fix or restore from backup
-```
-
-**STOP — do not continue if migration reversal fails.**
-
-### If no migrations to reverse:
-```
-No migrations to reverse — proceeding to redeploy.
-```
-
----
-
-## Step 3 — Redeploy Previous Build
+## Step 2 — Redeploy the previous build (code first)
 
 ### Local
+Never check out an older commit over the working tree (it may hold uncommitted work).
 ```bash
-# Checkout previous version
-git checkout "${PREVIOUS_SHA}"
-
-# Rebuild
-docker compose build
-
-# Restart services
-docker compose down
-docker compose up -d
-
-# Return to main branch (keep deployment on previous version)
-git checkout main
+if [ -n "${PREVIOUS_IMAGE}" ] && docker image inspect "${PREVIOUS_IMAGE}" >/dev/null 2>&1; then
+  : # the recorded image still exists — run it via a compose override that pins image: ${PREVIOUS_IMAGE}
+else
+  WT="$(mktemp -d)/rollback-${PREVIOUS_SHA}"
+  git worktree add --detach "$WT" "${PREVIOUS_SHA}"          # separate checkout; the working tree is untouched
+  docker compose -f "$WT/docker-compose.yml" build
+fi
+docker compose up -d --no-deps <app services>                 # the datastore keeps running; no volume is touched
 ```
+Remove the temporary worktree afterwards (`git worktree remove "$WT"`).
 
 ### Staging / Production
-```bash
-# Use the previous image tag
-docker compose -f docker-compose.${TARGET}.yml up -d --force-recreate
-# Or equivalent orchestration command from IMPLEMENTATION_GUIDELINES
-```
+Redeploy the previous release's recorded image digests (or the platform's previous revision) with the
+platform named in IMPLEMENTATION_GUIDELINES §11. No `migrate` step runs: the schema stays.
 
-Wait for services to start:
+Wait for the runtime contract's probes:
 ```bash
 for i in $(seq 1 12); do
-  curl -sf http://localhost:<PORT>/health > /dev/null 2>&1 && break
+  curl -sf "${BASE_URL}/healthz" >/dev/null 2>&1 && curl -sf "${BASE_URL}/readyz" >/dev/null 2>&1 && break
   sleep 5
 done
 ```
 
 ---
 
-## Step 4 — Health Check
+## Step 3 — Health Check
 
 Reuse the post-deploy health validation from `/deploy` Step 5:
 
-1. **Endpoint health check** — curl every route in the phase manifest's `api_routes[]`
+1. **Probes** — `/healthz` and `/readyz` return 200; the version route reports `${PREVIOUS_SHA}`.
+2. **Endpoint health check** — curl every route in the phase manifest's `api_routes[]`
    - GET endpoints: verify 200 status + response has expected shape
-   - Authenticated endpoints: use test credentials from seed data
+   - Authenticated endpoints: use test credentials from seed data (never production credentials)
    - Timeout: 10s per endpoint
-
-2. **Contract shape validation** — for each endpoint response:
-   - Compare against `data-contracts.md` TypeScript interfaces
-   - Verify list endpoints return arrays, single endpoints return objects
-   - Flag any CONTRACT_VIOLATION
-
-3. **Performance baseline** — record p95 response times per endpoint
-   - Compare against pre-rollback baseline if available
-   - Verify rolled-back version performs within acceptable range
+3. **Contract shape validation** — every response matches the envelope (`~/.claude/skills/api/response-envelope.md`) and `data-contracts.md`; flag any CONTRACT_VIOLATION.
+4. **Performance baseline** — record p95 response times per endpoint; compare with the pre-rollback baseline if available.
 
 ```
 Health check results:
+  Probes:     /healthz 200 · /readyz 200 · git_sha ${PREVIOUS_SHA}
   Endpoints:  N/N healthy
   Contracts:  N/N valid
   Performance: within baseline | degraded (expected for older version)
@@ -245,41 +162,44 @@ Health check results:
 
 ---
 
+## Step 4 — Reverse schema (local only, explicit, human-confirmed)
+
+Runs only when `--reverse_schema` was passed, `TARGET` is `local`, and the code rollback in Step 2 is
+healthy. It never runs automatically and never runs for dev, qa, staging or prod.
+
+1. List the migrations added after `${PREVIOUS_SHA}` (Step 1), newest first, and the DOWN file for
+   each. A migration marked `forward-only` has no DOWN: stop — the only local options are to keep
+   the schema or reset the local database with the project's documented reset for local dev.
+2. Show the list and the command that would run (the tool's one-step-down command, e.g.
+   `goose down`, `migrate down 1`, `alembic downgrade -1`), and ask the human to confirm each step.
+   Never use a command that drops and recreates the database.
+3. Run the confirmed steps one at a time with the local database URL; stop at the first failure and
+   report the partial state.
+
+---
+
 ## Step 5 — Update State and Report
 
 ### If health passes:
 
-Update deploy state:
+Append the rollback to the deploy history and write the marker `/accept` and `/status` read:
 ```bash
-# Record rollback in deploy state
-cat > agent_state/deploy/rollback-${TIMESTAMP}.json << EOF
-{
-  "timestamp": "${TIMESTAMP}",
-  "target": "${TARGET}",
-  "rolled_back_from": "${CURRENT_SHA}",
-  "rolled_back_to": "${PREVIOUS_SHA}",
-  "migrations_reversed": [${MIGRATION_LIST}],
-  "health_check": "PASS",
-  "reason": "manual rollback via /rollback"
-}
-EOF
-```
-
-Tag the rollback:
-```bash
-git tag "rollback-${TARGET}-${TIMESTAMP}" -m "Rollback on ${TARGET}: ${CURRENT_SHA} → ${PREVIOUS_SHA}"
+mkdir -p "agent_state/deploy/${TARGET}"
+printf '%s\n' "{\"ts\":\"${TS}\",\"target\":\"${TARGET}\",\"mode\":\"rollback\",\"git_sha\":\"${PREVIOUS_SHA}\",\"from_sha\":\"${CURRENT_SHA}\",\"images\":${PREVIOUS_IMAGES_JSON},\"status\":\"HEALTHY\",\"schema_reversed\":${SCHEMA_REVERSED:-false}}" \
+  >> "agent_state/deploy/${TARGET}/history.jsonl"
+printf '%s\n' "{\"target\":\"${TARGET}\",\"status\":\"HEALTHY\",\"mode\":\"rollback\",\"git_sha\":\"${PREVIOUS_SHA}\",\"ts\":\"${TS}\"}" \
+  > agent_state/deploy/last-deploy-status.json
 ```
 
 ```
 ✅ Rollback complete — ${TARGET}
 
-  From:       ${CURRENT_SHA} (${CURRENT_TIMESTAMP})
-  To:         ${PREVIOUS_SHA} (${PREVIOUS_TIMESTAMP})
-  Migrations: ${N} reversed
-  Health:     ✅ all endpoints healthy
+  From:   ${CURRENT_SHA} (${CURRENT_TS})
+  To:     ${PREVIOUS_SHA} (${PREVIOUS_TS})
+  Schema: unchanged${SCHEMA_REVERSED:+ (local: N DOWN steps confirmed and run)}
+  Health: ✅ probes and endpoints healthy
 
-  State: agent_state/deploy/rollback-${TIMESTAMP}.json
-  Tag:   rollback-${TARGET}-${TIMESTAMP}
+  History: agent_state/deploy/${TARGET}/history.jsonl
 
   ⚠ The rolled-back code is now deployed. To fix forward:
     /diagnose --symptom="<what caused the rollback>"
@@ -293,28 +213,32 @@ git tag "rollback-${TARGET}-${TIMESTAMP}" -m "Rollback on ${TARGET}: ${CURRENT_S
 ⛔ Rollback health check FAILED
 
   Rolled back to: ${PREVIOUS_SHA}
-  Failing endpoints: [list]
+  Failing checks: [list]
   Errors: [details]
 
   The system is in a degraded state. Manual intervention required:
 
   Options:
-    1. Check logs: docker logs <container>
-    2. Try an older version: /rollback with a different target SHA
-    3. Restore from backup (if database was affected)
+    1. Check logs: docker compose logs <service> (local) or the platform's logs
+    2. Roll back further: the next older HEALTHY entry in agent_state/deploy/${TARGET}/history.jsonl
+    3. Restore from a verified backup (human operation) if data was affected
     4. Investigate: /diagnose --symptom="<health check failures>"
 
   ⚠ DO NOT run additional automated rollbacks without understanding the failure.
 ```
+Write the DEGRADED marker (`last-deploy-status.json` with `status: DEGRADED`) so `/accept` and
+`/status` surface it.
 
 ---
 
 ## Rules
 
-- **NEVER auto-rollback production** — always require `--confirm` flag
-- **NEVER skip migration reversal** — data integrity depends on schema matching code
-- **STOP on migration failure** — a half-rolled-back database is worse than a broken deploy
-- Health checks after rollback use the same validation as `/deploy` — consistency matters
-- Every rollback is recorded in `agent_state/deploy/` and tagged in git — full audit trail
+- **NEVER auto-rollback production** — always require `--confirm`
+- **Code first, schema never (automatically):** redeploy the previous build; DOWN migrations run only
+  in Step 4, for `local`, after an explicit human confirmation of each step
+- **Never a destroy-and-recreate command** (a reset that drops the database) in any rollback path
+- **Read the recorded deploy history,** not files nothing writes; refuse when no previous HEALTHY deploy is recorded
+- **Never check out an old commit over the working tree** — build it in a separate worktree or reuse its recorded image
+- Health checks after rollback use the same validation as `/deploy`, on `/healthz` + `/readyz`
+- Every rollback is appended to `agent_state/deploy/<target>/history.jsonl` — full audit trail
 - Rollback is not a fix — it buys time. Always follow up with `/diagnose` + `/hotfix` or `/develop`
-- If the previous deploy state is unknown or corrupted, refuse to rollback — manual intervention is safer than guessing

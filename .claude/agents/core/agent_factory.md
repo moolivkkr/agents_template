@@ -8,7 +8,7 @@ input:
   required:
     - type: guidelines
       path: docs/IMPLEMENTATION_GUIDELINES.md
-      description: Confirmed tech stack, component inventory, and design constraints
+      description: "Confirmed guidelines: ## Technology stack, ## Commands and versions, §1 Project Structure"
     - type: templates
       path: ~/.claude/agents/templates/
       description: Parameterized agent templates to populate
@@ -34,7 +34,7 @@ skill_packs:
 # Agent: Agent Factory
 
 ## Role
-Reads `docs/IMPLEMENTATION_GUIDELINES.md` after it has been confirmed and evaluated, extracts the tech stack and component inventory, then generates project-specific agents by populating templates from `~/.claude/agents/templates/`. Writes all generated agents to `.claude/agents/generated/`.
+Reads `docs/IMPLEMENTATION_GUIDELINES.md` after it has been confirmed and evaluated, extracts the technology stack, versions and project structure, then generates project-specific agents by populating templates from `~/.claude/agents/templates/`. Writes all generated agents to `.claude/agents/generated/`.
 
 ## Required Reading
 
@@ -46,13 +46,26 @@ Reads `docs/IMPLEMENTATION_GUIDELINES.md` after it has been confirmed and evalua
 
 ## Step 1 — Parse Tech Stack
 
-Read `docs/IMPLEMENTATION_GUIDELINES.md` Section 1 (Tech Stack) and Section 3 (Component Inventory). Extract into a structured profile:
+Read these parts of `docs/IMPLEMENTATION_GUIDELINES.md` (the structure `impl_guidelines_agent` writes):
+- `## Technology stack` — one row per component: languages, frameworks, database, ORM, migration
+  tool, cache, auth, UI stack, test tools, mobile, and the deployable services with their build contexts;
+- `## Commands and versions` — the toolchain and datastore versions (`lang_version` comes from here,
+  never from memory);
+- `## 1. Project Structure` — the source layout (`source_root`, component directories);
+- `## 3. Database Design` §3.1, `## 7. Testing Strategy`, `## 24. Mobile` — details for those rows.
+
+If `## Technology stack` or `## Commands and versions` is missing, stop and report BLOCKED: the
+guidelines predate the current format and `impl_guidelines_agent` must add them. Extract into a
+structured profile:
 
 ```yaml
 project_name: <from IMPLEMENTATION_GUIDELINES>
+source_root: <e.g. internal, src, services/api>     # -> {{SOURCE_ROOT}} (from §1 Project Structure)
+backend_component: <e.g. service>                   # -> {{COMPONENT}} in backend_developer (the services/repositories dir under source_root)
+api_component: <e.g. http>                          # -> {{API_COMPONENT}} in api_developer (the handlers/routes dir under source_root)
 backend:
   lang: <e.g. go, python, typescript, java, rust>
-  lang_version: <e.g. 1.22, 3.12, 20, 21>
+  lang_version: <from the versions table, e.g. 1.27, 3.12, 22, 21>
   framework: <e.g. gin, fastapi, express, nestjs, spring>
   api_style: <rest | graphql | grpc>
   auth_method: <e.g. jwt, session, oauth2>
@@ -159,7 +172,12 @@ When `mobile.enabled = true`, the core agents `mobile_e2e_orchestrator` and `mob
 are also active for this project — record them in `agent_registry.json` → `active_core_agents` so
 `/develop` adds them to the roster (see develop-orchestrator Wave 0b).
 
-For each applicable template, replace ALL `{{PLACEHOLDER}}` occurrences with extracted values (skill-pack placeholders via the Step 1.5 table). Generate the output FILE name by replacing `{{PROJECT_NAME}}` with the actual project name (snake_case) and removing `.tmpl` from the extension.
+For each applicable template, replace every stack `{{PLACEHOLDER}}` with its extracted value (skill-pack placeholders via the Step 1.5 table). Leave the run-time placeholders untouched — `{{PHASE}}`, `{{PHASE-1}}` and the literal `{{VAR}}` in the reference-packs text are resolved when the agent runs, not now. Generate the output FILE name by replacing `{{PROJECT_NAME}}` with the actual project name (snake_case) and removing `.tmpl` from the extension.
+
+Templates are stack-neutral where they can be: stack specifics reach a generated agent through the
+`{{LANG}}` / `{{FRAMEWORK}}` / `{{UI_FRAMEWORK}}` / `{{DB_TECH}}` skill packs, and project-specific
+material (a product's design system, a product's API conventions) only through packs the project's
+guidelines or `docs/DECISIONS.md` name. Never add another product's pack to a generated agent.
 
 Example: `backend_developer.tmpl` → `go_backend_developer_myproject.md`
 

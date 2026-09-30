@@ -21,12 +21,17 @@ quality_gates:
   no_ambiguous_tech_decisions: true
   local_dev_setup_defined: true
   all_components_have_technology: true
+  commands_table_parses: true
+  runtime_contract_defined: true
 dependencies:
   upstream: [brd_agent]
   downstream: [agent_factory, architecture_orchestrator, ci_cd_agent, product_manager, project_planner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/commands-and-versions.md"
   - "~/.claude/skills/core/auto-research.md"
+  - "~/.claude/skills/core/implementation-guidelines-template.md"
+  - "~/.claude/skills/api/response-envelope.md"
+  - "~/.claude/skills/security/secure-coding.md"
 ---
 
 # Agent: Implementation Guidelines Agent
@@ -35,7 +40,11 @@ skill_packs:
 Load and apply the following, ground truth FIRST:
 - `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 - `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
-- `~/.claude/skills/core/implementation-guidelines-template.md` — 24-section template for generating comprehensive guidelines
+- `~/.claude/skills/core/implementation-guidelines-template.md` — the section structure (§0–§24) every other agent cites by number
+- `~/.claude/skills/core/commands-and-versions.md` — the exact, machine-parsed format of `## Commands and versions`
+- `~/.claude/skills/api/response-envelope.md` — the one response envelope; §2.3 reproduces it (the template's older §2.3 example is superseded)
+- `~/.claude/skills/security/secure-coding.md` — §4 auth/session and §8 security decisions must agree with it (no tokens in web storage; secrets fail closed unless `APP_ENV` is local|dev|test)
+- `~/.claude/skills/infrastructure/lima-k8s-lab.md` — the runtime rules the lab cluster enforces (numeric USER, read-only root FS, DB retry, readiness)
 - `~/.claude/skills/core/code-quality.md` — code quality standards to embed in guidelines
 - `~/.claude/skills/core/software-architecture.md` — architecture patterns to reference
 - `~/.claude/skills/core/resiliency-patterns.md` — resiliency patterns to include
@@ -81,6 +90,9 @@ Before writing the final guidelines, every category below must have a concrete a
 | **Observability** | Logging, metrics, tracing tools |
 | **Testing** | Unit, integration, and E2E frameworks; coverage threshold |
 | **Deployment** | Target environment, deployment method |
+| **Commands** | The exact install, build, typecheck, lint, test (per tier), migrate, seed and run commands |
+| **Versions** | Language toolchain, runtime and datastore major versions (one value used by Dockerfiles, CI, testcontainers and k8s) |
+| **Runtime contract** | Entry points, listen port, liveness/readiness/version paths, env config, `APP_ENV` values, user/filesystem, shutdown budget |
 
 ---
 
@@ -134,73 +146,146 @@ Never invent a technology choice. If the user defers, document it as an open dec
 
 ### Phase 4: Write docs/IMPLEMENTATION_GUIDELINES.md
 
+**One structure.** Follow `implementation-guidelines-template.md`: the header, then the three named
+sections below, then the numbered sections §0–§24 with the template's headings (`## 0. Coding
+Standards …` through `## 24. Mobile …`), then `## Open Decisions`. Other agents cite those numbers —
+§1 Project Structure (layer directories), §2.3 envelope, §4.1/§4.5 auth and sessions, §10.2
+environment variables, §11 deployment, §24 Mobile — so don't renumber, merge or drop a section. A
+section that doesn't apply says `N/A — <reason>` under its heading.
+
+Two template sections need overriding while you fill them:
+- **§2.3 Request/Response Conventions:** reproduce `~/.claude/skills/api/response-envelope.md` (success
+  `{data, meta}`, cursor pagination in `meta.pagination`, error `{error:{code, message, details,
+  request_id, retryable}}`) or state "the envelope is `response-envelope.md`, verbatim". The template's
+  older example with top-level offset pagination and an error `detail` field is superseded.
+- **§4.1 token storage:** httpOnly cookie or in-memory for web clients, Keychain/Keystore for mobile
+  (`secure-coding.md` §3). Web storage is never a valid value.
+
+The three named sections come right after the header, before §0. Their headings are exact: tools
+parse them, and agents find them by name.
+
+#### `## Technology stack`
+
+One row per decided component — the table `agent_factory` builds `tech_profile` from and
+`deployment_agent` discovers services from. Every row names a concrete technology (versions live in
+the next section):
+
 ```markdown
-# Implementation Guidelines
-**Project:** <name from BRD>
-**Version:** 1.0
-**Date:** YYYY-MM-DD
-**Status:** Confirmed | Pending Decisions
+## Technology stack
 
----
+| Component | Technology | Notes |
+|---|---|---|
+| Backend language | Go | |
+| Backend framework | chi | REST, /api/v1 |
+| Database | PostgreSQL | pooled tenancy, RLS |
+| ORM / driver | pgx | |
+| Migration tool | goose | forward-only |
+| Cache | none | |
+| Auth | session cookie (httpOnly) | §4 |
+| Web UI framework | react | enabled |
+| UI components | shadcn/ui | |
+| State management | tanstack-query | |
+| Build tool | vite | |
+| Unit test framework | go test + testify / vitest | |
+| E2E tool | playwright | |
+| Mobile | none | or: react-native (expo), see §24 |
+| Services (deployables) | api (`cmd/app`), web (`web/`) | build contexts for Dockerfiles |
+| Deploy targets | local compose, lab k8s dev/qa | |
+```
 
-## 1. Technology Stack
+#### `## Commands and versions` (exact format — parsed by `.claude/hooks/commands-table.py`)
 
-### Frontend
-- **Framework:** <e.g., React 18, Vue 3, SvelteKit>
-- **State Management:** <e.g., Zustand, Pinia, Redux Toolkit>
-- **Component Library:** <e.g., shadcn/ui, MUI, none>
-- **Build Tool:** <e.g., Vite, Webpack, Turbopack>
+Fill it from the decided stack, in the format of `~/.claude/skills/core/commands-and-versions.md`.
+Purposes are lowercase and fixed (`install build typecheck lint test:unit test:integration test:ui
+test:e2e test:mobile migrate seed run`, plus `x:<name>`); leave out a row that doesn't apply (never
+"N/A"); `$PHASE` and `$APP_BASE_URL` are substituted at run time; test commands never retry silently
+and Go tests run with `-count=1`. Example for a Go API + React web app on PostgreSQL:
 
-### Backend
-- **Language:** <e.g., Python 3.12, Go 1.22, Node.js 20>
-- **Framework:** <e.g., FastAPI, Gin, Express, NestJS>
-- **API Style:** <REST | GraphQL | gRPC>
+```markdown
+## Commands and versions
 
-### Data Layer
-- **Database:** <engine + version>
-- **ORM / Query Layer:** <e.g., SQLAlchemy, GORM, Drizzle, raw SQL>
-- **Migration Tool:** <e.g., Alembic, golang-migrate, Flyway>
-- **Cache:** <e.g., Redis, in-memory, none>
+| Purpose | Command |
+|---|---|
+| install | go mod download && (cd web && npm ci --ignore-scripts) |
+| build | go build ./... && (cd web && npm run build) |
+| typecheck | go vet ./... && (cd web && npx tsc --noEmit) |
+| lint | golangci-lint run ./... && (cd web && npm run lint) |
+| test:unit | gotestsum --junitfile agent_state/phases/$PHASE/junit/unit.xml -- -count=1 -race ./internal/... |
+| test:integration | gotestsum --junitfile agent_state/phases/$PHASE/junit/integration.xml -- -count=1 -tags=integration ./... |
+| test:ui | cd web && npx vitest run --reporter=junit --outputFile=../agent_state/phases/$PHASE/junit/ui.xml |
+| test:e2e | cd web && npx playwright test --reporter=junit |
+| migrate | go run ./cmd/app migrate |
+| seed | go run ./cmd/app seed |
+| run | go run ./cmd/app serve |
 
-### Auth
-- **Strategy:** <e.g., JWT, session-based, OAuth2>
-- **Provider / Library:** <e.g., Auth0, Clerk, Passport.js>
+| Component | Version |
+|---|---|
+| Go | 1.27 |
+| Node | 22 |
+| PostgreSQL | 17 |
+```
 
-### Infrastructure
-- **Target Cloud / Platform:** <e.g., AWS, GCP, Fly.io, bare metal>
-- **Container Strategy:** <e.g., Docker Compose for local; ECS for prod>
+Versions are the single source for Dockerfiles (`golang:<Go>-alpine`, `node:<Node>-slim`), CI
+(`setup-go` / `setup-node`), testcontainers images and the k8s manifests. The Go version equals the
+`go` line in `go.mod`; the Node version equals `.nvmrc` / `engines`. Record the toolchain file in
+§14 Dependency Management.
 
-## 2. Local Development Setup
-<Step-by-step: what to install, what commands to run, expected outcome>
-- Prerequisites: ...
-- Start command: `<command>`
-- Verify health: `<command>`
+**Verify before you finish:**
+```bash
+python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json
+```
+(or `~/.claude/hooks/startup/commands-table.py` when the project copy is missing). A non-zero exit —
+missing section, unknown purpose, no `test:unit` — means the guidelines aren't done.
 
-## 3. CI/CD Pipeline
-- **Platform:** <e.g., GitHub Actions, GitLab CI>
-- **Required Stages:** lint → test → build → [deploy]
-- **Coverage Threshold:** <N%>
-- **Required checks before merge:** <list>
+#### `## Runtime contract`
 
-## 4. Testing Strategy
-- **Unit Testing:** <framework + approach>
-- **Integration Testing:** <framework + what is covered>
-- **E2E Testing:** <framework + scope>
-- **Coverage Target:** <N%>
+What every coding agent implements and every deploy target, probe and test tier relies on. Fill each
+row for this project; the defaults below are what the lab cluster templates (`deploy/k8s/base/`) and
+`scripts/k8s/smoke.sh` expect, so change them only with a reason recorded in `docs/DECISIONS.md`:
 
-## 5. Observability
-- **Logging:** <structured JSON / library>
-- **Metrics:** <e.g., Prometheus, Datadog, none>
-- **Tracing:** <e.g., OpenTelemetry, none>
-- **Alerting:** <e.g., PagerDuty, Slack webhook, none>
+```markdown
+## Runtime contract
 
-## 6. Coding Conventions
-- **Code Style / Formatter:** <tool + config>
-- **Linter:** <tool + key rules>
-- **Commit Convention:** <e.g., Conventional Commits>
-- **Branch Strategy:** <e.g., trunk-based, gitflow>
+| Item | Value |
+|---|---|
+| Entry points | `app serve` (HTTP server) · `app migrate` (apply migrations, exit) · `app seed` (idempotent upserts, exit). Migrations never run on `serve` start |
+| Listen | `$PORT` (default 8080) |
+| Liveness | `GET /healthz` → 200 while the process can serve; checks no dependency |
+| Readiness | `GET /readyz` → 200 only when the DB answers within 500 ms and the schema version ≥ this release's; 503 otherwise; never checks optional dependencies (cache, search, email); no error text in the body |
+| Version | `GET /api/version` → `{"git_sha": "<12-char sha from env GIT_SHA>"}` (top-level key; smoke.sh reads it) |
+| Operational endpoints | `/healthz`, `/readyz`, `/api/version` skip auth, sessions, rate limits and the response envelope |
+| Config | environment variables only (the list in §10.2); `APP_ENV` ∈ local, dev, test, qa, staging, prod |
+| Secrets | no compiled-in defaults; a missing secret stops the process unless `APP_ENV` is exactly local, dev or test |
+| Dependencies at start | serve `/healthz` first; connect to the DB with backoff for up to 60 s while not ready; exit non-zero at once on auth/config errors (Postgres SQLSTATE class 28) |
+| User and filesystem | numeric non-root user `65532:65532`; read-only root filesystem; writes only to `$TMPDIR` |
+| Shutdown | SIGTERM → readiness 503 → keep serving 5 s (drain) → stop accepting → finish in-flight ≤ 20 s → close pools → flush telemetry → exit 0; `terminationGracePeriodSeconds` ≥ 30 and a `preStop` sleep ≥ the drain |
+| Health paths everywhere | `/healthz` + `/readyz` only — compose healthchecks, k8s probes, `SMOKE_PATHS`, CI smoke steps and test agents use these two, never `/health` or `/ready` |
+```
 
-## 7. Open Decisions
+#### The rest of the document
+
+```markdown
+# <Project>: Implementation Guidelines
+> **Version:** 1.0 · **Date:** YYYY-MM-DD · **Status:** Confirmed | Pending Decisions
+
+## Technology stack
+(table above)
+
+## Commands and versions
+(table above)
+
+## Runtime contract
+(table above)
+
+## 0. Coding Standards & Engineering Principles
+## 1. Project Structure            ← layer directories the optimizers and reviewers scope by
+## 2. API Design                   ← §2.3 = response-envelope.md
+## 3. Database Design
+## 4. Authentication & Authorization
+…
+## 24. Mobile (React Native — iOS + Android)   (or: N/A — no native app)
+
+## Open Decisions
 | ID | Category | Question | Owner | Due |
 |----|----------|----------|-------|-----|
 | OD-001 | <category> | <decision needed> | <person> | <date> |
@@ -214,6 +299,9 @@ Write `agent_state/impl_guidelines/decisions.yaml` with all answers and their so
 ## QUALITY GATES
 
 - [ ] Every category in the decision table has a concrete technology named
+- [ ] `## Commands and versions` parses: `commands-table.py` exits 0 and writes `agent_state/config/verify-commands.json`
+- [ ] `## Runtime contract` fills every row (entry points, port, `/healthz` + `/readyz`, version path, config, secrets, start-up retry, user/filesystem, shutdown)
+- [ ] The numbered sections follow the template (§0–§24); §2.3 is the `response-envelope.md` envelope; §4.1 never names web storage for tokens
 - [ ] Local dev setup has at least one executable command sequence
 - [ ] No technology is described only as "TBD" — deferred items in Open Decisions table with owner
 - [ ] Guidelines are consistent with BRD constraints (no conflicts)
@@ -228,6 +316,9 @@ These hold the conventions and patterns for the work you're doing. Before writin
 
 - `~/.claude/skills/core/commands-and-versions.md`
 - `~/.claude/skills/core/auto-research.md`
+- `~/.claude/skills/core/implementation-guidelines-template.md`
+- `~/.claude/skills/api/response-envelope.md`
+- `~/.claude/skills/security/secure-coding.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
@@ -254,6 +345,10 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Primary output written to the EXACT path `docs/IMPLEMENTATION_GUIDELINES.md` (not a draft in `requirements/`), plus `agent_state/impl_guidelines/decisions.yaml` recording every decision and its source (user-provided vs. defaulted).
 - [ ] EVERY category in the decision table names a concrete, actionable technology — no "TBD", no "SQL database"; unresolved items are in the Open Decisions table with an owner, not silently omitted.
 - [ ] Local dev setup has at least one executable command sequence, and the guidelines contain no conflicts with BRD constraints.
+- [ ] `## Commands and versions` is present in the exact format of `commands-and-versions.md`, and `python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json` exited 0 (command and output in my final message).
+- [ ] `## Runtime contract` is present with every row filled, and it names `/healthz` + `/readyz` as the only health paths.
+- [ ] `## Technology stack` is present with one concrete row per decided component, including the deployable services and their build contexts.
+- [ ] The document uses the template's numbered sections §0–§24 (N/A with a reason where one doesn't apply), so every agent's `§N` reference resolves; §2.3 matches `response-envelope.md`.
 - [ ] In `--auto` mode, each auto-decided choice followed the research ladder and is logged to `agent_state/autonomous/decisions.md` with the level it was decided at.
 - [ ] If a decision genuinely could not be made (missing input, unresolvable conflict), I recorded it as an explicit Open Decision with best-guess + flag — I do NOT emit a guidelines doc that reads confirmed while a blocker is unresolved.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.

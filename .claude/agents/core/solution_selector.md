@@ -27,6 +27,8 @@ skill_packs:
   - "~/.claude/skills/core/candidate-selection.md"
   - "~/.claude/skills/core/code-quality.md"
   - "~/.claude/skills/languages/{{LANG}}.md"
+  - "~/.claude/skills/api/response-envelope.md"
+  - "~/.claude/skills/security/secure-coding.md"
 ---
 
 # Agent: Solution Selector
@@ -92,25 +94,53 @@ verdict is reproducible, not vibes-based.
 |---|---|---|---|---|---|
 | R1 | **Spec / TC-\* coverage** | 0.30 | in-scope FR-\* or TC-\* unimplemented | every in-scope FR-\* + TC-\* implemented | spec ID → `file:line` map |
 | R2 | **Test results (own + cross)** | 0.30 | fails own tests | passes own + all comparable sibling suites | cross-test matrix row |
-| R3 | **Code quality** | 0.15 | stubs/TODOs, dead code, unclear | idiomatic, no stubs, readable | `file:line` of the pattern |
-| R4 | **Architecture fit** | 0.15 | violates layer boundaries / a DECISIONS.md decision | matches IMPL_GUIDELINES + repository pattern | boundary/interface `file:line` |
-| R5 | **Risk** | 0.10 | large blast radius, unsafe casts, migration risk | minimal, contained, reversible | risk site `file:line` |
+| R3 | **Code quality** | 0.15 | stubs/TODOs, dead code, unclear, build gate not green | idiomatic, no stubs, readable, build/typecheck/lint green | `file:line` of the pattern; build-gate exit codes |
+| R4 | **Architecture + contract fit** | 0.15 | violates layer boundaries, the Ownership split, a DECISIONS.md decision, `response-envelope.md` or the §Runtime contract | matches IMPL_GUIDELINES, the one envelope, the runtime contract (entry points, `/healthz` + `/readyz`, env config, graceful shutdown) | boundary/interface/handler `file:line` |
+| R5 | **Risk (incl. security + operability)** | 0.10 | large blast radius, unsafe casts, non-N-1-compatible migration, missing authz/tenant check, secrets with defaults, calls without timeouts, retries on non-idempotent calls | minimal, contained, forward-compatible, `secure-coding.md` rules met | risk site `file:line` |
+
+Every candidate was told the Wave 2A RULES and BUILD GATE apply to it (develop-orchestrator Wave 2B
+step 2). Score against them: they are the same rules the role agents follow, and the adopt pass
+(step 5b) only fixes violations, it doesn't rewrite the winner.
 
 **Combined score** (aligns with `candidate-selection.md` §Combine):
 ```
 rubric_score = 0.30*R1 + 0.30*R2 + 0.15*R3 + 0.15*R4 + 0.10*R5    (each Rn scaled 0–5 → 0–1)
-combined     = 0.5 * normalized(cross_test_pass_rate)   # Signal A — execution
-             + 0.5 * normalized(rubric_score)           # Signal B — this rubric
+combined     = 0.5 * cross_test_pass_rate     # Signal A — execution, the raw 0–1 rate (no min-max scaling)
+             + 0.5 * rubric_score             # Signal B — this rubric, raw 0–1
 ```
+With N=2, min-max scaling would turn any gap into 0 vs 1, so both signals are used as raw rates. If
+**no** sibling suite is comparable (every cross pair `N/A`), Signal A is undefined: the verdict is
+PROVISIONAL, decided on the rubric alone, and the report says so.
 
 **Hard rules (override the numeric score):**
-1. **Disqualify** any candidate that fails its OWN tests (it self-reported broken) or uses a RETIRED
-   component / violates a settled decision. A disqualified candidate cannot win, regardless of R3–R5.
+1. **Disqualify** any candidate that fails its OWN tests (it self-reported broken), uses a RETIRED
+   component, violates a settled decision, or lacks an authorization / tenant / ownership check that a
+   sibling candidate has for the same route (security is not traded for score). A disqualified
+   candidate cannot win, regardless of R3–R5.
 2. **Execution beats preference:** if your top rubric pick fails a sibling test that the runner-up
    passes, you must either flip to the test-passing candidate OR justify the pick on a concrete R1/R4
    ground (cite it). Taste is not a justification.
 3. **Ties within 0.05** → higher cross-test pass rate wins; if still tied, the smaller diff / simpler
    design wins (lower maintenance).
+
+## The winner must leave the same artifacts as Wave 2A
+
+Candidates are generic implementers, so a merged winner has code but not the role agents' hand-off
+artifacts, which Wave 3 and the roster gate require. List, for the winner, which of these exist and
+which the adopt pass (orchestrator Wave 2B step 5b) must produce:
+
+| Artifact | Owning role (adopt pass, `subagent_type: <role>`, 2A order) | Consumers |
+|---|---|---|
+| `docs/design/database.md` updated | `database_agent` | migration_agent, backend_developer |
+| Migration files in the tool's naming + `migrations/registry.yaml` + `migration_agent/manifest.json` | `migration_agent` | migration_safety_reviewer, integration tests |
+| `impl/backend_progress.md` (service interfaces, build gate) | `backend_developer` | api_developer |
+| `docs/design/phases/{{PHASE}}/specs/api-contracts.md` + `api_developer/manifest.json` | `api_developer` | ui/mobile developers, ui/mobile/integration test agents |
+| `ui_developer/manifest.json` | `ui_developer` | ui_test_agent, ui_code_optimizer |
+| `mobile_developer/manifest.json` | `mobile_developer` | mobile_test_agent, mobile_platform_auditor |
+| A `completed` line in `execution.jsonl` per roster role | each role, after its BUILD GATE | verify-gate roster check |
+
+Only roles in `roster.json` apply. A candidate whose code can't be adopted without a rewrite of a
+layer (e.g. handlers doing business logic across the board) scores 0–1 on R4.
 
 ## Graft List (extract value from the losers)
 
@@ -120,8 +150,11 @@ picking the winner, scan each loser for elements strictly better than the winner
 - a cleaner interface or type, a more complete error path, a missing edge-case test, a safer
   migration ordering, a better-named abstraction.
 
-For each, emit a graft entry: source candidate + `file:line`, why it's better, and how to apply it
-(`git checkout cand/phase-{{PHASE}}/cJ -- <path>` or a scoped follow-up). Grafts must be **specific and
+For each, emit a graft entry: source candidate + `file:line`, why it's better, the owning role, and the
+hunk to apply (`git diff cand/phase-{{PHASE}}/cN cand/phase-{{PHASE}}/cJ -- <path>`, the specific hunk
+only). Never a whole-file `git checkout` of a loser's file: it overwrites the winner's version of
+everything else in that file. The owning role applies grafts during the adopt pass and then runs its
+BUILD GATE, so a graft that breaks the build is caught before Wave 3. Grafts must be **specific and
 mergeable** — "c1 is generally nicer" is not a graft; "c1's `parseInterval` at c1/x.go:42 handles the
 empty-string case the winner crashes on" is.
 
@@ -155,13 +188,22 @@ Verdict basis: EXECUTION-BACKED | PROVISIONAL (code-only — tests could not run
 <why cN won — cite the combined score + the specific rows that decided it + any execution override>
 
 ## Graft List (fold into the winner)
-| From | Element | Why better | Apply |
-|------|---------|-----------|-------|
-| c1   | parseInterval empty-string handling (c1/x.go:42) | winner crashes on "" | git checkout cand/phase-{{PHASE}}/c1 -- x.go |
+| From | Element | Why better | Owning role | Apply (hunk) |
+|------|---------|-----------|-------------|--------------|
+| c1   | parseInterval empty-string handling (c1/x.go:42) | winner crashes on "" | backend_developer | `git diff cand/phase-{{PHASE}}/cN cand/phase-{{PHASE}}/c1 -- x.go` hunk @@ -40,6 @@ |
+
+## Role artifacts for the adopt pass
+| Artifact | Present in winner? | Owning role to produce it |
+|----------|--------------------|---------------------------|
+| specs/api-contracts.md + api_developer/manifest.json | no | api_developer |
+| migration registry + migration_agent/manifest.json | partial (files present, registry missing) | migration_agent |
 
 ## Rejoin Instructions (for the orchestrator)
 - Merge branch `cand/phase-{{PHASE}}/cN` into the working tree.
-- Apply the grafts above (cherry-pick / scoped commit — never blind-merge a loser).
+- Run the adopt pass (develop-orchestrator Wave 2B step 5b): spawn each roster role in 2A order with
+  `subagent_type: <role>`; each adopts its layer without rewriting it, applies its grafts from the
+  list above, publishes its artifacts from the table above, runs its BUILD GATE and logs its
+  completion line.
 - Discard losing worktrees + branches; continue to Wave 3 on the winner.
 
 BLOCKING:N WARNING:N INFO:N
@@ -192,6 +234,8 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/core/candidate-selection.md`
 - `~/.claude/skills/core/code-quality.md`
 - `~/.claude/skills/languages/{{LANG}}.md`
+- `~/.claude/skills/api/response-envelope.md`
+- `~/.claude/skills/security/secure-coding.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
@@ -219,8 +263,9 @@ Keep it short; the detail belongs in the artifact.
 - [ ] EVERY candidate scored on EVERY rubric row (R1–R5) — no candidate skipped, no row left blank.
 - [ ] The cross-test voting matrix is populated from REAL test execution (or the verdict is marked PROVISIONAL with the reason tests couldn't run — never a silent code-only pick presented as execution-backed).
 - [ ] The winner's `combined` score is the highest among non-disqualified candidates, OR an execution-override / tie-break is explicitly justified with a cited ground.
-- [ ] Every non-trivial score and every graft cites `file:line`; the graft list is specific and mergeable (or explicitly empty with a note that the winner already dominates).
-- [ ] Rejoin instructions name the exact winner branch and the exact graft cherry-picks.
+- [ ] Every non-trivial score and every graft cites `file:line`; the graft list is specific and mergeable, hunk-level with an owning role (or explicitly empty with a note that the winner already dominates).
+- [ ] The "Role artifacts for the adopt pass" table lists every Wave 2A artifact the roster needs and whether the winner already has it.
+- [ ] Rejoin instructions name the exact winner branch, the adopt pass, and the exact graft hunks.
 - [ ] The count line (`BLOCKING:N WARNING:N INFO:N`) is REAL — derived from findings.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 

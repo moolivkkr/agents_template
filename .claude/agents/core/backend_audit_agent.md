@@ -26,6 +26,8 @@ dependencies:
 skill_packs:
   - "~/.claude/skills/core/code-quality.md"
   - "~/.claude/skills/core/software-architecture.md"
+  - "~/.claude/skills/api/response-envelope.md"
+  - "~/.claude/skills/security/secure-coding.md"
 ---
 
 # Agent: Backend Audit Agent
@@ -56,7 +58,8 @@ Every finding in the audit report MUST be classified by evidence level:
 1. `docs/design/phases/{{PHASE}}/specs/` — what must be built this phase
 2. `docs/design/phases/{{PHASE}}/PHASE_PLAN.md` — exit criteria and wave structure
 3. `agent_state/phases/{{PHASE-1}}/manifest.json` — what already exists
-4. `docs/IMPLEMENTATION_GUIDELINES.md` — where code should live (component inventory)
+4. `docs/IMPLEMENTATION_GUIDELINES.md` — `## Technology stack`, §1 Project Structure (where code should live), `## Runtime contract`
+5. `agent_state/codebase/` (from `/map`, when present) — the conventions map; confirm or correct it from the code you read
 
 ---
 
@@ -146,11 +149,24 @@ When reading `carried_forward[]` from previous manifests, apply escalating sever
 
 ## Standard Gap Analysis
 
+- **Existing code to extend** — what the spec needs that already exists (file:line), so implementers extend it instead of re-creating it
 - **Missing implementations** — spec defines interface X, no implementation found
 - **Incomplete implementations** — function exists but is stubbed/TODO
 - **Missing tests** — implementation exists but no test file found
-- **Broken items** — compile errors, import cycles, obvious runtime issues
+- **Broken items** — compile errors, import cycles, obvious runtime issues (run the `build` and `typecheck` commands from `agent_state/config/verify-commands.json` when it exists and cite the exit codes)
 - **Migration gaps** — spec requires schema change, no migration file found
+- **Runtime-contract gaps** — against IMPLEMENTATION_GUIDELINES `## Runtime contract`: `serve`/`migrate`/`seed` entry points, `/healthz` + `/readyz` + version route, config from env, secrets with compiled-in defaults, DB connect without retry, no SIGTERM drain
+
+Every gap names its **owner** from the coding agents' Ownership split, so the orchestrator can route
+it: services/repositories/jobs/config/entry points → `backend_developer`; routes/handlers/middleware/
+health routes → `api_developer`; schema design → `database_agent`; migration files →
+`migration_agent`; tests → the Wave 3 test agents.
+
+### Conventions observed (implementers follow these)
+Record what the existing code actually does, with one `file:line` example each: package/directory
+layout, naming, error types and wrapping, constructor/DI style, logging fields, test file location
+(e.g. Go `_test.go` beside the source), response helpers. Implementers are told to follow these
+rather than invent new ones; a convention you can't find is "none yet".
 
 ---
 
@@ -168,21 +184,36 @@ When reading `carried_forward[]` from previous manifests, apply escalating sever
 | GetResource(ctx, id) | IDOR-susceptible | Missing tenantID parameter | Add tenantID as second param |
 | store map[uuid]*Resource | In-memory multi-tenant | No ownership check described | Add tenantID to key or value + add ownership check note |
 
+## Conventions Observed
+| Convention | What the code does | Example (file:line) |
+|------------|--------------------|---------------------|
+
+## Existing Code to Extend (do not re-create)
+| Spec item | Existing code (file:line) | State | Owner |
+|-----------|---------------------------|-------|-------|
+
 ## Gap Analysis
-| Component | Expected (from spec) | Found (in codebase) | Gap |
-|-----------|---------------------|---------------------|-----|
+| Component | Expected (from spec) | Found (in codebase) | Gap | Owner |
+|-----------|---------------------|---------------------|-----|-------|
 
 ## Missing Implementations (must build)
-- [ ] <interface/function> — required by spec/<file.md>, should live in <path per IMPL_GUIDELINES>
+- [ ] <interface/function> — required by spec/<file.md>, should live in <path per §1 Project Structure> — owner: <role>
 
 ## Incomplete (must complete)
-- [ ] <function> — stubbed at <file:line>
+- [ ] <function> — stubbed at <file:line> — owner: <role>
 
-## Missing Tests (must add)
+## Missing Tests (must add — Wave 3 test agents)
 - [ ] <component> — no test file found
 
-## Migration Gaps
+## Migration Gaps (migration_agent)
 - [ ] <schema change> — required by spec, no migration file found
+
+## Runtime-Contract Gaps
+| Item (IMPLEMENTATION_GUIDELINES §Runtime contract) | Status | Evidence (file:line) | Owner |
+|---|---|---|---|
+| serve / migrate / seed entry points | present / missing | | backend_developer |
+| /healthz, /readyz, version route | present / missing | | api_developer |
+| secrets fail closed unless APP_ENV is local/dev/test | yes / default found | | backend_developer |
 
 ## Recommended Implementation Order
 [Ordered list respecting wave structure from PHASE_PLAN.md, security gaps addressed first]
@@ -197,6 +228,8 @@ These hold the conventions and patterns for the work you're doing. Before writin
 
 - `~/.claude/skills/core/code-quality.md`
 - `~/.claude/skills/core/software-architecture.md`
+- `~/.claude/skills/api/response-envelope.md`
+- `~/.claude/skills/security/secure-coding.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->

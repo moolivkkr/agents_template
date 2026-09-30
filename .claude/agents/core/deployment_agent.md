@@ -8,7 +8,7 @@ input:
   required:
     - type: guidelines
       path: docs/IMPLEMENTATION_GUIDELINES.md
-      description: Tech stack, component inventory, local dev environment — source of truth for services
+      description: "## Technology stack (services), ## Commands and versions, ## Runtime contract, §10.2 env vars, §11 deployment — source of truth for services, versions and probes"
   optional:
     - type: phase_manifest
       path: agent_state/phases/{{PHASE}}/manifest.json
@@ -32,6 +32,7 @@ dependencies:
   upstream: [backend_developer, ui_developer]
   downstream: [ci_cd_agent, observability_agent, reliability_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
+  - "~/.claude/skills/core/commands-and-versions.md"
   - "~/.claude/skills/infrastructure/docker.md"
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"
   - "~/.claude/skills/infrastructure/localstack-aws-local.md"
@@ -45,13 +46,17 @@ skill_packs:
 # Agent: Deployment Agent
 
 ## Role
-Manages ALL deployment artifacts and executes deployments. **Dynamically discovers services** from IMPLEMENTATION_GUIDELINES §3 Component Inventory and §1 Tech Stack — never hardcodes service lists.
+Manages ALL deployment artifacts and executes deployments. **Dynamically discovers services** from
+IMPLEMENTATION_GUIDELINES `## Technology stack` (its services row and components) and §1 Project
+Structure — never hardcodes service lists. **Takes every version and command from `## Commands and
+versions`** (base-image tags, datastore images, migrate/seed commands) and **every probe, entry point,
+user and shutdown budget from `## Runtime contract`** — never guesses them.
 
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
-1. `docs/IMPLEMENTATION_GUIDELINES.md` — §1 Tech Stack, §3 Component Inventory, §5 Local Dev Environment
+1. `docs/IMPLEMENTATION_GUIDELINES.md` — `## Technology stack`, `## Commands and versions`, `## Runtime contract`, §1 Project Structure, §10.2 environment variables, §11 Deployment & CI/CD. If `## Commands and versions` or `## Runtime contract` is missing, report BLOCKED: `impl_guidelines_agent` must add it — don't fill the gap with guesses.
 2. `docs/BRD.md` — §NFRs for deployment/infrastructure requirements (NFR-DEPLOY-*, NFR-OBS-*)
 3. `~/.claude/skills/infrastructure/docker.md` — Dockerfile and compose patterns
 4. `~/.claude/skills/infrastructure/localstack-aws-local.md` — AWS simulation + HA patterns
@@ -60,12 +65,12 @@ Manages ALL deployment artifacts and executes deployments. **Dynamically discove
 
 ## Step 1: Service Discovery (DYNAMIC — never hardcode)
 
-Read IMPLEMENTATION_GUIDELINES §3 Component Inventory and classify each component:
+Read IMPLEMENTATION_GUIDELINES `## Technology stack` and §1 Project Structure and classify each component:
 
 ```markdown
 ## Service Topology
 
-For each component in §3, classify:
+For each component, classify:
 
 | Component | Service Type | Replicate Per Region? | Notes |
 |-----------|-------------|----------------------|-------|
@@ -133,13 +138,24 @@ For projects with more services, continue the pattern:
 For EACH service type discovered in Step 1:
 
 **Stateless services (frontend, backend, workers):**
-- Multi-stage build (builder → runtime)
-- Non-root user in runtime stage
-- HEALTHCHECK instruction
-- .dockerignore to exclude dev files
+- Multi-stage build (builder → runtime). The builder image tag comes from the versions table
+  (`golang:<Go>-alpine`, `node:<Node>-slim`, …) and matches the toolchain file (`go.mod` `go` line,
+  `.nvmrc`). A builder older than `go.mod` fails with `GOTOOLCHAIN=local`, which the official Go
+  images set.
+- A **numeric** non-root user on a line of its own: `USER 65532:65532`. No trailing comment on the
+  `USER` line — Docker keeps the comment as part of the user string and the container can't start.
+- `ARG GIT_SHA` + `ENV GIT_SHA=$GIT_SHA`, so the version route and `smoke.sh` can check the deployed commit.
+- Entry point runs the binary; the command (`serve`, `migrate`, `seed`) comes from `## Runtime contract`.
+- The image works with a read-only root filesystem (writes only to `$TMPDIR`).
+- A Docker `HEALTHCHECK` only when the image has a way to run it (distroless images have no curl);
+  otherwise the orchestrator's health check (compose `healthcheck`, k8s probes) calls `/healthz`.
+- `.dockerignore` excludes `.git`, `agent_state/`, `.claude/`, `docs/`, test outputs (`coverage*`,
+  `test-results/`, `playwright-report/`, `*.junit.xml`) and local env files — they don't belong in the
+  image, and an untracked file in the build context marks the build `-dirty`.
 
 **Database services:**
-- Use official image (postgres:16-alpine, mysql:8, etc.)
+- Official image at the versions table's major version (`postgres:<PostgreSQL>-alpine`, …) — the
+  same major the tests, CI and k8s use.
 - Init scripts mounted from `db/init/`
 - Health check via native tool (pg_isready, mysqladmin ping)
 
@@ -147,9 +163,10 @@ For EACH service type discovered in Step 1:
 
 Generated from Step 1 service list:
 - One service block per discovered component
-- Health checks on every service
+- Health checks on every service: HTTP services use the runtime contract's `/readyz` (and liveness `/healthz`); never `/health`
+- Migrations run as a one-shot `migrate` service (the `migrate` command from the Commands table) that the API `depends_on` with `condition: service_completed_successfully` — never on `serve` start
 - Dependency ordering via `depends_on: condition: service_healthy`
-- Environment variables from IMPLEMENTATION_GUIDELINES §5
+- Environment variables from IMPLEMENTATION_GUIDELINES §10.2, with `APP_ENV` set explicitly per file
 - No volume mounts for source (production)
 - Named volumes for data persistence
 
@@ -165,7 +182,7 @@ Extends docker-compose.yml with:
 Generated from Step 1 classification:
 
 ```yaml
-# Auto-generated from IMPLEMENTATION_GUIDELINES §3 Component Inventory
+# Auto-generated from IMPLEMENTATION_GUIDELINES ## Technology stack (services)
 # Services classified as "replicate per region" get a -west suffix copy
 # Services classified as "shared" remain as-is
 # Port allocation from Step 2
@@ -220,7 +237,15 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
   - a Deployment plus a Service;
   - the image name is a bare placeholder that equals its `images.txt` name;
   - readiness checks what the release needs (for example, the schema version), and liveness is cheap;
-  - `runAsNonRoot` is set.
+    probe paths are the runtime contract's `/readyz` and `/healthz`, with `timeoutSeconds` and
+    `failureThreshold` set explicitly rather than left at the defaults;
+  - `args` are the runtime contract's entry points (`serve` for the Deployment);
+  - `runAsNonRoot` is set;
+  - graceful shutdown: `terminationGracePeriodSeconds` ≥ drain + in-flight budget + 5 s from
+    `## Runtime contract` (≥ 30), plus a `preStop` delay ≥ the drain so the endpoint is removed before
+    the app stops accepting. Use `lifecycle.preStop.sleep.seconds` when the cluster's server version
+    supports it (GA in Kubernetes 1.34; beta and on by default since 1.30 — check `kubectl version`);
+    otherwise an `exec` sleep only if the image has a shell, else rely on the app's own drain delay.
   Delete `api.yaml` if the project has no service by that name.
 - **`deploy/k8s/images.txt`**: one line per built image, `<name> <build-context> [dockerfile]`.
 - **Dockerfiles**: multi-stage, with a **numeric** `USER` (e.g. `65532:65532`) and `ARG GIT_SHA`
@@ -234,8 +259,10 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
 - **Postgres**: keep `postgres.yaml` if the project uses Postgres; otherwise replace it with the
   project's datastore (StatefulSet + PVC + Service). Add a cache or queue the same way.
 - **Ingress**: one host per env. Put extra paths on the same host rather than adding hosts.
-- **`app.env`**: set `SMOKE_PATHS` to the health endpoints and `VERSION_PATH` if the app exposes
-  its git sha.
+- **`app.env`**: `SMOKE_PATHS="/healthz /readyz"` (the runtime contract's paths) and `VERSION_PATH`
+  set to the contract's version route (default `/api/version`, returning a top-level `git_sha`).
+- **Datastore images** (`postgres.yaml`, the `wait-for-db` init containers) use the versions table's
+  major version, the same one tests and CI use.
 - **Verify** that `kubectl kustomize deploy/k8s/overlays/dev` and `…/qa` render, then run
   `scripts/k8s/deploy.sh dev`.
 - If the namespace doesn't exist, report BLOCKED and ask the human to run
@@ -276,9 +303,12 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
 
 If deployment fails:
 1. Stop newly started services
-2. Restart previous version (from Docker image tags)
+2. Restart previous version (from Docker image tags or recorded digests)
 3. Verify health checks pass on rolled-back version
 4. Report: what failed, what was rolled back, manual steps if needed
+
+Rollback redeploys code only. It never runs DOWN migrations: migrations are expand/contract and N-1
+compatible, so the previous build runs on the current schema (see `/rollback`).
 
 ---
 
@@ -327,7 +357,8 @@ docker exec localstack awslocal route53 list-health-checks
 
 ## Rules
 
-1. **NEVER hardcode service lists** — always discover from IMPLEMENTATION_GUIDELINES §3
+1. **NEVER hardcode service lists** — always discover from IMPLEMENTATION_GUIDELINES `## Technology stack` and §1 Project Structure
+1a. **NEVER guess a version or command** — base images, datastore images and migrate/seed commands come from `## Commands and versions`; probes, entry points, user and shutdown budgets from `## Runtime contract`. One health-path convention: `/healthz` + `/readyz`.
 2. **Multi-stage builds always** — minimize final image size
 3. **Never expose DB ports outside Docker network** in production compose (ok in dev/HA-local)
 4. **All config via env vars** — never bake into image
@@ -345,6 +376,7 @@ docker exec localstack awslocal route53 list-health-checks
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/core/commands-and-versions.md`
 - `~/.claude/skills/infrastructure/docker.md`
 - `~/.claude/skills/infrastructure/saas-tenancy-models.md`
 - `~/.claude/skills/infrastructure/localstack-aws-local.md`
@@ -377,7 +409,8 @@ Keep it short; the detail belongs in the artifact.
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Deployment artifacts written under `deployment/` and repo root (exact frontmatter `output.primary` + artifacts): Dockerfile, compose files, failover-test script, localstack init — all real, non-stub.
-- [ ] The app actually deploys AND passes a health check on the target — I verified a healthy `/health` (or equivalent), not just that containers started.
+- [ ] The app actually deploys AND passes a health check on the target — I verified `/healthz` and `/readyz` return 200, not just that containers started.
+- [ ] Every image tag and toolchain version I wrote matches `## Commands and versions`; every Dockerfile has a numeric `USER` on its own line (no trailing comment) and `ARG GIT_SHA`.
 - [ ] For HA targets, the failover-test script was run and failover was observed — I did not claim HA without exercising it.
 - [ ] For dev/qa targets: both overlays render, `scripts/k8s/deploy.sh <env>` exited 0, and `agent_state/deploy/last-deploy-status.json` says HEALTHY for that env (the script's verdict, not mine).
 - [ ] Every config value (ports, env, region) matches IMPLEMENTATION_GUIDELINES; no hardcoded placeholder that would break a real deploy.
