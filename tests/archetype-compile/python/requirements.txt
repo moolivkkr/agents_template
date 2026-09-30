@@ -14,9 +14,14 @@ anyio==4.15.1
     #   starlette
 apscheduler==3.11.3
     # via -r requirements.in
+argon2-cffi==25.1.0
+    # via -r requirements.in
+argon2-cffi-bindings==26.1.0
+    # via argon2-cffi
 asgiref==3.12.1
     # via
     #   channels
+    #   daphne
     #   django
     #   opentelemetry-instrumentation-asgi
 asyncpg==0.31.0
@@ -25,10 +30,20 @@ asyncpg==0.31.0
     #   asyncpg-stubs
 asyncpg-stubs==0.31.3
     # via -r requirements.in
+attrs==26.1.0
+    # via
+    #   service-identity
+    #   twisted
+autobahn==26.7.1
+    # via daphne
+automat==25.4.16
+    # via twisted
 billiard==4.3.0
     # via celery
 cachetools==7.2.0
     # via -r requirements.in
+cbor2==6.1.4
+    # via autobahn
 celery==5.6.3
     # via -r requirements.in
 celery-types==0.26.0
@@ -38,6 +53,11 @@ certifi==2026.7.22
     #   httpcore
     #   httpx
     #   requests
+cffi==2.1.1
+    # via
+    #   argon2-cffi-bindings
+    #   autobahn
+    #   cryptography
 channels==4.3.2
     # via -r requirements.in
 charset-normalizer==3.5.2
@@ -55,6 +75,15 @@ click-plugins==1.1.1.2
     # via celery
 click-repl==0.4.0
     # via celery
+constantly==23.10.4
+    # via twisted
+cryptography==50.0.2
+    # via
+    #   autobahn
+    #   pyopenssl
+    #   service-identity
+daphne==4.2.3
+    # via channels
 django==6.1.1
     # via
     #   -r requirements.in
@@ -90,11 +119,19 @@ httpcore==1.0.9
     # via httpx
 httpx==0.28.1
     # via -r requirements.in
+hyperlink==21.0.0
+    # via
+    #   autobahn
+    #   twisted
 idna==3.20
     # via
     #   anyio
     #   httpx
+    #   hyperlink
     #   requests
+    #   twisted
+incremental==24.11.0
+    # via twisted
 iniconfig==2.3.0
     # via pytest
 kombu==5.6.2
@@ -106,7 +143,9 @@ mako==1.4.3
 markupsafe==3.0.3
     # via mako
 msgpack==1.2.3
-    # via -r requirements.in
+    # via
+    #   -r requirements.in
+    #   autobahn
 opentelemetry-api==1.45.0
     # via
     #   -r requirements.in
@@ -173,6 +212,7 @@ opentelemetry-util-http==0.66b0
     #   opentelemetry-instrumentation-httpx
 packaging==26.3
     # via
+    #   incremental
     #   kombu
     #   opentelemetry-instrumentation
     #   opentelemetry-instrumentation-sqlalchemy
@@ -197,6 +237,8 @@ protobuf==7.36.2
     #   opentelemetry-proto
 py-cpuinfo2==10.1.1
     # via pytest-benchmark
+pycparser==3.0
+    # via cffi
 pydantic==2.13.5
     # via
     #   -r requirements.in
@@ -210,6 +252,8 @@ pygments==2.21.0
     # via pytest
 pyjwt==2.15.1
     # via -r requirements.in
+pyopenssl==26.4.0
+    # via twisted
 pytest==9.1.1
     # via
     #   -r requirements.in
@@ -231,6 +275,8 @@ redis==8.1.0
     #   dramatiq
 requests==2.34.2
     # via docker
+service-identity==26.1.0
+    # via twisted
 setuptools==84.0.0
     # via grpcio-tools
 six==1.17.0
@@ -250,6 +296,10 @@ structlog==26.1.0
     # via -r requirements.in
 testcontainers==4.15.0
     # via -r requirements.in
+twisted==26.4.0
+    # via daphne
+txaio==26.6.1
+    # via autobahn
 types-cachetools==7.0.0.20260713
     # via -r requirements.in
 types-grpcio==1.84.0.20260928
@@ -272,10 +322,12 @@ typing-extensions==4.16.0
     #   opentelemetry-semantic-conventions
     #   pydantic
     #   pydantic-core
+    #   pyopenssl
     #   pytest-asyncio
     #   sqlalchemy
     #   starlette
     #   testcontainers
+    #   twisted
     #   typing-inspection
 typing-inspection==0.4.4
     # via
@@ -288,6 +340,8 @@ tzlocal==5.4.4
     # via
     #   apscheduler
     #   celery
+ujson==6.0.0
+    # via autobahn
 urllib3==2.8.0
     # via
     #   docker
@@ -304,6 +358,8 @@ vine==5.1.0
     #   kombu
 wcwidth==0.9.1
     # via prompt-toolkit
+websockets==17.1
+    # via -r requirements.in
 wrapt==2.5.0
     # via
     #   opentelemetry-instrumentation
@@ -311,3 +367,5 @@ wrapt==2.5.0
     #   opentelemetry-instrumentation-redis
     #   opentelemetry-instrumentation-sqlalchemy
     #   testcontainers
+zope-interface==8.6
+    # via twisted

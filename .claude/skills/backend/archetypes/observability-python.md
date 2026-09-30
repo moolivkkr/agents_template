@@ -19,7 +19,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `core/observability-patterns.md` (Go/TypeScript). All three produce identical metric names, span naming conventions, and required log fields so dashboards and alerts work across polyglot services.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the app run through TestClient (lifespan, middleware, metrics read in-process: one series per route template; log redaction). opentelemetry-sdk 1.45.0 / instrumentation 0.66b0, structlog 26.1.0, prometheus-fastapi-instrumentator 8.1.0, FastAPI 0.142.2.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the app run through TestClient (lifespan, middleware, metrics and spans read in-process: one http.server.request.duration source, one series per route template, a server span per request, probes excluded, log redaction). opentelemetry-sdk 1.45.0 / instrumentation 0.66b0, structlog 26.1.0, prometheus-fastapi-instrumentator 8.1.0, FastAPI 0.142.2.
 
 Complete observability stack for Python backend services built on FastAPI. Every generated Python service MUST follow this pattern.
 
@@ -115,20 +115,27 @@ from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.metrics import NoOpMeterProvider
 
 
-def instrument_auto(app, engine=None):
+def instrument_fastapi(app):
     """
-    Enable auto-instrumentation for FastAPI, SQLAlchemy, Redis, and httpx.
-
-    Call after configure_tracing() in the FastAPI lifespan.
+    Root span for every request. Call where the app is created, NOT in the lifespan: the instrumentor
+    wraps the middleware stack, and Starlette builds that stack on the app's first call — the
+    lifespan's — so instrumenting from inside the lifespan never takes effect. The tracer is resolved
+    per request, so the provider configure_tracing() sets later is the one used.
     """
-    # FastAPI — creates root spans for every request
     FastAPIInstrumentor.instrument_app(
         app,
-        excluded_urls="health,ready,metrics",
+        excluded_urls="healthz,readyz,metrics",
         # MetricsMiddleware (2.3) is the single source of HTTP server metrics; don't record a second set
         meter_provider=NoOpMeterProvider(),
     )
 
+
+def instrument_auto(engine=None):
+    """
+    Enable auto-instrumentation for SQLAlchemy, Redis, and httpx.
+
+    Call after configure_tracing() in the FastAPI lifespan.
+    """
     # SQLAlchemy — wraps every query in a child span
     if engine is not None:
         SQLAlchemyInstrumentor().instrument(
@@ -436,7 +443,7 @@ class MetricsMiddleware(BaseHTTPMiddleware):
     """Stable OTel HTTP semconv. Every attribute is bounded: no tenant_id, IDs, raw paths or query strings."""
 
     async def dispatch(self, request: Request, call_next) -> Response:
-        if request.url.path in ("/health", "/ready", "/metrics"):  # skip list only, never a label
+        if request.url.path in ("/healthz", "/readyz", "/metrics"):  # skip list only, never a label
             return await call_next(request)
 
         # The route isn't known until the router has matched, so active_requests has method + scheme only
@@ -534,7 +541,7 @@ Instrumentator(
     should_group_status_codes=True,
     should_ignore_untemplated=True,
     should_respect_env_var=False,
-    excluded_handlers=["/health", "/ready", "/metrics"],
+    excluded_handlers=["/healthz", "/readyz", "/metrics"],
     inprogress_name="http_requests_inprogress",
     inprogress_labels=True,
 ).instrument(app).expose(app, endpoint="/metrics")
@@ -954,9 +961,9 @@ from app.observability.metrics import configure_metrics
 from app.observability.instruments import instrument_auto
 
 
-def instrument_app(app, engine=None):
+def instrument_app(engine=None):
     """
-    One-call setup for all observability.
+    One-call setup for all observability except the FastAPI instrumentor (see instrument_fastapi).
 
     Must be called inside the FastAPI lifespan context manager.
     Returns (tracer_provider, meter_provider) for clean shutdown.
@@ -970,8 +977,8 @@ def instrument_app(app, engine=None):
     # 3. Metrics
     meter_provider = configure_metrics()
 
-    # 4. Auto-instrumentation
-    instrument_auto(app, engine=engine)
+    # 4. Auto-instrumentation (SQLAlchemy, Redis, httpx)
+    instrument_auto(engine=engine)
 
     return tracer_provider, meter_provider
 ```
@@ -985,6 +992,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.observability import instrument_app
+from app.observability.instruments import instrument_fastapi
 from app.db import create_engine
 from app.middleware.auth_middleware import AuthMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
@@ -995,7 +1003,7 @@ from app.middleware.metrics_middleware import MetricsMiddleware
 async def lifespan(app: FastAPI):
     # ── Startup ───────────────────────────────────────────────────────
     engine = create_engine()
-    tracer_provider, meter_provider = instrument_app(app, engine=engine.sync_engine)
+    tracer_provider, meter_provider = instrument_app(engine=engine.sync_engine)
 
     yield
 
@@ -1011,7 +1019,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Order Service",
     lifespan=lifespan,
+    # FastAPI's native OpenTelemetry (FastAPI 0.142 here) turns on whenever a provider is configured and
+    # would record a second http.server.request.duration series next to MetricsMiddleware (and add
+    # exporters from OTEL_* env vars). The instrumentor below and MetricsMiddleware own HTTP telemetry.
+    telemetry={"tracing": False, "metrics": False, "logs": False, "auto_configure": False},
 )
+instrument_fastapi(app)  # before the app serves anything, the lifespan included
 
 # Middleware order matters — outermost runs first. Starlette: the LAST one added is the OUTERMOST.
 app.add_middleware(AuthMiddleware)     # innermost: verifies the token; sets request.state.tenant_id/user_id

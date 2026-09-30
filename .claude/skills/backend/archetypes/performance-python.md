@@ -17,7 +17,7 @@ tags:
 
 > **Canonical reference**: Python-specific performance patterns for FastAPI services. Apply these alongside `core/observability-patterns.md` for measured, observable performance improvements.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked, with a small smoke run (single-flight, hashing, msgpack round trip). SQLAlchemy 2.1.1, asyncpg 0.31.0, redis 8.1.0, cachetools 7.2.0, uvloop 0.22.1, celery 5.6.3.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked, with a smoke run (argon2id hash/verify, single-flight, msgpack round trip, the Celery report task's transient-only retry and single notification). SQLAlchemy 2.1.1, asyncpg 0.31.0, redis 8.1.0, cachetools 7.2.0, argon2-cffi 25.1.0, uvloop 0.22.1, celery 5.6.3.
 
 Every generated Python service MUST follow these patterns to avoid common performance pitfalls.
 
@@ -29,28 +29,46 @@ Every generated Python service MUST follow these patterns to avoid common perfor
 
 The single most common Python async performance mistake. CPU-bound work on the event loop starves all other coroutines.
 
+Password hashing is the classic case: a real password hash is deliberately slow (tens of ms of CPU).
+The examples use argon2id via `argon2-cffi` (`PasswordHasher()` defaults: argon2id, 64 MiB, t=3, p=4, a
+random salt per hash, stored inside the hash string). Never a fast hash such as SHA-256 or a fixed salt.
+
 ```python
 # ---- WRONG: blocks the event loop ----
-import hashlib
+from argon2 import PasswordHasher
+
+_hasher = PasswordHasher()  # argon2id; each hash gets its own random salt
+
 
 async def hash_password(password: str) -> str:
-    # This runs on the event loop — blocks ALL concurrent requests
-    return hashlib.pbkdf2_hmac("sha256", password.encode(), b"salt", 100_000).hex()
+    # ~50 ms of CPU on the event loop — blocks ALL concurrent requests
+    return _hasher.hash(password)
 
 
 # ---- CORRECT: offload CPU work to a thread pool ----
 import asyncio
-import hashlib
-from functools import partial
+
+from argon2.exceptions import InvalidHashError, VerifyMismatchError
 
 
 async def hash_password(password: str) -> str:
     loop = asyncio.get_running_loop()
-    digest = await loop.run_in_executor(
-        None,  # default ThreadPoolExecutor
-        partial(hashlib.pbkdf2_hmac, "sha256", password.encode(), b"salt", 100_000),
-    )
-    return digest.hex()
+    # default ThreadPoolExecutor; argon2 releases the GIL while it hashes, so threads run in parallel
+    return await loop.run_in_executor(None, _hasher.hash, password)
+
+
+async def verify_password(stored_hash: str, password: str) -> bool:
+    """Constant-time check (argon2 recomputes the hash with the stored salt and parameters)."""
+    loop = asyncio.get_running_loop()
+    try:
+        return await loop.run_in_executor(None, _hasher.verify, stored_hash, password)
+    except (VerifyMismatchError, InvalidHashError):  # wrong password, or not an argon2 hash
+        return False
+
+
+def needs_rehash(stored_hash: str) -> bool:
+    """True when the hash used older parameters: re-hash the password on the next successful login."""
+    return _hasher.check_needs_rehash(stored_hash)
 
 
 # ---- CORRECT: heavy CPU work → ProcessPoolExecutor ----
@@ -1083,20 +1101,34 @@ async def handle_request():
 from celery import Celery
 app = Celery("tasks", broker="redis://localhost:6379/0")
 
-@app.task(bind=True, max_retries=3, default_retry_delay=60)
-def generate_monthly_report(self, tenant_id: str):
-    """Runs in a separate Celery worker process."""
-    try:
-        data = fetch_month_data(tenant_id)
-        pdf = build_pdf(data)        # CPU-intensive
-        upload_to_s3(pdf)             # IO-bound
-        send_notification(tenant_id)  # IO-bound
-    except Exception as exc:
-        self.retry(exc=exc)
+
+@app.task(
+    bind=True,
+    acks_late=True,
+    # Retry transient failures only, with exponential backoff and jitter. A bug or bad data fails
+    # once: retrying repeats it.
+    autoretry_for=(ConnectionError, TimeoutError),
+    retry_backoff=True,       # 1 s, 2 s, 4 s, ...
+    retry_backoff_max=600,    # at most 10 minutes apart
+    retry_jitter=True,        # randomized, so many workers' retries don't land together
+    max_retries=5,
+)
+def generate_monthly_report(self, tenant_id: str, month: str) -> None:
+    """Runs in a separate Celery worker process. Safe to retry and to deliver twice: each step is
+    idempotent for (tenant_id, month), and the one that isn't (the notification) is gated on a key."""
+    key = f"monthly-report:{tenant_id}:{month}"
+    data = fetch_month_data(tenant_id, month)              # read-only
+    pdf = build_pdf(data)                                  # pure, CPU-intensive
+    upload_to_s3(f"reports/{tenant_id}/{month}.pdf", pdf)  # a fixed key: a retry overwrites, never adds
+    if not idempotency.is_done(f"{key}:notified"):
+        # The provider deduplicates on the key, so a retry after a timeout that did deliver sends nothing
+        send_notification(tenant_id, idempotency_key=f"{key}:notified")
+        idempotency.mark_done(f"{key}:notified")
+
 
 # Dispatch from FastAPI:
-async def request_report(tenant_id: str):
-    generate_monthly_report.delay(tenant_id)  # async dispatch
+async def request_report(tenant_id: str, month: str):
+    generate_monthly_report.delay(tenant_id, month)  # async dispatch
     return {"status": "queued"}
 ```
 
@@ -1127,7 +1159,7 @@ uvloop.run(main())  # instead of asyncio.run(main()); uvloop.install() is deprec
 
 ## 7. Critical Rules
 
-1. **Never block the event loop** — offload CPU work to `ProcessPoolExecutor` or `run_in_executor`
+1. **Never block the event loop** — offload CPU work to `ProcessPoolExecutor` or `run_in_executor` (password hashing included: argon2id with a per-hash salt, never a fixed salt)
 2. **Create connection pools once** — httpx.AsyncClient, asyncpg.Pool, redis pool created at startup, shared across requests
 3. **Use `slots=True`** on dataclasses in hot paths — 40% less memory per instance
 4. **Stream large results** — use async generators and `StreamingResponse`, never load unbounded result sets into memory

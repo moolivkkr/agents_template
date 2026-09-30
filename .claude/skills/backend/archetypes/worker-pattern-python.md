@@ -16,7 +16,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `worker-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked; the Celery task applied in-process, the dramatiq actor function called, the asyncio worker and APScheduler jobs exercised. No broker was used. celery 5.6.3, dramatiq 2.2.1, APScheduler 3.11.3.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked; the Celery task applied in-process (transient failure retried, one email per idempotency key, permanent failure not retried), the dramatiq actor function called, the asyncio worker's idempotent-only backoff retries and APScheduler jobs exercised. No broker was used. celery 5.6.3, dramatiq 2.2.1, APScheduler 3.11.3.
 
 Python workers typically use Celery (Redis/RabbitMQ) or dramatiq for task queues, and APScheduler or Celery Beat for scheduled jobs.
 
@@ -95,6 +95,7 @@ logger = structlog.get_logger(__name__)
 class BaseTask(Task):
     """Base task with structured logging and error handling."""
 
+    # Retry transient failures only. A bad template or a rejected address fails once: retrying repeats it.
     autoretry_for = (ConnectionError, TimeoutError)
     retry_backoff = True           # Exponential backoff
     retry_backoff_max = 300        # Max 5 minutes between retries
@@ -154,19 +155,18 @@ def send_email(
 
     log.info("email.sending", to=to, template=template_id)
 
-    try:
-        svc = EmailService()
-        html = svc.render_template(template_id, variables)
-        result = svc.send(to=to, subject=subject, html=html)
+    # A ConnectionError/TimeoutError propagates and BaseTask retries it with backoff and jitter; any
+    # other error fails the task once (on_failure logs it). No catch-all self.retry().
+    svc = EmailService()
+    html = svc.render_template(template_id, variables)
+    # Sending is not idempotent by itself: the provider deduplicates on idempotency_key, so a retry
+    # after a timeout that did deliver doesn't send a second email.
+    result = svc.send(to=to, subject=subject, html=html, idempotency_key=job_id)
 
-        idem.mark_processed(job_id, ttl_seconds=86400)
+    idem.mark_processed(job_id, ttl_seconds=86400)
 
-        log.info("email.sent", provider_id=result.message_id)
-        return {"status": "sent", "message_id": result.message_id}
-
-    except Exception as exc:
-        log.error("email.failed", error=str(exc))
-        raise self.retry(exc=exc)
+    log.info("email.sent", provider_id=result.message_id)
+    return {"status": "sent", "message_id": result.message_id}
 ```
 
 ## Dramatiq Alternative
@@ -193,9 +193,14 @@ broker.add_middleware(CurrentMessage())
 dramatiq.set_broker(broker)
 
 
+def retry_transient(retries: int, exc: BaseException) -> bool:
+    """Retry a dependency hiccup, up to 5 times; a bug or bad input fails once."""
+    return isinstance(exc, (ConnectionError, TimeoutError)) and retries < 5
+
+
 @dramatiq.actor(
     queue_name="email",
-    max_retries=5,
+    retry_when=retry_transient,  # replaces max_retries; the backoff is exponential with jitter
     min_backoff=1_000,    # 1 second
     max_backoff=300_000,  # 5 minutes
     time_limit=300_000,   # 5 minute hard limit
@@ -221,7 +226,7 @@ def send_email(
 
     svc = EmailService()
     html = svc.render_template(template_id, variables)
-    svc.send(to=to, subject=subject, html=html)
+    svc.send(to=to, subject=subject, html=html, idempotency_key=job_id)  # the provider deduplicates
 
     idem.mark_processed(job_id, ttl_seconds=86400)
     logger.info("email.sent", job_id=job_id, to=to)
@@ -233,15 +238,19 @@ def send_email(
 # app/worker/async_worker.py
 
 import asyncio
+import random
 import signal
-import uuid
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Coroutine
+from typing import Any
 
 import structlog
 
 logger = structlog.get_logger(__name__)
+
+# Worth another try: a dependency hiccup, or the job's own timeout. Anything else is a bug or bad input.
+TRANSIENT_ERRORS: tuple[type[BaseException], ...] = (ConnectionError, TimeoutError)
 
 
 @dataclass
@@ -255,19 +264,35 @@ class Job:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
 
-class AsyncWorker:
-    """In-process async worker using asyncio.Queue. For single-process apps."""
+Handler = Callable[[Job], Coroutine[Any, Any, None]]
 
-    def __init__(self, concurrency: int = 5, job_timeout: float = 300.0):
+
+class AsyncWorker:
+    """In-process async worker using asyncio.Queue. For single-process apps: queued jobs and pending
+    retries live in memory and are lost on restart; use Celery or dramatiq when they must survive."""
+
+    def __init__(
+        self,
+        concurrency: int = 5,
+        job_timeout: float = 300.0,
+        retry_base_delay: float = 1.0,
+        retry_max_delay: float = 60.0,
+    ):
         self._queue: asyncio.Queue[Job] = asyncio.Queue(maxsize=1000)
-        self._handlers: dict[str, Callable] = {}
+        self._handlers: dict[str, tuple[Handler, bool]] = {}
         self._concurrency = concurrency
         self._job_timeout = job_timeout
+        self._retry_base_delay = retry_base_delay
+        self._retry_max_delay = retry_max_delay
+        self._pending_retries: set[asyncio.Task[None]] = set()
         self._shutdown_event = asyncio.Event()
         self._in_flight = 0
 
-    def register(self, job_type: str, handler: Callable[..., Coroutine]) -> None:
-        self._handlers[job_type] = handler
+    def register(self, job_type: str, handler: Handler, *, idempotent: bool) -> None:
+        """idempotent=True only when running the handler twice for the same job has the effect of
+        running it once: it upserts, or checks job.id in an idempotency store before its side effect.
+        Only idempotent jobs are retried."""
+        self._handlers[job_type] = (handler, idempotent)
 
     async def enqueue(self, job: Job) -> None:
         await self._queue.put(job)
@@ -289,10 +314,11 @@ class AsyncWorker:
         while self._in_flight > 0:
             await asyncio.sleep(0.1)
 
-        for task in tasks:
+        pending = [*tasks, *self._pending_retries]  # scheduled retries are dropped (in-memory queue)
+        for task in pending:
             task.cancel()
 
-        await asyncio.gather(*tasks, return_exceptions=True)
+        await asyncio.gather(*pending, return_exceptions=True)
         logger.info("worker.shutdown_complete")
 
     async def _consume(self, consumer_id: str) -> None:
@@ -318,21 +344,40 @@ class AsyncWorker:
             attempt=job.attempt,
         )
 
-        handler = self._handlers.get(job.type)
-        if handler is None:
+        entry = self._handlers.get(job.type)
+        if entry is None:
             log.error("job.unknown_type")
             return
+        handler, idempotent = entry
 
         try:
             await asyncio.wait_for(handler(job), timeout=self._job_timeout)
             log.info("job.completed")
-        except asyncio.TimeoutError:
-            log.error("job.timeout")
-        except Exception as exc:
-            log.error("job.failed", error=str(exc))
-            if job.attempt < job.max_retries:
+        except TRANSIENT_ERRORS as exc:
+            if idempotent and job.attempt < job.max_retries:
+                delay = self._backoff(job.attempt)
+                log.warning("job.retrying", error=type(exc).__name__, delay_s=round(delay, 3))
                 job.attempt += 1
-                await self.enqueue(job)  # re-enqueue for retry
+                self._schedule_retry(job, delay)
+            else:
+                log.error("job.failed", error=type(exc).__name__, retryable=idempotent)
+        except Exception as exc:  # a bug or bad input: retrying would repeat it
+            log.error("job.failed", error=str(exc))
+
+    def _backoff(self, attempt: int) -> float:
+        """Exponential backoff with full jitter: uniform(0, min(max, base * 2^(attempt - 1)))."""
+        return random.uniform(0, min(self._retry_max_delay, self._retry_base_delay * 2 ** (attempt - 1)))
+
+    def _schedule_retry(self, job: Job, delay: float) -> None:
+        """Re-enqueue after the delay without holding a consumer."""
+
+        async def later() -> None:
+            await asyncio.sleep(delay)
+            await self.enqueue(job)
+
+        task = asyncio.create_task(later())
+        self._pending_retries.add(task)
+        task.add_done_callback(self._pending_retries.discard)
 ```
 
 ## Scheduled Jobs with APScheduler
@@ -505,6 +550,7 @@ def enqueue_email(
 - Use `task_reject_on_worker_lost = True` — re-queue if the worker crashes mid-task
 - Set both `task_time_limit` (hard) and `task_soft_time_limit` (soft) — prevent hung tasks
 - Use `retry_backoff = True` with `retry_jitter = True` for exponential backoff with jitter
+- Retry only transient errors (`ConnectionError`, `TimeoutError`) and only idempotent work: a job is safe to retry when running it twice has the effect of running it once. A non-idempotent side effect (an email, a charge) goes out with an idempotency key the provider deduplicates on, and the job's own idempotency record skips it on a re-run. Never a catch-all `self.retry()`
 - Every task MUST accept keyword arguments only — positional args break serialization on schema change
 - Every task MUST log `job_id`, `tenant_id`, `task_id`, and `attempt` — use `structlog.bind()`
 - Idempotency check MUST happen inside the task, not at enqueue time

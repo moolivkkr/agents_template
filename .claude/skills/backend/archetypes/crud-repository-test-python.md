@@ -18,7 +18,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-repository-test.md` (Go/pgx). Both test the same CRUD operations, pagination, tenant isolation, and optimistic locking against a real PostgreSQL instance.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked, collected (32 tests), and run against a postgres:16-alpine testcontainer (`run.sh --live`): 32 passed. pytest 9.1.1, pytest-asyncio 1.4.0, testcontainers 4.15.0, SQLAlchemy 2.1.1.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked, collected (32 tests), and run against a postgres:16-alpine testcontainer (`run.sh --live`): 32 passed, the unique-violation tests asserting `ConflictError` exactly. pytest 9.1.1, pytest-asyncio 1.4.0, testcontainers 4.15.0, SQLAlchemy 2.1.1.
 
 Complete integration test template for the Python repository layer using testcontainers. Every generated repository test MUST follow this pattern.
 
@@ -236,7 +236,8 @@ class TestCreate:
         # Insert another with the same ID
         duplicate = make_widget(id=widget.id, tenant_id=widget.tenant_id, name="different")
 
-        with pytest.raises((ConflictError, Exception)):
+        # The repository maps the unique violation (SQLSTATE 23505) to the domain error — nothing else
+        with pytest.raises(ConflictError):
             await repo.create(duplicate)
 
     @pytest.mark.asyncio
@@ -247,7 +248,7 @@ class TestCreate:
         await repo.create(w1)
 
         w2 = make_widget(tenant_id=tenant_id, name="unique-name")
-        with pytest.raises((ConflictError, Exception)):
+        with pytest.raises(ConflictError):
             await repo.create(w2)
 
 
@@ -772,16 +773,15 @@ class TestErrorMapping:
 
         w2 = make_widget(tenant_id=tenant_id, name="unique")
 
-        with pytest.raises((ConflictError, Exception)) as exc_info:
+        with pytest.raises(ConflictError) as exc_info:
             await repo.create(w2)
 
-        # If the repo properly maps the error, it should be ConflictError
-        if isinstance(exc_info.value, ConflictError):
-            assert exc_info.value.status == 409
-            assert exc_info.value.code == "CONFLICT"
-            # The client message is generic — the constraint name and driver text stay in the chain/log
-            assert "constraint" not in exc_info.value.message.lower()
-            assert "idx_" not in exc_info.value.message
+        assert exc_info.value.status == 409
+        assert exc_info.value.code == "CONFLICT"
+        # The client message is generic — the constraint name and driver text stay in the chain/log
+        assert "constraint" not in exc_info.value.message.lower()
+        assert "idx_" not in exc_info.value.message
+        assert exc_info.value.__cause__ is not None  # the driver error is kept for the log
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_false(self, repo: WidgetRepository) -> None:

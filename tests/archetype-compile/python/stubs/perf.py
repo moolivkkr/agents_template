@@ -108,18 +108,43 @@ def cpu_task() -> int:
     return 0
 
 
-def fetch_month_data(tenant_id: str) -> list[dict[str, Any]]:
+def fetch_month_data(tenant_id: str, month: str) -> list[dict[str, Any]]:
     return []
 
 
 def build_pdf(data: list[dict[str, Any]]) -> bytes:
-    return b""
+    return b"%PDF"
 
 
-def upload_to_s3(pdf: bytes) -> None: ...
+UPLOADS: dict[str, bytes] = {}     # object key -> body (what the smoke inspects)
+NOTIFIED: dict[str, str] = {}      # idempotency key -> tenant (provider-side dedup)
+FAIL_UPLOADS: list[BaseException] = []
 
 
-def send_notification(tenant_id: str) -> None: ...
+def upload_to_s3(key: str, pdf: bytes) -> None:
+    if FAIL_UPLOADS:
+        raise FAIL_UPLOADS.pop(0)
+    UPLOADS[key] = pdf
+
+
+def send_notification(tenant_id: str, *, idempotency_key: str) -> None:
+    NOTIFIED.setdefault(idempotency_key, tenant_id)
+
+
+class IdempotencyRecord:
+    """The job's own record of side effects already done (a table or Redis set in an app)."""
+
+    def __init__(self) -> None:
+        self._done: set[str] = set()
+
+    def is_done(self, key: str) -> bool:
+        return key in self._done
+
+    def mark_done(self, key: str) -> None:
+        self._done.add(key)
+
+
+idempotency = IdempotencyRecord()
 
 
 async def main() -> None:

@@ -95,8 +95,8 @@ WS = "websocket-pattern-python.md"
 WK = "worker-pattern-python.md"
 
 EXPECTED = {
-    AM: 8, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
-    EH: 7, GR: 5, MG: 8, OB: 22, PF: 28, WS: 7, WK: 8,
+    AM: 10, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
+    EH: 7, GR: 5, MG: 8, OB: 22, PF: 28, WS: 8, WK: 8,
 }
 
 # Blocks that hold only comments. The harness verifies that; code added to one fails until it gets a unit.
@@ -160,6 +160,34 @@ def handler_pkg() -> dict[str, list[B | T | S | MD]]:
             B(CH, 5, "# Allowed sort and filter fields — prevents SQL injection by allow-listing"),
         ],
         "app/main.py": [B(CH, 6, "# app/main.py")],
+    }
+
+
+def auth_pkg() -> dict[str, list[B | T | S | MD]]:
+    """auth-middleware-python.md's settings, JWT dependency and request-id middleware."""
+    return {
+        "app/config.py": [B(AM, 0, "# app/config.py")],
+        "app/dependencies/auth.py": [
+            B(AM, 1, "# app/dependencies/auth.py"),
+            B(AM, 2, "# app/dependencies/auth.py (continued)"),
+        ],
+        "app/middleware/request_id.py": [B(AM, 6, "# app/middleware/request_id.py")],
+    }
+
+
+def migration_files() -> dict[str, list[B | T | S | MD]]:
+    """migration-pattern-python.md's alembic.ini, env.py and revision chain."""
+    return {
+        "alembic.ini": [MD(MG, "ini", 0, "# alembic.ini")],
+        "alembic/env.py": [B(MG, 0, "# alembic/env.py")],
+        "alembic/versions/20260115_100000_create_widgets_table.py": [
+            B(MG, 1, "# alembic/versions/20260115_100000_create_widgets_table.py")],
+        "alembic/versions/20260115_100100_add_widget_categories.py": [
+            B(MG, 2, "# alembic/versions/20260115_100100_add_widget_categories.py")],
+        "alembic/versions/20260115_100200_seed_default_categories.py": [
+            B(MG, 3, "# alembic/versions/20260115_100200_seed_default_categories.py")],
+        "alembic/versions/20260115_100300_backfill_widget_category.py": [
+            B(MG, 4, "# alembic/versions/20260115_100300_backfill_widget_category.py")],
     }
 
 
@@ -287,19 +315,17 @@ UNITS.append(Unit(
             B(CH, 4, "# app/api/v1/widgets.py"),
             B(CH, 5, "# Allowed sort and filter fields — prevents SQL injection by allow-listing"),
         ],
-        "app/config.py": [S("app_config_jwt.py")],
-        "app/dependencies/auth.py": [
-            B(AM, 0, "# app/dependencies/auth.py"),
-            B(AM, 1, "# app/dependencies/auth.py (continued)"),
-        ],
-        "app/dependencies/api_key.py": [B(AM, 2, "# app/dependencies/api_key.py")],
-        "app/middleware/rate_limit.py": [B(AM, 3, "# app/middleware/rate_limit.py")],
-        "app/middleware/cors.py": [B(AM, 4, "# app/middleware/cors.py")],
-        "app/middleware/request_id.py": [B(AM, 5, "# app/middleware/request_id.py")],
-        "app/middleware/logging.py": [B(AM, 6, "# app/middleware/logging.py")],
-        "app/main.py": [B(AM, 7, "# app/main.py")],
+        **auth_pkg(),
+        "app/dependencies/api_key.py": [B(AM, 3, "# app/dependencies/api_key.py")],
+        "app/dependencies/rate_limit.py": [B(AM, 4, "# app/dependencies/rate_limit.py")],
+        "app/middleware/cors.py": [B(AM, 5, "# app/middleware/cors.py")],
+        "app/middleware/logging.py": [B(AM, 7, "# app/middleware/logging.py")],
+        "app/main.py": [B(AM, 8, "# app/main.py")],
+        "tests/test_auth.py": [B(AM, 9, "# tests/test_auth.py")],
     },
-    env={"APP_ENV": "test", "JWT_SECRET_KEY": "harness-only-test-key-0123456789abcdef0123456789"},
+    # no JWT_* variables: Settings takes the local/dev/test path (ephemeral key, per-env issuer/audience)
+    env={"APP_ENV": "test"},
+    pytest="run",
     smoke=smoke("smoke_auth_middleware.py"),
 ))
 
@@ -353,44 +379,41 @@ UNITS.append(Unit(
 ))
 
 # ── migrations (alembic offline mode runs env.py and every upgrade()/downgrade() without a DB) ──────
+BATCH_REVISION = "alembic/versions/20260115_100400_harness_batch_backfill.py"
 UNITS.append(Unit(
     name="migrations",
     own=[MG],
     files={
-        "alembic.ini": [MD(MG, "ini", 0, "# alembic.ini")],
-        "alembic/env.py": [B(MG, 0, "# alembic/env.py")],
-        "alembic/versions/20260115_100000_create_widgets_table.py": [
-            B(MG, 1, "# alembic/versions/20260115_100000_create_widgets_table.py")],
-        "alembic/versions/20260115_100100_add_widget_categories.py": [
-            B(MG, 2, "# alembic/versions/20260115_100100_add_widget_categories.py")],
-        "alembic/versions/20260115_100200_seed_default_categories.py": [
-            B(MG, 3, "# alembic/versions/20260115_100200_seed_default_categories.py")],
-        "alembic/versions/20260115_100300_backfill_widget_status.py": [
-            B(MG, 4, "# alembic/versions/20260115_100300_backfill_widget_status.py")],
-        # "Large Table Batch Data Migration": an alternative upgrade() body, shown without its file header
-        "docs_fragments/batch_backfill.py": [
-            T("from alembic import op  # harness: the fragment's migration-file header"),
-            B(MG, 5, "# For tables > 100K rows, use batched updates to avoid long locks."),
+        **migration_files(),
+        # "Large Table Batch Data Migration" is an alternative upgrade() body shown without its file
+        # header. The harness gives it one, as the next revision, so offline SQL and --live run it too.
+        BATCH_REVISION: [
+            T('"""harness: the batch backfill from the doc, as a revision."""\n'
+              "from alembic import op\n\n"
+              'revision = "e5f6a7b8c9d0"\ndown_revision = "d4e5f6a7b8c9"\nbranch_labels = None\ndepends_on = None\n'),
+            B(MG, 5, "# For tables > 100K rows, backfill in batches: each batch is its own short transaction, so no lock is"),
+            T("\n\ndef downgrade() -> None:  # harness: the fragment shows upgrade() only\n    pass"),
         ],
         "app/models/widget.py": [B(CR, 0, "# app/models/widget.py")],
         "app/db/rls.py": [B(MG, 6, "# app/db/rls.py")],
-        "tests/test_migrations.py": [B(MG, 7, "# tests/test_migrations.py")],
+        # + harness (--live): the batch backfill with rows to move, as the non-superuser owner under FORCE
+        # RLS. Appended to the doc's module to share its session fixtures (one owner role per run).
+        "tests/test_migrations.py": [B(MG, 7, "# tests/test_migrations.py"), S("test_harness_batch_backfill.py")],
         # pg_url for --live: the repository tests' testcontainers fixtures, where this test can see them
-        "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py"), S("tenants_table_fixture.py")],
+        "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py")],
     },
     typecheck=[
         "alembic/env.py",
         "alembic/versions/20260115_100000_create_widgets_table.py",
         "alembic/versions/20260115_100100_add_widget_categories.py",
         "alembic/versions/20260115_100200_seed_default_categories.py",
-        "alembic/versions/20260115_100300_backfill_widget_status.py",
-        "docs_fragments/batch_backfill.py",
+        "alembic/versions/20260115_100300_backfill_widget_category.py",
+        BATCH_REVISION,
         "app/db/rls.py",
         "tests/test_migrations.py",
     ],
-    imports=["app.db.rls", "docs_fragments.batch_backfill"],
+    imports=["app.db.rls"],
     pytest="collect",
-    pytest_args=["tests/test_migrations.py"],
     live="run",
     env={"DATABASE_URL": "postgresql+asyncpg://harness@localhost:5432/harness"},
     post=[
@@ -403,14 +426,21 @@ UNITS.append(Unit(
 UNITS.append(Unit(
     name="dockerfile-health",
     own=[DF],
-    files={"app/api/health.py": [B(DF, 0, "# app/api/health.py")]},
-    smoke=(
-        "from fastapi import FastAPI\nfrom fastapi.testclient import TestClient\n"
-        "from app.api.health import router\n"
-        "app = FastAPI(); app.include_router(router)\n"
-        "r = TestClient(app).get('/health')\n"
-        "assert r.status_code == 200 and r.json()['checks']['database'] == 'unreachable', r.text\n"
-    ),
+    files={
+        # readiness compares the database's revision with the newest migration the release ships
+        **migration_files(),
+        "app/models/widget.py": [B(CR, 0, "# app/models/widget.py")],
+        "app/api/health.py": [B(DF, 0, "# app/api/health.py")],
+        # --live: the schema-revision check against a real PostgreSQL (harness test)
+        "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py")],
+        "tests/test_health_live.py": [S("test_health_live.py")],
+    },
+    typecheck=["app/api/health.py"],
+    imports=["app.api.health"],
+    env={"DATABASE_URL": "postgresql+asyncpg://harness@localhost:5432/harness"},
+    live="run",
+    pytest_args=["tests/test_health_live.py"],
+    smoke=smoke("smoke_health.py"),
 ))
 
 # ── gRPC (codegen from grpc-pattern.md's .proto blocks, then the Python servicer against it) ────────
@@ -589,18 +619,29 @@ UNITS.append(Unit(
     name="websocket",
     own=[WS],
     files={
-        "app/auth/jwt.py": [S("ws_jwt.py")],
+        **errors_pkg(),
+        **auth_pkg(),  # the ticket endpoint uses auth-middleware-python.md's bearer dependency
         "app/ws/manager.py": [B(WS, 0, "# app/ws/manager.py")],
-        "app/ws/endpoint.py": [B(WS, 1, "# app/ws/endpoint.py")],
-        "app/ws/handlers.py": [B(WS, 2, "# app/ws/handlers.py")],
-        "app/ws/heartbeat.py": [B(WS, 5, "# app/ws/heartbeat.py")],
-        "app/main.py": [B(WS, 6, "# app/main.py")],
-        "myapp/consumers.py": [B(WS, 3, "# myapp/consumers.py")],
-        "myapp/routing.py": [B(WS, 4, "# myapp/routing.py")],
+        "app/ws/tickets.py": [B(WS, 1, "# app/ws/tickets.py")],
+        "app/ws/endpoint.py": [B(WS, 2, "# app/ws/endpoint.py")],
+        "app/ws/handlers.py": [B(WS, 3, "# app/ws/handlers.py")],
+        "app/ws/heartbeat.py": [B(WS, 6, "# app/ws/heartbeat.py")],
+        "app/main.py": [B(WS, 7, "# app/main.py")],
+        "myapp/tickets.py": [S("myapp_tickets.py")],
+        "myapp/consumers.py": [B(WS, 4, "# myapp/consumers.py")],
+        "myapp/routing.py": [B(WS, 5, "# myapp/routing.py")],
         "harness_django_settings.py": [S("django_settings.py")],
+        "tests/test_ws_tickets_live.py": [S("test_ws_tickets_live.py")],  # --live: RedisTicketStore
     },
-    imports=["app.ws.manager", "app.ws.endpoint", "app.ws.handlers", "app.ws.heartbeat", "app.main"],
-    env={"DJANGO_SETTINGS_MODULE": "harness_django_settings"},
+    typecheck=["app/ws/manager.py", "app/ws/tickets.py", "app/ws/endpoint.py", "app/ws/handlers.py",
+               "app/ws/heartbeat.py", "app/main.py", "myapp/consumers.py", "myapp/routing.py"],
+    imports=["app.ws.manager", "app.ws.tickets", "app.ws.endpoint", "app.ws.handlers", "app.ws.heartbeat",
+             "app.main"],
+    # REDIS_URL: the lifespan builds the client (lazy; nothing connects); the smoke overrides the store
+    env={"DJANGO_SETTINGS_MODULE": "harness_django_settings", "APP_ENV": "test",
+         "REDIS_URL": "redis://127.0.0.1:1/0"},
+    live="run",
+    pytest_args=["tests/test_ws_tickets_live.py"],
     smoke=smoke("smoke_websocket.py"),
 ))
 
