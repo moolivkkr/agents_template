@@ -20,9 +20,15 @@ Per FR, the worst of:
   FAILING   a TC-ACC test for it failed (--results)
   UNTESTED  rows exist, but no test named with the ID ran and passed (without --results: no non-skipped test)
   COVERED   none of the above
-ORPHAN rows (TC-ACC rows naming only FRs the BRD no longer has) are listed as warnings.
+Retire (requirements that went away):
+  retire row   a TC-ACC row whose every FR left the BRD or became Won't: delete the row and its tests
+  retire test  test code named with a TC-ACC ID that no spec row defines any more: delete the test
+The JSON's "delta" lists what the current BRD calls for — add (NEW/PARTIAL), update (CHANGED), retire rows,
+retire tests — which /recon applies with spec_writer (rows) and acceptance_test_agent (test code).
+An FR belongs to the phases whose PHASE_PLAN scopes it and the phases whose specs hold its TC-ACC rows.
 
-Blocking = an in-scope Must/Should FR that is not COVERED. Exit 0 = none, 1 = some, 2 = usage/input error.
+Blocking = an in-scope Must/Should FR that is not COVERED, plus, for --phase/--all, every retire item.
+Exit 0 = none, 1 = some, 2 = usage/input error.
 The FR's text is its row in a requirements table (Source/Phase/Status columns ignored), plus any heading or
 line that starts with its ID, e.g. "FR-012: WHEN ... SHALL ...". Traceability, out-of-scope, open-question
 and changelog sections are not part of any FR's text.
@@ -211,10 +217,11 @@ def acceptance_rows(root):
 
 def row_verdicts(root, results):
     cases = tci.scan_tests(root)[0]
-    named = {}
+    named, any_named = {}, {}
     for c in cases:
-        if not c["skipped"]:
-            for i in c["ids"]:
+        for i in c["ids"]:
+            any_named.setdefault(i, []).append(f"{c['file']}:{c['line']}")      # skipped ones too: they're still test code
+            if not c["skipped"]:
                 named.setdefault(i, []).append(f"{c['file']}:{c['line']}")
     res = {}
     for p in results:
@@ -231,7 +238,7 @@ def row_verdicts(root, results):
             vs = res.get(tid, [])
             return "FAIL" if any(v in ("FAIL", "FLAKY") for v in vs) else ("PASS" if "PASS" in vs else "UNTESTED")
         return "PASS" if named.get(tid) else "UNTESTED"
-    return verdict, named
+    return verdict, named, any_named
 
 
 # ─── the map ──────────────────────────────────────────────────────────────────────────────────────
@@ -239,18 +246,29 @@ def build(root, brd_path, scope_phase, scope_all, results, baseline):
     frs = parse_brd(brd_path)
     plans = {n: plan_scope(os.path.join(d, "PHASE_PLAN.md")) for n, d in phase_dirs(root)
              if os.path.isfile(os.path.join(d, "PHASE_PLAN.md"))}
+    rows = acceptance_rows(root)
+    wont = {fr for fr, e in frs.items() if e["moscow"] == "wont"}
+    active = set(frs) - wont
+    # An FR belongs to the phases whose plan scopes it AND the phases whose specs hold its TC-ACC rows
+    # (rows added later by /recon or /accept amend a delivered phase without re-planning it).
     owner = {}
     for n, ids in sorted(plans.items()):
         for fr in ids:
             owner.setdefault(fr, []).append(n)
+    for r in rows:
+        for fr in r["frs"]:
+            if fr in active and r["phase"] not in owner.setdefault(fr, []):
+                owner[fr].append(r["phase"])
+    for fr in owner:
+        owner[fr].sort()
+    upto = (lambda n: n <= scope_phase) if scope_phase is not None else (lambda n: True)
     if scope_all:
         scope, label = set(frs), "all"
     elif scope_phase is not None:
-        scope, label = set().union(*[ids for n, ids in plans.items() if n <= scope_phase] or [set()]), f"phase<={scope_phase}"
+        scope, label = {fr for fr, ns in owner.items() if any(upto(n) for n in ns)}, f"phase<={scope_phase}"
     else:
-        scope, label = set().union(*plans.values()) if plans else set(), "planned"
-    rows = acceptance_rows(root)
-    verdict, named = row_verdicts(root, results)
+        scope, label = set(owner), "planned"
+    verdict, named, any_named = row_verdicts(root, results)
     by_fr = {}
     for r in rows:
         r["verdict"] = verdict(r["id"])
@@ -276,7 +294,7 @@ def build(root, brd_path, scope_phase, scope_all, results, baseline):
             issues.append(("CHANGED", "BRD text changed since its acceptance tests were recorded "
                                       f"({base.get('recorded', '?')[:10]}) — update its TC-ACC rows and tests"))
         if not rs:
-            where = "" if owner.get(fr) else " (in no phase plan)"
+            where = "" if owner.get(fr) else " (in no phase)"
             issues.append(("NEW", "no TC-ACC row names it" + where))
         else:
             ks = sorted({k for r in rs for k in r["shall_k"].get(fr, [])})
@@ -301,18 +319,41 @@ def build(root, brd_path, scope_phase, scope_all, results, baseline):
             "status": status, "issues": [f"{k}: {v}" for k, v in issues],
             "blocking": status != "COVERED" and priority in ("HIGH", "MEDIUM"),
         })
-    orphans = [{"id": r["id"], "where": r["where"], "frs": r["frs"]} for r in rows if r["frs"] and not any(f in frs for f in r["frs"])]
+    # Retire: rows whose every FR left the BRD or became Won't, and test code named with a TC-ACC ID that
+    # no spec row defines any more (the row was retired but its test was left behind).
+    retire_rows = []
+    for r in rows:
+        if r["frs"] and not any(f in active for f in r["frs"]) and upto(r["phase"]):
+            why = "; ".join(f"{f} {'is Won’t' if f in wont else 'is no longer in the BRD'}" for f in r["frs"])
+            retire_rows.append({"id": r["id"], "phase": r["phase"], "where": r["where"], "frs": r["frs"],
+                                "tests": any_named.get(r["id"], [])[:5], "reason": why})
+    row_ids = {r["id"] for r in rows}
+    retire_tests = [{"id": tid, "tests": where[:5], "reason": "no spec row defines this TC-ACC ID"}
+                    for tid, where in sorted(any_named.items()) if tid.startswith("TC-ACC-") and tid not in row_ids]
     unlinked = [{"id": r["id"], "where": r["where"]} for r in rows if not r["frs"]]
+    retire_blocks = scope_all or scope_phase is not None       # a scoped check (gate, /accept) must not leave them behind
+    delta = {
+        "add": [{"fr": f["fr"], "status": f["status"], "phases": f["phases"], "as_built": f["as_built"], "detail": "; ".join(f["issues"])}
+                for f in out_frs if f["status"] in ("NEW", "PARTIAL")],
+        "update": [{"fr": f["fr"], "phases": f["phases"], "rows": [r["id"] for r in f["rows"]], "detail": "; ".join(f["issues"]),
+                    # the rows were rewritten since the baseline: the spec followed the requirement (tests may not have yet)
+                    "rows_amended": ((baseline.get("frs") or {}).get(f["fr"]) or {}).get("rows_hash") != f["rows_hash"]}
+                   for f in out_frs if f["status"] == "CHANGED"],
+        "retire_rows": retire_rows, "retire_tests": retire_tests,
+    }
     counts = {}
     for f in out_frs:
         counts[f["status"]] = counts.get(f["status"], 0) + 1
     sha_, dirty = tci.code_state(root)
+    blocking = sum(f["blocking"] for f in out_frs) + (len(retire_rows) + len(retire_tests) if retire_blocks else 0)
     return {
         "schema": "sdlc.acceptance-map/v1", "scope": label, "brd": os.path.relpath(brd_path, root),
-        "mode": "results" if results else "source", "code_sha": sha_, "dirty": dirty,
-        "summary": {"frs": len(out_frs), "by_status": counts, "blocking": sum(f["blocking"] for f in out_frs),
-                    "orphan_rows": len(orphans), "unlinked_rows": len(unlinked), "unplanned": len(unplanned)},
-        "frs": out_frs, "orphans": orphans, "unlinked_rows": unlinked, "unplanned": unplanned,
+        "mode": "results" if results else "source", "code_sha": sha_, "dirty": dirty, "retire_blocks": retire_blocks,
+        "summary": {"frs": len(out_frs), "by_status": counts, "blocking": blocking,
+                    "add": len(delta["add"]), "update": len(delta["update"]),
+                    "retire_rows": len(retire_rows), "retire_tests": len(retire_tests),
+                    "unlinked_rows": len(unlinked), "unplanned": len(unplanned)},
+        "frs": out_frs, "delta": delta, "unlinked_rows": unlinked, "unplanned": unplanned,
         "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
 
@@ -328,11 +369,18 @@ def write_md(m, path):
         mark = "⛔ " if f["blocking"] else ""
         L.append(f"| {f['fr']}{' (as-built)' if f['as_built'] else ''} | {f['moscow']} | {','.join(map(str, f['phases'])) or '—'} | "
                  f"{f['shall']} | {tcs or '—'} | {mark}{f['status']} | {'; '.join(f['issues']) or ''} |")
+    d = m["delta"]
+    if any(d.values()):
+        L += ["", "## Acceptance changes the requirements call for", "",
+              "| Action | What | Where | Why |", "|--------|------|-------|-----|"]
+        L += [f"| add rows + tests | {a['fr']}{' (as-built)' if a['as_built'] else ''} | phase {','.join(map(str, a['phases'])) or '— (the phase amending it)'} | {a['detail']} |" for a in d["add"]]
+        L += [f"| update rows + tests | {u['fr']} ({', '.join(u['rows'])}) | phase {','.join(map(str, u['phases']))} | {u['detail']} |" for u in d["update"]]
+        L += [f"| retire row + its tests | {r['id']} | {r['where']}{' · tests ' + ', '.join(r['tests']) if r['tests'] else ''} | {r['reason']} |" for r in d["retire_rows"]]
+        L += [f"| delete test | {t['id']} | {', '.join(t['tests'])} | {t['reason']} |" for t in d["retire_tests"]]
+        if not m.get("retire_blocks"):
+            L += ["", "(Retire items are reported here; `--phase`/`--all` runs block on them.)"]
     if m["unplanned"]:
-        L += ["", "## In the BRD, in no phase plan yet", ""] + [f"- {u['fr']} ({u['priority']}{', as-built' if u['as_built'] else ''})" for u in m["unplanned"]]
-    if m["orphans"]:
-        L += ["", "## Orphan TC-ACC rows (their FR is no longer in the BRD — retire or re-link)", ""] + \
-             [f"- {o['id']} → {', '.join(o['frs'])} at {o['where']}" for o in m["orphans"]]
+        L += ["", "## In the BRD, in no phase yet", ""] + [f"- {u['fr']} ({u['priority']}{', as-built' if u['as_built'] else ''})" for u in m["unplanned"]]
     if m["unlinked_rows"]:
         L += ["", "## TC-ACC rows that name no FR (can't be traced)", ""] + [f"- {o['id']} at {o['where']}" for o in m["unlinked_rows"]]
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
@@ -351,9 +399,19 @@ def merge_into(m, path):
             sc["cases"].append({"name": f"{f['fr']} {f['status']} — {'; '.join(f['issues'])[:200]}", "ids": [],
                                 "priority": f["priority"], "verdict": "UNTESTED", "source": "acceptance-map"})
             added += 1
+    if m.get("retire_blocks"):
+        for r in m["delta"]["retire_rows"]:
+            sc["cases"].append({"name": f"{r['id']} RETIRE — {r['reason']}: delete the row ({r['where']}) and its tests", "ids": [],
+                                "priority": "HIGH", "verdict": "UNTESTED", "source": "acceptance-map"})
+            added += 1
+        for t in m["delta"]["retire_tests"]:
+            sc["cases"].append({"name": f"{t['id']} RETIRE — {t['reason']}: delete the test at {', '.join(t['tests'][:2])}", "ids": [],
+                                "priority": "HIGH", "verdict": "UNTESTED", "source": "acceptance-map"})
+            added += 1
     if added:
         sc["verdict"] = "FAIL"
-    sc["acceptance_map"] = {"scope": m["scope"], "blocking": [f["fr"] for f in m["frs"] if f["blocking"]]}
+    sc["acceptance_map"] = {"scope": m["scope"], "blocking": [f["fr"] for f in m["frs"] if f["blocking"]],
+                            "retire": [r["id"] for r in m["delta"]["retire_rows"] + m["delta"]["retire_tests"]] if m.get("retire_blocks") else []}
     json.dump(sc, open(path, "w"), indent=1)
     return added
 
@@ -425,10 +483,16 @@ def main():
     write_md(m, re.sub(r"\.json$", "", out) + ".md")
     s = m["summary"]
     print(f"acceptance-map ({m['scope']}, {m['mode']}): {s['frs']} FRs {json.dumps(s['by_status'])}; blocking {s['blocking']}; "
-          f"orphan rows {s['orphan_rows']}, unlinked rows {s['unlinked_rows']}, unplanned {s['unplanned']}")
+          f"to add {s['add']}, update {s['update']}, retire rows {s['retire_rows']}, retire tests {s['retire_tests']}; "
+          f"unlinked rows {s['unlinked_rows']}, unplanned {s['unplanned']}")
     for f in m["frs"]:
         if f["status"] != "COVERED":
-            print(f"  {'⛔' if f['blocking'] else '·'} {f['fr']} [{f['priority']}] {f['status']}: {'; '.join(f['issues'])}")
+            print(f"  {'⛔' if f['blocking'] else '·'} {f['fr']} [{f['priority']}] {'; '.join(f['issues'])}")
+    mark = "⛔" if m["retire_blocks"] else "·"
+    for r in m["delta"]["retire_rows"]:
+        print(f"  {mark} {r['id']} RETIRE row ({r['where']}): {r['reason']}")
+    for t in m["delta"]["retire_tests"]:
+        print(f"  {mark} {t['id']} RETIRE test ({', '.join(t['tests'][:2])}): {t['reason']}")
     if a.merge_into:
         n = merge_into(m, rel(a.merge_into))
         print(f"  merged {n} blocking gap(s) into {a.merge_into}")

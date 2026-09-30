@@ -894,19 +894,22 @@ phase is every FR delivered so far plus this phase's, so a BRD change since an e
 discovered at release:
 ```bash
 python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --out agent_state/phases/${PHASE}/reports/acceptance_map.json || true
-jq -r '.frs[] | select(.status=="CHANGED" or .status=="NEW" or .status=="PARTIAL") | "\(.fr) \(.status) phases=\(.phases|join(",")) \(.issues|join("; "))"' \
-  agent_state/phases/${PHASE}/reports/acceptance_map.json
+jq -r '(.delta.add[] | "\(.fr) \(.status) phases=\(.phases|join(",")) \(.detail)"),
+       (.delta.update[] | "\(.fr) CHANGED phases=\(.phases|join(",")) \(.detail)"),
+       (.delta.retire_rows[] | "retire row \(.id) (\(.reason))"),
+       (.delta.retire_tests[] | "retire test \(.id) (\(.reason))")' agent_state/phases/${PHASE}/reports/acceptance_map.json
 ```
-If any line prints, spawn `spec_writer` (subagent_type: spec_writer) with `MODE: acceptance-amend`
-and that list. It rewrites those FRs' TC-ACC rows to the current BRD text, in the phase that owns each
-FR (this phase for NEW/PARTIAL rows of this phase's FRs). Wait for it, then pass the same list to Track B
-as `CHANGED_FRS`. Nothing printed → `CHANGED_FRS: none`.
+If any FR or `retire row` line prints, spawn `spec_writer` (subagent_type: spec_writer) with
+`MODE: acceptance-amend` and those lines. It rewrites those FRs' TC-ACC rows to the current BRD text
+in the phase that owns each FR (this phase for NEW/PARTIAL rows of this phase's FRs), and deletes the
+retired rows. Wait for it, then pass every printed line (retire-test lines too) to Track B as
+`CHANGED_FRS`. Nothing printed → `CHANGED_FRS: none`. Retire items block this gate, like missing tests.
 
 ```
 Agent prompt (subagent_type: acceptance_test_agent): "[GROUND TRUTH] You are acceptance_test_agent running Wave 4 Track B for Phase ${PHASE}.
 CHANGED_FRS: <the pre-step list, or none> — update (or add, or retire) the tests for these FRs' amended
-TC-ACC rows, whatever phase wrote them; each changed pre-existing test gets its TEST-CHANGE comment
-citing spec: the row.
+TC-ACC rows, whatever phase wrote them, and delete the tests on 'retire' lines (test-changes.json entry);
+each changed pre-existing test gets its TEST-CHANGE comment citing spec: the row.
 After the run, merge the requirement map into your sidecar (every FR delivered so far + this phase's):
   python3 .claude/hooks/acceptance-map.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/acceptance_report.json \
     --merge-into agent_state/phases/${PHASE}/reports/acceptance_report.json --out agent_state/phases/${PHASE}/reports/acceptance_map.json

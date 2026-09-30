@@ -77,20 +77,59 @@ requirement.
    - `--fix=docs` → run the **as-built doc update**: propose BRD/TRD/requirement edits; with `--apply`,
      write and commit them per repo. (Implementation: see [`/reconcile`](reconcile.md).)
 4. **Report:** always write the drift report; `--fix` modes append what they changed (or proposed).
-5. **Acceptance follow-through (`--fix=docs --apply`):** an FR the docs gained or changed is only
-   proven once acceptance tests exist for its current text. Run
-   `python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json` and
-   append its non-COVERED FRs to the report with the next step. Backfilled (UNSPEC) FRs carry
-   `Source: as-built: <file:line>`, so the next `/plan` pulls them in as acceptance-only scope.
-   DRIFT-DOC FRs in delivered phases show as CHANGED, and the next `/develop` gate (Wave 4 pre-step)
-   or `/accept` (Step 1a) updates their TC-ACC rows and tests.
+5. **Acceptance tests follow the requirements (all modes).** Every requirement change recon finds
+   has an acceptance consequence: a test to add, update or retire. Recon owns those, not the next
+   gate. See [Acceptance changes](#acceptance-changes) below.
+
+## Acceptance changes
+
+Acceptance tests are the executable form of the BRD: one TC-ACC row per EARS SHALL per persona, in the
+owning phase's spec, and one committed test per row under `tests/acceptance/`. When recon changes what
+the BRD says, those rows and tests change with it.
+
+| Recon finding | Requirement change | Acceptance change |
+|---|---|---|
+| UNSPEC (built, not in the docs) → FR backfilled, `Source: as-built` | new FR | **add** TC-ACC rows (in the phase whose code implements it) + tests |
+| DRIFT-DOC (built differently from the docs) → FR text updated | changed FR | **update** its rows (keep IDs whose SHALL survives, add new ones, retire removed ones) + tests |
+| New SHALL on an existing FR | changed FR | **add** the missing rows + tests |
+| INVENTED, human ruled "drop" → FR removed / marked Won't | removed FR | **retire** its rows and **delete** their tests |
+| Test code whose TC-ACC ID no spec row defines | — (left behind) | **delete** the test |
+| GAP-IMPL (documented, not built; `--fix=code`) | none | **add** rows if the FR has none; the tests come with the `/develop` catch-up |
+
+`acceptance-map.py` computes the list from the BRD, every phase's spec rows and the test code:
+```bash
+python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json || true
+jq '.delta' agent_state/reconciliation/acceptance_map.json    # add / update / retire_rows / retire_tests
+```
+
+**Bare `/recon` (report only):** the drift report gets an `## Acceptance changes` table: the map's
+`delta`, plus the changes the doc findings imply once applied (each DRIFT-DOC FR → update, each UNSPEC
+→ add, each INVENTED → retire if the human drops it). Nothing is written.
+
+**`--fix=docs --apply`:** after the BRD/TRD edits (`/reconcile` Step 4), apply the acceptance changes
+(`/reconcile` Step 4b):
+1. `spec_writer` (`MODE: acceptance-amend`) with the map's add / update / retire-row lines: writes,
+   rewrites or deletes the TC-ACC rows in the owning phase's spec, with an `## Amendments` line each.
+2. `acceptance_test_agent` (`MODE: amend-tests`) with the same list plus retire-test lines: writes the
+   tests for new rows, updates the tests for changed rows, deletes the tests for retired rows and the
+   stale ones. It writes the test code and doesn't need a deployed build. Running the tests is the
+   next gate's or `/accept`'s job.
+3. Re-run the map. Done when `add`, `retire_rows` and `retire_tests` are empty and every `update`
+   entry has `rows_amended: true`. The CHANGED status itself clears when the next green gate or
+   `/accept` records the new baseline.
+4. Commit the rows and tests with the doc edits:
+   `docs(recon): … — acceptance: +N rows, ~N updated, -N retired`.
+
+**`--fix=code --apply`:** the specs win, so the requirements don't change. Recon adds rows for any FR
+that has none and retires rows and tests for FRs the BRD no longer has, both through step 1 above.
+The tests for the catch-up work are written by `/develop`'s acceptance agent when it builds the gap.
 
 ## Where each path starts
 
 | Situation | Start with |
 |---|---|
 | Code exists, no BRD/specs at all | `/init --from-code` → `/plan --phase=1 --as-built` → `/develop --phase=1` (builds the spec + acceptance baseline) |
-| BRD/specs exist; code moved on without them | `/recon --fix=docs --apply` → acceptance follow-through above |
+| BRD/specs exist; code moved on without them | `/recon --fix=docs --apply` (docs and acceptance tests follow the code) |
 | BRD/specs exist; code is behind them | `/recon --fix=code --apply` → `/develop` |
 | A requirement changes on purpose | `product_manager` change request → the gate / `/accept` update its acceptance tests |
 

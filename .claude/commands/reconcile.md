@@ -238,16 +238,46 @@ For **DRIFT-DOC** and **UNSPEC** items only:
 2. Keep edits **surgical** — change the drifted statement, don't rewrite whole documents.
 3. Leave a dated reconciliation note in each edited doc's changelog/amendment section if it
    has one (many products have `docs/*-AMENDMENT-*.md` — append there when present).
-4. **GAP-IMPL and INVENTED are never applied** — they go to the action plan / human ruling.
-5. Run `python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json`
-   and list the FRs you added or changed with their acceptance status in the report. The doc change
-   isn't finished until their acceptance tests match (see `/recon` step 5).
-6. Commit per repo:
-   `docs(reconcile): align <product> docs with as-built architecture (N DRIFT, M UNSPEC)`
+4. **GAP-IMPL and INVENTED are never applied on your own judgment** — they go to the action plan /
+   human ruling. The one exception: an INVENTED item the human has ruled **drop** (recorded with
+   `remember.sh decide`) is removed from the BRD (or marked Won't, if the BRD keeps a history), and its
+   acceptance rows and tests retire in Step 4b.
+5. Apply the acceptance changes (Step 4b), then commit per repo:
+   `docs(reconcile): align <product> docs with as-built architecture (N DRIFT, M UNSPEC) — acceptance: +N rows, ~N updated, -N retired`
    with the Co-Authored-By trailer. Branch first if on the default branch.
 
 Without `--apply`: write `agent_state/reconciliation/30-doc-patches.md` containing the exact
-proposed edit for each DRIFT-DOC/UNSPEC item (file → old → new), ready to review.
+proposed edit for each DRIFT-DOC/UNSPEC item (file → old → new), ready to review, and
+`agent_state/reconciliation/31-acceptance-changes.md` (Step 4b's list, not applied).
+
+---
+
+## Step 4b — Acceptance tests follow the requirement changes
+
+Every requirement change from Step 4 changes which acceptance tests should exist. The doc update isn't
+finished until they do. (Background and the full table: `/recon` § Acceptance changes.)
+
+```bash
+python3 .claude/hooks/acceptance-map.py --out agent_state/reconciliation/acceptance_map.json || true
+jq '.delta' agent_state/reconciliation/acceptance_map.json
+```
+`delta.add` lists the new FRs (UNSPEC backfills) and FRs missing a SHALL's rows. `delta.update` lists
+the FRs whose text changed since their tests were recorded (DRIFT-DOC). `delta.retire_rows` lists rows
+for FRs that were dropped or marked Won't, and `delta.retire_tests` lists test code whose row is gone.
+
+With `--apply`:
+1. Spawn `spec_writer` (subagent_type: spec_writer), `MODE: acceptance-amend`, with the add, update and
+   retire-row lines. It edits the TC-ACC rows in each FR's owning phase. For a backfilled FR in no phase,
+   that's the phase whose code implements it: match the FR's `Source` file against the phase
+   manifests' `artifacts`, else the latest gated phase.
+2. Spawn `acceptance_test_agent` (subagent_type: acceptance_test_agent), `MODE: amend-tests`, with the
+   same list plus the retire-test lines. It writes, updates and deletes the test code; no deployed
+   build is needed.
+3. Re-run the map. Done when `add`, `retire_rows` and `retire_tests` are empty and every `update`
+   entry has `rows_amended: true`. Anything left goes in the report under `## Acceptance changes not done`.
+
+Without `--apply`, write the list to `31-acceptance-changes.md` as a table: action, FR/TC ID, phase,
+and the recon finding that caused it.
 
 ---
 
@@ -272,6 +302,12 @@ Write two documents per product:
 ## GAP-IMPL (documented, not built) → see action plan
 ## INVENTED / Needs human ruling
 ## Suspected regressions (bugs, not drift)
+## Acceptance changes — [applied | proposed]
+| Action | FR / TC-ACC | Phase | Because |
+|--------|-------------|-------|---------|
+| add rows + tests | FR-045 | 3 | UNSPEC backfill |
+| update rows + tests | FR-012 (TC-ACC-20101..03) | 2 | DRIFT-DOC |
+| retire row + tests | TC-ACC-10199 | 1 | FR-099 dropped (D-014) |
 ```
 
 ### `agent_state/reconciliation/COMPLETION_ACTION_PLAN.md`

@@ -151,7 +151,7 @@ check("AM-05", False, "FR-004" in F, "--phase 1 excludes the FR the plan defers 
 check("AM-06", False, "FR-005" in F, "a Won't FR is never in scope")
 check("AM-07", False, any(k.startswith("NFR") for k in F), "NFR-001 is not read as FR-001")
 check("AM-08", 1, rc, "blocking gaps → exit 1")
-check("AM-09", ["TC-ACC-10199"], [o["id"] for o in M.get("orphans", [])], "a TC-ACC row for an FR the BRD dropped is an orphan")
+check("AM-09", ["TC-ACC-10199"], [o["id"] for o in M.get("delta", {}).get("retire_rows", [])], "a TC-ACC row for an FR the BRD dropped is a row to retire")
 check("AM-10", True, os.path.isfile(os.path.join(W, "agent_state/accept/acceptance_map.md")), "the readable map is written next to the JSON")
 
 rc, out, F, M = amap("--phase", "2")
@@ -175,11 +175,12 @@ check("AM-14", "FAILING", F.get("FR-001", {}).get("status"), "results mode: a fa
 rc, out, F, M = amap("--phase", "1", "--results", SC, "--merge-into", SC)
 sc = json.load(open(os.path.join(W, SC)))
 merged = [c for c in sc["cases"] if c.get("source") == "acceptance-map"]
-check("AM-15", ("FAIL", 3), (sc["verdict"], len(merged)), "merge-into: 3 blocking FRs → 3 UNTESTED cases, sidecar verdict FAIL")
+check("AM-15", ("FAIL", 4), (sc["verdict"], len(merged)), "merge-into: 3 blocking FRs + 1 row to retire → 4 UNTESTED cases, sidecar verdict FAIL")
 check("AM-16", {"HIGH", "MEDIUM"}, {c["priority"] for c in merged}, "merged cases carry the FR's MoSCoW priority (Must→HIGH, Should→MEDIUM)")
+check("AM-16b", True, any("RETIRE" in c["name"] and "TC-ACC-10199" in c["name"] for c in merged), "a scoped run merges the row to retire as a blocking case")
 amap("--phase", "1", "--results", SC, "--merge-into", SC)
 sc = json.load(open(os.path.join(W, SC)))
-check("AM-17", 3, len([c for c in sc["cases"] if c.get("source") == "acceptance-map"]), "merge-into is idempotent (re-run replaces, doesn't append)")
+check("AM-17", 4, len([c for c in sc["cases"] if c.get("source") == "acceptance-map"]), "merge-into is idempotent (re-run replaces, doesn't append)")
 
 # record only what passed; then a requirement change is CHANGED until the spec follows it
 GREEN = "agent_state/accept/green.json"
@@ -220,6 +221,41 @@ rc, out, F, M = amap("--phase", "1", "--results", GREEN)
 check("AM-29", "COVERED", F.get("FR-001", {}).get("status"), "…and the FR is COVERED again")
 
 check("AM-30", 2, run(AM, "--brd", "docs/NOPE.md")[0], "a missing BRD is an input error (exit 2)")
+
+# ─── requirement changes found by /recon: add, update and retire acceptance tests ─────────────────
+rc, out, F, M = amap("--phase", "1")
+d = M.get("delta", {})
+check("AM-31", ["FR-002", "FR-003"], sorted(a["fr"] for a in d.get("add", [])), "delta.add lists the FRs that need rows + tests (NEW, PARTIAL)")
+write("docs/BRD.md", CHANGED_BRD.replace("| FR-005 | Dark mode | Won't | requirements/ui.md |",
+      "| FR-005 | Dark mode | Won't | requirements/ui.md |\n| FR-006 | Buyers see order history | Should | as-built: api/history.go:10 |"))
+write("docs/design/phases/1/specs/amend.md", """# Amendments (recon 2026-09-30)
+| TC ID | Category | Description | Priority | Tier |
+|-------|----------|-------------|----------|------|
+| TC-ACC-10901 | ACC | FR-006 SHALL 1 — Buyer: order history lists past orders | MEDIUM | acceptance |
+| TC-ACC-10902 | ACC | FR-005 SHALL 1 — dark mode toggle | LOW | acceptance |
+""")
+write("tests/acceptance/stale.spec.ts", "test('TC-ACC-10777 FR-001 — an old check whose row was retired', async () => {})\n")
+rc, out, F, M = amap("--phase", "1")
+d = M.get("delta", {})
+check("AM-32", True, "FR-006" in F, "an FR whose rows were added to a delivered phase's spec is in that phase's scope (no re-plan needed)")
+check("AM-33", [1], F.get("FR-006", {}).get("phases"), "…and is owned by that phase")
+check("AM-34", ["TC-ACC-10199", "TC-ACC-10902"], sorted(r["id"] for r in d.get("retire_rows", [])), "rows for a dropped FR and for a Won't FR are rows to retire")
+check("AM-35", True, any("Won" in r["reason"] for r in d.get("retire_rows", [])), "…each with its reason")
+check("AM-36", ["TC-ACC-10777"], [t["id"] for t in d.get("retire_tests", [])], "test code named with a TC-ACC ID no row defines is a test to delete")
+check("AM-37", ["FR-001"], [u["fr"] for u in d.get("update", [])], "delta.update lists CHANGED FRs with their rows")
+check("AM-37b", False, (d.get("update") or [{}])[0].get("rows_amended"), "…and says the rows haven't been rewritten yet (what /recon --apply must do)")
+rc, out, F, M = amap()
+check("AM-38", (False, 0), (M.get("retire_blocks"), M["summary"]["blocking"] - sum(f["blocking"] for f in F.values())),
+      "an unscoped run (bare /recon) reports retire items without blocking on them")
+rc, out, F, M = amap("--all")
+check("AM-39", 1, rc, "--all blocks while rows/tests for removed requirements remain")
+write("docs/design/phases/1/specs/orders.md", SPEC.replace("| TC-ACC-10199 | ACC | FR-099 SHALL 1 — removed requirement | HIGH | acceptance |\n", ""))
+write("docs/design/phases/1/specs/amend.md", open(os.path.join(W, "docs/design/phases/1/specs/amend.md")).read()
+      .replace("| TC-ACC-10902 | ACC | FR-005 SHALL 1 — dark mode toggle | LOW | acceptance |\n", ""))
+os.remove(os.path.join(W, "tests/acceptance/stale.spec.ts"))
+rc, out, F, M = amap("--all")
+d = M.get("delta", {})
+check("AM-40", (0, 0), (len(d.get("retire_rows", [])), len(d.get("retire_tests", []))), "once the rows and the test are removed, nothing is left to retire")
 
 shutil.rmtree(W, ignore_errors=True)
 print("─" * 44)

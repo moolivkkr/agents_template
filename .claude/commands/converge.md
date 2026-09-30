@@ -111,6 +111,22 @@ For every `missing` or `partial` item, emit a task sized and ordered for `/devel
 Order tasks by dependency (data layer before service before handler before UI), and tag each with a
 complexity class per `scale-adaptive-depth.md` so `/develop` picks the right wave depth.
 
+## Step 3b — Acceptance rows follow the spec
+
+The spec wins here, so the requirements don't change, but the acceptance inventory must still match
+them:
+```bash
+python3 .claude/hooks/acceptance-map.py ${ARG_PHASE:+--phase $ARG_PHASE} --out agent_state/convergence/acceptance_map.json || true
+jq '.delta | {add, retire_rows, retire_tests}' agent_state/convergence/acceptance_map.json
+```
+- **An FR with a catch-up task and no TC-ACC rows** (`delta.add`): the task's "Tests owed" includes
+  "TC-ACC rows for FR-xxx", and with `--apply` `spec_writer` (`MODE: acceptance-amend`) writes the rows
+  now. Their tests come from `/develop`'s acceptance agent when it builds the gap.
+- **Rows or tests for FRs the BRD no longer has** (`delta.retire_rows`, `delta.retire_tests`): list
+  them under `## Acceptance to retire`. With `--apply`, `spec_writer` deletes the rows and
+  `acceptance_test_agent` (`MODE: amend-tests`) deletes the tests.
+- `delta.update` (CHANGED FRs) is a docs-side change. Leave it to `/recon --fix=docs` or the next gate.
+
 ## Step 4 — Write the delta file
 
 ```bash
@@ -132,6 +148,9 @@ DELTA-... (as above, dependency-ordered)
 
 ## Divergent (needs decision — reconcile candidate)
 - FR-018: code returns 200 where spec says 202 — spec stale? confirm before building.
+
+## Acceptance rows (Step 3b)
+- to add: FR-031 (no TC-ACC rows) · to retire: TC-ACC-10199 (FR-099 not in the BRD)
 ```
 
 ## Step 5 — Report / Apply

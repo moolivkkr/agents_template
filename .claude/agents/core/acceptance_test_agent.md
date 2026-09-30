@@ -268,6 +268,32 @@ Then complete the sidecar, and write the use-case view the report and `/accept` 
    assertion must cite `spec:` or `moved:` (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test). At most 2 rounds.
 4. Never modify an acceptance criterion to match broken behaviour.
 
+## `MODE: amend-tests` (from `/recon`, `/reconcile`, `/converge` with `--apply`)
+
+Requirements changed and `spec_writer` has already amended the TC-ACC rows. Your job is to make the
+committed test code match the rows. **Write, don't run:** no deployed build is needed, and there's no
+sidecar and no verdict. The next gate or `/accept` runs them.
+
+Your prompt carries the `acceptance-map.py` delta:
+| Line | Do |
+|---|---|
+| `add FR-xxx` | write one test per new TC-ACC row of the FR, as in Step 3 (named with the ID, asserting the SHALL literally, envelope/contract checks, persona boundaries) |
+| `update FR-xxx` | read the spec's `## Amendments` line; update each kept row's test to the amended row, add tests for new rows, delete tests for retired IDs |
+| `retire row TC-ACC-…` / `retire test TC-ACC-…` | delete the test (the whole file if it held only retired IDs) |
+
+Rules:
+- A changed pre-existing test gets its one-line `TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <row>)`
+  comment. N is the phase in progress (`agent_state/phases/N/base_sha` exists, no `gate.passed`), or
+  else the highest gated phase. Record each deleted file in `agent_state/phases/<N>/test-changes.json`
+  (`{"file", "kind": "deleted_test_file", "reason"}`).
+- If the runner can list tests without executing them (`npx playwright test --list`, `go test -list .`,
+  `pytest --collect-only -q`), list them to prove the new files parse and the new IDs are named.
+  Don't start the app.
+- Finish with `acceptance-map.py` in source mode: every added or updated row has a named test, and
+  `retire_tests` is empty. Commit: `test(acceptance): follow requirement changes — +N ~N -N (TC-ACC-…)`.
+- Never weaken a kept assertion to match the code. If the as-built behaviour contradicts the amended
+  row, the test asserts the row. The failure shows up at the next run, where it belongs.
+
 ## `/accept` mode (all phases)
 
 The same procedure over every completed phase: the whole `tests/acceptance/` suite, with the

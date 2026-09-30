@@ -250,17 +250,22 @@ TEST-13).
 
 ### Acceptance-amend mode (a requirement changed or was added after its phase was planned)
 
-Spawned by `/develop`'s Wave 4 pre-step, `/accept` Step 1a, or after a change request, with
-`MODE: acceptance-amend` and a list from `acceptance-map.py`: `FR-xxx CHANGED|NEW|PARTIAL phases=<n> <detail>`.
-Touch only the TC-ACC rows of the listed FRs:
-- **Where:** the phase that owns the FR (`phases=`; the first listed). For an FR in no phase (NEW
-  "in no phase plan"), the phase you were launched for.
+Spawned by `/recon`/`/reconcile`/`/converge` with `--apply`, `/develop`'s Wave 4 pre-step, `/accept`
+Step 1a, or after a change request, with `MODE: acceptance-amend` and lines from `acceptance-map.py`'s
+delta: `FR-xxx CHANGED|NEW|PARTIAL phases=<n> <detail>` and `retire TC-ACC-… (<reason>)`.
+Touch only the TC-ACC rows of the listed FRs and IDs:
+- **Where:** the phase that owns the FR (`phases=`; the first listed). For an FR in no phase: the phase
+  named in your prompt, or else the phase whose manifest `artifacts` contain the FR's `Source` file, or
+  else the latest gated phase. Rows in a delivered phase's spec are enough for the FR to count in that
+  phase; don't edit its PHASE_PLAN.
 - **CHANGED:** re-read the FR in `docs/BRD.md` and rewrite its rows to match it. Keep a row's ID when
   its SHALL still exists (update the description and priority), allocate new IDs from that phase's
   block for new SHALLs or personas (*Allocating IDs* above), and delete rows for SHALLs that no longer
   exist.
 - **NEW / PARTIAL:** add the missing rows (one per SHALL per persona, plus the negative
   permission-boundary rows).
+- **retire:** delete the row. Its FR was dropped from the BRD or marked Won't, so the behaviour is
+  no longer required. List the ID in the amendment line; the acceptance agent deletes its test.
 - Append to the spec an `## Amendments` line per FR: `<date> FR-xxx <status>: <what changed> —
   rows kept/added/retired: <ids>`. The acceptance agent needs the retired IDs to remove their tests.
 - Then `tc-inventory.py --phase <n> --spec-only` for each phase you touched must list the new rows.

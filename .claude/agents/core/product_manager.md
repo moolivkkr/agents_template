@@ -228,8 +228,10 @@ touched, with its status and the next step:
 | CHANGED (FR in a delivered phase) | its tests check the old criteria | `/accept` (Step 1a updates the TC-ACC rows + tests in the owning phase), or the next `/develop` gate does it in its Wave 4 pre-step |
 | NEW, in a planned or current phase | no TC-ACC rows yet | `/plan --phase=<N>` for that phase |
 | unplanned | in no phase plan | the next `/plan` picks it up |
+| retire (FR removed or marked Won't) | its TC-ACC rows and tests no longer describe a requirement | `/recon --fix=docs --apply`, the next gate's Wave 4 pre-step, or `/accept` Step 1a deletes the rows and tests; scoped runs block until they're gone |
 
-The phase gate and `/accept` block until CHANGED FRs have updated rows and passing tests.
+The phase gate and `/accept` block until CHANGED FRs have updated rows and passing tests, and until
+retired FRs' rows and tests are gone.
 
 ---
 
