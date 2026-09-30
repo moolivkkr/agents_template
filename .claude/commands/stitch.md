@@ -45,7 +45,9 @@ thing never done without explicit confirmation is `delete_project`, and this com
 
 ## Step 0 — Probe and load state (every action)
 
-1. Call `mcp__stitch__list_projects`. If it fails or the tool is missing, print
+1. Probe: `get_project` on the stored `projectId` if `stitch.json` has one, else `mcp__stitch__list_projects`.
+   `list_projects` is large (every project's theme and screens), so read only name and title from
+   the saved result with `jq`. If the call fails or the tool is missing, print
    `⛔ Stitch MCP unavailable — check the "stitch" server in /mcp` and stop. (Pipelines fall back
    to the agent path; this interactive command reports instead.)
 2. Read `docs/design/stitch.json` (the schema is in stitch-design.md §2). If there is no stored
@@ -69,7 +71,7 @@ For each in-scope screen (from `docs/design/phases/N/specs/archetype-mapping.md`
    criteria and the platform (stitch-design.md §5).
 2. `generate_screen_from_text` with `projectId`, `prompt`, `deviceType` and
    `designSystem: "assets/<assetId>"`. Don't retry on timeout; poll `get_screen` (30s × 10).
-3. Store `screens["N/<screen>/<device>"]`. Up to 3 generations may run in flight; queue the rest.
+3. Store `screens["N/<screen>/<device>"]` (id, the Stitch-expanded `prompt`, `htmlCode` and `screenshot` file names). Up to 3 generations may run in flight; queue the rest.
 
 Report per screen: `generated | pending (still polling) | failed (reason)`. Generation does not
 touch the wireframe contract; run `sync` for that.
@@ -86,7 +88,8 @@ with the chosen id stored in `stitch.json`.
 
 `edit_screens` on the stored screen id. The prompt is `--prompt`, or, when omitted and the phase's
 `DESIGN_REVIEW.md` BLOCKed this screen, the reviewer's fix list for it verbatim. Same polling
-rules. Afterwards, run `sync` for the screen.
+rules. **The edit returns a NEW screen id:** store it as `screenId`, move the old id to
+`previous`, and then run `sync` for the screen.
 
 ## theme — change the house style
 

@@ -114,8 +114,10 @@ Exit 0. This is the graceful no-op for backend-only phases.
 
 ### `--source=stitch` availability probe (only when the flag is set)
 
-The probe is an **MCP call made by this session**, not a shell function: call
-`mcp__stitch__list_projects` once.
+The probe is an **MCP call made by this session**, not a shell function. Call `get_project` on the
+`projectId` stored in `docs/design/stitch.json`, or `mcp__stitch__list_projects` when there is none.
+`list_projects` returns every project's theme and screens (large), so extract only name and title
+with `jq` and never echo it.
 - It returns → `STITCH_MODE=stitch`, print `✅ Stitch MCP available — enriching wireframes with Stitch renders.`
 - It errors, times out, or the tool doesn't exist → `STITCH_MODE=agent`, print
   `⚠ Stitch MCP unavailable — falling back to pure-agent design (ux_designer).` In `--auto`, append
@@ -247,7 +249,8 @@ Writes `docs/design/phases/${PHASE}/DESIGN_REVIEW.md` with per-screen verdicts a
 2. `ux_designer` revises the specific wireframe(s). If the screen came from Stitch
    (`STITCH_MODE=stitch`) and the BLOCK is visual (contrast, density, missing label, layout), first
    send the reviewer's fix list verbatim to `mcp__stitch__edit_screens` for that screen (same
-   `deviceType`; poll, don't retry), then re-normalize (stitch-design.md §7). Binding, state and
+   `deviceType`; poll, don't retry). The edit returns a **new** screen id: update `stitch.json`
+   before re-normalizing (stitch-design.md §6–7). Binding, state and
    contract BLOCKs are fixed in the wireframe directly; Stitch doesn't own those.
 3. Re-run `design_quality_reviewer`. Max **2** revision cycles.
 4. **Interactive mode:** still BLOCK after 2 cycles → STOP and surface to the user with the exact gaps.
