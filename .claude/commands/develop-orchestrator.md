@@ -220,6 +220,11 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 ### Wave 0c — Commands, base commit, evidence directories
 
 ```bash
+# 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
+for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py; do
+  [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
+    || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
+done
 P="agent_state/phases/${PHASE}"; mkdir -p "$P/junit" "$P/reports" agent_state/config
 # 1. The project's real commands (IMPLEMENTATION_GUIDELINES §Commands and versions) as JSON. Every agent,
 #    test_runner and the gate's execution check (verify-gate.sh (e)) run exactly these — nobody guesses.
