@@ -67,7 +67,7 @@ export interface AuditEntry {
 // src/services/widget.service.interface.ts
 
 import type { Widget } from "../domain/entity";
-import type { ListFilters, ListResult, OffsetListFilters, OffsetListResult } from "../types/pagination";
+import type { ListFilters, ListResult } from "../types/pagination";
 
 export interface CreateWidgetInput {
   name: string;
@@ -90,7 +90,6 @@ export interface IWidgetService {
   update(tenantId: string, id: string, input: UpdateWidgetInput): Promise<Widget>;
   delete(tenantId: string, id: string): Promise<void>;
   list(tenantId: string, filters: ListFilters): Promise<ListResult<Widget>>;
-  listOffset(tenantId: string, filters: OffsetListFilters): Promise<OffsetListResult<Widget>>;
 }
 ```
 
@@ -100,7 +99,7 @@ export interface IWidgetService {
 // src/repositories/widget.repository.interface.ts
 
 import type { Widget } from "../domain/entity";
-import type { ListFilters, ListResult, OffsetListFilters, OffsetListResult } from "../types/pagination";
+import type { ListFilters, ListResult } from "../types/pagination";
 
 /**
  * Repository defines the data access contract. Owned by the consumer (service).
@@ -113,7 +112,6 @@ export interface IWidgetRepository {
   update(widget: Widget): Promise<Widget>;
   softDelete(tenantId: string, id: string): Promise<void>;
   list(tenantId: string, filters: ListFilters): Promise<ListResult<Widget>>;
-  listOffset(tenantId: string, filters: OffsetListFilters): Promise<OffsetListResult<Widget>>;
 }
 ```
 
@@ -155,13 +153,8 @@ import type { IWidgetRepository } from "../repositories/widget.repository.interf
 import type { ICache } from "../lib/cache.interface";
 import type { IAuditWriter } from "../lib/audit.interface";
 import type { IWidgetService, CreateWidgetInput, UpdateWidgetInput } from "./widget.service.interface";
-import type { ListFilters, ListResult, OffsetListFilters, OffsetListResult } from "../types/pagination";
-import {
-  ValidationError,
-  NotFoundError,
-  ConflictError,
-  InternalError,
-} from "../errors/domain-errors";
+import type { ListFilters, ListResult } from "../types/pagination";
+import { validationError, notFound, conflict } from "../errors/domain-errors";
 import type { Logger } from "../lib/logger";
 
 const CACHE_TTL_SECONDS = 300; // 5 minutes
@@ -182,10 +175,10 @@ export class WidgetService implements IWidgetService {
     // 1. Validate input
     this.validateCreateInput(input);
 
-    // 2. Check for duplicate name within tenant
+    // 2. Check for duplicate name within tenant — 409 CONFLICT
     const existing = await this.repo.findByName(tenantId, input.name);
     if (existing) {
-      throw new ConflictError("widget", `name '${input.name}' already exists`);
+      throw conflict("A widget with this name already exists.");
     }
 
     // 3. Build domain object
@@ -227,10 +220,10 @@ export class WidgetService implements IWidgetService {
     }
     this.logger.debug("cache miss, querying database", { widgetId: id, tenantId });
 
-    // 2. Query DB
+    // 2. Query DB (another tenant's widget is also NOT_FOUND — never 403)
     const widget = await this.repo.findById(tenantId, id);
     if (!widget) {
-      throw new NotFoundError("widget", id);
+      throw notFound("Widget");
     }
 
     // 3. Populate cache
@@ -250,12 +243,12 @@ export class WidgetService implements IWidgetService {
     // 2. Fetch current (ensures tenant-scoping)
     const existing = await this.repo.findById(tenantId, id);
     if (!existing) {
-      throw new NotFoundError("widget", id);
+      throw notFound("Widget");
     }
 
-    // 3. Optimistic lock check
+    // 3. Optimistic lock check — 409 CONFLICT
     if (input.version !== existing.version) {
-      throw new ConflictError("widget", "version mismatch — reload and retry");
+      throw conflict("This widget was changed by someone else. Reload and try again.");
     }
 
     // 4. Apply changes
@@ -320,40 +313,27 @@ export class WidgetService implements IWidgetService {
     return result;
   }
 
-  // --- List with Offset Pagination (Admin/Reporting) ---
-
-  async listOffset(tenantId: string, filters: OffsetListFilters): Promise<OffsetListResult<Widget>> {
-    const sanitized: OffsetListFilters = {
-      page: Math.max(filters.page || 1, 1),
-      perPage: Math.min(Math.max(filters.perPage || 20, 1), 100),
-      sortBy: filters.sortBy || "created_at",
-      sortDir: filters.sortDir || "desc",
-      fields: filters.fields,
-    };
-
-    return this.repo.listOffset(tenantId, sanitized);
-  }
-
   // --- Private Helpers ---
 
+  // 400 VALIDATION_FAILED: details[] entries use lower_snake codes and fixed messages
   private validateCreateInput(input: CreateWidgetInput): void {
     if (!input.name?.trim()) {
-      throw new ValidationError("name", "name is required");
+      throw validationError("name", "required", "Name is required.");
     }
     if (input.name.length > 255) {
-      throw new ValidationError("name", "name must be 255 characters or fewer");
+      throw validationError("name", "too_long", "Name must be 255 characters or fewer.");
     }
     if (input.description && input.description.length > 2000) {
-      throw new ValidationError("description", "description must be 2000 characters or fewer");
+      throw validationError("description", "too_long", "Description must be 2000 characters or fewer.");
     }
   }
 
   private validateUpdateInput(input: UpdateWidgetInput): void {
     if (!input.name?.trim()) {
-      throw new ValidationError("name", "name is required");
+      throw validationError("name", "required", "Name is required.");
     }
     if (input.version == null || input.version < 0) {
-      throw new ValidationError("version", "version is required and must be non-negative");
+      throw validationError("version", "invalid_value", "Version must be a non-negative number.");
     }
   }
 
@@ -387,6 +367,7 @@ export class WidgetService implements IWidgetService {
 
 import { PrismaClient } from "@prisma/client";
 import type { Widget } from "../domain/entity";
+import { businessRule } from "../errors/domain-errors";
 
 /**
  * Multi-step creation within a Prisma transaction.
@@ -445,7 +426,8 @@ export async function updateWithInventoryCheck(
       });
 
       if (!inventory || inventory.quantity < quantity) {
-        throw new Error("insufficient inventory");
+        // Valid request, rejected by a domain rule → 422 BUSINESS_RULE_VIOLATION (rolls back the tx)
+        throw businessRule("There isn't enough inventory for this order.");
       }
 
       await tx.inventory.update({
@@ -476,6 +458,7 @@ export async function updateWithInventoryCheck(
 import { type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { widgets, components } from "../db/schema";
 import type { Widget } from "../domain/entity";
+import { notFound } from "../errors/domain-errors";
 
 /**
  * Multi-step creation within a Drizzle transaction.
@@ -546,7 +529,7 @@ export async function transferWidget(
       );
 
     if (!widget) {
-      throw new NotFoundError("widget", widgetId);
+      throw notFound("Widget");
     }
 
     // Transfer ownership
@@ -684,9 +667,9 @@ export function createServices() {
 - Every mutation MUST produce an audit log entry (fire-and-forget — never block business ops)
 - Cache invalidation MUST happen on every write (Update, Delete)
 - Cache misses MUST populate the cache before returning
-- Optimistic locking via `version` field — reject stale writes with `ConflictError`
+- Optimistic locking via `version` field — reject stale writes with `conflict(...)` (409 `CONFLICT`)
 - Input validation MUST happen before any side effects (DB, cache, external calls)
-- Errors MUST be typed `AppError` subclasses from `error-handling-typescript.md`
+- Errors MUST be `AppError`s built by the constructors in `error-handling-typescript.md` (`validationError`, `notFound`, `conflict`, `businessRule`, …) — messages are fixed and user-safe, never built from input or exception text
 - Max 40 lines of logic per function — extract helpers for complex steps
 - Accept interfaces, return concrete types — constructor takes interfaces via DI
 - Never return unbounded lists — always enforce `pageSize` max (100)

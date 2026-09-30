@@ -127,9 +127,15 @@ from uuid import UUID
 from sqlalchemy import and_, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.domain.base import ListFilters, ListResult, OffsetListFilters, OffsetListResult
+from app.domain.base import ListFilters, ListResult
 from app.domain.widget import Widget, WidgetStatus
-from app.errors import ConflictError, InternalError, NotFoundError, ValidationError
+from app.errors import (
+    BusinessRuleError,
+    ConflictError,
+    InternalError,
+    UnavailableError,
+    ValidationFailedError,
+)
 from app.models.widget import WidgetModel
 
 logger = logging.getLogger(__name__)
@@ -407,52 +413,8 @@ class WidgetRepository:
         return ListResult(items=items, cursor=next_cursor, has_more=has_more, total=total)
 ```
 
-## List with Offset-Based Pagination (Admin/Reporting)
-
-```python
-    async def list_offset(self, tenant_id: UUID, filters: OffsetListFilters) -> OffsetListResult[Widget]:
-        """
-        List widgets with offset-based pagination.
-        Use for admin dashboards and reporting UIs where users need "jump to page N".
-        """
-        log = self._logger.getChild("list_offset")
-        offset = (filters.page - 1) * filters.per_page
-
-        sort_col = self._resolve_sort_column(filters.sort_by)
-
-        async with self._session_factory() as session:
-            stmt = (
-                select(WidgetModel)
-                .where(
-                    and_(
-                        WidgetModel.tenant_id == tenant_id,
-                        WidgetModel.deleted_at.is_(None),
-                    )
-                )
-            )
-
-            stmt = self._apply_field_filters(stmt, filters.fields)
-
-            if filters.sort_dir == "desc":
-                stmt = stmt.order_by(sort_col.desc(), WidgetModel.id.desc())
-            else:
-                stmt = stmt.order_by(sort_col.asc(), WidgetModel.id.asc())
-
-            stmt = stmt.limit(filters.per_page).offset(offset)
-
-            result = await session.execute(stmt)
-            models = list(result.scalars().all())
-
-        items = [self._to_domain(m) for m in models]
-        total = await self._count_total(tenant_id, filters.fields)
-
-        log.info(
-            "list_offset completed",
-            extra={"page": filters.page, "per_page": filters.per_page, "result_count": len(items), "total": total},
-        )
-
-        return OffsetListResult(items=items, total=total)
-```
+There is no offset/page-number list: the API is cursor-only (`crud-handler-python.md` §Pagination).
+For "jump to page N" admin tables, filter instead (date range, search, status).
 
 ## Batch Operations
 
@@ -510,9 +472,9 @@ class WidgetRepository:
                 )
                 result = await session.execute(stmt)
                 if result.rowcount == 0:
+                    # Rolls back the whole batch (409 CONFLICT; user-safe message, no DB detail)
                     raise ConflictError(
-                        resource="widget",
-                        reason=f"version mismatch on item {i} (id={widget.id})",
+                        f"Item {i + 1} of the batch was changed by someone else. Reload and try again.",
                     )
 
         # Invalidate cache for all updated widgets
@@ -539,8 +501,9 @@ class WidgetRepository:
         try:
             data = json.loads(urlsafe_b64decode(cursor.encode()))
             return data["sv"], UUID(data["id"])
-        except (KeyError, ValueError, json.JSONDecodeError) as exc:
-            raise ValidationError(field="cursor", reason="invalid cursor format") from exc
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            # 400 VALIDATION_FAILED on the `cursor` query param — the decode error stays in the chain
+            raise ValidationFailedError("cursor", "invalid_cursor", "This cursor is invalid or expired.") from exc
 ```
 
 ## Query Helpers
@@ -660,35 +623,44 @@ class WidgetRepository:
         """
         Map database exceptions to domain error types.
         Creates domain errors at the repository boundary where we KNOW the error type.
+
+        Client messages are generic. The driver message, SQL and constraint name stay in the
+        exception chain (`raise self._map_error(exc, ...) from exc`) and reach only the log, under
+        request_id (error-handling-python.md). Branch on the SQLSTATE, never on the message text.
+        Route every DB call through this mapping (shown on create/batch_create; wrap reads the same way).
         """
         from sqlalchemy.exc import IntegrityError, OperationalError
+        from sqlalchemy.exc import TimeoutError as PoolTimeoutError
+
+        # SQLAlchemy 2.x exposes the SQLSTATE on the adapted DBAPI error (asyncpg/psycopg: .sqlstate,
+        # psycopg2: .pgcode); the raw asyncpg error is its __cause__.
+        orig = getattr(exc, "orig", None)
+        sqlstate = (
+            getattr(orig, "sqlstate", None)
+            or getattr(orig, "pgcode", None)
+            or getattr(getattr(orig, "__cause__", None), "sqlstate", None)
+        )
 
         if isinstance(exc, IntegrityError):
-            detail = str(exc.orig) if exc.orig else str(exc)
+            # unique_violation → 409 CONFLICT
+            if sqlstate == "23505":
+                return ConflictError("A widget with these values already exists.")
 
-            # unique_violation (PostgreSQL 23505)
-            if "unique" in detail.lower() or "23505" in detail:
-                return ConflictError(
-                    resource="widget",
-                    reason=f"duplicate value — {detail}",
-                )
+            # foreign_key_violation → 422 BUSINESS_RULE_VIOLATION
+            if sqlstate == "23503":
+                return BusinessRuleError("A referenced record doesn't exist.")
 
-            # foreign_key_violation (PostgreSQL 23503)
-            if "foreign key" in detail.lower() or "23503" in detail:
-                return ValidationError(
-                    field="reference",
-                    reason="referenced resource does not exist",
-                )
+            # check_violation → 422 BUSINESS_RULE_VIOLATION
+            if sqlstate == "23514":
+                return BusinessRuleError("A value isn't allowed.")
 
-            # check_violation (PostgreSQL 23514)
-            if "check" in detail.lower() or "23514" in detail:
-                return ValidationError(
-                    field="constraint",
-                    reason=f"value violates constraint — {detail}",
-                )
-
-        if isinstance(exc, OperationalError):
-            return InternalError(cause=exc)
+        # query_canceled (statement_timeout), connection failure, pool exhausted → 503 UNAVAILABLE
+        if (
+            sqlstate == "57014"
+            or (sqlstate or "").startswith("08")
+            or isinstance(exc, (OperationalError, PoolTimeoutError))
+        ):
+            return UnavailableError("postgres", cause=exc)
 
         return InternalError(cause=exc)
 ```
@@ -778,7 +750,9 @@ class WidgetRawRepository:
 - Cursor values MUST be opaque (base64-encoded JSON) — never expose raw DB values
 - List queries MUST request `LIMIT + 1` to detect `has_more` without extra count query
 - Batch inserts SHOULD use `copy_records_to_table` for high-throughput (asyncpg's COPY protocol)
-- Database exceptions MUST be mapped to domain errors (`ConflictError`, `ValidationError`, `InternalError`) at the repository boundary
+- Database exceptions MUST be mapped to domain errors at the repository boundary, by SQLSTATE: unique → `ConflictError` (409), FK/check → `BusinessRuleError` (422), statement timeout/connection/pool → `UnavailableError` (503), anything else → `InternalError` (500)
+- Client messages MUST be generic — never `str(exc)`, SQL or a constraint name; those stay in the exception chain and reach only the log, under `request_id`
+- Lists are cursor-paginated only — no `OFFSET` list method
 - Cache MUST be invalidated on every write (Update, Delete)
 - Cache failures are logged, never raised — cache is an optimization, not a correctness requirement
 - Use `async_sessionmaker` with `expire_on_commit=False` to avoid lazy-load issues after commit

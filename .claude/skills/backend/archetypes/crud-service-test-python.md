@@ -104,7 +104,7 @@ import pytest
 
 from app.domain.base import AuditEntry, ListFilters, ListResult
 from app.domain.widget import Widget, WidgetStatus
-from app.errors import ConflictError, NotFoundError, UnauthorizedError, ValidationError
+from app.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.services.widget import WidgetService
 from tests.factories import make_list_result, make_widget
 
@@ -208,7 +208,7 @@ class TestCreate:
         tenant_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> None:
-        with pytest.raises(ValidationError) as exc_info:
+        with pytest.raises(ValidationFailedError) as exc_info:
             await service.create(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -216,7 +216,9 @@ class TestCreate:
                 description="Desc",
             )
 
-        assert exc_info.value.code == "VALIDATION_ERROR"
+        assert exc_info.value.code == "VALIDATION_FAILED"
+        assert exc_info.value.status == 400
+        assert [(d.field, d.code) for d in exc_info.value.details] == [("name", "required")]
         mock_repo.create.assert_not_called()
 
     @pytest.mark.asyncio
@@ -227,7 +229,7 @@ class TestCreate:
         tenant_id: uuid.UUID,
         user_id: uuid.UUID,
     ) -> None:
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationFailedError):
             await service.create(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -293,7 +295,7 @@ class TestCreateTableDriven:
         mock_repo.create.return_value = None
 
         if should_raise:
-            with pytest.raises(ValidationError):
+            with pytest.raises(ValidationFailedError):
                 await service.create(
                     tenant_id=tenant_id,
                     user_id=user_id,
@@ -385,7 +387,7 @@ class TestGet:
         with pytest.raises(NotFoundError) as exc_info:
             await service.get(tenant_id=tenant_id, widget_id=widget_id)
 
-        assert exc_info.value.http_status == 404
+        assert exc_info.value.status == 404
         mock_cache.set.assert_not_called()  # don't cache 404s
 
     @pytest.mark.asyncio
@@ -468,7 +470,7 @@ class TestUpdate:
                 version=1,  # stale — current is 3
             )
 
-        assert exc_info.value.http_status == 409
+        assert exc_info.value.status == 409
         mock_repo.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -525,7 +527,7 @@ class TestUpdate:
         user_id: uuid.UUID,
     ) -> None:
         """Input validation must happen before any side effects."""
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationFailedError):
             await service.update(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -584,7 +586,7 @@ class TestList:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "page_size, expected_clamped",
+        "limit, expected_clamped",
         [
             (0, 1),        # zero -> clamp to min 1
             (-5, 1),       # negative -> clamp to min 1
@@ -594,17 +596,17 @@ class TestList:
         ],
         ids=["zero", "negative", "valid-50", "max-100", "exceeds-max"],
     )
-    async def test_page_size_clamping(
+    async def test_limit_clamping(
         self,
         service: WidgetService,
         mock_repo: AsyncMock,
         tenant_id: uuid.UUID,
-        page_size: int,
+        limit: int,
         expected_clamped: int,
     ) -> None:
         mock_repo.list.return_value = make_list_result()
 
-        await service.list(tenant_id=tenant_id, page_size=page_size)
+        await service.list(tenant_id=tenant_id, limit=limit)
 
         call_args = mock_repo.list.call_args
         filters = call_args.args[1]  # second positional arg is ListFilters
@@ -625,7 +627,7 @@ class TestList:
             total=25,
         )
 
-        result = await service.list(tenant_id=tenant_id, page_size=10)
+        result = await service.list(tenant_id=tenant_id, limit=10)
 
         assert len(result.items) == 3
         assert result.has_more is True
@@ -873,7 +875,7 @@ class TestEdgeCases:
         user_id: uuid.UUID,
     ) -> None:
         """Names that are only whitespace must be rejected."""
-        with pytest.raises(ValidationError):
+        with pytest.raises(ValidationFailedError):
             await service.create(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -1022,7 +1024,7 @@ class TestTransactionRollback:
 - Audit failures MUST be swallowed — assert that business operation completes
 - Version conflict test: set existing.version = 3, input version = 1 — assert ConflictError
 - Validation MUST happen before any side effects (DB, cache, audit)
-- Use `pytest.raises` for expected exceptions, always checking `.code` or `.http_status`
+- Use `pytest.raises` for expected exceptions, always checking `.code` or `.status` (codes and statuses per `api/response-envelope.md`: 400 `VALIDATION_FAILED`, 404 `NOT_FOUND`, 409 `CONFLICT`, ...)
 - Use `pytest.mark.parametrize` for table-driven tests with descriptive `ids`
 - Use `assert_not_called()` to verify methods that should NOT be invoked
 - Use `call_args.args[0]` or `call_args.kwargs` to inspect what was passed to mocks

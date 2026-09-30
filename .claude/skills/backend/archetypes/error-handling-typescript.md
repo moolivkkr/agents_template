@@ -1,6 +1,6 @@
 ---
 skill: error-handling-typescript
-description: TypeScript error handling archetype — AppError class, domain error subclasses, Express/NestJS middleware, HTTP mapping, structured error responses matching Go archetype output
+description: TypeScript error handling archetype — AppError class with FieldError details, one constructor per error code, one Express error middleware (NestJS filter delegates to it), HTTP mapping to the canonical error envelope matching the Go archetype
 version: "1.0"
 tags:
   - typescript
@@ -14,9 +14,9 @@ tags:
 
 # Error Handling Archetype — TypeScript
 
-> **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/error-handling.md` (Go). Both produce identical error response envelopes so frontend clients can use a single error parsing strategy.
+> **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/error-handling-go.md` (Go). Both produce the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`), so frontend clients can use a single error parsing strategy. If this file and the envelope ever disagree, the envelope wins.
 
-Complete error handling system for TypeScript backend services (Express, NestJS, Fastify). Every generated TypeScript service MUST follow this pattern.
+Complete error handling system for TypeScript backend services (Express, NestJS). Every generated TypeScript service MUST follow this pattern.
 
 ## AppError Base Class
 
@@ -24,30 +24,55 @@ Complete error handling system for TypeScript backend services (Express, NestJS,
 // src/errors/app-error.ts
 
 /**
- * AppError is the base application error type.
- * All domain errors MUST extend this class so error middleware can map them to HTTP responses.
- *
- * Produces the same JSON envelope as the Go archetype:
- * {"error": {"code": "...", "message": "...", "details": {...}}}
+ * FieldError is one entry of error.details[] — field-level problems for VALIDATION_FAILED.
+ * `code` is a stable lower_snake identifier; `message` comes from a fixed catalog, never from
+ * an exception or a validator's raw text.
+ */
+export interface FieldError {
+  field: string;
+  code: string;
+  message: string;
+}
+
+/** The error envelope (api/response-envelope.md). Every error response uses it; it has no `data` key. */
+export interface ErrorResponseBody {
+  error: {
+    code: string;
+    message: string;
+    details?: FieldError[];
+    request_id: string;
+    retryable: boolean;
+  };
+}
+
+/**
+ * AppError is the one application error type. Domain code throws AppErrors built by the
+ * constructors in domain-errors.ts so the error middleware can map them to the envelope.
  */
 export class AppError extends Error {
-  public readonly code: string;
-  public readonly httpStatus: number;
-  public readonly details: Record<string, unknown>;
-  public readonly cause?: Error;
+  public readonly code: string;          // UPPER_SNAKE, stable: VALIDATION_FAILED, NOT_FOUND, ...
+  public readonly status: number;        // HTTP status — not serialized
+  public readonly details: FieldError[]; // serialized as error.details
+  public readonly retryable: boolean;    // serialized as error.retryable
+  public readonly retryAfter: number;    // seconds; sets the Retry-After header (429/503)
+  public cause?: unknown;                // wrapped cause — logged server-side, never serialized
 
   constructor(opts: {
     code: string;
-    message: string;
-    httpStatus: number;
-    details?: Record<string, unknown>;
-    cause?: Error;
+    message: string; // user-safe; the UI shows it as-is
+    status: number;
+    details?: FieldError[];
+    retryable?: boolean;
+    retryAfter?: number;
+    cause?: unknown;
   }) {
     super(opts.message);
     this.name = "AppError";
     this.code = opts.code;
-    this.httpStatus = opts.httpStatus;
-    this.details = opts.details ?? {};
+    this.status = opts.status;
+    this.details = opts.details ?? [];
+    this.retryable = opts.retryable ?? false;
+    this.retryAfter = opts.retryAfter ?? 0;
     this.cause = opts.cause;
 
     // Maintain proper stack trace in V8 engines
@@ -56,192 +81,147 @@ export class AppError extends Error {
     }
   }
 
-  /** Add structured context to the error. Returns this for chaining. */
-  withDetails(key: string, value: unknown): this {
-    (this.details as Record<string, unknown>)[key] = value;
+  /** Append a field-level problem (VALIDATION_FAILED). Returns this for chaining. */
+  withField(field: string, code: string, message: string): this {
+    this.details.push({ field, code, message });
     return this;
   }
 
-  /** Wrap an underlying error for debugging while keeping the client message clean. */
-  withCause(err: Error): this {
-    (this as any).cause = err;
+  /** Wrap an underlying error for the log while keeping the client message clean. */
+  withCause(err: unknown): this {
+    this.cause = err;
     return this;
   }
 
-  /** Serialize to the standard error response format. */
-  toJSON(): ErrorResponseBody {
+  /** The client-visible body: only code, message, details, request_id and retryable leave the server. */
+  toBody(requestId: string): ErrorResponseBody {
     return {
       error: {
         code: this.code,
         message: this.message,
-        ...(Object.keys(this.details).length > 0 ? { details: this.details } : {}),
+        ...(this.details.length > 0 ? { details: this.details } : {}),
+        request_id: requestId,
+        retryable: this.retryable,
       },
     };
   }
 }
 
-/** Standard JSON error response body — matches Go archetype exactly. */
-export interface ErrorResponseBody {
-  error: {
-    code: string;
-    message: string;
-    details?: Record<string, unknown>;
-  };
+/** Type guard — the TypeScript form of Go's errors.Is(err, apperr.ErrNotFound). */
+export function isAppError(err: unknown, code?: string): err is AppError {
+  return err instanceof AppError && (code === undefined || err.code === code);
 }
 ```
 
-## Domain Error Subclasses
+## Error Taxonomy — Constructor Functions
+
+The codes and statuses are the table in `api/response-envelope.md`. Messages are user-safe and fixed;
+nothing from a parser, driver or upstream error reaches the client.
 
 ```typescript
 // src/errors/domain-errors.ts
 
-import { AppError } from "./app-error";
+import { AppError, type FieldError } from "./app-error";
 
-// --- 400 Bad Request: Malformed Request (JSON parse errors, wrong content type) ---
+/** details[].message per lower_snake field code. Validator text (Zod, class-validator) is never sent. */
+export const FIELD_MESSAGES: Record<string, string> = {
+  required: "This field is required.",
+  invalid_type: "This value has the wrong type.",
+  invalid_format: "This value isn't in the right format.",
+  invalid_value: "This value isn't allowed.",
+  too_short: "This value is too short.",
+  too_long: "This value is too long.",
+  too_small: "This value is too small.",
+  too_big: "This value is too large.",
+  unknown_field: "This field isn't allowed.",
+};
 
-export class BadRequestError extends AppError {
-  constructor(reason: string, cause?: Error) {
-    super({
-      code: "BAD_REQUEST",
-      message: reason,
-      httpStatus: 400,
-      cause,
-    });
-    this.name = "BadRequestError";
-  }
+// --- 400 MALFORMED_REQUEST: JSON parse errors, wrong content type, body too large ---
+
+export function malformedRequest(cause?: unknown): AppError {
+  return new AppError({ code: "MALFORMED_REQUEST", message: "The request could not be read.", status: 400, cause });
 }
 
-// --- 422 Unprocessable Entity: Business Validation Errors ---
-// Use 422 for well-formed requests that fail domain/business validation rules.
-// Use 400 (above) for malformed JSON, wrong content type, or request parsing errors.
+// --- 400 VALIDATION_FAILED: the input fails schema/validation; details[] lists the fields ---
 
-export class ValidationError extends AppError {
-  constructor(field: string, reason: string, cause?: Error) {
-    super({
-      code: "VALIDATION_ERROR",
-      message: `invalid value for field '${field}'`,
-      httpStatus: 422,
-      details: { field, reason },
-      cause,
-    });
-    this.name = "ValidationError";
-  }
+export function validationError(field: string, code: string, message: string): AppError {
+  return multiValidationError([{ field, code, message }]);
 }
 
-export class MultiValidationError extends AppError {
-  constructor(fieldErrors: Record<string, string>) {
-    super({
-      code: "VALIDATION_ERROR",
-      message: "one or more fields failed validation",
-      httpStatus: 422,
-      details: { fields: fieldErrors },
-    });
-    this.name = "MultiValidationError";
-  }
+export function multiValidationError(fields: FieldError[]): AppError {
+  return new AppError({ code: "VALIDATION_FAILED", message: "Some fields are invalid.", status: 400, details: fields });
 }
 
-// --- 401 Unauthorized: Authentication Errors ---
+// --- 422 BUSINESS_RULE_VIOLATION: a valid request rejected by a domain rule ---
 
-export class UnauthorizedError extends AppError {
-  constructor(reason: string = "authentication required") {
-    super({
-      code: "UNAUTHORIZED",
-      message: reason,
-      httpStatus: 401,
-    });
-    this.name = "UnauthorizedError";
-  }
+export function businessRule(message: string): AppError {
+  return new AppError({ code: "BUSINESS_RULE_VIOLATION", message, status: 422 });
 }
 
-// --- 403 Forbidden: Authorization Errors ---
+// --- 401 UNAUTHENTICATED ---
 
-export class ForbiddenError extends AppError {
-  constructor(action: string, resource: string) {
-    super({
-      code: "FORBIDDEN",
-      message: `insufficient permissions to ${action} ${resource}`,
-      httpStatus: 403,
-      details: { action, resource },
-    });
-    this.name = "ForbiddenError";
-  }
+export function unauthenticated(): AppError {
+  return new AppError({ code: "UNAUTHENTICATED", message: "Sign in to continue.", status: 401 });
 }
 
-// --- 404 Not Found ---
+// --- 403 FORBIDDEN: authenticated, not allowed (function-level) ---
 
-export class NotFoundError extends AppError {
-  constructor(resource: string, identifier?: string) {
-    const message = identifier
-      ? `${resource} '${identifier}' not found`
-      : `${resource} not found`;
-    super({
-      code: "NOT_FOUND",
-      message,
-      httpStatus: 404,
-      details: { resource, ...(identifier ? { identifier } : {}) },
-    });
-    this.name = "NotFoundError";
-  }
+export function forbidden(): AppError {
+  return new AppError({ code: "FORBIDDEN", message: "You don't have permission to do this.", status: 403 });
 }
 
-// --- 409 Conflict: Duplicate / Version Mismatch ---
+// --- 404 NOT_FOUND: missing OR another tenant's/owner's object (never 403 for those) ---
 
-export class ConflictError extends AppError {
-  constructor(resource: string, reason: string) {
-    super({
-      code: "CONFLICT",
-      message: `${resource} conflict: ${reason}`,
-      httpStatus: 409,
-      details: { resource, reason },
-    });
-    this.name = "ConflictError";
-  }
+export function notFound(resource: string): AppError {
+  return new AppError({ code: "NOT_FOUND", message: `${resource} not found.`, status: 404 });
 }
 
-// --- 429 Too Many Requests ---
+// --- 409 CONFLICT: duplicate / version mismatch / state conflict ---
 
-export class RateLimitError extends AppError {
-  public readonly retryAfterSeconds: number;
-
-  constructor(retryAfterSeconds: number) {
-    super({
-      code: "RATE_LIMITED",
-      message: "too many requests — please retry later",
-      httpStatus: 429,
-      details: { retry_after_seconds: retryAfterSeconds },
-    });
-    this.name = "RateLimitError";
-    this.retryAfterSeconds = retryAfterSeconds;
-  }
+export function conflict(message: string): AppError {
+  return new AppError({ code: "CONFLICT", message, status: 409 });
 }
 
-// --- 500 Internal Server Error ---
+// --- 409 IDEMPOTENCY_KEY_REUSED: an Idempotency-Key replayed with a different body ---
 
-export class InternalError extends AppError {
-  constructor(cause?: Error) {
-    super({
-      code: "INTERNAL_ERROR",
-      message: "an unexpected error occurred",
-      httpStatus: 500,
-      cause,
-    });
-    this.name = "InternalError";
-  }
+export function idempotencyKeyReused(): AppError {
+  return new AppError({
+    code: "IDEMPOTENCY_KEY_REUSED",
+    message: "This Idempotency-Key was already used with a different request.",
+    status: 409,
+  });
 }
 
-// --- 502 Bad Gateway: Upstream Failure ---
+// --- 429 RATE_LIMITED ---
 
-export class UpstreamError extends AppError {
-  constructor(service: string, cause?: Error) {
-    super({
-      code: "UPSTREAM_ERROR",
-      message: `upstream service '${service}' is unavailable`,
-      httpStatus: 502,
-      details: { service },
-      cause,
-    });
-    this.name = "UpstreamError";
-  }
+export function rateLimited(retryAfterSeconds: number): AppError {
+  return new AppError({
+    code: "RATE_LIMITED",
+    message: "Too many requests. Try again shortly.",
+    status: 429,
+    retryable: true,
+    retryAfter: retryAfterSeconds,
+  });
+}
+
+// --- 500 INTERNAL ---
+
+export function internal(cause?: unknown): AppError {
+  return new AppError({ code: "INTERNAL", message: "Something went wrong.", status: 500, cause });
+}
+
+// --- 503 UNAVAILABLE: a dependency (DB, upstream API) failed or timed out ---
+// The service name goes to the log (inside `cause`), not the client.
+
+export function unavailable(service: string, cause?: unknown): AppError {
+  return new AppError({
+    code: "UNAVAILABLE",
+    message: "The service is temporarily unavailable.",
+    status: 503,
+    retryable: true,
+    retryAfter: 5,
+    cause: new Error(`upstream ${service}`, { cause }),
+  });
 }
 ```
 
@@ -250,69 +230,72 @@ export class UpstreamError extends AppError {
 ```typescript
 // src/middleware/error-handler.ts
 
-import { Request, Response, NextFunction } from "express";
+import { randomUUID } from "node:crypto";
+import type { Request, Response, NextFunction } from "express";
 import { AppError } from "../errors/app-error";
-import { RateLimitError } from "../errors/domain-errors";
+import { internal, malformedRequest } from "../errors/domain-errors";
 import { logger } from "../lib/logger"; // structured logger (pino, winston, etc.)
 
+/** The request's ID, set by the request-id middleware; created here if that middleware didn't run. */
+export function requestIdOf(req: Request): string {
+  const r = req as Request & { requestId?: string };
+  r.requestId ||= randomUUID();
+  return r.requestId;
+}
+
+/** express.json() (body-parser) failures that mean "the body could not be read". */
+const BODY_PARSER_ERRORS = new Set([
+  "entity.parse.failed", // malformed JSON
+  "entity.too.large",    // over the express.json({ limit }) cap
+  "charset.unsupported",
+  "encoding.unsupported",
+]);
+
+/** Maps anything thrown to an AppError. Unknown errors become 500 INTERNAL; their text is never sent. */
+export function toAppError(err: unknown): AppError {
+  if (err instanceof AppError) return err;
+  const type = (err as { type?: unknown } | null)?.type;
+  if (typeof type === "string" && BODY_PARSER_ERRORS.has(type)) return malformedRequest(err);
+  return internal(err);
+}
+
+/** writeErrorBody is the only function that writes an error response. */
+export function writeErrorBody(res: Response, requestId: string, e: AppError): void {
+  res.set("X-Request-Id", requestId);
+  if (e.retryAfter > 0) res.set("Retry-After", String(e.retryAfter));
+  if (e.status === 401) res.set("WWW-Authenticate", "Bearer");
+  res.status(e.status).json(e.toBody(requestId));
+}
+
 /**
- * Express error middleware. Mount LAST in the middleware stack.
- * Maps AppError instances to structured HTTP responses.
+ * Express error middleware — the ONE place thrown errors become HTTP responses. Mount LAST.
  *
  * Usage:
  *   app.use(errorHandler);
  */
 export function errorHandler(
-  err: Error,
+  err: unknown,
   req: Request,
   res: Response,
-  _next: NextFunction,
+  next: NextFunction,
 ): void {
-  const requestId = (req as any).requestId ?? req.headers["x-request-id"] ?? "";
+  if (res.headersSent) return next(err); // too late for an envelope; Express closes the connection
 
-  if (err instanceof AppError) {
-    // Log internal errors with full detail; client gets sanitized message
-    if (err.httpStatus >= 500) {
-      logger.error("internal error", {
-        code: err.code,
-        message: err.message,
-        cause: err.cause?.message,
-        stack: err.cause?.stack,
-        request_id: requestId,
-        method: req.method,
-        path: req.path,
-      });
-    }
+  const requestId = requestIdOf(req);
+  const e = toAppError(err);
 
-    // Add Retry-After header for rate limit errors
-    if (err instanceof RateLimitError) {
-      res.set("Retry-After", String(err.retryAfterSeconds));
-    }
-
-    // Add WWW-Authenticate header for 401 errors
-    if (err.httpStatus === 401) {
-      res.set("WWW-Authenticate", "Bearer");
-    }
-
-    res.status(err.httpStatus).json(err.toJSON());
-    return;
+  if (e.status >= 500) {
+    // The cause (driver/upstream message, stack) goes to the log under request_id — never to the client.
+    logger.error("request failed", {
+      code: e.code,
+      request_id: requestId,
+      method: req.method,
+      path: req.path,
+      err: e.cause ?? e,
+    });
   }
 
-  // Unknown error type — treat as 500, never expose message
-  logger.error("unmapped error", {
-    error: err.message,
-    stack: err.stack,
-    request_id: requestId,
-    method: req.method,
-    path: req.path,
-  });
-
-  res.status(500).json({
-    error: {
-      code: "INTERNAL_ERROR",
-      message: "an unexpected error occurred",
-    },
-  });
+  writeErrorBody(res, requestId, e);
 }
 
 /**
@@ -321,7 +304,7 @@ export function errorHandler(
  * Usage:
  *   router.get("/users/:id", asyncHandler(async (req, res) => {
  *     const user = await userService.get(req.params.id);
- *     res.json({ data: user });
+ *     res.json({ data: user, meta: newMeta(requestIdOf(req)) });
  *   }));
  */
 export function asyncHandler(
@@ -335,6 +318,9 @@ export function asyncHandler(
 
 ## NestJS Exception Filter
 
+The filter is an adapter: it turns the exception into an `AppError` and hands it to the same
+`writeErrorBody`, so Express and NestJS write the envelope in one place.
+
 ```typescript
 // src/filters/app-error.filter.ts
 
@@ -345,9 +331,23 @@ import {
   HttpException,
   Logger,
 } from "@nestjs/common";
-import { Request, Response } from "express";
+import type { ValidationError } from "class-validator";
+import type { Request, Response } from "express";
 import { AppError } from "../errors/app-error";
-import { RateLimitError } from "../errors/domain-errors";
+import {
+  FIELD_MESSAGES,
+  businessRule,
+  conflict,
+  forbidden,
+  internal,
+  malformedRequest,
+  multiValidationError,
+  notFound,
+  rateLimited,
+  unauthenticated,
+  unavailable,
+} from "../errors/domain-errors";
+import { requestIdOf, toAppError, writeErrorBody } from "../middleware/error-handler";
 
 @Catch()
 export class AppErrorFilter implements ExceptionFilter {
@@ -357,56 +357,68 @@ export class AppErrorFilter implements ExceptionFilter {
     const ctx = host.switchToHttp();
     const res = ctx.getResponse<Response>();
     const req = ctx.getRequest<Request>();
-    const requestId = (req as any).requestId ?? req.headers["x-request-id"] ?? "";
+    const requestId = requestIdOf(req);
+    const e = exception instanceof HttpException ? fromHttpException(exception) : toAppError(exception);
 
-    // Handle AppError (domain errors)
-    if (exception instanceof AppError) {
-      if (exception.httpStatus >= 500) {
-        this.logger.error("Internal error", {
-          code: exception.code,
-          message: exception.message,
-          cause: exception.cause?.message,
-          request_id: requestId,
-        });
-      }
-
-      if (exception instanceof RateLimitError) {
-        res.set("Retry-After", String(exception.retryAfterSeconds));
-      }
-      if (exception.httpStatus === 401) {
-        res.set("WWW-Authenticate", "Bearer");
-      }
-
-      res.status(exception.httpStatus).json(exception.toJSON());
-      return;
+    if (e.status >= 500) {
+      this.logger.error("request failed", { code: e.code, request_id: requestId, err: e.cause ?? e });
     }
 
-    // Handle NestJS HttpException
-    if (exception instanceof HttpException) {
-      const status = exception.getStatus();
-      res.status(status).json({
-        error: {
-          code: status >= 500 ? "INTERNAL_ERROR" : "BAD_REQUEST",
-          message: exception.message,
-        },
-      });
-      return;
-    }
-
-    // Unknown error — 500
-    this.logger.error("Unmapped error", {
-      error: exception instanceof Error ? exception.message : String(exception),
-      stack: exception instanceof Error ? exception.stack : undefined,
-      request_id: requestId,
-    });
-
-    res.status(500).json({
-      error: {
-        code: "INTERNAL_ERROR",
-        message: "an unexpected error occurred",
-      },
-    });
+    writeErrorBody(res, requestId, e);
   }
+}
+
+/**
+ * Nest's own HttpExceptions (guards, pipes, unknown routes) get a code from their status and a
+ * fixed message. The exception's own message is never sent — it can echo input or internals.
+ */
+const FROM_HTTP_STATUS: Record<number, () => AppError> = {
+  400: () => malformedRequest(),
+  401: () => unauthenticated(),
+  403: () => forbidden(),
+  404: () => notFound("Resource"),
+  409: () => conflict("This request conflicts with the current state."),
+  413: () => malformedRequest(),
+  415: () => malformedRequest(),
+  422: () => businessRule("This request can't be completed."),
+  429: () => rateLimited(5),
+  503: () => unavailable("upstream"),
+};
+
+function fromHttpException(ex: HttpException): AppError {
+  const make = FROM_HTTP_STATUS[ex.getStatus()];
+  return (make ? make() : internal()).withCause(ex);
+}
+
+/** class-validator constraint name → lower_snake details[].code. */
+const CONSTRAINT_CODES: Record<string, string> = {
+  isNotEmpty: "required",
+  isDefined: "required",
+  isString: "invalid_type",
+  isInt: "invalid_type",
+  isUuid: "invalid_format",
+  isEnum: "invalid_value",
+  minLength: "too_short",
+  maxLength: "too_long",
+  min: "too_small",
+  max: "too_big",
+  whitelistValidation: "unknown_field", // forbidNonWhitelisted
+};
+
+/**
+ * ValidationPipe exceptionFactory: class-validator errors → 400 VALIDATION_FAILED with details[].
+ * Constraint messages are never sent; each becomes a stable code + a catalog message.
+ * Use it wherever a ValidationPipe is built:
+ *   new ValidationPipe({ whitelist: true, transform: true, exceptionFactory: validationExceptionFactory })
+ */
+export function validationExceptionFactory(errors: ValidationError[]): AppError {
+  const fields = errors.flatMap((e) =>
+    Object.keys(e.constraints ?? {}).map((constraint) => {
+      const code = CONSTRAINT_CODES[constraint] ?? "invalid_value";
+      return { field: e.property, code, message: FIELD_MESSAGES[code] };
+    }),
+  ); // nested DTOs: recurse into e.children
+  return multiValidationError(fields);
 }
 
 // Register globally in main.ts:
@@ -415,56 +427,74 @@ export class AppErrorFilter implements ExceptionFilter {
 
 ## HTTP Status Mapping Summary
 
-| Error Class | HTTP Status | Code | When to Use |
+| Constructor | HTTP Status | Code | When to Use |
 |---|---|---|---|
-| `BadRequestError` | 400 | `BAD_REQUEST` | Malformed JSON, wrong content type, request parsing failure |
-| `ValidationError` | 422 | `VALIDATION_ERROR` | Well-formed request that fails business/domain validation |
-| `MultiValidationError` | 422 | `VALIDATION_ERROR` | Multiple field validation failures |
-| `UnauthorizedError` | 401 | `UNAUTHORIZED` | Missing or invalid credentials (JWT, API key) |
-| `ForbiddenError` | 403 | `FORBIDDEN` | Valid credentials but insufficient permissions |
-| `NotFoundError` | 404 | `NOT_FOUND` | Resource does not exist or was soft-deleted |
-| `ConflictError` | 409 | `CONFLICT` | Duplicate entry, version mismatch, state conflict |
-| `RateLimitError` | 429 | `RATE_LIMITED` | Too many requests from tenant/user |
-| `InternalError` | 500 | `INTERNAL_ERROR` | Unexpected server error — never expose details |
-| `UpstreamError` | 502 | `UPSTREAM_ERROR` | External service failure |
+| `malformedRequest(cause?)` | 400 | `MALFORMED_REQUEST` | Malformed JSON, wrong content type, body too large |
+| `validationError(field, code, message)` / `multiValidationError(fields)` | 400 | `VALIDATION_FAILED` | Input fails schema/validation — `details[]` lists `{field, code, message}` |
+| `unauthenticated()` | 401 | `UNAUTHENTICATED` | Missing, invalid or expired credentials (JWT, API key) |
+| `forbidden()` | 403 | `FORBIDDEN` | Authenticated but not allowed (function-level) |
+| `notFound(resource)` | 404 | `NOT_FOUND` | Doesn't exist, soft-deleted, **or belongs to another tenant/owner** |
+| `conflict(message)` | 409 | `CONFLICT` | Duplicate entry, version mismatch, state conflict |
+| `idempotencyKeyReused()` | 409 | `IDEMPOTENCY_KEY_REUSED` | Idempotency-Key replayed with a different body |
+| `businessRule(message)` | 422 | `BUSINESS_RULE_VIOLATION` | Valid shape, rejected by a domain rule |
+| `rateLimited(seconds)` | 429 | `RATE_LIMITED` | Too many requests (`Retry-After`, `retryable: true`) |
+| `internal(cause?)` | 500 | `INTERNAL` | Unexpected server error — never expose details |
+| `unavailable(service, cause?)` | 503 | `UNAVAILABLE` | A dependency failed or timed out (`Retry-After`, `retryable: true`) |
 
 ## Error Response Format
 
-All error responses use the same envelope format as the Go archetype:
+All error responses use the envelope from `api/response-envelope.md`. The HTTP status carries the
+class, the `X-Request-Id` header equals `request_id`, and there is no `data` key:
 
 ```json
-// 422 Validation Error:
+// 400 VALIDATION_FAILED:
 {
   "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "invalid value for field 'email'",
-    "details": { "field": "email", "reason": "invalid format" }
+    "code": "VALIDATION_FAILED",
+    "message": "Some fields are invalid.",
+    "details": [{ "field": "email", "code": "invalid_format", "message": "This value isn't in the right format." }],
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
-// 404 Not Found:
+// 404 NOT_FOUND (also for another tenant's or owner's widget — don't confirm it exists):
 {
   "error": {
     "code": "NOT_FOUND",
-    "message": "widget 'abc-123' not found",
-    "details": { "resource": "widget", "identifier": "abc-123" }
+    "message": "Widget not found.",
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
-// 409 Conflict:
+// 409 CONFLICT:
 {
   "error": {
     "code": "CONFLICT",
-    "message": "widget conflict: version mismatch — reload and retry",
-    "details": { "resource": "widget", "reason": "version mismatch" }
+    "message": "This widget was changed by someone else. Reload and try again.",
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
-// 500 Internal Error:
+// 503 UNAVAILABLE (with Retry-After: 5):
 {
   "error": {
-    "code": "INTERNAL_ERROR",
-    "message": "an unexpected error occurred"
+    "code": "UNAVAILABLE",
+    "message": "The service is temporarily unavailable.",
+    "request_id": "b7e1c2…",
+    "retryable": true
+  }
+}
+
+// 500 INTERNAL (the cause is in the log line with the same request_id):
+{
+  "error": {
+    "code": "INTERNAL",
+    "message": "Something went wrong.",
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 ```
@@ -474,25 +504,21 @@ All error responses use the same envelope format as the Go archetype:
 ```typescript
 // src/services/widget.service.ts
 
-import {
-  ValidationError,
-  NotFoundError,
-  ConflictError,
-} from "../errors/domain-errors";
+import { validationError, notFound, conflict } from "../errors/domain-errors";
 
 export class WidgetService {
   constructor(private readonly repo: WidgetRepository) {}
 
   async create(input: CreateWidgetInput): Promise<Widget> {
-    // Validate — throws 422 on failure
+    // Validate — throws 400 VALIDATION_FAILED
     if (!input.name?.trim()) {
-      throw new ValidationError("name", "name is required");
+      throw validationError("name", "required", "Name is required.");
     }
 
-    // Check for duplicates — throws 409 on conflict
+    // Check for duplicates — throws 409 CONFLICT
     const existing = await this.repo.findByName(input.tenantId, input.name);
     if (existing) {
-      throw new ConflictError("widget", `name '${input.name}' already exists`);
+      throw conflict("A widget with this name already exists.");
     }
 
     return this.repo.create(input);
@@ -501,7 +527,7 @@ export class WidgetService {
   async get(tenantId: string, id: string): Promise<Widget> {
     const widget = await this.repo.findById(tenantId, id);
     if (!widget) {
-      throw new NotFoundError("widget", id);
+      throw notFound("Widget"); // also for another tenant's widget — never 403
     }
     return widget;
   }
@@ -509,9 +535,9 @@ export class WidgetService {
   async update(tenantId: string, id: string, input: UpdateWidgetInput): Promise<Widget> {
     const existing = await this.get(tenantId, id);
 
-    // Optimistic lock check — throws 409 on version mismatch
+    // Optimistic lock check — throws 409 CONFLICT on version mismatch
     if (input.version !== existing.version) {
-      throw new ConflictError("widget", "version mismatch — reload and retry");
+      throw conflict("This widget was changed by someone else. Reload and try again.");
     }
 
     return this.repo.update(id, {
@@ -525,20 +551,20 @@ export class WidgetService {
 ## Type Checking Errors
 
 ```typescript
-// Use instanceof for error type checking
+// Use isAppError (instanceof AppError, optionally by code) for error type checking
 try {
   await widgetService.create(input);
 } catch (err) {
-  if (err instanceof ValidationError) {
-    // Access err.details.field, err.details.reason
+  if (isAppError(err, "VALIDATION_FAILED")) {
+    // err.details: FieldError[] — [{ field, code, message }]
   }
-  if (err instanceof NotFoundError) {
-    // Access err.details.resource, err.details.identifier
+  if (isAppError(err, "NOT_FOUND")) {
+    // err.status === 404
   }
-  if (err instanceof AppError) {
-    // Any domain error — access err.code, err.httpStatus, err.details
+  if (isAppError(err)) {
+    // Any domain error — err.code, err.status, err.retryable
   }
-  // Unknown error — rethrow or wrap
+  // Unknown error — rethrow; the error middleware maps it to 500 INTERNAL
   throw err;
 }
 ```
@@ -548,31 +574,36 @@ try {
 ```typescript
 // src/errors/index.ts
 
-export { AppError, type ErrorResponseBody } from "./app-error";
+export { AppError, isAppError, type FieldError, type ErrorResponseBody } from "./app-error";
 export {
-  BadRequestError,
-  ValidationError,
-  MultiValidationError,
-  UnauthorizedError,
-  ForbiddenError,
-  NotFoundError,
-  ConflictError,
-  RateLimitError,
-  InternalError,
-  UpstreamError,
+  FIELD_MESSAGES,
+  malformedRequest,
+  validationError,
+  multiValidationError,
+  businessRule,
+  unauthenticated,
+  forbidden,
+  notFound,
+  conflict,
+  idempotencyKeyReused,
+  rateLimited,
+  internal,
+  unavailable,
 } from "./domain-errors";
 ```
 
 ## Critical Rules
 
-- Every error thrown from service/repo layers MUST be an `AppError` subclass
-- Internal error messages (500, 502) MUST NOT leak to clients — always return generic message
-- Validation errors (422) SHOULD include the field name and reason in `details`
-- Bad request errors (400) are for malformed JSON/request parsing — NOT business validation
-- `instanceof` checks MUST work — never throw plain `Error` objects from domain code
+- Every error thrown from service/repo layers MUST be an `AppError` built by a constructor above; anything else becomes 500 `INTERNAL`
+- Internal error messages (500, 503) MUST NOT leak to clients — always return the generic message
+- No client-visible field ever contains an exception message (`err.message`, `String(err)`), SQL, a constraint name, a driver/upstream message, a path or a stack trace — the cause is logged with `request_id`
+- Validation errors (400 `VALIDATION_FAILED`) carry `details[]` of `{field, code, message}` — lower_snake codes, catalog messages
+- Business-rule rejections are 422 `BUSINESS_RULE_VIOLATION`; malformed bodies are 400 `MALFORMED_REQUEST`
+- Every error body carries `request_id` (= the `X-Request-Id` header) and `retryable`, and has no `data` key
+- `writeErrorBody` is the only code that writes an error response — `errorHandler` (Express) and `AppErrorFilter` (NestJS) both call it
+- `instanceof AppError` / `isAppError` checks MUST work — never throw plain `Error` objects from domain code
 - Log errors ONCE at the top of the call stack (middleware) — never log at every layer
-- Create domain errors at the BOUNDARY where you know the error type
+- Create domain errors at the BOUNDARY where you know the error type (repo maps DB errors, service maps business rules)
 - Panic recovery (uncaughtException / unhandledRejection) MUST be in the process — crashes MUST be caught
-- Rate limit responses MUST include `Retry-After` header
+- 429 and 503 responses MUST include a `Retry-After` header
 - 401 responses MUST include `WWW-Authenticate: Bearer` header
-- Error response format MUST match the Go archetype: `{"error": {"code": "...", "message": "...", "details": {...}}}`

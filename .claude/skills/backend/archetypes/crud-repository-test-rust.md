@@ -1,6 +1,6 @@
 ---
 skill: crud-repository-test-rust
-description: Rust repository integration test archetype — sqlx::test with automatic migration + rollback, real PostgreSQL CRUD, cursor + offset pagination, soft delete, optimistic locking, unique constraints, multi-tenant isolation, batch operations
+description: Rust repository integration test archetype — sqlx::test with automatic migration + rollback, real PostgreSQL CRUD, cursor pagination, soft delete, optimistic locking, unique constraints, multi-tenant isolation, batch operations
 version: "1.0"
 tags:
   - rust
@@ -65,7 +65,7 @@ use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use yourapp::domain::{ListFilters, OffsetListFilters};
+use yourapp::domain::ListFilters;
 use yourapp::error::AppError;
 use yourapp::models::Widget;
 use yourapp::repositories::widget::PgWidgetRepository;
@@ -586,85 +586,6 @@ async fn list_invalid_cursor_returns_validation_error(pool: PgPool) {
 }
 ```
 
-## Offset Pagination Tests
-
-```rust
-#[sqlx::test(migrations = "./migrations")]
-async fn list_offset_pagination(pool: PgPool) {
-    let repo = PgWidgetRepository::new(pool);
-    let tenant_id = Uuid::new_v4();
-
-    for i in 0..10 {
-        let mut w = make_widget_named(tenant_id, &format!("Offset Widget {i:02}"));
-        w.created_at = Utc::now() + chrono::Duration::milliseconds(i * 100);
-        repo.create(&w).await.unwrap();
-    }
-
-    // Page 1
-    let filters = OffsetListFilters {
-        page: 1,
-        per_page: 3,
-        sort_by: "created_at".into(),
-        sort_dir: "desc".into(),
-        fields: Default::default(),
-    };
-
-    let page1 = repo.list_offset(tenant_id, &filters).await.unwrap();
-    assert_eq!(page1.items.len(), 3);
-    assert_eq!(page1.total, 10);
-
-    // Page 2
-    let filters2 = OffsetListFilters {
-        page: 2,
-        per_page: 3,
-        ..filters.clone()
-    };
-
-    let page2 = repo.list_offset(tenant_id, &filters2).await.unwrap();
-    assert_eq!(page2.items.len(), 3);
-    assert_eq!(page2.total, 10);
-
-    // Verify no overlap
-    let page1_ids: Vec<Uuid> = page1.items.iter().map(|w| w.id).collect();
-    let page2_ids: Vec<Uuid> = page2.items.iter().map(|w| w.id).collect();
-    for id in &page2_ids {
-        assert!(!page1_ids.contains(id), "offset pages must not overlap");
-    }
-
-    // Last page (page 4: items 10-10, just 1 item)
-    let filters_last = OffsetListFilters {
-        page: 4,
-        per_page: 3,
-        ..filters.clone()
-    };
-
-    let last_page = repo.list_offset(tenant_id, &filters_last).await.unwrap();
-    assert_eq!(last_page.items.len(), 1);
-    assert_eq!(last_page.total, 10);
-}
-
-#[sqlx::test(migrations = "./migrations")]
-async fn list_offset_beyond_total_returns_empty(pool: PgPool) {
-    let repo = PgWidgetRepository::new(pool);
-    let tenant_id = Uuid::new_v4();
-
-    let w = make_widget(tenant_id);
-    repo.create(&w).await.unwrap();
-
-    let filters = OffsetListFilters {
-        page: 100, // far beyond actual data
-        per_page: 20,
-        sort_by: "created_at".into(),
-        sort_dir: "desc".into(),
-        fields: Default::default(),
-    };
-
-    let result = repo.list_offset(tenant_id, &filters).await.unwrap();
-    assert_eq!(result.items.len(), 0);
-    assert_eq!(result.total, 1); // total still reflects actual count
-}
-```
-
 ## Multi-Tenant Isolation Tests
 
 ```rust
@@ -872,11 +793,10 @@ async fn list_with_multiple_filters(pool: PgPool) {
 - Soft-deleted items MUST be excluded from `get_by_id` and `list` results
 - Optimistic locking tests MUST verify that stale updates are rejected with `Conflict`
 - Concurrent update tests MUST verify exactly one writer wins
-- Cursor pagination tests MUST verify: no overlap, all items returned, correct ordering
-- Offset pagination tests MUST verify: correct page boundaries, total count unchanged
+- Cursor pagination tests MUST verify: no overlap, all items returned, correct ordering (there is no offset pagination to test)
 - Batch operations MUST handle empty slices gracefully
-- Unique constraint violations MUST map to `AppError::Conflict`
-- Invalid cursor values MUST return `AppError::Validation`
+- Unique constraint violations MUST map to `AppError::Conflict` (409 `CONFLICT`, generic message — no constraint name)
+- Invalid cursor values MUST return `AppError::Validation` (400 `VALIDATION_FAILED`, field `cursor`)
 - Multi-tenant isolation MUST be tested for all CRUD operations
 - Use `Uuid::new_v4()` for every test entity — never hardcode UUIDs
 - Factory functions MUST generate unique names to avoid constraint collisions

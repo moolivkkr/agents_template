@@ -391,10 +391,11 @@ import { useSearchParams } from "react-router-dom"; // or next/navigation
 import { useQuery } from "@tanstack/react-query";
 import { z } from "zod";
 
-// Define valid filter schema
+// Define valid filter schema. Pagination is cursor-based (api/response-envelope.md): the URL holds the
+// opaque cursor of the page being shown, never a page number.
 const filterSchema = z.object({
-  page: z.coerce.number().min(1).default(1),
-  per_page: z.coerce.number().min(10).max(100).default(25),
+  cursor: z.string().default(""),
+  limit: z.coerce.number().min(10).max(100).default(25),
   search: z.string().default(""),
   status: z.enum(["all", "active", "inactive"]).default("all"),
   sort: z.enum(["name", "created_at", "updated_at"]).default("created_at"),
@@ -414,8 +415,8 @@ export function useURLFilters() {
   // Update URL params (replaces history entry — no back-button spam)
   function setFilters(updates: Partial<Filters>) {
     const merged = { ...filters, ...updates };
-    // Reset page to 1 when filters change (except when explicitly setting page)
-    if (!("page" in updates)) merged.page = 1;
+    // Back to the first page when filters change (except when explicitly paging)
+    if (!("cursor" in updates)) merged.cursor = "";
 
     const params = new URLSearchParams();
     Object.entries(merged).forEach(([key, value]) => {
@@ -436,8 +437,9 @@ function ItemList() {
 
   const { data, isLoading } = useQuery({
     queryKey: ["items", "list", filters],
-    queryFn: () => api.items.list(filters),
+    queryFn: () => api.items.list({ ...filters, cursor: filters.cursor || undefined }),
   });
+  const pagination = data?.meta.pagination;
 
   return (
     <div>
@@ -454,12 +456,12 @@ function ItemList() {
         order={filters.order}
         onChange={(sort, order) => setFilters({ sort, order })}
       />
-      {/* Data table with pagination */}
-      <Pagination
-        page={filters.page}
-        perPage={filters.per_page}
-        total={data?.meta?.total ?? 0}
-        onChange={(page) => setFilters({ page })}
+      {/* Data table with cursor pagination: "Next" follows meta.pagination.next_cursor;
+          "First page" clears the cursor (browser Back returns to earlier pages) */}
+      <CursorPager
+        hasMore={pagination?.has_more ?? false}
+        onNext={() => pagination?.next_cursor && setFilters({ cursor: pagination.next_cursor })}
+        onFirst={filters.cursor ? () => setFilters({ cursor: "" }) : undefined}
       />
     </div>
   );

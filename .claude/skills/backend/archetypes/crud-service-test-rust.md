@@ -316,10 +316,7 @@ mod tests {
             |repo| {
                 repo.expect_create()
                     .times(1)
-                    .returning(|_| Err(AppError::Conflict {
-                        resource: "widget".into(),
-                        reason: "duplicate name".into(),
-                    }));
+                    .returning(|_| Err(AppError::conflict("A widget with this name already exists.")));
             },
             |_cache| {},
             |_audit| {},
@@ -407,10 +404,7 @@ mod tests {
             |repo| {
                 repo.expect_get_by_id()
                     .times(1)
-                    .returning(move |_, id| Err(AppError::NotFound {
-                        resource: "widget".into(),
-                        identifier: id.to_string(),
-                    }));
+                    .returning(|_, _| Err(AppError::not_found("Widget")));
             },
             |cache| {
                 cache.expect_get()
@@ -545,10 +539,7 @@ mod tests {
             |repo| {
                 repo.expect_get_by_id()
                     .times(1)
-                    .returning(move |_, id| Err(AppError::NotFound {
-                        resource: "widget".into(),
-                        identifier: id.to_string(),
-                    }));
+                    .returning(|_, _| Err(AppError::not_found("Widget")));
                 repo.expect_update().times(0);
             },
             |_cache| {},
@@ -636,10 +627,7 @@ mod tests {
             |repo| {
                 repo.expect_soft_delete()
                     .times(1)
-                    .returning(move |_, id| Err(AppError::NotFound {
-                        resource: "widget".into(),
-                        identifier: id.to_string(),
-                    }));
+                    .returning(|_, _| Err(AppError::not_found("Widget")));
             },
             |_cache| {},
             |_audit| {},
@@ -1007,10 +995,7 @@ mod tests {
                 repo.expect_get_by_id()
                     .withf(move |tid, _| *tid == tenant_b) // request for tenant_b
                     .times(1)
-                    .returning(move |_, id| Err(AppError::NotFound {
-                        resource: "widget".into(),
-                        identifier: id.to_string(),
-                    }));
+                    .returning(|_, _| Err(AppError::not_found("Widget")));
             },
             |cache| {
                 cache.expect_get()

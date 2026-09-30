@@ -1,6 +1,6 @@
 ---
 skill: error-handling-python
-description: Python error handling archetype — AppError base class hierarchy, FastAPI exception handlers, error response envelope, structured logging, error code registry
+description: Python error handling archetype — AppError hierarchy with field-level details, FastAPI exception handlers that write the one error envelope (request_id, retryable, X-Request-Id, Retry-After), structured logging, error code registry
 version: "1.0"
 tags:
   - python
@@ -12,7 +12,7 @@ tags:
 
 # Error Handling Archetype — Python
 
-> **Canonical reference**: This is the Python counterpart to `backend/archetypes/error-handling.md` (Go) and `backend/archetypes/error-handling-typescript.md` (TypeScript). All three produce identical error response envelopes so frontend clients can use a single error parsing strategy.
+> **Canonical reference**: This is the Python counterpart to `backend/archetypes/error-handling-go.md` (Go) and `backend/archetypes/error-handling-typescript.md` (TypeScript). The wire shape all three produce is the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`); if this file and the envelope ever disagree, the envelope wins.
 
 Complete error handling system for Python backend services (FastAPI, Starlette). Every generated Python service MUST follow this pattern.
 
@@ -21,55 +21,74 @@ Complete error handling system for Python backend services (FastAPI, Starlette).
 ```python
 # app/errors/base.py
 
+from dataclasses import asdict, dataclass
 from typing import Any
+
+
+@dataclass(frozen=True, slots=True)
+class FieldError:
+    """
+    One entry of error.details[] — a field-level problem (VALIDATION_FAILED).
+    `code` is a stable lower_snake identifier; `message` comes from a fixed catalog,
+    never str(exc) or a raw validator message.
+    """
+
+    field: str
+    code: str
+    message: str
 
 
 class AppError(Exception):
     """
     Base application error type.
-    All domain errors MUST inherit from this class so exception handlers
-    can map them to HTTP responses.
-
-    Produces the same JSON envelope as the Go and TypeScript archetypes:
-    {"error": {"code": "...", "message": "...", "details": {...}}}
+    All domain errors MUST inherit from this class so the exception handlers
+    can map them to the error envelope:
+    {"error": {"code": "...", "message": "...", "details": [...], "request_id": "...", "retryable": false}}
     """
 
     def __init__(
         self,
         *,
-        code: str,
-        message: str,
-        http_status: int,
-        details: dict[str, Any] | None = None,
-        cause: Exception | None = None,
+        code: str,                                 # UPPER_SNAKE, stable: VALIDATION_FAILED, NOT_FOUND, ...
+        message: str,                              # user-safe; shown by the UI as-is
+        status: int,                               # HTTP status; not serialized
+        details: list[FieldError] | None = None,   # serialized as error.details
+        retryable: bool = False,                   # serialized as error.retryable
+        retry_after: int | None = None,            # seconds; sets the Retry-After header (429/503)
+        cause: BaseException | None = None,        # logged server-side, never serialized
     ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
-        self.http_status = http_status
-        self.details = details or {}
+        self.status = status
+        self.details: list[FieldError] = list(details or [])
+        self.retryable = retryable
+        self.retry_after = retry_after
         if cause is not None:
             self.__cause__ = cause
 
-    def with_details(self, key: str, value: Any) -> "AppError":
-        """Add structured context to the error. Returns self for chaining."""
-        self.details[key] = value
+    @property
+    def cause(self) -> BaseException | None:
+        return self.__cause__
+
+    def with_field(self, field: str, code: str, message: str) -> "AppError":
+        """Append a field-level problem (VALIDATION_FAILED). Returns self for chaining."""
+        self.details.append(FieldError(field=field, code=code, message=message))
         return self
 
-    def with_cause(self, cause: Exception) -> "AppError":
+    def with_cause(self, cause: BaseException) -> "AppError":
         """Wrap an underlying error for debugging while keeping the client message clean."""
         self.__cause__ = cause
         return self
 
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize to the standard error detail format."""
-        result: dict[str, Any] = {
-            "code": self.code,
-            "message": self.message,
-        }
+    def to_body(self, request_id: str) -> dict[str, Any]:
+        """Serialize to the error envelope. Nothing from the cause is ever included."""
+        error: dict[str, Any] = {"code": self.code, "message": self.message}
         if self.details:
-            result["details"] = self.details
-        return result
+            error["details"] = [asdict(d) for d in self.details]
+        error["request_id"] = request_id
+        error["retryable"] = self.retryable
+        return {"error": error}
 
     def __repr__(self) -> str:
         cause_str = f", cause={self.__cause__!r}" if self.__cause__ else ""
@@ -78,153 +97,142 @@ class AppError(Exception):
 
 ## Domain Error Subclasses
 
+The codes and statuses are the table in `api/response-envelope.md`. Messages are user-safe and fixed;
+nothing from a parser, driver or upstream error reaches the client.
+
 ```python
 # app/errors/domain.py
 
-from app.errors.base import AppError
+from app.errors.base import AppError, FieldError
 
 
-# --- 400 Bad Request: Malformed Request (JSON parse errors, wrong content type) ---
+# --- 400 MALFORMED_REQUEST: unparseable JSON, wrong content type, body too large ---
 
-class BadRequestError(AppError):
-    """Malformed request — unparseable JSON, wrong content type, etc."""
-
-    def __init__(self, reason: str, cause: Exception | None = None) -> None:
+class MalformedRequestError(AppError):
+    def __init__(self, cause: BaseException | None = None) -> None:
         super().__init__(
-            code="BAD_REQUEST",
-            message=reason,
-            http_status=400,
+            code="MALFORMED_REQUEST",
+            message="The request could not be read.",
+            status=400,
             cause=cause,
         )
 
 
-# --- 422 Unprocessable Entity: Business Validation Errors ---
-# Use 422 for well-formed requests that fail domain/business validation rules.
-# Use 400 (above) for malformed JSON, wrong content type, or request parsing errors.
+# --- 400 VALIDATION_FAILED: the input fails schema/validation; details[] lists the fields ---
+# One field:  ValidationFailedError("email", "invalid_format", "Enter a valid email address.")
+# Several:    ValidationFailedError(fields=[FieldError(...), FieldError(...)])
+# Named ValidationFailedError so it never shadows pydantic.ValidationError.
 
-class ValidationError(AppError):
-    """Business validation failure on a single field."""
-
-    def __init__(self, *, field: str, reason: str, cause: Exception | None = None) -> None:
+class ValidationFailedError(AppError):
+    def __init__(
+        self,
+        field: str = "",
+        code: str = "",
+        message: str = "",
+        *,
+        fields: list[FieldError] | None = None,
+        cause: BaseException | None = None,
+    ) -> None:
+        details = list(fields or [])
+        if field:
+            details.insert(0, FieldError(field=field, code=code, message=message))
         super().__init__(
-            code="VALIDATION_ERROR",
-            message=f"invalid value for field '{field}'",
-            http_status=422,
-            details={"field": field, "reason": reason},
+            code="VALIDATION_FAILED",
+            message="Some fields are invalid.",
+            status=400,
+            details=details,
             cause=cause,
         )
 
 
-class MultiValidationError(AppError):
-    """Multiple field validation failures."""
+# --- 401 UNAUTHENTICATED: missing, invalid or expired credentials ---
 
-    def __init__(self, field_errors: dict[str, str]) -> None:
-        super().__init__(
-            code="VALIDATION_ERROR",
-            message="one or more fields failed validation",
-            http_status=422,
-            details={"fields": field_errors},
-        )
+class UnauthenticatedError(AppError):
+    def __init__(self, cause: BaseException | None = None) -> None:
+        super().__init__(code="UNAUTHENTICATED", message="Sign in to continue.", status=401, cause=cause)
 
 
-# --- 401 Unauthorized: Authentication Errors ---
-
-class UnauthorizedError(AppError):
-    """Missing or invalid credentials (JWT, API key)."""
-
-    def __init__(self, reason: str = "authentication required") -> None:
-        super().__init__(
-            code="UNAUTHORIZED",
-            message=reason,
-            http_status=401,
-        )
-
-
-# --- 403 Forbidden: Authorization Errors ---
+# --- 403 FORBIDDEN: authenticated, not allowed (function-level) ---
 
 class ForbiddenError(AppError):
-    """Valid credentials but insufficient permissions."""
-
-    def __init__(self, *, action: str, resource: str) -> None:
-        super().__init__(
-            code="FORBIDDEN",
-            message=f"insufficient permissions to {action} {resource}",
-            http_status=403,
-            details={"action": action, "resource": resource},
-        )
+    def __init__(self) -> None:
+        super().__init__(code="FORBIDDEN", message="You don't have permission to do this.", status=403)
 
 
-# --- 404 Not Found ---
+# --- 404 NOT_FOUND: missing OR another tenant's/owner's object (never 403 for those) ---
 
 class NotFoundError(AppError):
-    """Resource does not exist or was soft-deleted."""
-
-    def __init__(self, *, resource: str, identifier: str = "") -> None:
-        msg = f"{resource} not found" if not identifier else f"{resource} '{identifier}' not found"
-        super().__init__(
-            code="NOT_FOUND",
-            message=msg,
-            http_status=404,
-            details={"resource": resource, "identifier": identifier},
-        )
+    def __init__(self, resource: str) -> None:
+        super().__init__(code="NOT_FOUND", message=f"{resource} not found.", status=404)
 
 
-# --- 409 Conflict: Duplicate / Version Mismatch ---
+# --- 409 CONFLICT: duplicate / version mismatch / state conflict ---
 
 class ConflictError(AppError):
-    """Duplicate entry, version mismatch, or state conflict."""
+    def __init__(
+        self,
+        message: str = "This conflicts with the current state. Reload and try again.",
+        *,
+        cause: BaseException | None = None,
+    ) -> None:
+        super().__init__(code="CONFLICT", message=message, status=409, cause=cause)
 
-    def __init__(self, *, resource: str, reason: str) -> None:
+
+# --- 409 IDEMPOTENCY_KEY_REUSED: Idempotency-Key replayed with a different body ---
+
+class IdempotencyKeyReusedError(AppError):
+    def __init__(self) -> None:
         super().__init__(
-            code="CONFLICT",
-            message=f"{resource} conflict: {reason}",
-            http_status=409,
-            details={"resource": resource, "reason": reason},
+            code="IDEMPOTENCY_KEY_REUSED",
+            message="This Idempotency-Key was already used with a different request.",
+            status=409,
         )
 
 
-# --- 429 Too Many Requests ---
+# --- 422 BUSINESS_RULE_VIOLATION: a valid request rejected by a domain rule ---
+
+class BusinessRuleError(AppError):
+    def __init__(self, message: str, *, cause: BaseException | None = None) -> None:
+        super().__init__(code="BUSINESS_RULE_VIOLATION", message=message, status=422, cause=cause)
+
+
+# --- 429 RATE_LIMITED ---
 
 class RateLimitError(AppError):
-    """Too many requests from tenant/user."""
-
     def __init__(self, retry_after_seconds: int) -> None:
         super().__init__(
             code="RATE_LIMITED",
-            message="too many requests — please retry later",
-            http_status=429,
-            details={"retry_after_seconds": retry_after_seconds},
+            message="Too many requests. Try again shortly.",
+            status=429,
+            retryable=True,
+            retry_after=retry_after_seconds,
         )
-        self.retry_after_seconds = retry_after_seconds
 
 
-# --- 500 Internal Server Error ---
+# --- 500 INTERNAL ---
 
 class InternalError(AppError):
     """Unexpected server error — never expose details to clients."""
 
-    def __init__(self, cause: Exception | None = None) -> None:
+    def __init__(self, cause: BaseException | None = None) -> None:
+        super().__init__(code="INTERNAL", message="Something went wrong.", status=500, cause=cause)
+
+
+# --- 503 UNAVAILABLE: a dependency (DB, upstream API) failed or timed out ---
+# The service name goes to the log (an exception note), not the client.
+
+class UnavailableError(AppError):
+    def __init__(self, service: str, cause: BaseException | None = None) -> None:
         super().__init__(
-            code="INTERNAL_ERROR",
-            message="an unexpected error occurred",
-            http_status=500,
+            code="UNAVAILABLE",
+            message="The service is temporarily unavailable.",
+            status=503,
+            retryable=True,
+            retry_after=5,
             cause=cause,
         )
-
-
-# --- 502 Bad Gateway: Upstream Failure ---
-
-class UpstreamError(AppError):
-    """External service (CA, email, webhook) failure."""
-
-    def __init__(self, service: str, cause: Exception | None = None) -> None:
-        super().__init__(
-            code="UPSTREAM_ERROR",
-            message=f"upstream service '{service}' is unavailable",
-            http_status=502,
-            details={"service": service},
-            cause=cause,
-        )
+        self.service = service
+        self.add_note(f"dependency: {service}")  # printed in the logged traceback only
 ```
 
 ## Barrel Export
@@ -232,57 +240,151 @@ class UpstreamError(AppError):
 ```python
 # app/errors/__init__.py
 
-from app.errors.base import AppError
+from app.errors.base import AppError, FieldError
 from app.errors.domain import (
-    BadRequestError,
+    BusinessRuleError,
     ConflictError,
     ForbiddenError,
+    IdempotencyKeyReusedError,
     InternalError,
-    MultiValidationError,
+    MalformedRequestError,
     NotFoundError,
     RateLimitError,
-    UnauthorizedError,
-    UpstreamError,
-    ValidationError,
+    UnauthenticatedError,
+    UnavailableError,
+    ValidationFailedError,
 )
 
 __all__ = [
     "AppError",
-    "BadRequestError",
+    "BusinessRuleError",
     "ConflictError",
+    "FieldError",
     "ForbiddenError",
+    "IdempotencyKeyReusedError",
     "InternalError",
-    "MultiValidationError",
+    "MalformedRequestError",
     "NotFoundError",
     "RateLimitError",
-    "UnauthorizedError",
-    "UpstreamError",
-    "ValidationError",
+    "UnauthenticatedError",
+    "UnavailableError",
+    "ValidationFailedError",
 ]
 ```
 
 ## FastAPI Exception Handlers
 
+FastAPI's built-in handlers answer `{"detail": ...}` — and 422 for request validation. Neither matches
+the envelope, so `register_exception_handlers` replaces them. `error_response` is the only function that
+writes an error body.
+
 ```python
 # app/errors/handlers.py
 
 import logging
-import traceback
+import uuid
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import JSONResponse
 
-from app.errors.base import AppError
-from app.errors.domain import RateLimitError
+from app.errors.base import AppError, FieldError
+from app.errors.domain import (
+    ConflictError,
+    ForbiddenError,
+    InternalError,
+    MalformedRequestError,
+    NotFoundError,
+    UnauthenticatedError,
+    UnavailableError,
+    ValidationFailedError,
+)
 
 logger = logging.getLogger(__name__)
+
+# Pydantic error types ("missing", "string_too_long", ...) are stable lower_snake identifiers, so they
+# become details[].code. Messages come from this catalog. Pydantic's own `msg` is never sent: a custom
+# validator's ValueError text lands there and can carry internals.
+_FIELD_MESSAGES: dict[str, str] = {
+    "missing": "This field is required.",
+    "string_too_short": "This value is too short.",
+    "string_too_long": "This value is too long.",
+    "string_pattern_mismatch": "This value has an invalid format.",
+    "greater_than_equal": "This value is too small.",
+    "less_than_equal": "This value is too large.",
+    "int_parsing": "Must be a whole number.",
+    "uuid_parsing": "Must be a valid ID.",
+    "enum": "This value is not one of the allowed options.",
+}
+_DEFAULT_FIELD_MESSAGE = "This value is invalid."
+_LOCATIONS = {"body", "query", "path", "header", "cookie"}
+
+
+def request_id_of(request: Request) -> str:
+    """The request_id set by RequestIDMiddleware. Read it from request.state, which every handler
+    (including the catch-all) sees; the contextvar is already reset when a 500 is being written."""
+    return getattr(request.state, "request_id", None) or str(uuid.uuid4())
+
+
+def error_response(request: Request, exc: AppError) -> JSONResponse:
+    """The only function that writes an error response (mirrors writeErrorBody in error-handling-go.md)."""
+    request_id = request_id_of(request)
+    log_extra = {
+        "code": exc.code,
+        "request_id": request_id,
+        "method": request.method,
+        "path": request.url.path,
+    }
+    if exc.status >= 500:
+        # Cause, traceback and exception notes go to the log, never to the client
+        logger.error("request failed", extra=log_extra, exc_info=exc)
+    elif exc.__cause__ is not None:
+        # A 4xx built from a driver error (e.g. unique violation → 409): the constraint name lives only here
+        logger.info("request rejected", extra=log_extra, exc_info=exc)
+
+    headers = {"X-Request-Id": request_id}  # set here too: a 500 from the catch-all bypasses RequestIDMiddleware
+    if exc.retry_after:
+        headers["Retry-After"] = str(exc.retry_after)
+    if exc.status == 401:
+        headers["WWW-Authenticate"] = "Bearer"
+
+    return JSONResponse(status_code=exc.status, content=exc.to_body(request_id), headers=headers)
+
+
+def _field_path(loc: tuple) -> str:
+    """("body", "items", 0, "name") -> "items.0.name"; ("query", "limit") -> "limit"."""
+    parts = [str(p) for p in loc]
+    if parts and parts[0] in _LOCATIONS:
+        parts = parts[1:]
+    return ".".join(parts) or "body"
+
+
+def _is_malformed(err: dict) -> bool:
+    # FastAPI reports unparseable JSON as "json_invalid" and an empty body as a missing ("body",)
+    return err["type"] == "json_invalid" or (err["type"] == "missing" and tuple(err["loc"]) == ("body",))
+
+
+def _from_http_status(status: int, exc: Exception) -> AppError:
+    """Re-shape an HTTPException by its status only. exc.detail is never sent (it can carry internals)."""
+    if status == 401:
+        return UnauthenticatedError()
+    if status == 403:
+        return ForbiddenError()
+    if status == 404:
+        return NotFoundError("Resource")
+    if status == 409:
+        return ConflictError()
+    if status == 503:
+        return UnavailableError("http", cause=exc)
+    if status >= 500:
+        return InternalError(cause=exc)
+    return MalformedRequestError()  # 400, 405, 413, 415 and any other 4xx
 
 
 def register_exception_handlers(app: FastAPI) -> None:
     """
-    Mount all custom exception handlers on the FastAPI app.
-    Call this once during application startup.
+    The ONE registration point for error handling. Call this once during application startup.
 
     Usage:
         app = FastAPI()
@@ -291,128 +393,86 @@ def register_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-        req_id = getattr(request.state, "request_id", "")
-
-        # Log internal errors with full detail; client gets sanitized message
-        if exc.http_status >= 500:
-            logger.error(
-                "internal error",
-                extra={
-                    "code": exc.code,
-                    "message": exc.message,
-                    "cause": str(exc.__cause__) if exc.__cause__ else None,
-                    "traceback": traceback.format_exc() if exc.__cause__ else None,
-                    "request_id": req_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                },
-            )
-
-        headers: dict[str, str] = {}
-
-        # Add Retry-After header for rate limit errors
-        if isinstance(exc, RateLimitError):
-            headers["Retry-After"] = str(exc.retry_after_seconds)
-
-        # Add WWW-Authenticate header for 401 errors
-        if exc.http_status == 401:
-            headers["WWW-Authenticate"] = "Bearer"
-
-        return JSONResponse(
-            status_code=exc.http_status,
-            content={"error": exc.to_dict()},
-            headers=headers,
-        )
+        return error_response(request, exc)
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         """
-        Pydantic / FastAPI validation errors → 422 with field details.
-        Maps FastAPI's native validation to our standard error envelope.
+        Pydantic / FastAPI request validation (body, query, path). FastAPI's default is
+        422 {"detail": [...]}; the envelope says 400 VALIDATION_FAILED with details[],
+        or 400 MALFORMED_REQUEST when the body isn't readable JSON.
         """
-        field_errors: dict[str, str] = {}
-        for error in exc.errors():
-            # Build field path: "body → name" or "query → page_size"
-            loc = " → ".join(str(part) for part in error["loc"] if part != "body")
-            field_errors[loc] = error["msg"]
+        errors = exc.errors()
+        if any(_is_malformed(e) for e in errors):
+            return error_response(request, MalformedRequestError())
 
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "one or more fields failed validation",
-                    "details": {"fields": field_errors},
-                }
-            },
-        )
+        fields = [
+            FieldError(
+                field=_field_path(e["loc"]),
+                code=e["type"],
+                message=_FIELD_MESSAGES.get(e["type"], _DEFAULT_FIELD_MESSAGE),
+            )
+            for e in errors
+        ]
+        return error_response(request, ValidationFailedError(fields=fields))
+
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+        """
+        Unknown routes (404), wrong methods (405) and any HTTPException raised by FastAPI or a
+        dependency. FastAPI's default body is {"detail": ...}. App code raises AppError subclasses,
+        not HTTPException.
+        """
+        return error_response(request, _from_http_status(exc.status_code, exc))
 
     @app.exception_handler(Exception)
     async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
         """
-        Catch-all handler. Acts as the Python equivalent of Go's recovery middleware.
-        Never leaks internal error details to clients.
+        Catch-all handler. Acts as the Python equivalent of Go's recovery middleware:
+        500 INTERNAL with a generic message; the exception and traceback go to the log under request_id.
+        Starlette runs this in ServerErrorMiddleware and re-raises after the response is sent (so the
+        server logs it too). In tests, use ASGITransport(app=app, raise_app_exceptions=False).
         """
-        req_id = getattr(request.state, "request_id", "")
-        logger.error(
-            "unhandled error",
-            extra={
-                "error": str(exc),
-                "error_type": type(exc).__name__,
-                "traceback": traceback.format_exc(),
-                "request_id": req_id,
-                "method": request.method,
-                "path": request.url.path,
-            },
-        )
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "an unexpected error occurred",
-                }
-            },
-        )
+        return error_response(request, InternalError(cause=exc))
 ```
 
 ## Error Response Format
 
-All error responses use the same envelope format as the Go and TypeScript archetypes:
+All error responses use the error envelope from `api/response-envelope.md`. The HTTP status carries the
+class, there is no `data` key, and every error response sets `X-Request-Id` = `request_id`:
 
 ```json
-// 400 Bad Request (malformed input):
+// 400 MALFORMED_REQUEST (unparseable JSON, wrong content type, body too large):
 {
   "error": {
-    "code": "BAD_REQUEST",
-    "message": "invalid JSON in request body"
+    "code": "MALFORMED_REQUEST",
+    "message": "The request could not be read.",
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
-// 422 Validation Error (business rule violation):
+// 400 VALIDATION_FAILED (pydantic request validation lands here too, not on 422):
 {
   "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "invalid value for field 'email'",
-    "details": { "field": "email", "reason": "invalid format" }
+    "code": "VALIDATION_FAILED",
+    "message": "Some fields are invalid.",
+    "details": [
+      { "field": "name", "code": "missing", "message": "This field is required." },
+      { "field": "email", "code": "invalid_format", "message": "Enter a valid email address." }
+    ],
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
-// 422 Multi-field Validation Error:
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "one or more fields failed validation",
-    "details": { "fields": { "name": "name is required", "email": "invalid format" } }
-  }
-}
-
-// 404 Not Found:
+// 404 Not Found (also for another tenant's or owner's widget — don't confirm it exists):
 {
   "error": {
     "code": "NOT_FOUND",
-    "message": "widget 'abc-123' not found",
-    "details": { "resource": "widget", "identifier": "abc-123" }
+    "message": "Widget not found.",
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
@@ -420,8 +480,19 @@ All error responses use the same envelope format as the Go and TypeScript archet
 {
   "error": {
     "code": "CONFLICT",
-    "message": "widget conflict: version mismatch — reload and retry",
-    "details": { "resource": "widget", "reason": "version mismatch" }
+    "message": "This widget was changed by someone else. Reload and try again.",
+    "request_id": "b7e1c2…",
+    "retryable": false
+  }
+}
+
+// 422 BUSINESS_RULE_VIOLATION (valid shape, rejected by a domain rule):
+{
+  "error": {
+    "code": "BUSINESS_RULE_VIOLATION",
+    "message": "Archived widgets can't be edited.",
+    "request_id": "b7e1c2…",
+    "retryable": false
   }
 }
 
@@ -429,16 +500,29 @@ All error responses use the same envelope format as the Go and TypeScript archet
 {
   "error": {
     "code": "RATE_LIMITED",
-    "message": "too many requests — please retry later",
-    "details": { "retry_after_seconds": 30 }
+    "message": "Too many requests. Try again shortly.",
+    "request_id": "b7e1c2…",
+    "retryable": true
   }
 }
 
-// 500 Internal Error:
+// 500 INTERNAL (the cause is in the log line with the same request_id):
 {
   "error": {
-    "code": "INTERNAL_ERROR",
-    "message": "an unexpected error occurred"
+    "code": "INTERNAL",
+    "message": "Something went wrong.",
+    "request_id": "b7e1c2…",
+    "retryable": false
+  }
+}
+
+// 503 UNAVAILABLE (a dependency failed or timed out; includes Retry-After header):
+{
+  "error": {
+    "code": "UNAVAILABLE",
+    "message": "The service is temporarily unavailable.",
+    "request_id": "b7e1c2…",
+    "retryable": true
   }
 }
 ```
@@ -452,7 +536,7 @@ All error responses use the same envelope format as the Go and TypeScript archet
 #
 #    # In repository — this is where we know IntegrityError means conflict:
 #    except IntegrityError as exc:
-#        raise ConflictError(resource="widget", reason="duplicate name") from exc
+#        raise ConflictError("A widget with this name already exists.") from exc
 #    # NOT in the handler — the handler shouldn't know about SQLAlchemy.
 #
 # 2. Use `raise ... from exc` to preserve the exception chain for debugging.
@@ -460,8 +544,8 @@ All error responses use the same envelope format as the Go and TypeScript archet
 #    try:
 #        await repo.create(widget)
 #    except IntegrityError as exc:
-#        raise ConflictError(resource="widget", reason="duplicate") from exc
-#    # The __cause__ is preserved for logging in the exception handler.
+#        raise ConflictError("A widget with this name already exists.") from exc
+#    # The __cause__ is preserved for logging in the exception handler — it is never sent.
 #
 # 3. Never double-wrap domain errors — if the error is already an AppError, re-raise it.
 #
@@ -478,7 +562,7 @@ All error responses use the same envelope format as the Go and TypeScript archet
 # 5. Preserve the exception chain for debugging.
 #
 #    # The chain should read like a traceback:
-#    # ConflictError("widget conflict: duplicate name")
+#    # ConflictError("A widget with this name already exists.")
 #    #   caused by IntegrityError("unique_violation on idx_widgets_name")
 #    #     caused by asyncpg.UniqueViolationError(...)
 ```
@@ -489,10 +573,10 @@ All error responses use the same envelope format as the Go and TypeScript archet
 # app/services/widget.py
 
 from app.errors import (
+    BusinessRuleError,
     ConflictError,
     NotFoundError,
-    UnauthorizedError,
-    ValidationError,
+    ValidationFailedError,
 )
 
 
@@ -501,29 +585,33 @@ class WidgetService:
         self._repo = repo
 
     async def create(self, *, tenant_id: UUID, name: str) -> Widget:
-        # Validate — raises 422 on failure
+        # Validate — raises 400 VALIDATION_FAILED on failure
         if not name.strip():
-            raise ValidationError(field="name", reason="name is required")
+            raise ValidationFailedError("name", "required", "Name is required.")
 
         # Check for duplicates — raises 409 on conflict
         existing = await self._repo.find_by_name(tenant_id, name)
         if existing is not None:
-            raise ConflictError(resource="widget", reason=f"name '{name}' already exists")
+            raise ConflictError("A widget with this name already exists.")
 
         return await self._repo.create(widget)
 
     async def get(self, *, tenant_id: UUID, widget_id: UUID) -> Widget:
         widget = await self._repo.get_by_id(tenant_id, widget_id)
         if widget is None:
-            raise NotFoundError(resource="widget", identifier=str(widget_id))
+            raise NotFoundError("Widget")  # also when it belongs to another tenant
         return widget
 
     async def update(self, *, tenant_id: UUID, widget_id: UUID, version: int, **fields) -> Widget:
         existing = await self.get(tenant_id=tenant_id, widget_id=widget_id)
 
+        # Domain rule — raises 422 BUSINESS_RULE_VIOLATION
+        if existing.status == WidgetStatus.ARCHIVED:
+            raise BusinessRuleError("Archived widgets can't be edited.")
+
         # Optimistic lock check — raises 409 on version mismatch
         if version != existing.version:
-            raise ConflictError(resource="widget", reason="version mismatch — reload and retry")
+            raise ConflictError("This widget was changed by someone else. Reload and try again.")
 
         return await self._repo.update(existing)
 ```
@@ -535,14 +623,14 @@ class WidgetService:
 
 try:
     await widget_service.create(tenant_id=tid, name=name)
-except ValidationError as exc:
-    # Access exc.details["field"], exc.details["reason"]
+except ValidationFailedError as exc:
+    # exc.details is a list[FieldError]: exc.details[0].field, .code, .message
     pass
 except NotFoundError as exc:
-    # Access exc.details["resource"], exc.details["identifier"]
+    # exc.code == "NOT_FOUND", exc.status == 404
     pass
 except AppError as exc:
-    # Any domain error — access exc.code, exc.http_status, exc.details
+    # Any domain error — access exc.code, exc.status, exc.details, exc.retryable
     pass
 except Exception:
     # Unknown error — rethrow or wrap
@@ -553,28 +641,32 @@ except Exception:
 
 | Error Class | HTTP Status | Code | When to Use |
 |---|---|---|---|
-| `BadRequestError` | 400 | `BAD_REQUEST` | Malformed JSON, wrong content type, request parsing failure |
-| `ValidationError` | 422 | `VALIDATION_ERROR` | Well-formed request that fails business/domain validation |
-| `MultiValidationError` | 422 | `VALIDATION_ERROR` | Multiple field validation failures |
-| `UnauthorizedError` | 401 | `UNAUTHORIZED` | Missing or invalid credentials (JWT, API key) |
-| `ForbiddenError` | 403 | `FORBIDDEN` | Valid credentials but insufficient permissions |
-| `NotFoundError` | 404 | `NOT_FOUND` | Resource does not exist or was soft-deleted |
+| `MalformedRequestError` | 400 | `MALFORMED_REQUEST` | Malformed JSON, wrong content type, body too large |
+| `ValidationFailedError` | 400 | `VALIDATION_FAILED` | Input fails schema/validation (including pydantic request validation) — `details[]` lists `{field, code, message}` |
+| `UnauthenticatedError` | 401 | `UNAUTHENTICATED` | Missing, invalid or expired credentials |
+| `ForbiddenError` | 403 | `FORBIDDEN` | Authenticated but not allowed (function-level) |
+| `NotFoundError` | 404 | `NOT_FOUND` | Doesn't exist, soft-deleted, **or belongs to another tenant/owner** |
 | `ConflictError` | 409 | `CONFLICT` | Duplicate entry, version mismatch, state conflict |
-| `RateLimitError` | 429 | `RATE_LIMITED` | Too many requests from tenant/user |
-| `InternalError` | 500 | `INTERNAL_ERROR` | Unexpected server error — never expose details |
-| `UpstreamError` | 502 | `UPSTREAM_ERROR` | External service failure |
+| `IdempotencyKeyReusedError` | 409 | `IDEMPOTENCY_KEY_REUSED` | `Idempotency-Key` replayed with a different body |
+| `BusinessRuleError` | 422 | `BUSINESS_RULE_VIOLATION` | Valid shape, rejected by a domain rule |
+| `RateLimitError` | 429 | `RATE_LIMITED` | Too many requests (`Retry-After`, `retryable: true`) |
+| `InternalError` | 500 | `INTERNAL` | Unexpected server error — never expose details |
+| `UnavailableError` | 503 | `UNAVAILABLE` | A dependency failed or timed out (`Retry-After`, `retryable: true`) |
 
 ## Critical Rules
 
 - Every error raised from service/repo layers MUST be an `AppError` subclass
-- Internal error messages (500, 502) MUST NOT leak to clients — always return generic message
-- Validation errors (422) SHOULD include the field name and reason in `details`
-- Bad request errors (400) are for malformed JSON/request parsing — NOT business validation
+- The wire shape is `api/response-envelope.md`: `{"error": {code, message, details?, request_id, retryable}}` — no `data` key, no `detail` field, and `details` is a list of `{field, code, message}`, never a dict
+- Internal error messages (500, 503) MUST NOT leak to clients — always return the generic message
+- No client-visible field ever contains `str(exc)`, `repr(exc)`, `exc.args`, a raw pydantic `msg`, SQL, a constraint name, a driver/upstream message, a path or a traceback — the cause goes to the log under `request_id`
+- Validation errors (400 `VALIDATION_FAILED`) carry `details[]` from a fixed catalog; pydantic/FastAPI request validation is 400 `VALIDATION_FAILED`, not FastAPI's default 422
+- Malformed bodies are 400 `MALFORMED_REQUEST`; business-rule rejections are 422 `BUSINESS_RULE_VIOLATION`
+- `register_exception_handlers` MUST replace FastAPI's default `RequestValidationError` and `HTTPException` handlers — their `{"detail": ...}` bodies never reach a client
+- Every error response sets `X-Request-Id` (= `error.request_id`) and carries `retryable`
 - `isinstance` checks MUST work — never raise bare `Exception` from domain code
 - Use `raise ... from exc` to preserve the exception chain for debugging
-- Log errors ONCE at the top of the call stack (exception handler) — never log at every layer
+- Log errors ONCE at the top of the call stack (`error_response`) — never log at every layer
 - Create domain errors at the BOUNDARY where you know the error type (repo maps SQLAlchemy errors, service maps business rule violations)
 - Catch-all exception handler MUST exist — unhandled exceptions MUST NOT crash the server or leak details
-- Rate limit responses MUST include `Retry-After` header
+- Rate limit (429) and unavailable (503) responses MUST include the `Retry-After` header
 - 401 responses MUST include `WWW-Authenticate: Bearer` header
-- Error response format MUST match the Go archetype: `{"error": {"code": "...", "message": "...", "details": {...}}}`

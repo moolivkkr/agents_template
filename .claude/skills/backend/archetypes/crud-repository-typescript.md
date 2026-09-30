@@ -1,6 +1,6 @@
 ---
 skill: crud-repository-typescript
-description: TypeScript repository archetype — Prisma and Drizzle patterns, cursor + offset pagination, soft delete, optimistic locking, multi-tenant filtering, error mapping
+description: TypeScript repository archetype — Prisma and Drizzle patterns, cursor pagination, soft delete, optimistic locking, multi-tenant filtering, error mapping
 version: "1.0"
 tags:
   - typescript
@@ -74,12 +74,14 @@ model Component {
 import { PrismaClient, Prisma } from "@prisma/client";
 import type { IWidgetRepository } from "./widget.repository.interface";
 import type { Widget } from "../domain/entity";
-import type { ListFilters, ListResult, OffsetListFilters, OffsetListResult } from "../types/pagination";
+import type { ListFilters, ListResult } from "../types/pagination";
+import { AppError } from "../errors/app-error";
 import {
-  NotFoundError,
-  ConflictError,
-  InternalError,
-  ValidationError,
+  notFound,
+  conflict,
+  businessRule,
+  internal,
+  unavailable,
 } from "../errors/domain-errors";
 
 /** Allowed sort columns — prevents injection via dynamic orderBy. */
@@ -165,7 +167,7 @@ export class PrismaWidgetRepository implements IWidgetRepository {
       });
 
       if (result.count === 0) {
-        throw new ConflictError("widget", "version mismatch or not found — reload and retry");
+        throw conflict("This widget was changed by someone else. Reload and try again.");
       }
 
       // Fetch the updated record to return full entity
@@ -174,7 +176,7 @@ export class PrismaWidgetRepository implements IWidgetRepository {
       });
       return this.toDomain(updated!);
     } catch (err) {
-      if (err instanceof ConflictError) throw err;
+      if (err instanceof AppError) throw err;
       throw this.mapError(err, "update");
     }
   }
@@ -195,7 +197,7 @@ export class PrismaWidgetRepository implements IWidgetRepository {
     });
 
     if (result.count === 0) {
-      throw new NotFoundError("widget", id);
+      throw notFound("Widget"); // also when it belongs to another tenant
     }
   }
 
@@ -257,63 +259,29 @@ export class PrismaWidgetRepository implements IWidgetRepository {
     };
   }
 
-  // --- List with Offset Pagination (Admin/Reporting) ---
-
-  async listOffset(tenantId: string, filters: OffsetListFilters): Promise<OffsetListResult<Widget>> {
-    const sortField = this.safeSortColumn(filters.sortBy);
-    const sortDir = filters.sortDir === "asc" ? "asc" : "desc";
-    const offset = (filters.page - 1) * filters.perPage;
-
-    const where: Prisma.WidgetWhereInput = {
-      tenantId,
-      deletedAt: null,
-      ...this.buildFieldFilters(filters.fields),
-    };
-
-    const [items, total] = await this.prisma.$transaction([
-      this.prisma.widget.findMany({
-        where,
-        orderBy: [{ [sortField]: sortDir }, { id: sortDir }],
-        skip: offset,
-        take: filters.perPage,
-      }),
-      this.prisma.widget.count({ where }),
-    ]);
-
-    return {
-      items: items.map((item) => this.toDomain(item)),
-      total,
-    };
-  }
-
   // --- Private Helpers ---
 
-  /** Maps Prisma errors to domain error types. */
-  private mapError(err: unknown, operation: string): Error {
+  /**
+   * Maps Prisma errors to AppErrors with generic client messages. The Prisma error — with the
+   * constraint/field names in err.meta — stays in `cause` for the server log only.
+   */
+  private mapError(err: unknown, operation: string): AppError {
     if (err instanceof Prisma.PrismaClientKnownRequestError) {
       switch (err.code) {
-        case "P2002": // Unique constraint violation
-          return new ConflictError(
-            "widget",
-            `duplicate value on ${(err.meta?.target as string[])?.join(", ") ?? "unknown field"}`,
-          );
-        case "P2003": // Foreign key constraint violation
-          return new ValidationError(
-            (err.meta?.field_name as string) ?? "unknown",
-            "referenced resource does not exist",
-          );
+        case "P2002": // Unique constraint violation → 409, constraint name only in the log
+          return conflict("This widget already exists.").withCause(err);
+        case "P2003": // Foreign key constraint violation → 422
+          return businessRule("A referenced item doesn't exist.").withCause(err);
         case "P2025": // Record not found
-          return new NotFoundError("widget", "");
-        default:
-          return new InternalError(err instanceof Error ? err : undefined);
+          return notFound("Widget");
+        case "P2024": // Timed out fetching a connection from the pool → 503, retryable
+          return unavailable("postgres", err);
       }
     }
 
-    if (err instanceof Prisma.PrismaClientValidationError) {
-      return new ValidationError("query", "invalid query parameters");
-    }
-
-    return new InternalError(err instanceof Error ? err : undefined);
+    // Anything else — including PrismaClientValidationError, which is a bug in the query we built,
+    // not bad client input — is 500 INTERNAL with a generic message.
+    return internal(err);
   }
 
   /** Validates and maps sort column to Prisma field. */
@@ -533,12 +501,14 @@ import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { widgets } from "../db/schema";
 import type { IWidgetRepository } from "./widget.repository.interface";
 import type { Widget } from "../domain/entity";
-import type { ListFilters, ListResult, OffsetListFilters, OffsetListResult } from "../types/pagination";
+import type { ListFilters, ListResult } from "../types/pagination";
+import { AppError } from "../errors/app-error";
 import {
-  NotFoundError,
-  ConflictError,
-  InternalError,
-  ValidationError,
+  notFound,
+  conflict,
+  businessRule,
+  internal,
+  unavailable,
 } from "../errors/domain-errors";
 
 /** Allowed sort columns — maps external names to Drizzle column references. */
@@ -638,12 +608,12 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
         .returning();
 
       if (!result) {
-        throw new ConflictError("widget", "version mismatch or not found — reload and retry");
+        throw conflict("This widget was changed by someone else. Reload and try again.");
       }
 
       return this.toDomain(result);
     } catch (err) {
-      if (err instanceof ConflictError) throw err;
+      if (err instanceof AppError) throw err;
       throw this.mapError(err, "update");
     }
   }
@@ -667,7 +637,7 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
       .returning({ id: widgets.id });
 
     if (result.length === 0) {
-      throw new NotFoundError("widget", id);
+      throw notFound("Widget"); // also when it belongs to another tenant
     }
   }
 
@@ -736,39 +706,6 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
     };
   }
 
-  // --- List with Offset Pagination (Admin/Reporting) ---
-
-  async listOffset(tenantId: string, filters: OffsetListFilters): Promise<OffsetListResult<Widget>> {
-    const sortCol = this.safeSortColumn(filters.sortBy);
-    const sortFn = filters.sortDir === "asc" ? asc : desc;
-    const offset = (filters.page - 1) * filters.perPage;
-
-    const conditions: SQL[] = [
-      eq(widgets.tenantId, tenantId),
-      isNull(widgets.deletedAt),
-    ];
-    this.applyFieldFilters(conditions, filters.fields);
-
-    const [items, [{ count }]] = await Promise.all([
-      this.db
-        .select()
-        .from(widgets)
-        .where(and(...conditions))
-        .orderBy(sortFn(sortCol), sortFn(widgets.id))
-        .limit(filters.perPage)
-        .offset(offset),
-      this.db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(widgets)
-        .where(and(...conditions)),
-    ]);
-
-    return {
-      items: items.map((item) => this.toDomain(item)),
-      total: count,
-    };
-  }
-
   // --- Multi-Tenant Filtering Helper ---
 
   /**
@@ -816,28 +753,23 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
     return conditions;
   }
 
-  /** Maps database errors to domain error types. */
-  private mapError(err: unknown, operation: string): Error {
-    if (err instanceof Error) {
-      const msg = err.message;
-
-      // Unique constraint violation
-      if (msg.includes("unique") || msg.includes("duplicate key") || msg.includes("23505")) {
-        return new ConflictError("widget", "duplicate value violates unique constraint");
-      }
-
-      // Foreign key violation
-      if (msg.includes("foreign key") || msg.includes("23503")) {
-        return new ValidationError("reference", "referenced resource does not exist");
-      }
-
-      // Check constraint violation
-      if (msg.includes("check") || msg.includes("23514")) {
-        return new ValidationError("constraint", "value violates check constraint");
-      }
+  /**
+   * Maps Postgres errors to AppErrors by SQLSTATE — never by matching message text. Client messages
+   * are generic; the driver error (with the constraint name) stays in `cause` for the log.
+   */
+  private mapError(err: unknown, operation: string): AppError {
+    switch (sqlStateOf(err)) {
+      case "23505": // unique_violation → 409
+        return conflict("This widget already exists.").withCause(err);
+      case "23503": // foreign_key_violation → 422
+        return businessRule("A referenced item doesn't exist.").withCause(err);
+      case "23514": // check_violation → 422
+        return businessRule("This change isn't allowed.").withCause(err);
+      case "57014": // query_canceled (statement_timeout) → 503, retryable
+        return unavailable("postgres", err);
+      default:
+        return internal(err);
     }
-
-    return new InternalError(err instanceof Error ? err : undefined);
   }
 
   /** Maps database row to domain entity. */
@@ -856,6 +788,16 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
       version: record.version,
     };
   }
+}
+
+/**
+ * The SQLSTATE of a Postgres error. postgres.js and node-postgres both expose it as `code`; newer
+ * drizzle-orm versions may wrap the driver error, so also look one level down in `cause`.
+ */
+function sqlStateOf(err: unknown): string | undefined {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  const code = e?.code ?? e?.cause?.code;
+  return typeof code === "string" ? code : undefined;
 }
 ```
 
@@ -986,10 +928,12 @@ export function createDatabase(connectionString: string) {
 - Filter field names MUST be allow-listed — never pass arbitrary query params to the DB
 - Cursor values MUST be opaque (base64url-encoded JSON) — never expose raw DB values
 - List queries MUST request `LIMIT + 1` to detect `hasMore` without extra count query
-- Prisma errors MUST be mapped to domain errors (`NotFoundError`, `ConflictError`, etc.)
-- Drizzle errors MUST be mapped to domain errors at the repository boundary
+- Prisma errors MUST be mapped to `AppError`s (`notFound`, `conflict`, `businessRule`, `unavailable`, `internal`) — unique violation → 409 `CONFLICT`, FK/check violation → 422 `BUSINESS_RULE_VIOLATION`, timeout → 503 `UNAVAILABLE`
+- Drizzle errors MUST be mapped the same way at the repository boundary, by SQLSTATE (never by matching message text)
+- Client-visible messages MUST be generic — constraint names, SQL and driver messages stay in `cause` for the log
+- There is no offset/page-number list method — list endpoints are cursor-only (`crud-handler-typescript.md` §Pagination)
 - Cache MUST be invalidated on every write — handled by the service layer, not the repository
-- The repository returns `null` for not-found reads — the service converts to `NotFoundError`
+- The repository returns `null` for not-found reads — the service converts to `notFound(...)` (404 `NOT_FOUND`)
 - Connection pools MUST have explicit limits — never use unbounded connection counts
 - All SQL-like operations MUST use parameterized queries — Prisma and Drizzle handle this natively
 - `toDomain()` mapping MUST exist — never return ORM-specific types to the service layer

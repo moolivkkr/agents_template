@@ -15,7 +15,7 @@ tags:
 
 # CRUD Handler Test Archetype — Python (FastAPI)
 
-> **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-handler-test.md` (Go/chi). Both test the same response envelope, error codes, and pagination behavior.
+> **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-handler-test-go.md` (Go/chi). Both test the same response envelope (`~/.claude/skills/api/response-envelope.md`), error codes, and pagination behavior.
 
 Complete FastAPI handler test template using pytest + httpx. Every generated handler test file MUST follow this pattern.
 
@@ -116,8 +116,12 @@ async def app_with_overrides(mock_service: AsyncMock):
 
 @pytest_asyncio.fixture
 async def client(app_with_overrides) -> AsyncIterator[AsyncClient]:
-    """httpx AsyncClient wired to the test app — no real HTTP server needed."""
-    transport = ASGITransport(app=app_with_overrides)
+    """httpx AsyncClient wired to the test app — no real HTTP server needed.
+
+    raise_app_exceptions=False: Starlette re-raises an unhandled exception after the catch-all
+    handler has sent its 500 envelope; without this flag httpx raises it and the 500 can't be asserted.
+    """
+    transport = ASGITransport(app=app_with_overrides, raise_app_exceptions=False)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
 ```
@@ -171,37 +175,49 @@ def make_widget(
 from __future__ import annotations
 
 import uuid
+from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 
 from app.domain.base import ListResult
 from app.domain.widget import Widget
-from app.errors import ConflictError, NotFoundError, ValidationError
+from app.errors import (
+    BusinessRuleError,
+    ConflictError,
+    NotFoundError,
+    UnauthenticatedError,
+    UnavailableError,
+    ValidationFailedError,
+)
 from tests.conftest import DEFAULT_TENANT_ID, DEFAULT_USER_ID
 from tests.factories import make_widget
 
 
 # ---------------------------------------------------------------------------
-# Helper assertions
+# Helper assertions — the shapes are ~/.claude/skills/api/response-envelope.md
 # ---------------------------------------------------------------------------
 
-def assert_envelope(body: dict, status: int = 200) -> dict:
-    """Assert the standard success envelope shape and return data."""
-    assert "data" in body, f"expected 'data' key in response: {body}"
-    assert "meta" in body, f"expected 'meta' key in response: {body}"
-    assert "request_id" in body["meta"]
-    assert "timestamp" in body["meta"]
+def assert_envelope(body: dict) -> Any:
+    """Assert the success envelope: exactly data + meta, meta.request_id, no error key. Returns data."""
+    assert set(body) == {"data", "meta"}, f"expected exactly 'data' and 'meta': {body}"
+    assert body["meta"]["request_id"]
     return body["data"]
 
 
-def assert_error_envelope(body: dict, expected_code: str) -> dict:
-    """Assert the standard error envelope shape and return error detail."""
-    assert "error" in body, f"expected 'error' key in response: {body}"
+def assert_error_envelope(resp: Response, expected_status: int, expected_code: str) -> dict:
+    """Assert the status/code pair and the error envelope. Returns the error object."""
+    assert resp.status_code == expected_status, resp.text
+    body = resp.json()
+    assert set(body) == {"error"}, f"an error body has only the 'error' key (no 'data'): {body}"
     err = body["error"]
     assert err["code"] == expected_code, f"expected code '{expected_code}', got '{err['code']}'"
-    assert "message" in err
+    assert err["message"]
+    assert err["request_id"]
+    assert err["request_id"] == resp.headers["x-request-id"]
+    assert isinstance(err["retryable"], bool)
+    assert "detail" not in err, "no technical detail field"
     return err
 
 
@@ -242,86 +258,84 @@ class TestCreateWidget:
             json={"name": "", "description": "desc"},
         )
 
-        # Pydantic catches min_length=1 -> 422
-        assert resp.status_code == 422
-        err = assert_error_envelope(resp.json(), "VALIDATION_ERROR")
-        assert "fields" in err.get("details", {})
+        # Pydantic catches min_length=1 -> 400 VALIDATION_FAILED (the handlers replace FastAPI's 422)
+        err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
+        assert err["details"] == [
+            {"field": "name", "code": "string_too_short", "message": "This value is too short."}
+        ]
         mock_service.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_validation_error_missing_name(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        """Missing required field -> 422."""
+        """Missing required field -> 400 VALIDATION_FAILED."""
         resp = await client.post(
             "/api/v1/widgets/",
             json={"description": "desc"},
         )
 
-        assert resp.status_code == 422
-        assert_error_envelope(resp.json(), "VALIDATION_ERROR")
+        err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
+        assert err["details"][0]["field"] == "name"
+        assert err["details"][0]["code"] == "missing"
         mock_service.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_malformed_json(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        """Invalid JSON body -> 422 from FastAPI's request parser."""
+        """Invalid JSON body -> 400 MALFORMED_REQUEST (not a validation error)."""
         resp = await client.post(
             "/api/v1/widgets/",
             content=b"{invalid json",
             headers={"content-type": "application/json"},
         )
 
-        assert resp.status_code == 422
+        assert_error_envelope(resp, 400, "MALFORMED_REQUEST")
         mock_service.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_body(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        """Empty body -> 422."""
+        """Empty body -> 400 MALFORMED_REQUEST."""
         resp = await client.post(
             "/api/v1/widgets/",
             content=b"",
             headers={"content-type": "application/json"},
         )
 
-        assert resp.status_code == 422
+        assert_error_envelope(resp, 400, "MALFORMED_REQUEST")
         mock_service.create.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_service_validation_error(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        """Service-level validation error -> 422."""
-        mock_service.create.side_effect = ValidationError(field="name", reason="name is required")
+        """Service-level validation error -> 400 VALIDATION_FAILED."""
+        mock_service.create.side_effect = ValidationFailedError("name", "required", "Name is required.")
 
         resp = await client.post(
             "/api/v1/widgets/",
             json={"name": "X", "description": "desc"},
         )
 
-        assert resp.status_code == 422
-        assert_error_envelope(resp.json(), "VALIDATION_ERROR")
+        err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
+        assert err["details"] == [{"field": "name", "code": "required", "message": "Name is required."}]
 
     @pytest.mark.asyncio
     async def test_service_conflict_error(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         """Duplicate name -> 409 Conflict."""
-        mock_service.create.side_effect = ConflictError(
-            resource="widget", reason="name already exists",
-        )
+        mock_service.create.side_effect = ConflictError("A widget with this name already exists.")
 
         resp = await client.post(
             "/api/v1/widgets/",
             json={"name": "Duplicate", "description": "desc"},
         )
 
-        assert resp.status_code == 409
-        assert_error_envelope(resp.json(), "CONFLICT")
+        assert_error_envelope(resp, 409, "CONFLICT")
 
     @pytest.mark.asyncio
     async def test_name_too_long(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        """Name exceeding max_length -> 422 from Pydantic."""
+        """Name exceeding max_length -> 400 VALIDATION_FAILED from Pydantic."""
         resp = await client.post(
             "/api/v1/widgets/",
             json={"name": "x" * 256, "description": "desc"},
         )
 
-        assert resp.status_code == 422
-        assert_error_envelope(resp.json(), "VALIDATION_ERROR")
+        assert_error_envelope(resp, 400, "VALIDATION_FAILED")
         mock_service.create.assert_not_called()
 ```
 
@@ -346,31 +360,30 @@ class TestGetWidget:
     @pytest.mark.asyncio
     async def test_not_found(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         widget_id = uuid.uuid4()
-        mock_service.get.side_effect = NotFoundError(resource="widget", identifier=str(widget_id))
+        mock_service.get.side_effect = NotFoundError("Widget")
 
         resp = await client.get(f"/api/v1/widgets/{widget_id}")
 
-        assert resp.status_code == 404
-        assert_error_envelope(resp.json(), "NOT_FOUND")
+        assert_error_envelope(resp, 404, "NOT_FOUND")
 
     @pytest.mark.asyncio
     async def test_invalid_uuid(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        """Invalid UUID path param -> 422 from FastAPI path validation."""
+        """Invalid UUID path param -> 400 VALIDATION_FAILED from FastAPI path validation."""
         resp = await client.get("/api/v1/widgets/not-a-uuid")
 
-        assert resp.status_code == 422
+        err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
+        assert err["details"][0]["field"] == "widget_id"
         mock_service.get.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_wrong_tenant_returns_not_found(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         """Wrong tenant MUST see 404, not 403 — prevents entity enumeration."""
         widget_id = uuid.uuid4()
-        mock_service.get.side_effect = NotFoundError(resource="widget", identifier=str(widget_id))
+        mock_service.get.side_effect = NotFoundError("Widget")
 
         resp = await client.get(f"/api/v1/widgets/{widget_id}")
 
-        assert resp.status_code == 404
-        assert_error_envelope(resp.json(), "NOT_FOUND")
+        assert_error_envelope(resp, 404, "NOT_FOUND")
 ```
 
 ## Update Handler Tests
@@ -403,7 +416,7 @@ class TestUpdateWidget:
     async def test_version_conflict(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         widget_id = uuid.uuid4()
         mock_service.update.side_effect = ConflictError(
-            resource="widget", reason="version mismatch",
+            "This widget was changed by someone else. Reload and try again.",
         )
 
         resp = await client.put(
@@ -411,21 +424,19 @@ class TestUpdateWidget:
             json={"name": "Updated", "description": "desc", "version": 1},
         )
 
-        assert resp.status_code == 409
-        assert_error_envelope(resp.json(), "CONFLICT")
+        assert_error_envelope(resp, 409, "CONFLICT")
 
     @pytest.mark.asyncio
     async def test_not_found(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         widget_id = uuid.uuid4()
-        mock_service.update.side_effect = NotFoundError(resource="widget", identifier=str(widget_id))
+        mock_service.update.side_effect = NotFoundError("Widget")
 
         resp = await client.put(
             f"/api/v1/widgets/{widget_id}",
             json={"name": "Updated", "description": "desc", "version": 1},
         )
 
-        assert resp.status_code == 404
-        assert_error_envelope(resp.json(), "NOT_FOUND")
+        assert_error_envelope(resp, 404, "NOT_FOUND")
 
     @pytest.mark.asyncio
     async def test_invalid_json(self, client: AsyncClient, mock_service: AsyncMock) -> None:
@@ -436,7 +447,7 @@ class TestUpdateWidget:
             headers={"content-type": "application/json"},
         )
 
-        assert resp.status_code == 422
+        assert_error_envelope(resp, 400, "MALFORMED_REQUEST")
         mock_service.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -448,8 +459,8 @@ class TestUpdateWidget:
             json={"name": "Updated", "description": "desc"},
         )
 
-        assert resp.status_code == 422
-        assert_error_envelope(resp.json(), "VALIDATION_ERROR")
+        err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
+        assert err["details"][0]["field"] == "version"
         mock_service.update.assert_not_called()
 
     @pytest.mark.asyncio
@@ -461,7 +472,7 @@ class TestUpdateWidget:
             json={"name": "Updated", "description": "desc", "version": 0},
         )
 
-        assert resp.status_code == 422
+        assert_error_envelope(resp, 400, "VALIDATION_FAILED")
         mock_service.update.assert_not_called()
 ```
 
@@ -486,18 +497,17 @@ class TestDeleteWidget:
     @pytest.mark.asyncio
     async def test_not_found(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         widget_id = uuid.uuid4()
-        mock_service.delete.side_effect = NotFoundError(resource="widget", identifier=str(widget_id))
+        mock_service.delete.side_effect = NotFoundError("Widget")
 
         resp = await client.delete(f"/api/v1/widgets/{widget_id}")
 
-        assert resp.status_code == 404
-        assert_error_envelope(resp.json(), "NOT_FOUND")
+        assert_error_envelope(resp, 404, "NOT_FOUND")
 
     @pytest.mark.asyncio
     async def test_invalid_uuid(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         resp = await client.delete("/api/v1/widgets/xyz-not-uuid")
 
-        assert resp.status_code == 422
+        assert_error_envelope(resp, 400, "VALIDATION_FAILED")
         mock_service.delete.assert_not_called()
 ```
 
@@ -517,23 +527,20 @@ class TestListWidgets:
             total=25,
         )
 
-        resp = await client.get("/api/v1/widgets/?page_size=3&sort_by=created_at&sort_dir=desc")
+        resp = await client.get("/api/v1/widgets/?limit=3&sort_by=created_at&sort_dir=desc")
 
         assert resp.status_code == 200
         body = resp.json()
 
         # Assert data array
-        data = body["data"]
+        data = assert_envelope(body)
         assert isinstance(data, list)
         assert len(data) == 3
 
-        # Assert pagination meta
+        # Assert pagination meta: meta.pagination {next_cursor, has_more, limit}
         meta = body["meta"]
-        assert meta["cursor"] == "next-cursor-token"
-        assert meta["has_more"] is True
-        assert meta["total"] == 25
-        assert "request_id" in meta
-        assert "timestamp" in meta
+        assert meta["request_id"]
+        assert meta["pagination"] == {"next_cursor": "next-cursor-token", "has_more": True, "limit": 3}
 
     @pytest.mark.asyncio
     async def test_empty_results(self, client: AsyncClient, mock_service: AsyncMock) -> None:
@@ -547,9 +554,10 @@ class TestListWidgets:
 
         assert resp.status_code == 200
         body = resp.json()
-        assert body["data"] == []
-        assert body["meta"]["has_more"] is False
-        assert body["meta"]["total"] == 0
+        assert body["data"] == [], "empty list is [] — never null"
+        pagination = body["meta"]["pagination"]
+        assert pagination["has_more"] is False
+        assert pagination["next_cursor"] is None, "next_cursor is null when has_more is false"
 
     @pytest.mark.asyncio
     async def test_cursor_forwarded_to_service(self, client: AsyncClient, mock_service: AsyncMock) -> None:
@@ -559,29 +567,30 @@ class TestListWidgets:
             total=25,
         )
 
-        resp = await client.get("/api/v1/widgets/?cursor=some-cursor-token&page_size=10")
+        resp = await client.get("/api/v1/widgets/?cursor=some-cursor-token&limit=10")
 
         assert resp.status_code == 200
         call_kwargs = mock_service.list.call_args.kwargs
         assert call_kwargs["cursor"] == "some-cursor-token"
-        assert call_kwargs["page_size"] == 10
+        assert call_kwargs["limit"] == 10
+        assert resp.json()["meta"]["pagination"]["has_more"] is False
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        "query_string, expected_page_size",
+        "query_string, expected_limit",
         [
-            ("", 20),                     # default when missing
-            ("page_size=50", 50),         # respects valid size
-            ("page_size=100", 100),       # max allowed
+            ("", 20),                 # default when missing
+            ("limit=50", 50),         # respects valid size
+            ("limit=100", 100),       # max allowed
         ],
         ids=["default", "valid-50", "max-100"],
     )
-    async def test_page_size_values(
+    async def test_limit_values(
         self,
         client: AsyncClient,
         mock_service: AsyncMock,
         query_string: str,
-        expected_page_size: int,
+        expected_limit: int,
     ) -> None:
         mock_service.list.return_value = ListResult(items=[], total=0)
 
@@ -590,28 +599,30 @@ class TestListWidgets:
 
         assert resp.status_code == 200
         call_kwargs = mock_service.list.call_args.kwargs
-        assert call_kwargs["page_size"] == expected_page_size
+        assert call_kwargs["limit"] == expected_limit
+        assert resp.json()["meta"]["pagination"]["limit"] == expected_limit
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "query_string",
         [
-            "page_size=0",
-            "page_size=-5",
-            "page_size=101",
+            "limit=0",
+            "limit=-5",
+            "limit=101",
         ],
         ids=["zero", "negative", "exceeds-max"],
     )
-    async def test_page_size_out_of_range(
+    async def test_limit_out_of_range(
         self,
         client: AsyncClient,
         mock_service: AsyncMock,
         query_string: str,
     ) -> None:
-        """page_size outside [1, 100] -> 422 from FastAPI Query(ge=1, le=100)."""
+        """limit outside [1, 100] -> 400 VALIDATION_FAILED from FastAPI Query(ge=1, le=100)."""
         resp = await client.get(f"/api/v1/widgets/?{query_string}")
 
-        assert resp.status_code == 422
+        err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
+        assert err["details"][0]["field"] == "limit"
         mock_service.list.assert_not_called()
 
     @pytest.mark.asyncio
@@ -657,7 +668,7 @@ class TestListWidgets:
         """Invalid sort_dir should be rejected by regex pattern."""
         resp = await client.get("/api/v1/widgets/?sort_dir=invalid")
 
-        assert resp.status_code == 422
+        assert_error_envelope(resp, 400, "VALIDATION_FAILED")
         mock_service.list.assert_not_called()
 ```
 
@@ -672,22 +683,37 @@ class TestErrorMapping:
         "service_error, expected_status, expected_code",
         [
             (
-                NotFoundError(resource="widget", identifier="123"),
+                NotFoundError("Widget"),
                 404,
                 "NOT_FOUND",
             ),
             (
-                ConflictError(resource="widget", reason="version mismatch"),
+                ConflictError("This widget was changed by someone else. Reload and try again."),
                 409,
                 "CONFLICT",
             ),
             (
-                ValidationError(field="name", reason="required"),
+                ValidationFailedError("name", "required", "Name is required."),
+                400,
+                "VALIDATION_FAILED",
+            ),
+            (
+                BusinessRuleError("Archived widgets can't be edited."),
                 422,
-                "VALIDATION_ERROR",
+                "BUSINESS_RULE_VIOLATION",
+            ),
+            (
+                UnauthenticatedError(),
+                401,
+                "UNAUTHENTICATED",
+            ),
+            (
+                UnavailableError("postgres", cause=TimeoutError("statement timeout")),
+                503,
+                "UNAVAILABLE",
             ),
         ],
-        ids=["not-found-404", "conflict-409", "validation-422"],
+        ids=["not-found-404", "conflict-409", "validation-400", "business-rule-422", "unauthenticated-401", "unavailable-503"],
     )
     async def test_error_mapping(
         self,
@@ -702,8 +728,16 @@ class TestErrorMapping:
 
         resp = await client.get(f"/api/v1/widgets/{widget_id}")
 
-        assert resp.status_code == expected_status
-        assert_error_envelope(resp.json(), expected_code)
+        err = assert_error_envelope(resp, expected_status, expected_code)
+        # Only a dependency failure is retryable, and it tells the client when to retry
+        assert err["retryable"] is (expected_code == "UNAVAILABLE")
+        if expected_status == 503:
+            assert "retry-after" in resp.headers
+        if expected_status == 401:
+            assert resp.headers["www-authenticate"] == "Bearer"
+        # The cause (e.g. "statement timeout", "postgres") never reaches the client
+        assert "statement timeout" not in resp.text
+        assert "postgres" not in resp.text
 
     @pytest.mark.asyncio
     async def test_internal_error_does_not_leak_details(
@@ -715,14 +749,12 @@ class TestErrorMapping:
         widget_id = uuid.uuid4()
         resp = await client.get(f"/api/v1/widgets/{widget_id}")
 
-        assert resp.status_code == 500
-        body = resp.json()
-        err = body["error"]
-        assert err["code"] == "INTERNAL_ERROR"
-        # CRITICAL: the message must be generic — no internal details
-        assert "database" not in err["message"].lower()
-        assert "connection pool" not in err["message"].lower()
-        assert err["message"] == "an unexpected error occurred"
+        err = assert_error_envelope(resp, 500, "INTERNAL")
+        # CRITICAL: the message must be generic — no internal details anywhere in the body
+        assert err["message"] == "Something went wrong."
+        assert "connection pool" not in resp.text
+        assert "RuntimeError" not in resp.text
+        assert "Traceback" not in resp.text
 ```
 
 ## Auth Tests
@@ -733,7 +765,7 @@ class TestAuth:
 
     @pytest.mark.asyncio
     async def test_missing_auth_token(self, mock_service: AsyncMock) -> None:
-        """Request without Bearer token -> 403 (HTTPBearer returns 403 by default)."""
+        """Request without Bearer token -> 401 UNAUTHENTICATED (HTTPBearer(auto_error=False) + the dependency)."""
         from app.api.v1.widgets import get_widget_service
         from app.main import create_app
 
@@ -749,8 +781,9 @@ class TestAuth:
         async with AsyncClient(transport=transport, base_url="http://test") as ac:
             resp = await ac.get(f"/api/v1/widgets/{uuid.uuid4()}")
 
-        # FastAPI's HTTPBearer returns 403 when no credentials are provided
-        assert resp.status_code == 403
+        # No credentials is 401 UNAUTHENTICATED in the envelope — not FastAPI's {"detail": "Not authenticated"}
+        assert_error_envelope(resp, 401, "UNAUTHENTICATED")
+        assert resp.headers["www-authenticate"] == "Bearer"
         mock_service.get.assert_not_called()
         app.dependency_overrides.clear()
 
@@ -761,12 +794,11 @@ class TestAuth:
         The service layer returns NotFound (not Forbidden) for wrong-tenant access.
         """
         widget_id = uuid.uuid4()
-        mock_service.get.side_effect = NotFoundError(resource="widget", identifier=str(widget_id))
+        mock_service.get.side_effect = NotFoundError("Widget")
 
         resp = await client.get(f"/api/v1/widgets/{widget_id}")
 
-        assert resp.status_code == 404
-        assert_error_envelope(resp.json(), "NOT_FOUND")
+        assert_error_envelope(resp, 404, "NOT_FOUND")
 
     @pytest.mark.asyncio
     async def test_admin_role_access(self, mock_service: AsyncMock) -> None:
@@ -819,10 +851,10 @@ class TestResponseShape:
         for field in ("id", "tenant_id", "name", "version", "created_at", "updated_at"):
             assert field in data, f"missing field '{field}' in data"
 
-        # meta must contain request tracking fields
+        # meta carries only request_id (equal to the X-Request-Id header) — no pagination, no timestamp
         meta = body["meta"]
-        assert "request_id" in meta
-        assert "timestamp" in meta
+        assert set(meta) == {"request_id"}
+        assert meta["request_id"] == resp.headers["x-request-id"]
 
     @pytest.mark.asyncio
     async def test_list_resource_shape(self, client: AsyncClient, mock_service: AsyncMock) -> None:
@@ -836,27 +868,28 @@ class TestResponseShape:
         resp = await client.get("/api/v1/widgets/")
 
         body = resp.json()
-        # Must have "data" (array) and "meta" top-level keys
+        # Exactly "data" (array) and "meta" at the top level — no top-level pagination/links/total
+        assert set(body) == {"data", "meta"}
         assert isinstance(body["data"], list)
         assert len(body["data"]) == 1
 
         meta = body["meta"]
-        for field in ("cursor", "has_more", "total", "request_id", "timestamp"):
-            assert field in meta, f"missing field '{field}' in meta"
+        assert set(meta) == {"request_id", "pagination"}
+        assert set(meta["pagination"]) == {"next_cursor", "has_more", "limit"}
 
     @pytest.mark.asyncio
     async def test_error_response_shape(self, client: AsyncClient, mock_service: AsyncMock) -> None:
         widget_id = uuid.uuid4()
-        mock_service.get.side_effect = NotFoundError(resource="widget", identifier=str(widget_id))
+        mock_service.get.side_effect = NotFoundError("Widget")
 
         resp = await client.get(f"/api/v1/widgets/{widget_id}")
 
         body = resp.json()
-        # Error envelope: {"error": {"code": "...", "message": "..."}}
-        assert "error" in body
+        # Error envelope: {"error": {"code", "message", "details"?, "request_id", "retryable"}} — no "data"
+        assert set(body) == {"error"}
         err = body["error"]
-        assert "code" in err
-        assert "message" in err
+        assert {"code", "message", "request_id", "retryable"} <= set(err)
+        assert "details" not in err, "details[] is for field-level problems only"
 
     @pytest.mark.asyncio
     async def test_create_returns_201(self, client: AsyncClient, mock_service: AsyncMock) -> None:
@@ -894,7 +927,7 @@ class TestContentType:
 
     @pytest.mark.asyncio
     async def test_error_content_type(self, client: AsyncClient, mock_service: AsyncMock) -> None:
-        mock_service.get.side_effect = NotFoundError(resource="widget", identifier="x")
+        mock_service.get.side_effect = NotFoundError("Widget")
         resp = await client.get(f"/api/v1/widgets/{uuid.uuid4()}")
 
         assert "application/json" in resp.headers.get("content-type", "")
@@ -902,19 +935,20 @@ class TestContentType:
 
 ## Critical Rules
 
-- Every handler test MUST use `httpx.AsyncClient` with `ASGITransport` — no real HTTP server needed for unit tests
+- Every handler test MUST use `httpx.AsyncClient` with `ASGITransport(..., raise_app_exceptions=False)` — no real HTTP server needed for unit tests, and the catch-all 500 response stays assertable
 - Dependency overrides MUST inject mock service and test user — mirrors production DI
-- Pydantic validation errors return 422 with `VALIDATION_ERROR` code and field details
+- Pydantic request validation MUST return 400 `VALIDATION_FAILED` with `details[]` of `{field, code, message}` (not FastAPI's default 422); malformed JSON 400 `MALFORMED_REQUEST`; a domain rule 422 `BUSINESS_RULE_VIOLATION`
 - Wrong tenant MUST return 404 Not Found, not 403 Forbidden — prevents entity enumeration
 - Internal errors MUST NOT leak error details to the client — assert generic message in 500 responses
-- Every response MUST follow the envelope format: `{"data": T, "meta": {...}}` for success, `{"error": {...}}` for failure
+- Every response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}` for success, `{"error": {code, message, details?, request_id, retryable}}` for failure, never both
+- Every error response MUST carry `request_id` equal to the `X-Request-Id` header, and `retryable`
 - DELETE MUST return 204 with empty body
 - POST create MUST return 201 Created
-- List responses MUST include `cursor`, `has_more`, `total` in meta
-- Page size MUST be validated: `Query(ge=1, le=100)` — out-of-range returns 422
+- List responses MUST include `meta.pagination` `{next_cursor, has_more, limit}`; `data` is `[]` when empty
+- `limit` MUST be validated: `Query(ge=1, le=100)` — out of range returns 400 `VALIDATION_FAILED`
 - Sort and filter fields MUST be allow-listed — disallowed values default to safe values
 - Use `pytest.mark.asyncio` on every async test function
-- Use `pytest.mark.parametrize` for table-driven tests (error mapping, page size limits)
+- Use `pytest.mark.parametrize` for table-driven tests (error mapping, `limit` bounds)
 - Every test MUST use fresh `AsyncMock(spec=WidgetService)` — never share mock state between tests
 - Always assert `mock_service.method.assert_not_called()` for methods that should NOT be invoked
 - Fixtures MUST clean up `dependency_overrides` to prevent test pollution

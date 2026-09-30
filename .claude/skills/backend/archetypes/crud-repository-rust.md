@@ -21,7 +21,7 @@ Complete sqlx-based PostgreSQL repository template. Every generated repository M
 use async_trait::async_trait;
 use uuid::Uuid;
 
-use crate::domain::{ListFilters, ListResult, OffsetListFilters, OffsetListResult};
+use crate::domain::{ListFilters, ListResult};
 use crate::error::AppError;
 use crate::models::Widget;
 
@@ -33,7 +33,6 @@ pub trait WidgetRepository: Send + Sync {
     async fn update(&self, widget: &Widget) -> Result<(), AppError>;
     async fn soft_delete(&self, tenant_id: Uuid, id: Uuid) -> Result<(), AppError>;
     async fn list(&self, tenant_id: Uuid, filters: &ListFilters) -> Result<ListResult<Widget>, AppError>;
-    async fn list_offset(&self, tenant_id: Uuid, filters: &OffsetListFilters) -> Result<OffsetListResult<Widget>, AppError>;
     async fn batch_create(&self, widgets: &[Widget]) -> Result<(), AppError>;
 }
 ```
@@ -129,10 +128,8 @@ impl WidgetRepository for PgWidgetRepository {
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| map_sqlx_error(e, "get_by_id"))?
-        .ok_or_else(|| AppError::NotFound {
-            resource: "widget".into(),
-            identifier: id.to_string(),
-        })?;
+        // Missing, soft-deleted or another tenant's: all 404 NOT_FOUND
+        .ok_or_else(|| AppError::not_found("Widget"))?;
 
         Ok(widget)
     }
@@ -167,10 +164,9 @@ impl WidgetRepository for PgWidgetRepository {
         .map_err(|e| map_sqlx_error(e, "update"))?;
 
         if result.rows_affected() == 0 {
-            return Err(AppError::Conflict {
-                resource: "widget".into(),
-                reason: "version mismatch or not found -- reload and retry".into(),
-            });
+            return Err(AppError::conflict(
+                "This widget was changed by someone else. Reload and try again.",
+            ));
         }
 
         Ok(())
@@ -196,10 +192,7 @@ impl WidgetRepository for PgWidgetRepository {
         .map_err(|e| map_sqlx_error(e, "soft_delete"))?;
 
         if result.rows_affected() == 0 {
-            return Err(AppError::NotFound {
-                resource: "widget".into(),
-                identifier: id.to_string(),
-            });
+            return Err(AppError::not_found("Widget"));
         }
 
         Ok(())
@@ -285,76 +278,14 @@ impl WidgetRepository for PgWidgetRepository {
     }
 ```
 
-## List with Offset Pagination (Admin/Reporting)
-
-```rust
-    #[tracing::instrument(skip(self, filters), fields(tenant_id = %tenant_id))]
-    async fn list_offset(
-        &self,
-        tenant_id: Uuid,
-        filters: &OffsetListFilters,
-    ) -> Result<OffsetListResult<Widget>, AppError> {
-        let offset = (filters.page - 1) * filters.per_page;
-
-        let mut qb = QueryBuilder::new(
-            "SELECT id, tenant_id, name, description, status, \
-             created_at, updated_at, deleted_at, created_by, updated_by, version \
-             FROM widgets WHERE tenant_id = "
-        );
-        qb.push_bind(tenant_id);
-        qb.push(" AND deleted_at IS NULL");
-
-        for (field, value) in &filters.fields {
-            let col = sanitize_column(field);
-            qb.push(format!(" AND {col} = "));
-            qb.push_bind(value.clone());
-        }
-
-        let col = sanitize_column(&filters.sort_by);
-        let dir = if filters.sort_dir == "asc" { "ASC" } else { "DESC" };
-        qb.push(format!(" ORDER BY {col} {dir}, id {dir} LIMIT "));
-        qb.push_bind(filters.per_page);
-        qb.push(" OFFSET ");
-        qb.push_bind(offset);
-
-        let items: Vec<Widget> = qb.build_query_as()
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|e| map_sqlx_error(e, "list_offset"))?;
-
-        let total = self.count_total_offset(tenant_id, filters).await;
-
-        Ok(OffsetListResult { items, total })
-    }
-```
+There is no offset/page-number list: the API is cursor-only (see "Pagination — cursor only" in
+`crud-handler-rust.md`).
 
 ## Count Helpers
 
 ```rust
 impl PgWidgetRepository {
     async fn count_total(&self, tenant_id: Uuid, filters: &ListFilters) -> i64 {
-        let mut qb = QueryBuilder::new(
-            "SELECT COUNT(*) as count FROM widgets WHERE tenant_id = "
-        );
-        qb.push_bind(tenant_id);
-        qb.push(" AND deleted_at IS NULL");
-        for (field, value) in &filters.fields {
-            let col = sanitize_column(field);
-            qb.push(format!(" AND {col} = "));
-            qb.push_bind(value.clone());
-        }
-
-        #[derive(sqlx::FromRow)]
-        struct CountRow { count: Option<i64> }
-
-        qb.build_query_as::<CountRow>()
-            .fetch_one(&self.pool)
-            .await
-            .map(|r| r.count.unwrap_or(0))
-            .unwrap_or(0)
-    }
-
-    async fn count_total_offset(&self, tenant_id: Uuid, filters: &OffsetListFilters) -> i64 {
         let mut qb = QueryBuilder::new(
             "SELECT COUNT(*) as count FROM widgets WHERE tenant_id = "
         );
@@ -435,15 +366,13 @@ fn encode_cursor(ts: DateTime<Utc>, id: Uuid) -> String {
     URL_SAFE.encode(json)
 }
 
+/// A tampered or stale cursor → 400 VALIDATION_FAILED on field "cursor".
 fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), AppError> {
-    let bytes = URL_SAFE.decode(cursor).map_err(|_| AppError::Validation {
-        message: "invalid cursor encoding".into(),
-        details: None,
-    })?;
-    let payload: CursorPayload = serde_json::from_slice(&bytes).map_err(|_| AppError::Validation {
-        message: "invalid cursor payload".into(),
-        details: None,
-    })?;
+    let invalid = || {
+        AppError::validation("cursor", "invalid_cursor", "This cursor is not valid. Start from the first page.")
+    };
+    let bytes = URL_SAFE.decode(cursor).map_err(|_| invalid())?;
+    let payload: CursorPayload = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
     Ok((payload.ts, payload.id))
 }
 ```
@@ -472,55 +401,37 @@ fn sanitize_column(col: &str) -> &'static str {
 
 ```rust
 /// Map sqlx errors to domain AppError types at the repository boundary.
+/// SQLSTATE picks the class. Client messages are fixed; the driver text, SQLSTATE and constraint
+/// name go to the log only (5xx causes are logged by `IntoResponse` with request_id).
 fn map_sqlx_error(err: sqlx::Error, operation: &str) -> AppError {
-    match &err {
-        // No rows found
-        sqlx::Error::RowNotFound => AppError::NotFound {
-            resource: "widget".into(),
-            identifier: String::new(),
-        },
+    // No rows found
+    if matches!(err, sqlx::Error::RowNotFound) {
+        return AppError::not_found("Widget");
+    }
+    // Connection pool exhausted — a dependency timeout
+    if matches!(err, sqlx::Error::PoolTimedOut) {
+        return AppError::unavailable("postgres", err);
+    }
 
-        // PostgreSQL-specific constraint violations
-        sqlx::Error::Database(db_err) => {
-            if let Some(code) = db_err.code() {
-                match code.as_ref() {
-                    // unique_violation
-                    "23505" => return AppError::Conflict {
-                        resource: "widget".into(),
-                        reason: format!(
-                            "duplicate value on {}",
-                            db_err.constraint().unwrap_or("unknown")
-                        ),
-                    },
-                    // foreign_key_violation
-                    "23503" => return AppError::Validation {
-                        message: "referenced resource does not exist".into(),
-                        details: Some(serde_json::json!({
-                            "constraint": db_err.constraint().unwrap_or("unknown"),
-                        })),
-                    },
-                    // check_violation
-                    "23514" => return AppError::Validation {
-                        message: format!(
-                            "value violates constraint {}",
-                            db_err.constraint().unwrap_or("unknown")
-                        ),
-                        details: None,
-                    },
-                    // query_canceled (context timeout)
-                    "57014" => return AppError::Internal(
-                        format!("query timeout during {operation}: {err}").into(),
-                    ),
-                    _ => {}
-                }
-            }
-            AppError::Internal(format!("database error during {operation}: {err}").into())
+    let db = err.as_database_error();
+    let sql_state = db.and_then(|d| d.code()).map(|c| c.into_owned());
+    let constraint = db.and_then(|d| d.constraint()).unwrap_or("unknown").to_owned();
+
+    match sql_state.as_deref() {
+        // unique_violation — duplicate id or (tenant_id, name)
+        Some("23505") => {
+            tracing::warn!(operation, %constraint, "widget unique violation");
+            AppError::conflict("A widget with these details already exists.")
         }
-
-        // Connection / pool errors
-        _ => AppError::Internal(
-            format!("database error during {operation}: {err}").into(),
-        ),
+        // foreign_key_violation / check_violation
+        Some("23503") | Some("23514") => {
+            tracing::warn!(operation, %constraint, sql_state = ?sql_state, "widget integrity violation");
+            AppError::business_rule("This change conflicts with related data.")
+        }
+        // query_canceled — statement_timeout fired
+        Some("57014") => AppError::unavailable("postgres", err),
+        // Anything else is unexpected: 500 INTERNAL with a generic message
+        _ => AppError::internal(err),
     }
 }
 ```
@@ -559,7 +470,8 @@ pub struct Widget {
 - Cursor values MUST be opaque (base64-encoded JSON) — never expose raw DB values
 - List queries MUST request `LIMIT + 1` to detect `has_more` without an extra count query
 - Batch inserts SHOULD use `push_values` with chunking for large datasets
-- sqlx errors MUST be mapped to domain `AppError` at the repository boundary
+- sqlx errors MUST be mapped to domain `AppError` at the repository boundary: unique violation → 409 `CONFLICT`, FK/check violation → 422 `BUSINESS_RULE_VIOLATION`, statement/pool timeout → 503 `UNAVAILABLE`, all with generic messages (constraint names only in logs)
+- No offset/page-number list method — lists are cursor-only (keyset `WHERE (sort_col, id) < cursor`)
 - Prefer `sqlx::query_as!` (compile-time checked) for static queries; use `QueryBuilder` only for dynamic filters
 - `fetch_optional` + `.ok_or_else` is preferred over `fetch_one` for nullable lookups — gives you control over the NotFound error
 - Every repository method MUST use `#[tracing::instrument]` with relevant entity/tenant IDs
