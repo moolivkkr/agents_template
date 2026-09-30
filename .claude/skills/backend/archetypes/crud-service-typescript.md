@@ -14,6 +14,8 @@ tags:
 
 # CRUD Service Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10, Drizzle ORM 0.45, ioredis 6.0, pino 10.3 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-service.md` (Go). Both implement identical business logic patterns: cache-aside, optimistic locking, audit logging, and tenant isolation.
 
 Complete, production-ready TypeScript service layer template. Every generated TypeScript service MUST follow this pattern.
@@ -455,24 +457,26 @@ export async function updateWithInventoryCheck(
 ```typescript
 // src/services/widget.service.drizzle-tx.ts
 
+import { and, eq, isNull } from "drizzle-orm";
 import { type PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { widgets, components } from "../db/schema";
+import type * as schema from "../db/schema";
 import type { Widget } from "../domain/entity";
-import { notFound } from "../errors/domain-errors";
+import { internal, notFound } from "../errors/domain-errors";
 
 /**
  * Multi-step creation within a Drizzle transaction.
  * All operations succeed or all roll back.
  */
 export async function createWithRelations(
-  db: PostgresJsDatabase,
+  db: PostgresJsDatabase<typeof schema>,
   input: {
     widget: { name: string; description: string; tenantId: string; userId: string };
     components: Array<{ name: string; type: string }>;
   },
 ): Promise<Widget> {
   return db.transaction(async (tx) => {
-    // Step 1: Create parent widget
+    // Step 1: Create parent widget (INSERT … RETURNING yields exactly one row)
     const [widget] = await tx
       .insert(widgets)
       .values({
@@ -485,6 +489,7 @@ export async function createWithRelations(
         version: 1,
       })
       .returning();
+    if (!widget) throw internal(); // unreachable — narrows the row type for the steps below
 
     // Step 2: Create child components
     if (input.components.length > 0) {
@@ -508,7 +513,7 @@ export async function createWithRelations(
  * Drizzle transaction with savepoints for partial rollback.
  */
 export async function transferWidget(
-  db: PostgresJsDatabase,
+  db: PostgresJsDatabase<typeof schema>,
   tenantId: string,
   widgetId: string,
   fromUserId: string,
@@ -580,6 +585,9 @@ export function createLogger(name: string): Logger {
     error: (msg, meta) => base.error(meta, msg),
   };
 }
+
+/** App-wide instance for middleware (error handler, auth, request logging). Services get theirs injected. */
+export const logger: Logger = createLogger("app");
 ```
 
 ---
@@ -625,6 +633,7 @@ export class RedisCache implements ICache {
 // src/composition-root.ts
 
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import Redis from "ioredis";
 import { WidgetService } from "./services/widget.service";
 import { PrismaWidgetRepository } from "./repositories/prisma-widget.repository";
@@ -637,7 +646,8 @@ import { createLogger } from "./lib/logger";
  * Every dependency is explicit. No global state.
  */
 export function createServices() {
-  const prisma = new PrismaClient();
+  // Prisma 7 needs a driver adapter — `new PrismaClient()` with no options throws at startup
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   const redis = new Redis(process.env.REDIS_URL!);
 
   const cache = new RedisCache(redis);

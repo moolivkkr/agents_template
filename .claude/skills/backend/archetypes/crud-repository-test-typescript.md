@@ -17,6 +17,8 @@ tags:
 
 # CRUD Repository Test Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Vitest 5.0, Prisma 7.10, Drizzle ORM 0.45, @testcontainers/postgresql 12.2. Type-checked only: they need a database to run (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-repository-test.md` (Go). Both validate identical data access patterns: cursor pagination, soft delete, tenant isolation, optimistic locking, and error mapping against a real PostgreSQL database.
 
 Complete integration test template for Prisma and Drizzle repositories. Every generated TypeScript repository test MUST follow this pattern.
@@ -40,6 +42,7 @@ src/repositories/
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { PrismaWidgetRepository } from "./prisma-widget.repository";
@@ -71,9 +74,8 @@ beforeAll(async () => {
     stdio: "pipe",
   });
 
-  prisma = new PrismaClient({
-    datasources: { db: { url: testUrl } },
-  });
+  // Prisma 7: connect through a driver adapter (the `datasources` option was removed)
+  prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: testUrl }) });
 
   await prisma.$connect();
   repo = new PrismaWidgetRepository(prisma);
@@ -96,6 +98,7 @@ beforeEach(async () => {
 
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from "@testcontainers/postgresql";
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { execSync } from "node:child_process";
 
 let container: StartedPostgreSqlContainer;
@@ -123,9 +126,7 @@ export async function setupTestDatabase(): Promise<{
     stdio: "pipe",
   });
 
-  prisma = new PrismaClient({
-    datasources: { db: { url: connectionUrl } },
-  });
+  prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: connectionUrl }) });
 
   await prisma.$connect();
   return { prisma, connectionUrl };
@@ -361,8 +362,8 @@ describe("PrismaWidgetRepository — Pagination", () => {
       sortDir: "asc",
       fields: {},
     });
-    expect(asc.items[0].id).toBe(w1.id);
-    expect(asc.items[2].id).toBe(w3.id);
+    expect(asc.items[0]?.id).toBe(w1.id);
+    expect(asc.items[2]?.id).toBe(w3.id);
 
     // Descending
     const desc = await repo.list(tenantId, {
@@ -372,8 +373,8 @@ describe("PrismaWidgetRepository — Pagination", () => {
       sortDir: "desc",
       fields: {},
     });
-    expect(desc.items[0].id).toBe(w3.id);
-    expect(desc.items[2].id).toBe(w1.id);
+    expect(desc.items[0]?.id).toBe(w3.id);
+    expect(desc.items[2]?.id).toBe(w1.id);
   });
 });
 ```
@@ -536,7 +537,7 @@ describe("PrismaWidgetRepository — Soft Delete", () => {
     });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].id).toBe(visible.id);
+    expect(result.items[0]?.id).toBe(visible.id);
   });
 
   it("soft-deleted widget still exists in raw DB", async () => {
@@ -640,7 +641,7 @@ import type { Widget } from "../domain/entity";
 import type { ListFilters } from "../types/pagination";
 
 let client: ReturnType<typeof postgres>;
-let db: PostgresJsDatabase;
+let db: PostgresJsDatabase<typeof schema>;
 let repo: DrizzleWidgetRepository;
 
 beforeAll(async () => {
@@ -832,7 +833,7 @@ describe("DrizzleWidgetRepository — Transaction Rollback", () => {
     });
 
     expect(result.items).toHaveLength(1);
-    expect(result.items[0].name).toBe("committed");
+    expect(result.items[0]?.name).toBe("committed");
   });
 
   it("successful transaction persists all changes", async () => {

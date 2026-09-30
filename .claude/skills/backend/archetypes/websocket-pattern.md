@@ -220,8 +220,8 @@ Client-side heartbeat:
 
 ## Reconnection Handling (Client-Side)
 
-```javascript
-// Client reconnection with exponential backoff
+```
+// Client reconnection with exponential backoff (pseudocode)
 class ReconnectingWebSocket {
     maxRetries = 10
     baseDelay  = 1000   // 1 second

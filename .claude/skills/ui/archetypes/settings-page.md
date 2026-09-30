@@ -1,5 +1,7 @@
 # Page Archetype: Settings Page
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, React 19.3, TanStack Query 5.104, react-hook-form 7.89 + @hookform/resolvers 5.9, Zod 4.6, nuqs 2.10, sonner 2.0 (tests/archetype-compile/typescript/run.sh).
+
 ## When to Use
 Any configuration screen with tabbed sections: user settings, project settings, org admin.
 
@@ -79,11 +81,12 @@ const notifications = useQuery(settingsQueries.notifications());
 const security = useQuery(settingsQueries.security());
 
 // Each tab has its OWN form + submit
-const profileForm = useForm({ resolver: zodResolver(profileSchema), values: profile.data });
-const notifForm = useForm({ resolver: zodResolver(notifSchema), values: notifications.data });
+// profile.data is the envelope { data, meta } — the form values are its .data
+const profileForm = useForm({ resolver: zodResolver(profileSchema), values: profile.data?.data });
+const notifForm = useForm({ resolver: zodResolver(notifSchema), values: notifications.data?.data });
 
 // Per-section save (NOT page-level save)
-async function onSaveProfile(data) {
+async function onSaveProfile(data: z.infer<typeof profileSchema>) {
   await updateProfile.mutateAsync(data);
   toast.success("Profile updated");
 }
@@ -117,5 +120,5 @@ Settings pages are never truly empty — show default values or "not set" placeh
 ```tsx
 // Persist active tab in URL for deep linking
 const [tab, setTab] = useQueryState("tab", parseAsString.withDefault("profile"));
-<Tabs value={tab} onValueChange={setTab}>
+return <Tabs value={tab} onValueChange={setTab}>{/* TabsList + one TabsContent per tab */}</Tabs>;
 ```

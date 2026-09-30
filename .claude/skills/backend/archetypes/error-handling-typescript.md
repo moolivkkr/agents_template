@@ -14,6 +14,8 @@ tags:
 
 # Error Handling Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, class-validator 0.15 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/error-handling-go.md` (Go). Both produce the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`), so frontend clients can use a single error parsing strategy. If this file and the envelope ever disagree, the envelope wins.
 
 Complete error handling system for TypeScript backend services (Express, NestJS). Every generated TypeScript service MUST follow this pattern.
@@ -124,7 +126,7 @@ nothing from a parser, driver or upstream error reaches the client.
 import { AppError, type FieldError } from "./app-error";
 
 /** details[].message per lower_snake field code. Validator text (Zod, class-validator) is never sent. */
-export const FIELD_MESSAGES: Record<string, string> = {
+export const FIELD_MESSAGES = {
   required: "This field is required.",
   invalid_type: "This value has the wrong type.",
   invalid_format: "This value isn't in the right format.",
@@ -134,7 +136,10 @@ export const FIELD_MESSAGES: Record<string, string> = {
   too_small: "This value is too small.",
   too_big: "This value is too large.",
   unknown_field: "This field isn't allowed.",
-};
+} as const;
+
+/** A details[].code that has a catalog message — so FIELD_MESSAGES[code] is always a string. */
+export type FieldCode = keyof typeof FIELD_MESSAGES;
 
 // --- 400 MALFORMED_REQUEST: JSON parse errors, wrong content type, body too large ---
 
@@ -336,6 +341,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../errors/app-error";
 import {
   FIELD_MESSAGES,
+  type FieldCode,
   businessRule,
   conflict,
   forbidden,
@@ -391,7 +397,7 @@ function fromHttpException(ex: HttpException): AppError {
 }
 
 /** class-validator constraint name → lower_snake details[].code. */
-const CONSTRAINT_CODES: Record<string, string> = {
+const CONSTRAINT_CODES: Record<string, FieldCode> = {
   isNotEmpty: "required",
   isDefined: "required",
   isString: "invalid_type",
@@ -577,6 +583,7 @@ try {
 export { AppError, isAppError, type FieldError, type ErrorResponseBody } from "./app-error";
 export {
   FIELD_MESSAGES,
+  type FieldCode,
   malformedRequest,
   validationError,
   multiValidationError,

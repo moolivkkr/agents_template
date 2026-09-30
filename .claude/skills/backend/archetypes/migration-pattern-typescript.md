@@ -14,6 +14,8 @@ tags:
 
 # Migration Pattern Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 + @prisma/adapter-pg, Drizzle ORM 0.45, drizzle-kit 0.31, postgres.js 3.4 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/migration-pattern.md` (Go). Both produce identical database schemas. The Go archetype covers raw SQL migrations and golang-migrate; this covers Prisma and Drizzle ORM migration tooling.
 
 Complete TypeScript migration templates for Prisma and Drizzle. Every generated TypeScript migration MUST follow this pattern.
@@ -234,9 +236,11 @@ COMMENT ON COLUMN widgets.version IS 'Optimistic lock counter — increment on e
 // "prisma": { "seed": "tsx prisma/seed.ts" }
 
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { randomUUID } from "node:crypto";
 
-const prisma = new PrismaClient();
+// Prisma 7: a driver adapter is required (new PrismaClient() with no options throws)
+const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
 
 async function main(): Promise<void> {
   console.log("Seeding database...");

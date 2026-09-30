@@ -14,6 +14,8 @@ tags:
 
 # WebSocket Pattern — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, ws 8.22, socket.io 4.8 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 TypeScript WebSocket servers use the `ws` library for raw WebSocket or `Socket.IO` for higher-level features (rooms, namespaces, auto-reconnect, fallback transport).
@@ -177,15 +179,26 @@ import { URL } from 'url';
 
 import { ConnectionManager } from './manager';
 import type { ConnectedClient, WsMessage } from './types';
-import { validateJwt } from '../auth/jwt';
 
 const MAX_MESSAGE_SIZE = 65536; // 64KB
 const HEARTBEAT_INTERVAL = 30_000; // 30s
 const HEARTBEAT_TIMEOUT = 10_000;  // 10s
 
+/**
+ * Single-use connection tickets (websocket-pattern.md §Authentication on Upgrade, Option 1): the client
+ * gets one from an authenticated POST /api/v1/ws-tickets, then connects with ?ticket=. Never a bearer
+ * token in the URL — query strings land in proxy and access logs.
+ */
+export interface TicketStore {
+  /** Atomically GET+DELETE (e.g. Redis GETDEL, TTL ≈ 30s); null when unknown, expired or already used. */
+  redeem(ticket: string): Promise<{ userId: string; tenantId: string; roles: string[] } | null>;
+}
+
 export function createWebSocketServer(
   server: import('http').Server,
   manager: ConnectionManager,
+  tickets: TicketStore,
+  allowedOrigins: ReadonlySet<string>,
   logger: Logger,
 ): WebSocketServer {
   const wss = new WebSocketServer({
@@ -193,15 +206,20 @@ export function createWebSocketServer(
     path: '/ws',
     maxPayload: MAX_MESSAGE_SIZE,
     verifyClient: async (info, callback) => {
+      // Browsers always send Origin: allowlist it (cross-site WebSocket hijacking)
+      if (info.origin && !allowedOrigins.has(info.origin)) {
+        callback(false, 403, 'Forbidden');
+        return;
+      }
       // Authenticate on upgrade
       try {
         const url = new URL(info.req.url!, `http://${info.req.headers.host}`);
-        const token = url.searchParams.get('token');
-        if (!token) {
+        const ticket = url.searchParams.get('ticket');
+        const claims = ticket ? await tickets.redeem(ticket) : null;
+        if (!claims) {
           callback(false, 401, 'Unauthorized');
           return;
         }
-        const claims = await validateJwt(token);
         (info.req as any).__claims = claims;
         callback(true);
       } catch (err) {
@@ -358,9 +376,10 @@ export function createSocketIOServer(
     transports: ['websocket', 'polling'], // WS first, fallback to polling
   });
 
-  // Authentication middleware
+  // Authentication middleware. The client passes io(url, { auth: { token } }): it travels in the
+  // CONNECT packet, not the URL — never read a token from handshake.query (it's logged with the URL).
   io.use(async (socket, next) => {
-    const token = socket.handshake.auth?.token || socket.handshake.query?.token;
+    const token = socket.handshake.auth?.token;
     if (!token) {
       return next(new Error('Unauthorized'));
     }

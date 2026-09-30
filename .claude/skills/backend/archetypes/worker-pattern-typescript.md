@@ -14,6 +14,8 @@ tags:
 
 # Worker / Background Job Pattern — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, BullMQ 6.3, ioredis 6.0, node-cron 4.6, pino 10.3 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `worker-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 TypeScript workers use BullMQ (Redis-backed) for robust job queues, `node-cron` for scheduled tasks, and Node.js process signals for graceful shutdown.
@@ -23,7 +25,9 @@ TypeScript workers use BullMQ (Redis-backed) for robust job queues, `node-cron` 
 ```typescript
 // src/worker/types.ts
 
-export interface Job<T = Record<string, unknown>> {
+// Payload defaults to unknown: a JobHandler<YourPayload> (interface or type) is then assignable to
+// JobHandler, so WorkerService.register accepts it. Validate the payload inside handle().
+export interface Job<T = unknown> {
   id: string;
   type: string;
   payload: T;
@@ -34,7 +38,7 @@ export interface Job<T = Record<string, unknown>> {
   correlationId?: string;
 }
 
-export interface JobHandler<T = Record<string, unknown>> {
+export interface JobHandler<T = unknown> {
   readonly type: string;
   handle(job: Job<T>): Promise<void>;
 }
@@ -50,7 +54,7 @@ export interface HealthStatus {
   status: 'healthy' | 'degraded' | 'unhealthy';
   checks: {
     queueConnection: { status: string };
-    lastJobProcessed: { status: string; timestamp?: string; secondsAgo?: number };
+    lastJobProcessed: { status: string; timestamp?: string | undefined; secondsAgo?: number | undefined };
     inFlightJobs: { count: number; max: number };
   };
 }
@@ -61,9 +65,11 @@ export interface HealthStatus {
 ```typescript
 // src/worker/bull-worker.ts
 
-import { Worker as BullWorker, Queue, Job as BullJob, QueueEvents } from 'bullmq';
-import { Logger } from 'pino';
+import { Worker as BullWorker, type Job as BullJob } from 'bullmq';
+import type { Logger } from 'pino';
 import { Redis } from 'ioredis';
+import type { Job, JobHandler, WorkerConfig, HealthStatus } from './types';
+import { withTimeout, exponentialBackoff } from './utils';
 
 export class WorkerService {
   private workers: BullWorker[] = [];
@@ -275,6 +281,7 @@ export function exponentialBackoff(attempt: number): number {
 // src/worker/producer.ts
 
 import { Queue } from 'bullmq';
+import { Redis } from 'ioredis';
 import { v4 as uuidv4 } from 'uuid';
 
 export class JobProducer {
@@ -308,8 +315,7 @@ export class JobProducer {
       createdAt: new Date().toISOString(),
     }, {
       jobId,
-      delay: options.delay,
-      priority: options.priority,
+      ...options, // delay, priority
       attempts: 5,
       backoff: { type: 'custom' },
       removeOnComplete: { count: 1000 },
@@ -326,8 +332,8 @@ export class JobProducer {
 ```typescript
 // src/worker/scheduler.ts
 
-import cron from 'node-cron';
-import { Logger } from 'pino';
+import cron, { type ScheduledTask } from 'node-cron';
+import type { Logger } from 'pino';
 
 interface ScheduledJob {
   name: string;
@@ -341,7 +347,7 @@ interface LockStore {
 }
 
 export class Scheduler {
-  private tasks: cron.ScheduledTask[] = [];
+  private tasks: ScheduledTask[] = [];
 
   constructor(
     private lockStore: LockStore,
@@ -393,9 +399,9 @@ export class Scheduler {
 ```typescript
 // src/handlers/email-send.handler.ts
 
-import { JobHandler, Job } from '../worker/types';
-import { EmailService } from '../services/email.service';
-import { IdempotencyStore } from '../services/idempotency.store';
+import type { JobHandler, Job } from '../worker/types';
+import type { EmailService } from '../services/email.service';
+import type { IdempotencyStore } from '../services/idempotency.store';
 
 interface EmailPayload {
   tenantId: string;
@@ -438,6 +444,8 @@ import pino from 'pino';
 import { WorkerService } from './bull-worker';
 import { EmailSendHandler } from '../handlers/email-send.handler';
 import { ReportGenerateHandler } from '../handlers/report-generate.handler';
+import { loadConfig } from '../config'; // your zod-validated env config — no defaults for secrets
+import { emailService, idempotencyStore, reportService } from '../container'; // your composition root
 
 async function main(): Promise<void> {
   const logger = pino({ level: 'info' });

@@ -18,6 +18,8 @@ tags:
 
 # Observability Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, OpenTelemetry API 1.9 / SDK 0.222 / resources 2.11 / semconv 1.43, pino 10.3, pino-http 11.0, nestjs-pino 5.2, prom-client 15.1, Prisma 7.10, Drizzle ORM 0.45, ioredis 6.0. One elided fragment is skipped (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `core/observability-patterns.md`. Both produce identical metric names, span naming conventions, and structured log formats so dashboards and alerts work across polyglot services.
 
 Complete observability setup for TypeScript backend services (Express, NestJS). Every generated TypeScript service MUST follow this pattern.
@@ -70,7 +72,7 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources'; // resources 2.x: no `new Resource()`
 import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
@@ -88,7 +90,7 @@ const serviceVersion = process.env.APP_VERSION || '0.0.0';
 const environment = process.env.NODE_ENV || 'development';
 
 const sdk = new NodeSDK({
-  resource: new Resource({
+  resource: resourceFromAttributes({
     [ATTR_SERVICE_NAME]: serviceName,
     [ATTR_SERVICE_VERSION]: serviceVersion,
     [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: environment,
@@ -134,14 +136,14 @@ export { sdk };
 
 ```json
 {
-  "@opentelemetry/sdk-node": "^0.57.0",
-  "@opentelemetry/api": "^1.9.0",
-  "@opentelemetry/auto-instrumentations-node": "^0.56.0",
-  "@opentelemetry/exporter-trace-otlp-grpc": "^0.57.0",
-  "@opentelemetry/exporter-metrics-otlp-grpc": "^0.57.0",
-  "@opentelemetry/sdk-metrics": "^1.30.0",
-  "@opentelemetry/resources": "^1.30.0",
-  "@opentelemetry/semantic-conventions": "^1.28.0"
+  "@opentelemetry/sdk-node": "^0.222.0",
+  "@opentelemetry/api": "^1.9.1",
+  "@opentelemetry/auto-instrumentations-node": "^0.80.0",
+  "@opentelemetry/exporter-trace-otlp-grpc": "^0.222.0",
+  "@opentelemetry/exporter-metrics-otlp-grpc": "^0.222.0",
+  "@opentelemetry/sdk-metrics": "^2.11.0",
+  "@opentelemetry/resources": "^2.11.0",
+  "@opentelemetry/semantic-conventions": "^1.43.0"
 }
 ```
 
@@ -295,7 +297,7 @@ export function tracingMiddleware(req: Request, res: Response, next: NextFunctio
   // Enrich auto-instrumented span with business attributes. req.tenantId comes from the verified
   // token (requestContextMiddleware copies it from req.auth), never from a client header.
   span.setAttribute('tenant_id', req.tenantId || 'unknown');
-  span.setAttribute('request_id', req.id);
+  span.setAttribute('request_id', String(req.id)); // pino-http types req.id as string | number | object
   if (req.userId) {
     span.setAttribute('user_id', req.userId);
   }
@@ -396,12 +398,14 @@ Prisma query tracing via `@prisma/instrumentation` is set up in the SDK config a
 ```typescript
 // src/lib/prisma.ts
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { trace } from '@opentelemetry/api';
 import pino from 'pino';
 
 const logger = pino({ name: 'prisma' });
 
 export const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }), // Prisma 7: adapter required
   log: [
     { level: 'query', emit: 'event' },
     { level: 'error', emit: 'event' },
@@ -443,7 +447,9 @@ Drizzle does not have built-in OTel integration. Wrap the query execution with m
 ```typescript
 // src/lib/drizzle.ts
 import { drizzle } from 'drizzle-orm/node-postgres';
+import { and, eq } from 'drizzle-orm';
 import { Pool } from 'pg';
+import { orders } from '../db/schema'; // your Drizzle tables
 import { tracer } from './tracer';
 import { SpanStatusCode } from '@opentelemetry/api';
 import pino from 'pino';
@@ -560,6 +566,7 @@ Every span that encounters an error MUST record it. Never silently fail.
 
 ```typescript
 import { Span, SpanStatusCode } from '@opentelemetry/api';
+import type { AppError } from '../errors'; // error-handling-typescript.md
 
 // Pattern 1: recordException + setStatus (use for caught errors you re-throw)
 function recordSpanError(span: Span, err: Error): void {
@@ -573,9 +580,9 @@ function recordSpanError(span: Span, err: Error): void {
 // Pattern 2: Add error attributes for domain errors (use for expected errors like 404)
 function recordDomainError(span: Span, err: AppError): void {
   span.setAttribute('error.code', err.code);
-  span.setAttribute('error.category', err.category);
+  span.setAttribute('error.retryable', err.retryable);
   // Only set span status to ERROR for unexpected errors (5xx)
-  if (err.httpStatus >= 500) {
+  if (err.status >= 500) {
     span.recordException(err);
     span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
   }
@@ -868,7 +875,7 @@ export { router as metricsRouter };
 
 ```json
 {
-  "@opentelemetry/exporter-prometheus": "^0.57.0",
+  "@opentelemetry/exporter-prometheus": "^0.222.0",
   "prom-client": "^15.1.0"
 }
 ```
@@ -1018,10 +1025,9 @@ import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
     PinoLoggerModule.forRoot({
       pinoHttp: {
         level: process.env.LOG_LEVEL || 'info',
-        transport:
-          process.env.NODE_ENV !== 'production'
-            ? { target: 'pino-pretty', options: { colorize: true } }
-            : undefined,
+        ...(process.env.NODE_ENV !== 'production'
+          ? { transport: { target: 'pino-pretty', options: { colorize: true } } }
+          : {}),
         formatters: {
           level: (label) => ({ level: label }),
         },
@@ -1086,8 +1092,8 @@ export class OrderService {
 
 ```json
 {
-  "nestjs-pino": "^4.1.0",
-  "pino-http": "^10.3.0",
+  "nestjs-pino": "^5.2.1",
+  "pino-http": "^11.0.0",
   "pino-pretty": "^13.0.0"
 }
 ```
@@ -1101,6 +1107,7 @@ Connect every log line to its trace span using `trace_id` and `span_id`. Use `pi
 ```typescript
 // src/lib/logger.ts (production version with trace correlation)
 import pino from 'pino';
+import { trace, context } from '@opentelemetry/api';
 
 const isProduction = process.env.NODE_ENV === 'production';
 
@@ -1134,7 +1141,6 @@ export const logger = pino({
 
   // Mixin adds trace context to every log line (alternative to transport approach)
   mixin() {
-    const { trace, context } = require('@opentelemetry/api');
     const span = trace.getSpan(context.active());
     if (span) {
       const spanContext = span.spanContext();
@@ -1196,6 +1202,7 @@ Create a child logger per request. This avoids passing tenant_id/request_id to e
 ```typescript
 // src/middleware/request-context.middleware.ts
 import { Request, Response, NextFunction } from 'express';
+import type pino from 'pino';
 import { logger } from '../lib/logger';
 import { randomUUID } from 'node:crypto';
 
@@ -1205,8 +1212,7 @@ declare global {
       auth?: { tenantId: string; userId: string }; // set by the auth middleware from the verified token
       tenantId: string;
       userId?: string;
-      log: pino.Logger;
-      id: string;
+      log: pino.Logger; // req.id (and log) are also declared by pino-http: id is string | number | object
     }
   }
 }
@@ -1218,14 +1224,16 @@ export function requestContextMiddleware(req: Request, res: Response, next: Next
   // Request ID. pino-http's genReqId already set a validated req.id, so reuse it. Otherwise accept a
   // well-formed inbound ID, or generate one.
   const inbound = req.header('x-request-id');
-  const requestId = req.id || (inbound && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`);
+  const requestId =
+    typeof req.id === 'string' && req.id ? req.id : inbound && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`;
   req.id = requestId;
   res.setHeader('X-Request-ID', requestId);
 
   // Tenant and user come from the VERIFIED token that the auth middleware put on req.auth. Never
   // from a client header such as X-Tenant-ID: anyone can send one.
   if (!req.auth?.tenantId) {
-    res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'authentication required', request_id: requestId } });
+    res.set('WWW-Authenticate', 'Bearer');
+    res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Sign in to continue.', request_id: requestId, retryable: false } });
     return;
   }
   req.tenantId = req.auth.tenantId;
@@ -1318,7 +1326,7 @@ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-grpc';
 import { OTLPMetricExporter } from '@opentelemetry/exporter-metrics-otlp-grpc';
 import { PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics';
 import { getNodeAutoInstrumentations } from '@opentelemetry/auto-instrumentations-node';
-import { Resource } from '@opentelemetry/resources';
+import { resourceFromAttributes } from '@opentelemetry/resources'; // resources 2.x: no `new Resource()`
 import {
   ATTR_SERVICE_NAME,
   ATTR_SERVICE_VERSION,
@@ -1336,7 +1344,7 @@ if (process.env.OTEL_LOG_LEVEL === 'debug') {
 const otlpEndpoint = process.env.OTEL_EXPORTER_OTLP_ENDPOINT || 'http://localhost:4317';
 
 const sdk = new NodeSDK({
-  resource: new Resource({
+  resource: resourceFromAttributes({
     [ATTR_SERVICE_NAME]: process.env.OTEL_SERVICE_NAME || 'my-service',
     [ATTR_SERVICE_VERSION]: process.env.APP_VERSION || '0.0.0',
     [ATTR_DEPLOYMENT_ENVIRONMENT_NAME]: process.env.NODE_ENV || 'development',
@@ -1394,8 +1402,10 @@ import { requestContextMiddleware } from './middleware/request-context.middlewar
 import { tracingMiddleware } from './middleware/tracing.middleware';
 import { metricsMiddleware } from './middleware/metrics.middleware';
 import { errorHandler } from './middleware/error-handler.middleware';
-import { healthRouter } from './routes/health';
+import { createHealthRouter } from './routes/health'; // dockerfile-typescript.md
 import { orderRouter } from './routes/orders';
+import { prisma } from './lib/prisma';
+import { redis } from './lib/redis';
 
 const app = express();
 const port = Number(process.env.PORT) || 3000;
@@ -1409,7 +1419,7 @@ app.use(express.json({ limit: '1mb' }));
 app.use(httpLogger);
 
 // 3. Health checks (before auth/tenant — no tenant_id required)
-app.use(healthRouter);
+app.use(createHealthRouter({ prisma, redis }));
 
 // 4. Metrics (duration histogram, active requests). They need nothing from auth, and sitting before it
 //    means 401s are counted too.

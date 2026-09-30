@@ -14,6 +14,8 @@ tags:
 
 # CRUD Handler Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, Zod 4.6, class-validator 0.15, class-transformer 0.5 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-handler.md` (Go). Both produce the envelope in `~/.claude/skills/api/response-envelope.md` — success `{data, meta}`, error `{error}`, never both; list metadata in `meta.pagination` — so frontend clients can use a single parsing strategy. Error bodies are written only by the error middleware in `error-handling-typescript.md`.
 
 Complete HTTP handler set for Express and NestJS. Every generated TypeScript handler MUST follow this pattern.
@@ -97,6 +99,50 @@ export interface ListResult<T> {
 
 ---
 
+## Shared Types — Widget Response (the wire shape)
+
+```typescript
+// src/types/widget.response.ts
+
+import type { Widget } from "../domain/entity";
+
+/**
+ * The widget as the API sends it: snake_case keys and RFC 3339 strings — the same wire shape as the Go and
+ * Python archetypes. Handlers map the domain Widget through toWidgetResponse; never serialize it as-is
+ * (that would send camelCase keys and internal fields such as deletedAt).
+ */
+export interface WidgetResponse {
+  id: string;
+  tenant_id: string;
+  name: string;
+  description: string;
+  status: Widget["status"];
+  version: number;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+  updated_by: string;
+}
+
+export function toWidgetResponse(w: Widget): WidgetResponse {
+  return {
+    id: w.id,
+    tenant_id: w.tenantId,
+    name: w.name,
+    description: w.description,
+    status: w.status,
+    version: w.version,
+    // new Date(): a Redis cache hit (crud-service's cache-aside) holds ISO strings, not Dates
+    created_at: new Date(w.createdAt).toISOString(),
+    updated_at: new Date(w.updatedAt).toISOString(),
+    created_by: w.createdBy,
+    updated_by: w.updatedBy,
+  };
+}
+```
+
+---
+
 ## Zod Validation Schemas
 
 ```typescript
@@ -135,8 +181,9 @@ export const idParamSchema = z.object({
   id: z.string().uuid("invalid UUID format"),
 });
 
-// ?cursor=<next_cursor>&limit=<n> — cursor pagination only (see "Pagination — cursor only" below)
-export const cursorPaginationSchema = z.object({
+// ?cursor=<next_cursor>&limit=<n> — cursor pagination only (see "Pagination — cursor only" below).
+// Loose object: filter[field] keys survive parsing; parseFieldFilters allow-lists them.
+export const cursorPaginationSchema = z.looseObject({
   cursor: z.string().optional().default(""),
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
   sort_by: z.enum(["created_at", "updated_at", "name"]).optional().default("created_at"),
@@ -201,7 +248,7 @@ export interface AuthenticatedRequest extends Request {
 import type { Request, Response, NextFunction } from "express";
 import type { ZodSchema, ZodError, ZodIssue } from "zod";
 import type { FieldError } from "../errors/app-error";
-import { FIELD_MESSAGES, multiValidationError } from "../errors/domain-errors";
+import { FIELD_MESSAGES, multiValidationError, type FieldCode } from "../errors/domain-errors";
 
 type ValidationTarget = "body" | "params" | "query";
 
@@ -216,14 +263,16 @@ type ValidationTarget = "body" | "params" | "query";
  */
 export function validate(target: ValidationTarget, schema: ZodSchema) {
   return (req: Request, _res: Response, next: NextFunction) => {
-    const result = schema.safeParse(req[target]);
+    // reportInput: issue.input tells a missing field (undefined) from a wrong-typed one. It is never sent.
+    const result = schema.safeParse(req[target], { reportInput: true });
 
     if (!result.success) {
       throw multiValidationError(toFieldErrors(result.error));
     }
 
-    // Replace target with parsed value (trimmed, defaulted, coerced)
-    (req as any)[target] = result.data;
+    // Replace target with parsed value (trimmed, defaulted, coerced). Express 5's req.query is a
+    // getter, so `req.query = …` is ignored (or throws in strict mode): define an own property instead.
+    Object.defineProperty(req, target, { value: result.data, writable: true, enumerable: true, configurable: true });
     next();
   };
 }
@@ -239,17 +288,18 @@ function toFieldErrors(error: ZodError): FieldError[] {
   });
 }
 
-function fieldCode(issue: ZodIssue): string {
+// Zod 4 issue codes (Zod 3's invalid_string / invalid_enum_value / issue.received / issue.type are gone).
+function fieldCode(issue: ZodIssue): FieldCode {
   switch (issue.code) {
-    case "invalid_type":
-      return issue.received === "undefined" ? "required" : "invalid_type";
+    case "invalid_type": // a missing key arrives as input === undefined
+      return issue.input === undefined ? "required" : "invalid_type";
     case "too_small":
-      return issue.type === "string" && issue.minimum === 1 ? "required" : "too_small";
+      return issue.origin === "string" && issue.minimum === 1 ? "required" : "too_small";
     case "too_big":
-      return issue.type === "string" ? "too_long" : "too_big";
-    case "invalid_string": // uuid, email, url, regex …
+      return issue.origin === "string" ? "too_long" : "too_big";
+    case "invalid_format": // uuid, email, url, regex …
       return "invalid_format";
-    default: // invalid_enum_value, custom, …
+    default: // invalid_value (enum), custom, …
       return "invalid_value";
   }
 }
@@ -273,7 +323,7 @@ import type { WidgetService } from "../services/widget.service";
 import type { AuthenticatedRequest } from "../types/express";
 import { newMeta, newListMeta } from "../types/response";
 import type { Envelope, ListEnvelope } from "../types/response";
-import type { Widget } from "../domain/widget";
+import { toWidgetResponse, type WidgetResponse } from "../types/widget.response";
 
 /**
  * Creates the widget router with all CRUD endpoints mounted.
@@ -290,8 +340,8 @@ export function createWidgetRouter(svc: WidgetService): Router {
       const authReq = req as AuthenticatedRequest;
       const result = await svc.create(authReq.tenantId, authReq.userId, req.body);
 
-      const response: Envelope<Widget> = {
-        data: result,
+      const response: Envelope<WidgetResponse> = {
+        data: toWidgetResponse(result),
         meta: newMeta(authReq.requestId),
       };
       res.status(201).json(response);
@@ -323,8 +373,8 @@ export function createWidgetRouter(svc: WidgetService): Router {
       });
 
       // data is [] (never null) when empty; next_cursor is null when has_more is false
-      const response: ListEnvelope<Widget> = {
-        data: result.items ?? [],
+      const response: ListEnvelope<WidgetResponse> = {
+        data: (result.items ?? []).map(toWidgetResponse),
         meta: newListMeta(authReq.requestId, result, query.limit),
       };
       res.json(response);
@@ -337,10 +387,11 @@ export function createWidgetRouter(svc: WidgetService): Router {
     validate("params", idParamSchema),
     asyncHandler(async (req, res) => {
       const authReq = req as AuthenticatedRequest;
-      const result = await svc.get(authReq.tenantId, req.params.id);
+      // Express 5 types params as string | string[]; validate("params", idParamSchema) made it a UUID string
+      const result = await svc.get(authReq.tenantId, req.params.id as string);
 
-      const response: Envelope<Widget> = {
-        data: result,
+      const response: Envelope<WidgetResponse> = {
+        data: toWidgetResponse(result),
         meta: newMeta(authReq.requestId),
       };
       res.json(response);
@@ -354,10 +405,10 @@ export function createWidgetRouter(svc: WidgetService): Router {
     validate("body", updateWidgetSchema),
     asyncHandler(async (req, res) => {
       const authReq = req as AuthenticatedRequest;
-      const result = await svc.update(authReq.tenantId, req.params.id, req.body);
+      const result = await svc.update(authReq.tenantId, req.params.id as string, req.body);
 
-      const response: Envelope<Widget> = {
-        data: result,
+      const response: Envelope<WidgetResponse> = {
+        data: toWidgetResponse(result),
         meta: newMeta(authReq.requestId),
       };
       res.json(response);
@@ -370,7 +421,7 @@ export function createWidgetRouter(svc: WidgetService): Router {
     validate("params", idParamSchema),
     asyncHandler(async (req, res) => {
       const authReq = req as AuthenticatedRequest;
-      await svc.delete(authReq.tenantId, req.params.id);
+      await svc.delete(authReq.tenantId, req.params.id as string);
       res.status(204).send();
     }),
   );
@@ -390,9 +441,10 @@ const ALLOWED_FILTER_FIELDS = new Set(["status", "priority", "category"]);
 function parseFieldFilters(req: { query: Record<string, unknown> }): Record<string, string> {
   const fields: Record<string, string> = {};
   for (const [key, value] of Object.entries(req.query)) {
-    const match = /^filter\[(\w+)]$/.exec(key);
-    if (match && ALLOWED_FILTER_FIELDS.has(match[1]) && typeof value === "string") {
-      fields[match[1]] = value;
+    // Express 5's default ("simple") query parser keeps "filter[status]" as a flat key
+    const field = /^filter\[(\w+)]$/.exec(key)?.[1];
+    if (field && ALLOWED_FILTER_FIELDS.has(field) && typeof value === "string") {
+      fields[field] = value;
     }
   }
   return fields;
@@ -409,7 +461,14 @@ import { createWidgetRouter } from "./routes/widget.routes";
 import { errorHandler } from "./middleware/error-handler";
 import { requestId } from "./middleware/request-id";
 import { authMiddleware } from "./middleware/auth";
-import { corsMiddleware } from "./middleware/cors";
+import { corsMiddleware, type CorsConfig } from "./middleware/cors";
+import type { JwtConfig } from "./types/auth";
+import type { WidgetService } from "./services/widget.service";
+
+export interface AppDependencies {
+  config: { cors: CorsConfig; jwt: JwtConfig };
+  widgetService: WidgetService;
+}
 
 export function createApp(deps: AppDependencies): express.Application {
   const app = express();
@@ -474,7 +533,7 @@ import { validationError } from "../../errors/domain-errors";
 import type { AuthUser } from "../../types/auth";
 import { newMeta, newListMeta } from "../../types/response";
 import type { Envelope, ListEnvelope } from "../../types/response";
-import type { Widget } from "../../domain/widget";
+import { toWidgetResponse, type WidgetResponse } from "../../types/widget.response";
 
 /** Invalid :id → 400 VALIDATION_FAILED (details[0].field = "id"), not Nest's default body. */
 const uuidPipe = new ParseUUIDPipe({
@@ -494,10 +553,11 @@ export class WidgetController {
     @CurrentUser() user: AuthUser,
     @RequestId() requestId: string,
     @Body() dto: CreateWidgetDto,
-  ): Promise<Envelope<Widget>> {
-    const result = await this.widgetService.create(user.tenantId, user.id, dto);
+  ): Promise<Envelope<WidgetResponse>> {
+    // description is optional on the wire; the service input requires a string
+    const result = await this.widgetService.create(user.tenantId, user.id, { ...dto, description: dto.description ?? "" });
     return {
-      data: result,
+      data: toWidgetResponse(result),
       meta: newMeta(requestId),
     };
   }
@@ -507,7 +567,7 @@ export class WidgetController {
     @CurrentUser() user: AuthUser,
     @RequestId() requestId: string,
     @Query() query: CursorPaginationDto,
-  ): Promise<ListEnvelope<Widget>> {
+  ): Promise<ListEnvelope<WidgetResponse>> {
     const limit = query.limit ?? 20;
     const result = await this.widgetService.list(user.tenantId, {
       cursor: query.cursor ?? "",
@@ -517,7 +577,7 @@ export class WidgetController {
       fields: {},
     });
     return {
-      data: result.items ?? [],
+      data: (result.items ?? []).map(toWidgetResponse),
       meta: newListMeta(requestId, result, limit),
     };
   }
@@ -527,10 +587,10 @@ export class WidgetController {
     @CurrentUser() user: AuthUser,
     @RequestId() requestId: string,
     @Param("id", uuidPipe) id: string,
-  ): Promise<Envelope<Widget>> {
+  ): Promise<Envelope<WidgetResponse>> {
     const result = await this.widgetService.get(user.tenantId, id);
     return {
-      data: result,
+      data: toWidgetResponse(result),
       meta: newMeta(requestId),
     };
   }
@@ -541,10 +601,10 @@ export class WidgetController {
     @RequestId() requestId: string,
     @Param("id", uuidPipe) id: string,
     @Body() dto: UpdateWidgetDto,
-  ): Promise<Envelope<Widget>> {
-    const result = await this.widgetService.update(user.tenantId, id, dto);
+  ): Promise<Envelope<WidgetResponse>> {
+    const result = await this.widgetService.update(user.tenantId, id, { ...dto, description: dto.description ?? "" });
     return {
-      data: result,
+      data: toWidgetResponse(result),
       meta: newMeta(requestId),
     };
   }

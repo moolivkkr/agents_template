@@ -16,6 +16,8 @@ tags:
 
 # Auth Middleware Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, jsonwebtoken 9.0, jose 6.2, express-rate-limit 8.7, cors 2.8 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/auth-middleware.md` (Go). Both implement identical auth flows: JWT validation, tenant context injection, RBAC, rate limiting, and request ID propagation.
 
 Complete authentication and authorization middleware for Express and NestJS. Every generated TypeScript auth layer MUST follow this pattern.
@@ -96,7 +98,7 @@ export function requestId(req: Request, res: Response, next: NextFunction): void
 import type { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import type { JwtConfig, JwtCustomPayload, AuthUser } from "../types/auth";
-import { UnauthorizedError } from "../errors/domain-errors";
+import { unauthenticated } from "../errors/domain-errors";
 import { logger } from "../lib/logger";
 
 /**
@@ -113,7 +115,7 @@ export function authMiddleware(config: JwtConfig) {
     // 1. Extract token from Authorization header
     const token = extractBearerToken(req);
     if (!token) {
-      throw new UnauthorizedError("missing or invalid Authorization header");
+      throw unauthenticated(); // missing or invalid Authorization header
     }
 
     // 2. Verify and decode token
@@ -129,15 +131,15 @@ export function authMiddleware(config: JwtConfig) {
         request_id: requestId,
         error: err instanceof Error ? err.message : "unknown",
       });
-      throw new UnauthorizedError("invalid or expired token");
+      throw unauthenticated(); // invalid or expired token
     }
 
     // 3. Validate required claims
     if (!payload.sub) {
-      throw new UnauthorizedError("invalid token: missing subject claim");
+      throw unauthenticated(); // invalid token: missing subject claim
     }
     if (!payload.tenant_id) {
-      throw new UnauthorizedError("invalid token: missing tenant_id claim");
+      throw unauthenticated(); // invalid token: missing tenant_id claim
     }
 
     // 4. Inject AuthUser into request
@@ -166,9 +168,9 @@ function extractBearerToken(req: Request): string | null {
   if (!auth) return null;
 
   const parts = auth.split(" ");
-  if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer") return null;
+  if (parts.length !== 2 || parts[0]?.toLowerCase() !== "bearer") return null;
 
-  return parts[1];
+  return parts[1] ?? null;
 }
 ```
 
@@ -182,7 +184,8 @@ function extractBearerToken(req: Request): string | null {
 import type { Request, Response, NextFunction } from "express";
 import { jwtVerify, importSPKI, type JWTPayload } from "jose";
 import type { JwtConfig, AuthUser } from "../types/auth";
-import { UnauthorizedError } from "../errors/domain-errors";
+import { unauthenticated } from "../errors/domain-errors";
+import { isAppError } from "../errors/app-error";
 
 /**
  * Express auth middleware using `jose` — works in Edge runtimes
@@ -199,7 +202,7 @@ export function authMiddlewareJose(config: JwtConfig) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     const token = extractBearerToken(req);
     if (!token) {
-      throw new UnauthorizedError("missing or invalid Authorization header");
+      throw unauthenticated(); // missing or invalid Authorization header
     }
 
     try {
@@ -212,7 +215,7 @@ export function authMiddlewareJose(config: JwtConfig) {
 
       const tenantId = (payload as any).tenant_id as string;
       if (!payload.sub || !tenantId) {
-        throw new UnauthorizedError("invalid token claims");
+        throw unauthenticated(); // invalid token claims
       }
 
       const authUser: AuthUser = {
@@ -229,8 +232,8 @@ export function authMiddlewareJose(config: JwtConfig) {
 
       next();
     } catch (err) {
-      if (err instanceof UnauthorizedError) throw err;
-      throw new UnauthorizedError("invalid or expired token");
+      if (isAppError(err)) throw err;
+      throw unauthenticated(); // invalid or expired token
     }
   };
 }
@@ -239,8 +242,8 @@ function extractBearerToken(req: Request): string | null {
   const auth = req.headers.authorization;
   if (!auth) return null;
   const parts = auth.split(" ");
-  if (parts.length !== 2 || parts[0].toLowerCase() !== "bearer") return null;
-  return parts[1];
+  if (parts.length !== 2 || parts[0]?.toLowerCase() !== "bearer") return null;
+  return parts[1] ?? null;
 }
 ```
 
@@ -349,7 +352,7 @@ export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 // src/middleware/rbac.ts
 
 import type { Request, Response, NextFunction } from "express";
-import { ForbiddenError } from "../errors/domain-errors";
+import { forbidden } from "../errors/domain-errors";
 import type { AuthUser } from "../types/auth";
 
 /**
@@ -363,15 +366,12 @@ export function requireRole(...requiredRoles: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const user = (req as any).user as AuthUser | undefined;
     if (!user) {
-      throw new ForbiddenError("access", "resource");
+      throw forbidden(); // no authenticated user on the request
     }
 
     const hasRole = requiredRoles.some((role) => user.roles.includes(role));
     if (!hasRole) {
-      throw new ForbiddenError(
-        `requires one of roles: ${requiredRoles.join(", ")}`,
-        "resource",
-      );
+      throw forbidden(); // none of requiredRoles — the role list stays out of the client message
     }
 
     next();
@@ -389,13 +389,13 @@ export function requirePermission(...requiredPermissions: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const user = (req as any).user as AuthUser | undefined;
     if (!user) {
-      throw new ForbiddenError("access", "resource");
+      throw forbidden(); // no authenticated user on the request
     }
 
     const userPermSet = new Set(user.permissions);
     for (const perm of requiredPermissions) {
       if (!userPermSet.has(perm)) {
-        throw new ForbiddenError(`missing permission: ${perm}`, "resource");
+        throw forbidden(); // missing perm — never named in the client message
       }
     }
 
@@ -413,7 +413,7 @@ export function requirePermission(...requiredPermissions: string[]) {
 
 import { CanActivate, ExecutionContext, Injectable } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
-import { ForbiddenError } from "../errors/domain-errors";
+import { forbidden } from "../errors/domain-errors";
 import type { AuthUser } from "../types/auth";
 
 export const ROLES_KEY = "roles";
@@ -443,15 +443,12 @@ export class RolesGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user = request.user as AuthUser | undefined;
     if (!user) {
-      throw new ForbiddenError("access", "resource");
+      throw forbidden(); // no authenticated user on the request
     }
 
     const hasRole = requiredRoles.some((role) => user.roles.includes(role));
     if (!hasRole) {
-      throw new ForbiddenError(
-        `requires one of roles: ${requiredRoles.join(", ")}`,
-        "resource",
-      );
+      throw forbidden(); // none of requiredRoles — the role list stays out of the client message
     }
 
     return true;
@@ -477,9 +474,10 @@ export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
 ```typescript
 // src/middleware/rate-limit.ts
 
-import rateLimit from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import type { Request } from "express";
 import type { AuthUser } from "../types/auth";
+import { rateLimited } from "../errors/domain-errors";
 
 /**
  * Per-tenant rate limiter using express-rate-limit.
@@ -487,33 +485,24 @@ import type { AuthUser } from "../types/auth";
  * Falls back to IP-based limiting for unauthenticated requests.
  *
  * Usage:
- *   app.use(tenantRateLimit({ windowMs: 60_000, max: 100 }));
+ *   app.use(tenantRateLimit({ windowMs: 60_000, limit: 100 }));
  */
-export function tenantRateLimit(opts: { windowMs: number; max: number }) {
+export function tenantRateLimit(opts: { windowMs: number; limit: number }) {
   return rateLimit({
     windowMs: opts.windowMs,
-    max: opts.max,
+    limit: opts.limit,      // `max` was renamed `limit` in express-rate-limit 7
     standardHeaders: true,  // Return rate limit info in RateLimit-* headers
     legacyHeaders: false,   // Disable X-RateLimit-* headers
 
-    // Key by tenant ID (from auth) or IP (fallback)
+    // Key by tenant ID (from auth) or IP (fallback). ipKeyGenerator groups an IPv6 /56, so a
+    // client can't dodge the limit by rotating addresses inside its own prefix.
     keyGenerator: (req: Request): string => {
       const user = (req as any).user as AuthUser | undefined;
-      return user?.tenantId ?? req.ip ?? "unknown";
+      return user?.tenantId ?? ipKeyGenerator(req.ip ?? "");
     },
 
-    // Custom response matching the error envelope format
-    handler: (_req, res) => {
-      res.status(429).json({
-        error: {
-          code: "RATE_LIMITED",
-          message: "too many requests — please retry later",
-          details: {
-            retry_after_seconds: Math.ceil(opts.windowMs / 1000),
-          },
-        },
-      });
-    },
+    // 429 RATE_LIMITED goes through the error middleware: envelope, request_id, Retry-After
+    handler: (_req, _res, next) => next(rateLimited(Math.ceil(opts.windowMs / 1000))),
   });
 }
 
@@ -526,19 +515,11 @@ export function tenantRateLimit(opts: { windowMs: number; max: number }) {
 export function sensitiveRateLimit() {
   return rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 10,                   // 10 attempts per window
+    limit: 10,                 // 10 attempts per window
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req: Request): string => req.ip ?? "unknown",
-    handler: (_req, res) => {
-      res.status(429).json({
-        error: {
-          code: "RATE_LIMITED",
-          message: "too many attempts — please try again later",
-          details: { retry_after_seconds: 900 },
-        },
-      });
-    },
+    keyGenerator: (req: Request): string => ipKeyGenerator(req.ip ?? ""),
+    handler: (_req, _res, next) => next(rateLimited(900)),
   });
 }
 ```
@@ -669,7 +650,7 @@ import type { JwtConfig } from "../types/auth";
 interface MiddlewareConfig {
   cors: CorsConfig;
   jwt: JwtConfig;
-  rateLimit: { windowMs: number; max: number };
+  rateLimit: { windowMs: number; limit: number };
 }
 
 /**
@@ -773,7 +754,7 @@ bootstrap();
 import { timingSafeEqual } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import type { AuthUser } from "../types/auth";
-import { UnauthorizedError } from "../errors/domain-errors";
+import { unauthenticated } from "../errors/domain-errors";
 
 export interface ApiKeyIdentity {
   tenantId: string;
@@ -802,12 +783,12 @@ export function apiKeyAuth(config: ApiKeyConfig) {
   return async (req: Request, _res: Response, next: NextFunction): Promise<void> => {
     const apiKey = req.headers["x-api-key"] as string | undefined;
     if (!apiKey) {
-      throw new UnauthorizedError("missing X-API-Key header");
+      throw unauthenticated(); // missing X-API-Key header
     }
 
     const identity = await config.lookupFn(apiKey);
     if (!identity) {
-      throw new UnauthorizedError("invalid API key");
+      throw unauthenticated(); // invalid API key
     }
 
     const authUser: AuthUser = {

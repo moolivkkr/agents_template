@@ -1,5 +1,7 @@
 # Page Archetype: Detail Page
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, React 19.3, TanStack Query 5.104, React Router 7.18 (tests/archetype-compile/typescript/run.sh).
+
 ## When to Use
 Any screen showing a single resource: user profile, order details, invoice view, project settings.
 
@@ -52,7 +54,7 @@ const { id } = useParams();
 const { data, isLoading, isError, error, refetch } = useQuery(
   resourceQueries.detail(id)
 );
-// data type: { data: Resource } — SINGLE OBJECT
+// data type: ApiSuccess<Resource> = { data: Resource, meta: { request_id } } — data.data is a SINGLE OBJECT
 
 const deleteResource = useDeleteResource();
 ```

@@ -14,6 +14,8 @@ tags:
 
 # Component Test Archetype
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, React 19.3, TanStack Query 5.104, React Router 7.18, Testing Library (react 16.3, user-event 14.6, jest-dom 7.0), MSW 3.0, Vitest 5.0. Type-checked against stub components, not run (tests/archetype-compile/typescript/run.sh).
+
 Complete React/TypeScript component test template. Every generated component test MUST follow this pattern.
 
 ## Test File Location
@@ -40,6 +42,9 @@ import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { setupServer } from 'msw/node';
 import { http, HttpResponse } from 'msw';
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from 'vitest';
+import type { ApiErrorBody, ApiSuccess } from '@/types/api'; // the envelope types (api/response-envelope.md)
+import { WidgetList } from './WidgetList';
+import { WidgetForm } from './WidgetForm';
 
 // --- Provider Wrapper ---
 
@@ -163,7 +168,8 @@ const handlers = [
 
 const server = setupServer(...handlers);
 
-beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));
+// MSW 3 renamed onUnhandledRequest to onUnhandledFrame; the old key is silently ignored (unmocked requests only warn)
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 ```
@@ -682,7 +688,7 @@ describe('accessibility', () => {
 function mockApiResponse(
     method: 'get' | 'post' | 'put' | 'delete',
     path: string,
-    response: unknown,
+    response: ApiSuccess<unknown> | ApiErrorBody,
     status = 200,
 ) {
     const httpMethod = http[method];
@@ -693,7 +699,7 @@ function mockApiResponse(
     );
 }
 
-// mockApiError creates a standard error response.
+// mockApiError creates an error envelope (api/response-envelope.md): request_id and retryable included.
 function mockApiError(
     method: 'get' | 'post' | 'put' | 'delete',
     path: string,
@@ -702,7 +708,7 @@ function mockApiError(
     message: string,
 ) {
     mockApiResponse(method, path, {
-        error: { code, message },
+        error: { code, message, request_id: 'test', retryable: status === 429 || status >= 503 },
     }, status);
 }
 
@@ -719,7 +725,7 @@ async function waitForDataLoad() {
 - Every test MUST use `renderWithProviders` — never render without QueryClient and Router
 - QueryClient MUST have `retry: false` and `gcTime: 0` for deterministic tests
 - Use `userEvent.setup()` — never use `fireEvent` for user interactions (userEvent simulates real browser behavior)
-- MSW server MUST use `onUnhandledRequest: 'error'` to catch missing mock handlers
+- MSW server MUST use `onUnhandledFrame: 'error'` (MSW 3; `onUnhandledRequest` in MSW 2) to catch missing mock handlers
 - Reset handlers after each test with `server.resetHandlers()` — prevent cross-test contamination
 - Use `screen.getByRole` and `screen.getByLabelText` — never query by CSS class or test-id unless no semantic alternative exists
 - Use `waitFor` for async assertions — never use `setTimeout` or arbitrary delays

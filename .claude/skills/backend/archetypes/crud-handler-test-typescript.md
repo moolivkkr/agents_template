@@ -18,6 +18,8 @@ tags:
 
 # CRUD Handler Test Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Vitest 5.0 + supertest 7.3, NestJS 12.1 + Jest 30 types. The Express tests are also run (40/40 pass); the NestJS spec is type-checked only (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-handler-test.md` (Go). Both validate the envelope in `~/.claude/skills/api/response-envelope.md`, the same error codes, and the same cursor pagination behavior.
 
 Complete HTTP handler test template for Express (vitest + supertest) and NestJS (jest + supertest). Every generated TypeScript handler test MUST follow this pattern.
@@ -895,12 +897,12 @@ src/modules/widget/
 
 import { Test, TestingModule } from "@nestjs/testing";
 import { INestApplication, ValidationPipe, HttpStatus } from "@nestjs/common";
-import * as request from "supertest";
+import request from "supertest";
 import { WidgetController } from "./widget.controller";
 import { WidgetService } from "./widget.service";
 import { JwtAuthGuard } from "../../guards/jwt-auth.guard";
 import { AppErrorFilter, validationExceptionFactory } from "../../filters/app-error.filter";
-import type { Widget } from "../../domain/widget";
+import type { Widget } from "../../domain/entity";
 
 /** Factory: builds a test widget with defaults. */
 function makeWidget(overrides: Partial<Widget> = {}): Widget {

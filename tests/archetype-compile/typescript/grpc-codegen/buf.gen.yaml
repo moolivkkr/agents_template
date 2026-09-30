@@ -1,0 +1,11 @@
+# ts-proto for nice-grpc: per the ts-proto README, `outputServices=nice-grpc` must be paired with
+# `outputServices=generic-definitions` (that is what emits WidgetServiceDefinition).
+version: v2
+plugins:
+  - local: ../node_modules/.bin/protoc-gen-ts_proto
+    out: ../shims/grpc/src/gen
+    opt:
+      - outputServices=nice-grpc
+      - outputServices=generic-definitions
+      - useExactTypes=false
+      - esModuleInterop=true

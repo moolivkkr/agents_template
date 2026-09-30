@@ -14,6 +14,8 @@ tags:
 
 # CRUD Repository Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 (prisma-client-js + @prisma/adapter-pg), Drizzle ORM 0.45, postgres.js 3.4 (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-repository.md` (Go). Both implement identical data access patterns: cursor pagination, soft delete, optimistic locking, and tenant isolation.
 
 Complete TypeScript data access layer for Prisma and Drizzle. Every generated TypeScript repository MUST follow this pattern.
@@ -83,6 +85,7 @@ import {
   internal,
   unavailable,
 } from "../errors/domain-errors";
+import { encodeCursor, decodeCursor } from "../lib/cursor";
 
 /** Allowed sort columns — prevents injection via dynamic orderBy. */
 const ALLOWED_SORT_COLUMNS = new Set(["created_at", "updated_at", "name"]);
@@ -241,8 +244,8 @@ export class PrismaWidgetRepository implements IWidgetRepository {
 
     // Build next cursor from last item
     let cursor = "";
-    if (hasMore && pageItems.length > 0) {
-      const last = pageItems[pageItems.length - 1];
+    const last = pageItems.at(-1);
+    if (hasMore && last) {
       cursor = encodeCursor(last[sortField as keyof typeof last], last.id);
     }
 
@@ -322,93 +325,44 @@ export class PrismaWidgetRepository implements IWidgetRepository {
 }
 ```
 
-## Prisma Soft Delete Middleware
-
-```typescript
-// src/lib/prisma-soft-delete.middleware.ts
-
-import { Prisma } from "@prisma/client";
-
-/**
- * Prisma middleware that automatically filters soft-deleted records
- * on find operations and converts delete to soft delete.
- *
- * Apply in main.ts:
- *   prisma.$use(softDeleteMiddleware);
- *
- * NOTE: Prisma Client Extensions (v4.16+) are preferred over $use middleware.
- * This middleware is shown for compatibility with older Prisma versions.
- */
-export const softDeleteMiddleware: Prisma.Middleware = async (params, next) => {
-  // Models that support soft delete
-  const softDeleteModels = new Set(["Widget", "Component"]);
-
-  if (!params.model || !softDeleteModels.has(params.model)) {
-    return next(params);
-  }
-
-  // Intercept find operations — add deletedAt: null filter
-  if (params.action === "findFirst" || params.action === "findMany") {
-    if (!params.args) params.args = {};
-    if (!params.args.where) params.args.where = {};
-
-    // Only add filter if not explicitly querying deleted records
-    if (params.args.where.deletedAt === undefined) {
-      params.args.where.deletedAt = null;
-    }
-  }
-
-  // Intercept delete — convert to soft delete
-  if (params.action === "delete") {
-    params.action = "update";
-    params.args.data = { deletedAt: new Date() };
-  }
-
-  if (params.action === "deleteMany") {
-    params.action = "updateMany";
-    if (!params.args.data) params.args.data = {};
-    params.args.data.deletedAt = new Date();
-  }
-
-  return next(params);
-};
-```
-
 ## Prisma Client Extension (Modern Approach)
 
 ```typescript
 // src/lib/prisma-extensions.ts
 
-import { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 /**
- * Prisma Client Extension for soft delete — preferred over $use middleware (v4.16+).
+ * Prisma Client Extension for soft delete. (The older `prisma.$use` middleware was removed in
+ * Prisma 6.14 — extensions are the only hook.)
  *
  * Usage:
- *   const prisma = new PrismaClient().$extends(softDeleteExtension);
+ *   const prisma = new PrismaClient({ adapter }).$extends(softDeleteExtension);
  */
-export const softDeleteExtension = Prisma.defineExtension({
-  name: "soft-delete",
-  query: {
-    widget: {
-      async findMany({ args, query }) {
-        args.where = { ...args.where, deletedAt: null };
-        return query(args);
-      },
-      async findFirst({ args, query }) {
-        args.where = { ...args.where, deletedAt: null };
-        return query(args);
-      },
-      async delete({ args }) {
-        // Convert delete to soft delete
-        return (prisma as any).widget.update({
-          ...args,
-          data: { deletedAt: new Date(), updatedAt: new Date() },
-        }) as any;
+export const softDeleteExtension = Prisma.defineExtension((client) =>
+  client.$extends({
+    name: "soft-delete",
+    query: {
+      widget: {
+        async findMany({ args, query }) {
+          args.where = { ...args.where, deletedAt: null };
+          return query(args);
+        },
+        async findFirst({ args, query }) {
+          args.where = { ...args.where, deletedAt: null };
+          return query(args);
+        },
+        async delete({ args }) {
+          // Convert delete to soft delete — on the base client, so this hook isn't re-entered
+          return client.widget.update({
+            ...args,
+            data: { deletedAt: new Date(), updatedAt: new Date() },
+          });
+        },
       },
     },
-  },
-});
+  }),
+);
 ```
 
 ---
@@ -499,6 +453,7 @@ export type ComponentSelect = typeof components.$inferSelect;
 import { eq, and, isNull, lt, gt, asc, desc, sql, type SQL } from "drizzle-orm";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
 import { widgets } from "../db/schema";
+import type * as schema from "../db/schema";
 import type { IWidgetRepository } from "./widget.repository.interface";
 import type { Widget } from "../domain/entity";
 import type { ListFilters, ListResult } from "../types/pagination";
@@ -510,6 +465,7 @@ import {
   internal,
   unavailable,
 } from "../errors/domain-errors";
+import { encodeCursor, decodeCursor } from "../lib/cursor";
 
 /** Allowed sort columns — maps external names to Drizzle column references. */
 const SORT_COLUMN_MAP = {
@@ -521,7 +477,8 @@ const SORT_COLUMN_MAP = {
 type SortColumn = keyof typeof SORT_COLUMN_MAP;
 
 export class DrizzleWidgetRepository implements IWidgetRepository {
-  constructor(private readonly db: PostgresJsDatabase) {}
+  // The db createDatabase() returns (drizzle(client, { schema })) — a bare PostgresJsDatabase won't accept it
+  constructor(private readonly db: PostgresJsDatabase<typeof schema>) {}
 
   // --- Create ---
 
@@ -541,7 +498,7 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
         })
         .returning();
 
-      return this.toDomain(result);
+      return this.toDomain(result!); // INSERT … RETURNING yields exactly one row
     } catch (err) {
       throw this.mapError(err, "create");
     }
@@ -680,14 +637,14 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
 
     // Build next cursor
     let cursor = "";
-    if (hasMore && pageItems.length > 0) {
-      const last = pageItems[pageItems.length - 1];
+    const last = pageItems.at(-1);
+    if (hasMore && last) {
       const sortValue = last[this.sortFieldKey(filters.sortBy)];
       cursor = encodeCursor(sortValue, last.id);
     }
 
     // Count total
-    const [{ count }] = await this.db
+    const [{ count } = { count: 0 }] = await this.db
       .select({ count: sql<number>`count(*)::int` })
       .from(widgets)
       .where(
@@ -779,7 +736,7 @@ export class DrizzleWidgetRepository implements IWidgetRepository {
       tenantId: record.tenantId,
       name: record.name,
       description: record.description,
-      status: record.status,
+      status: record.status as Widget["status"], // varchar column, written only through this service
       createdAt: record.createdAt,
       updatedAt: record.updatedAt,
       deletedAt: record.deletedAt,

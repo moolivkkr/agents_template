@@ -14,6 +14,8 @@ tags:
 
 # Dockerfile Archetype — TypeScript / Node.js
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, Prisma 7.10, ioredis 6.0 (the health route) (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/dockerfile.md` (Go, if it exists). Covers multi-stage builds for npm, pnpm, and Bun runtimes.
 
 Complete, production-optimized Dockerfile templates for TypeScript/Node.js applications. Every generated Dockerfile MUST follow this pattern.

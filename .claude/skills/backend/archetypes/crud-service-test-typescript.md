@@ -14,6 +14,8 @@ tags:
 
 # CRUD Service Test Archetype — TypeScript
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Vitest 5.0, vitest-mock-extended 5.1, Prisma 7.10, Drizzle ORM 0.45. Also run: 43/43 pass (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-service-test.md` (Go). Both verify identical business logic patterns: cache-aside, optimistic locking, audit logging, and tenant isolation.
 
 Complete unit test template for the service layer using vitest. Every generated TypeScript service test MUST follow this pattern.
@@ -697,7 +699,7 @@ describe("WidgetService.create — table-driven", () => {
 ```typescript
 // Pattern for mocking Prisma Client in service tests
 
-import { vi } from "vitest";
+import { beforeEach, it } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { mockDeep, mockReset, type DeepMockProxy } from "vitest-mock-extended";
 
@@ -755,8 +757,9 @@ it("creates widget within transaction", async () => {
 ```typescript
 // Pattern for mocking Drizzle ORM in service tests
 
-import { vi } from "vitest";
+import { vi, it } from "vitest";
 import type { PostgresJsDatabase } from "drizzle-orm/postgres-js";
+import { makeWidget } from "../test-utils/widget.factory";
 
 /**
  * Creates a mock Drizzle database client.

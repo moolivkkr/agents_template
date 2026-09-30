@@ -1,5 +1,7 @@
 # Page Archetype: Form Page (Create / Edit)
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, React 19.3, TanStack Query 5.104, react-hook-form 7.89 + @hookform/resolvers 5.9, Zod 4.6, sonner 2.0 (tests/archetype-compile/typescript/run.sh).
+
 ## When to Use
 Any screen with a data entry form: create user, edit profile, new invoice, settings form.
 
@@ -44,7 +46,7 @@ const form = useForm<CreateUserInput>({
 
 // Edit mode — pre-populate from query
 const { data: user, isLoading } = useQuery(userQueries.detail(id));
-const form = useForm<UpdateUserInput>({
+const editForm = useForm<UpdateUserInput>({
   resolver: zodResolver(updateUserSchema),
   values: user?.data, // pre-populate when data arrives
 });
@@ -56,12 +58,10 @@ async function onSubmit(data: CreateUserInput) {
     toast.success("User created");
     form.reset();
     router.push("/users");
-  } catch (error: any) {
-    if (error.status === 422 && error.details) {
-      mapServerErrors(form, error.details); // field-level errors
-    } else {
-      toast.error("Failed to save");
-    }
+  } catch (error) {
+    // 400 VALIDATION_FAILED carries details[] (api/response-envelope.md) — map them onto the fields
+    if (error instanceof ApiError && error.code === "VALIDATION_FAILED" && mapServerErrors(form, error.details)) return;
+    toast.error(error instanceof ApiError ? error.message : "Failed to save");
   }
 }
 ```
@@ -90,7 +90,7 @@ async function onSubmit(data: CreateUserInput) {
 ### Validation Errors (inline)
 - `<FormMessage />` below each invalid field (red text, auto aria-describedby)
 - Submit button stays enabled — shows errors on attempt
-- Server 422 errors mapped to fields via `form.setError()`
+- Server 400 `VALIDATION_FAILED` `details[]` mapped to fields via `form.setError()` (`mapServerErrors`, ui/error-handling-patterns.md)
 
 ### Success
 - `toast.success("User created")` or `toast.success("Changes saved")`

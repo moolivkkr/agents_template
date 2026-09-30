@@ -15,6 +15,8 @@ tags:
 
 # Performance Archetype — TypeScript / Node.js
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 + extension-read-replicas 0.5, pg 8.23, ioredis 6.0, undici 8.11, axios 1.20, lru-cache 11.5, stream-json 3.7, csv-parse 7.0, autocannon 8.0, Zod 4.6. One barrel-export illustration is skipped (tests/archetype-compile/typescript/run.sh).
+
 > **Canonical reference**: Performance patterns specific to Node.js and TypeScript. Apply these alongside `core/observability-patterns.md` for measurable, monitored performance.
 
 Every generated TypeScript service MUST follow these patterns. Performance is not an afterthought — it is a first-class requirement from day one.
@@ -72,25 +74,29 @@ Node.js is single-threaded. If you block the event loop, every request queues be
 | RegExp on untrusted input | ReDoS-vulnerable patterns | Use `re2` or validate input length first |
 
 ```typescript
-// BAD — blocks event loop for 500ms+ on large files
-const data = fs.readFileSync('/path/to/large-file.csv', 'utf8');
-const parsed = JSON.parse(data);
-
-// GOOD — non-blocking
-const data = await fs.promises.readFile('/path/to/large-file.csv', 'utf8');
-const parsed = JSON.parse(data); // Still blocks if file is huge — see streaming section
-
-// BEST — streaming for truly large files
-import { createReadStream } from 'node:fs';
+import fs, { createReadStream } from 'node:fs';
 import { parser } from 'stream-json';
-import { streamArray } from 'stream-json/streamers/StreamArray';
+import { streamArray } from 'stream-json/streamers/stream-array.js'; // stream-json 3: kebab-case paths
 
-const pipeline = createReadStream('/path/to/large-file.json')
-  .pipe(parser())
-  .pipe(streamArray());
+// BAD — blocks event loop for 500ms+ on large files
+function loadSync(path: string): unknown {
+  return JSON.parse(fs.readFileSync(path, 'utf8'));
+}
 
-for await (const { value } of pipeline) {
-  await processItem(value);
+// GOOD — non-blocking read
+async function loadAsync(path: string): Promise<unknown> {
+  return JSON.parse(await fs.promises.readFile(path, 'utf8')); // Still blocks if file is huge — see streaming section
+}
+
+// BEST — streaming for truly large files (stream-json 3: .asStream() gives the Node Duplex to pipe)
+async function forEachArrayItem(path: string, processItem: (item: unknown) => Promise<void>): Promise<void> {
+  const pipeline = createReadStream(path)
+    .pipe(parser.asStream())
+    .pipe(streamArray.asStream());
+
+  for await (const { value } of pipeline) {
+    await processItem(value);
+  }
 }
 ```
 
@@ -148,7 +154,7 @@ const logger = pino({ name: 'worker-pool' });
 
 interface WorkerTask<T> {
   resolve: (value: T) => void;
-  reject: (reason: Error) => void;
+  reject: (reason: unknown) => void; // a Worker 'error' event carries unknown
 }
 
 export class WorkerPool {
@@ -313,6 +319,7 @@ export async function processLargeCSV(filePath: string): Promise<{ processed: nu
 
 // Stream a large JSON array from DB to HTTP response
 import { Readable } from 'node:stream';
+import type { Response } from 'express'; // without this import, `Response` is the Fetch API type
 
 export function streamJsonResponse(res: Response, cursor: AsyncIterable<unknown>): void {
   res.setHeader('Content-Type', 'application/json');
@@ -343,32 +350,23 @@ export function streamJsonResponse(res: Response, cursor: AsyncIterable<unknown>
 ## Connection Pooling — Prisma
 
 ```typescript
-// prisma/schema.prisma
-datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
-}
-
-// Connection pool settings via DATABASE_URL query params:
-// postgresql://user:pass@host:5432/db?connection_limit=20&pool_timeout=10
-
-// Or set programmatically:
 // src/lib/prisma.ts
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 
+// Prisma 7 connects through a driver adapter, and the adapter's pg Pool IS the connection pool: size it
+// here. (The ?connection_limit=&pool_timeout= DATABASE_URL params configured the old Rust engine's pool;
+// @prisma/adapter-pg and pg don't read them.)
 export const prisma = new PrismaClient({
-  // Prisma manages its own connection pool.
-  // Configure via DATABASE_URL query params:
-  //   connection_limit: Max pool size (default: num_cpus * 2 + 1)
-  //   pool_timeout:     Seconds to wait for connection (default: 10)
-  //
-  // For a 4-core machine, default pool = 9.
-  // For high-concurrency services, increase:
-  //   ?connection_limit=20&pool_timeout=15
-  //
+  adapter: new PrismaPg({
+    connectionString: process.env.DATABASE_URL!,
+    max: Number(process.env.PG_POOL_MAX || 10), // pool size per process
+    connectionTimeoutMillis: 10_000,            // wait for a free connection, then fail
+    idleTimeoutMillis: 30_000,
+  }),
   // WARNING: Total connections across all instances must not exceed
   // PostgreSQL max_connections (default: 100).
-  // Formula: connection_limit * num_instances < max_connections
+  // Formula: max * num_instances < max_connections
 });
 
 // Reuse a single PrismaClient across the entire process.
@@ -518,9 +516,8 @@ const agent = new Agent({
   pipelining: 1,                // HTTP pipelining depth (1 = disabled)
 });
 
-// Use with fetch (Node.js 18+)
+// Use with the global fetch (Node.js 18+; @types/node types `dispatcher`)
 const response = await fetch('https://api.example.com/data', {
-  // @ts-expect-error — undici dispatcher not in global fetch types yet
   dispatcher: agent,
 });
 
@@ -616,7 +613,7 @@ class OrderProcessor extends EventEmitter {
   }
 
   // GOOD — clean up when done
-  processOrder(handler: () => void): void {
+  processOrder(handler: () => void): () => void {
     someExternalEmitter.on('data', handler);
     // Return cleanup function
     return () => someExternalEmitter.removeListener('data', handler);
@@ -636,6 +633,10 @@ class Poller {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  private poll(): void {
+    // fetch + handle
   }
 }
 
@@ -695,6 +696,7 @@ Never buffer an entire large response in memory. Stream it directly to the clien
 import { Router, Request, Response } from 'express';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { prisma } from '../lib/prisma';
 
 const router = Router();
 
@@ -716,7 +718,7 @@ router.get('/api/v1/export/orders', async (req: Request, res: Response) => {
         where: { tenantId },
         take: batchSize,
         skip: cursor ? 1 : 0,
-        ...(cursor && { cursor: { id: cursor } }),
+        ...(cursor ? { cursor: { id: cursor } } : {}),
         orderBy: { id: 'asc' },
         select: { id: true, total: true, status: true, createdAt: true },
       });
@@ -728,7 +730,7 @@ router.get('/api/v1/export/orders', async (req: Request, res: Response) => {
       if (orders.length < batchSize) {
         this.push(null); // Signal end of stream
       } else {
-        cursor = orders[orders.length - 1].id;
+        cursor = orders.at(-1)?.id;
       }
     },
   });
@@ -852,7 +854,7 @@ gcObserver.observe({ type: 'gc', buffered: false });
 ```typescript
 // 1. Select only needed fields — avoid SELECT *
 // BAD
-const orders = await prisma.order.findMany({ where: { tenantId } });
+const allColumns = await prisma.order.findMany({ where: { tenantId } });
 
 // GOOD — select specific fields
 const orders = await prisma.order.findMany({
@@ -868,7 +870,7 @@ const orders = await prisma.order.findMany({
 
 // 2. Use include sparingly — it generates JOINs
 // BAD — includes everything
-const order = await prisma.order.findUnique({
+const everything = await prisma.order.findUnique({
   where: { id: orderId },
   include: { items: true, customer: true, payments: true, shipments: true },
 });
@@ -956,15 +958,17 @@ const [orders, stats, recentActivity] = await Promise.all([
 ## Read Replicas
 
 ```typescript
-// Using Prisma read replicas extension
+// Using Prisma read replicas extension (0.5+ for Prisma 7: pass replica clients, not URLs)
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import { readReplicas } from '@prisma/extension-read-replicas';
 
-const prisma = new PrismaClient().$extends(
+const client = (url: string) => new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) });
+
+const prisma = client(process.env.DATABASE_URL!).$extends(
   readReplicas({
-    url: process.env.DATABASE_REPLICA_URL!,
-    // Multiple replicas:
-    // url: [process.env.REPLICA_1_URL!, process.env.REPLICA_2_URL!],
+    replicas: [client(process.env.DATABASE_REPLICA_URL!)],
+    // Multiple replicas: [client(process.env.REPLICA_1_URL!), client(process.env.REPLICA_2_URL!)]
   }),
 );
 
@@ -985,12 +989,14 @@ const freshOrder = await prisma.$primary().order.findUnique({ where: { id: order
 ```typescript
 // src/lib/prisma.ts
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg } from '@prisma/adapter-pg';
 import pino from 'pino';
 
 const logger = pino({ name: 'prisma' });
 const SLOW_QUERY_MS = 500;
 
 export const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }), // Prisma 7: adapter required
   log: [
     { level: 'query', emit: 'event' },
     { level: 'error', emit: 'event' },
@@ -1001,8 +1007,7 @@ export const prisma = new PrismaClient({
 prisma.$on('query', (e) => {
   if (e.duration > SLOW_QUERY_MS) {
     logger.warn({
-      query: e.query,
-      params: e.params,
+      query: e.query, // the shape only — never e.params: values can carry PII and secrets
       duration_ms: e.duration,
       target: e.target,
     }, 'slow query detected');
@@ -1086,13 +1091,13 @@ export function detectNPlusOne(query: string): void {
 ```typescript
 // N+1: Loading orders then loading items for each order
 // BAD
-const orders = await prisma.order.findMany({ where: { tenantId } });
-for (const order of orders) {
-  order.items = await prisma.orderItem.findMany({ where: { orderId: order.id } }); // N queries!
+const ordersOnly = await prisma.order.findMany({ where: { tenantId } });
+for (const order of ordersOnly) {
+  const items = await prisma.orderItem.findMany({ where: { orderId: order.id } }); // N queries!
 }
 
 // GOOD — single query with include
-const orders = await prisma.order.findMany({
+const ordersWithItems = await prisma.order.findMany({
   where: { tenantId },
   include: { items: true }, // 1 query with JOIN
 });
@@ -1251,8 +1256,8 @@ const result = await autocannon({
   connections: 100,
   duration: 30,
   headers: {
-    'X-Tenant-ID': 'tenant_abc',
-    'Authorization': 'Bearer test-token',
+    // The tenant comes from the token's claims — never an X-Tenant-ID header
+    Authorization: `Bearer ${process.env.LOADTEST_TOKEN}`,
   },
 });
 
@@ -1296,9 +1301,11 @@ node --prof-process isolate-*.log > profile.txt
 ```typescript
 // src/lib/cache.ts
 import { LRUCache } from 'lru-cache';
+import { prisma } from './prisma';
 
 // Type-safe LRU cache factory
-export function createLRUCache<V>(options: {
+// V extends {}: lru-cache 11 doesn't store null/undefined values
+export function createLRUCache<V extends {}>(options: {
   maxItems: number;
   ttlMs: number;
   name: string;
@@ -1336,9 +1343,11 @@ export async function getTenantConfig(tenantId: string): Promise<TenantConfig> {
   const cached = tenantConfigCache.get(tenantId);
   if (cached) return cached;
 
-  const config = await prisma.tenantConfig.findUniqueOrThrow({
+  const row = await prisma.tenantConfig.findUniqueOrThrow({
     where: { tenantId },
   });
+  // limits is a JSON column — validated when it was written
+  const config: TenantConfig = { features: row.features, limits: row.limits as Record<string, number> };
 
   tenantConfigCache.set(tenantId, config);
   return config;
@@ -1400,18 +1409,15 @@ export async function cacheGetMany<T>(keys: string[]): Promise<Map<string, T>> {
   const results = await pipeline.exec();
   const map = new Map<string, T>();
 
-  if (results) {
-    for (let i = 0; i < results.length; i++) {
-      const [err, raw] = results[i];
-      if (!err && raw) {
-        try {
-          map.set(keys[i], JSON.parse(raw as string) as T);
-        } catch {
-          // Skip invalid entries
-        }
-      }
+  results?.forEach(([err, raw], i) => {
+    const key = keys[i];
+    if (key === undefined || err || !raw) return;
+    try {
+      map.set(key, JSON.parse(raw as string) as T);
+    } catch {
+      // Skip invalid entries
     }
-  }
+  });
 
   return map;
 }
@@ -1439,7 +1445,9 @@ When a popular cache key expires, many concurrent requests hit the database simu
 
 ```typescript
 // src/lib/single-flight.ts
-import { Sema } from 'async-sema';
+import type { Order } from '@prisma/client';
+import { cacheGet, cacheSet } from './redis-cache';
+import { prisma } from './prisma';
 
 // Map of in-flight requests: key → promise
 const inflight = new Map<string, Promise<unknown>>();
@@ -1489,14 +1497,6 @@ export async function getCachedOrder(tenantId: string, orderId: string): Promise
 }
 ```
 
-**Package dependency:**
-
-```json
-{
-  "async-sema": "^3.1.0"
-}
-```
-
 ---
 
 ## CDN Caching Headers
@@ -1506,7 +1506,7 @@ export async function getCachedOrder(tenantId: string, orderId: string): Promise
 import { Request, Response, NextFunction } from 'express';
 
 interface CacheOptions {
-  maxAge: number;          // seconds
+  maxAge?: number;         // seconds (not used with noStore)
   staleWhileRevalidate?: number;
   isPrivate?: boolean;     // true for user-specific content
   noStore?: boolean;       // true for sensitive data
@@ -1522,7 +1522,7 @@ export function cacheControl(options: CacheOptions) {
 
     const directives: string[] = [];
     directives.push(options.isPrivate ? 'private' : 'public');
-    directives.push(`max-age=${options.maxAge}`);
+    directives.push(`max-age=${options.maxAge ?? 0}`);
 
     if (options.staleWhileRevalidate) {
       directives.push(`stale-while-revalidate=${options.staleWhileRevalidate}`);
@@ -1599,7 +1599,8 @@ router.get('/api/v1/orders/:id', async (req, res) => {
   res.setHeader('ETag', etag);
 
   if (req.headers['if-none-match'] === etag) {
-    return res.status(304).end();
+    res.status(304).end();
+    return;
   }
 
   res.json(order);
@@ -1617,22 +1618,26 @@ router.get('/api/v1/orders/:id', async (req, res) => {
 import { z } from 'zod';
 
 const OrderSchema = z.object({ id: z.string(), total: z.number() });
+type Order = z.infer<typeof OrderSchema>;
 
-function processOrders(orders: unknown[]): void {
+function sumOrdersRevalidating(orders: unknown[]): number {
+  let total = 0;
   for (const order of orders) {
-    const parsed = OrderSchema.parse(order); // zod validation on every item!
-    // ...
+    total += OrderSchema.parse(order).total; // zod validation on every item!
   }
+  return total;
 }
 
 // GOOD — validate at boundary, trust internally
-function processOrders(orders: Order[]): void {
+function sumOrders(orders: Order[]): number {
   // Input was already validated at the API boundary (controller/handler)
   // Trust the type system internally — no runtime checks
+  let total = 0;
   for (const order of orders) {
     // TypeScript knows order.id is string, order.total is number
     total += order.total;
   }
+  return total;
 }
 
 // Rule: validate at entry points (HTTP handlers, message consumers, file readers),
@@ -1661,7 +1666,7 @@ import { OrderService } from './orders/order.service';
 
 ### ESM vs CJS Bundling for Production
 
-```typescript
+```jsonc
 // tsconfig.json for production Node.js service
 {
   "compilerOptions": {

@@ -1,5 +1,7 @@
 # Page Archetype: List Page
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, React 19.3, TanStack Query 5.104, nuqs 2.10 (tests/archetype-compile/typescript/run.sh).
+
 ## When to Use
 Any screen displaying a collection of resources: users, orders, invoices, projects, etc.
 
