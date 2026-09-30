@@ -2,7 +2,7 @@
 # sdlc-guard.sh — Claude Code PreToolUse guard for unattended non-prod development and deployment.
 #
 # Installed by `./install.sh --guard` to ~/.claude/hooks/sdlc-guard.sh and registered in USER (or
-# managed) settings with matcher "Bash|Monitor|Skill|Write|Edit|MultiEdit|NotebookEdit". User-level on
+# managed) settings with matcher "Bash|Monitor|Skill|Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob". User-level on
 # purpose: a repo's settings (or disableAllHooks there) cannot switch it off. See docs/PERMISSIONS_GUIDE.md.
 # Contract (code.claude.com/docs/en/hooks#pretooluse-decision-control):
 #   - no output + exit 0  -> no opinion; normal permission flow (deny/ask rules, mode, classifier) continues
@@ -49,6 +49,9 @@ ARTIFACT_DIRS = set((POLICY or {}).get("artifact_dirs", [
 PROTECTED_WRITE = [os.path.realpath(os.path.expanduser(p)) for p in (POLICY or {}).get("protected_paths", [
     "~/.claude/settings.json", "~/.claude/settings.local.json", "~/.claude/hooks",
     "/Library/Application Support/ClaudeCode", "~/.config/sdlc-guard", "~/.kube", "~/.lima/_config"])]
+SECRET_PATHS = [os.path.realpath(os.path.expanduser(p)) for p in (POLICY or {}).get("secret_paths", [
+    "~/.kube/sdlc-lab-admin.yaml", "~/.kube/config", "~/.ssh", "~/.aws", "~/.config/gcloud", "~/.azure",
+    "~/.docker/config.json"])]
 LIMA = (POLICY or {}).get("lima", {})
 LIMA_INSTANCES = LIMA.get("instances") or [LIMA.get("instance", "sdlc")]
 # never writable, whatever the patterns say: system namespaces and anything prod-looking
@@ -161,6 +164,18 @@ def check_write_target(path):
         if under(p, root):
             deny(f"write to protected path {path} (guard/settings/kubeconfig are human-owned)")
 
+def check_secret_args(argv, env, cwd):
+    """Any command naming a secret path (admin kubeconfig, ~/.ssh, cloud creds) is denied — read or write."""
+    for t in argv[1:]:
+        for part in [t.split("=", 1)[1]] if t.startswith("-") and "=" in t else [t]:
+            v = expand(part, env)
+            if "/" not in v and not v.startswith("~"):
+                continue
+            p = os.path.realpath(os.path.join(cwd, os.path.expanduser(v)))
+            for root in SECRET_PATHS:
+                if under(p, root):
+                    deny(f"{part} is a secret path (admin kubeconfig / ssh / cloud credentials); agents never read or copy it")
+
 DEST_WRITERS = {"cp", "mv", "ln", "install", "rsync", "ditto"}          # last positional is written
 ALL_WRITERS = {"rm", "rmdir", "unlink", "shred", "touch", "mkdir", "chmod", "chown", "chflags", "truncate", "tee"}
 def check_protected_args(a0, argv, env):
@@ -250,6 +265,11 @@ def kube_identity(flags, env, tool):
     if server != want["server"]: deny(f"{tool}: context '{ctx}' points at {server}, expected {want['server']}")
     if want.get("ca_sha256") and ca_sha(cl["cluster"].get("certificate-authority-data", "")) != want["ca_sha256"]:
         deny(f"{tool}: cluster CA does not match the pinned Lima cluster CA (identity check failed)")
+    if want.get("user_sha256"):
+        us = next((x for x in cfg.get("users", []) if x.get("name") == c["context"].get("user")), {}).get("user", {})
+        cred = us.get("token") or us.get("client-certificate-data") or ""
+        if hashlib.sha256(cred.encode()).hexdigest() != want["user_sha256"]:
+            deny(f"{tool}: the pinned kubeconfig's credential changed (not the agent ServiceAccount token); re-run make-policy if this was intended")
     return ctx, want, c["context"].get("namespace")
 
 def ns_writable(ns, want):
@@ -526,6 +546,7 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
         if a0 == "eval":
             check_command(" ".join(argv[1:]), cwd, scratch, depth + 1, env); continue
         check_protected_args(a0, argv, env)
+        check_secret_args(argv, env, cwd)
         if a0 in KUBE_TOOLS: check_kubectl(argv, env)
         elif a0 == "helm": check_helm(argv, env)
         elif a0 in ("kubectx", "kubens", "k9s"): deny(f"{a0} changes/uses ambient kube context; use kubectl with the pinned KUBECONFIG and an explicit -n")
@@ -552,6 +573,15 @@ def check_write(tool, ti):
     if fp.endswith((".claude/settings.json", ".claude/settings.local.json")) and "disableAllHooks" in body:
         deny("disableAllHooks would switch off the guard")
 
+def check_read(ti):
+    for k in ("file_path", "path", "notebook_path"):
+        v = ti.get(k)
+        if not v: continue
+        p = os.path.realpath(os.path.expanduser(str(v)))
+        for root in SECRET_PATHS:
+            if under(p, root):
+                deny(f"{v} is a secret path (admin kubeconfig / ssh / cloud credentials); agents never read it")
+
 def main():
     data = json.load(sys.stdin)
     tool = data.get("tool_name", ""); ti = data.get("tool_input", {}) or {}
@@ -559,7 +589,8 @@ def main():
     try:
         if tool in ("Bash", "Monitor"): check_command(ti.get("command", ""), cwd, scratch)
         elif tool == "Skill": check_skill(ti)
-        elif tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"): check_write(tool, ti)
+        elif tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"): check_write(tool, ti); check_read(ti)
+        elif tool in ("Read", "Grep", "Glob"): check_read(ti)
     except Deny as e:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                           "permissionDecisionReason": "sdlc-guard: " + str(e)}}))

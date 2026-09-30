@@ -27,6 +27,9 @@ DEFAULT_SHELL_ALLOW = [
     "k3s ctr images ls", "k3s ctr -n k8s.io images ls", "k3s ctr images import",
     "journalctl -u k3s", "journalctl -u k3s-agent", "systemctl status k3s", "systemctl status k3s-agent",
     "cat /etc/rancher/k3s/registries.yaml", "uptime", "df -h", "free -m"]
+# never read or copied by agents (any command naming them is denied); the admin kubeconfig is the key one
+DEFAULT_SECRET = ["~/.kube/sdlc-lab-admin.yaml", "~/.kube/config", "~/.ssh", "~/.aws", "~/.config/gcloud",
+                  "~/.azure", "~/.docker/config.json", "~/.lima/sdlc-server/copied-from-guest"]
 DEFAULT_PROTECTED = [
     "~/.claude/settings.json", "~/.claude/settings.local.json", "~/.claude/hooks",
     "/Library/Application Support/ClaudeCode", "~/.config/sdlc-guard", "~/.kube", "~/.lima/_config"]
@@ -103,9 +106,12 @@ def main():
                 "give agents the sdlc-agent ServiceAccount token kubeconfig, or pass --allow-admin")
         if user.get("exec") or user.get("auth-provider"):
             die(f"user for '{name}' uses an exec/auth-provider plugin; the agent kubeconfig must be a static token")
+        cred = user.get("token") or user.get("client-certificate-data") or ""
         contexts[name] = {
             "server": cl["cluster"]["server"],
             "ca_sha256": hashlib.sha256(base64.b64decode(ca)).hexdigest(),
+            # which CREDENTIAL, not just which cluster: an admin credential copied into the pinned file fails
+            "user_sha256": hashlib.sha256(cred.encode()).hexdigest(),
             "mutate_namespaces": patterns,
         }
 
@@ -121,6 +127,7 @@ def main():
         "lima": {"instances": a.lima_instance or ["sdlc"], "shell_allow": DEFAULT_SHELL_ALLOW},
         "local_hosts": DEFAULT_LOCAL + [h for h in a.lab_host if h not in DEFAULT_LOCAL],
         "protected_paths": DEFAULT_PROTECTED,
+        "secret_paths": DEFAULT_SECRET,
     }
     text = json.dumps(policy, indent=1) + "\n"
     if a.out:

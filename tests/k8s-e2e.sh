@@ -14,8 +14,9 @@
 #   6 v2 to dev, then rollback    new digest serves the new seed; rollback restores the v1 digest
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-export PATH="$REPO/.claude/guard/shims:$PATH:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin"
-export SDLC_GUARD_HOOK="$REPO/.claude/guard/sdlc-guard.sh" SDLC_GUARD_SHIMS="$REPO/.claude/guard/shims"
+SHIMS="${SDLC_GUARD_SHIMS:-$REPO/.claude/guard/shims}"; HOOK="${SDLC_GUARD_HOOK:-$REPO/.claude/guard/sdlc-guard.sh}"   # override to test the installed copy
+export PATH="$SHIMS:$PATH:/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin"
+export SDLC_GUARD_HOOK="$HOOK" SDLC_GUARD_SHIMS="$SHIMS"
 export KUBECONFIG="$HOME/.kube/sdlc-lab.json"
 PASS=0; FAIL=0
 ok()  { echo "  ✓ $1"; PASS=$((PASS+1)); }

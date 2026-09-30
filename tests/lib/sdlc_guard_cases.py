@@ -208,6 +208,16 @@ CASES = [
  ("T07", "allow","Write", {"file_path": CWD + "/deploy/k8s/base/api.yaml", "content": "kind: Deployment"}),
  ("T08", "deny", "Bash", "sed -i '' 's/dev/prod/' ~/.config/sdlc-guard/policy.json"),
  ("T09", "deny", "Bash", "ln -sf /tmp/x ~/.claude/hooks/sdlc-guard.sh"),
+ # --- secret paths (read or copy)
+ ("SE1", "deny", "Bash", "cat ~/.kube/sdlc-lab-admin.yaml"),
+ ("SE2", "deny", "Bash", "kubectl --kubeconfig ~/.kube/sdlc-lab-admin.yaml get pods -n shop-dev"),
+ ("SE3", "deny", "Bash", "KUBECONFIG=$HOME/.kube/sdlc-lab-admin.yaml kubectl get ns"),
+ ("SE4", "deny", "Bash", "cp ~/.ssh/id_ed25519 /tmp/k"),
+ ("SE5", "deny", "Bash", "python3 -c 'print(1)' --config=~/.aws/credentials"),
+ ("SE6", "deny", "Read", {"file_path": HOME + "/.kube/sdlc-lab-admin.yaml"}),
+ ("SE7", "deny", "Grep", {"pattern": "token", "path": HOME + "/.ssh"}),
+ ("SE8", "allow","Bash", "ls ~/.kube"),
+ ("SE9", "allow","Read", {"file_path": CWD + "/deploy/k8s/app.env"}),
  # --- Skill tool
  ("SK1", "deny", "Skill", {"skill": "startup:deploy", "args": "--target=prod"}),
  ("SK2", "deny", "Skill", {"skill": "deploy", "args": "--target=staging --phase=3"}),
@@ -255,6 +265,10 @@ def main():
         shutil.copy(src, PIN)
         got, why = run("Bash", {"command": "kubectl get pods -n shop-dev"}, env)
         check(cid, "deny", got, f"[{label}] kubectl get pods -n shop-dev", why)
+    # credential swapped: same cluster (server + CA) but not the agent's token, e.g. admin creds copied in
+    dump(kubeconfig(user={"token": "admin-token"}), "swapped.json"); shutil.copy(os.path.join(W, "swapped.json"), PIN)
+    got, why = run("Bash", {"command": "kubectl get pods -n shop-dev"}, env)
+    check("P05", "deny", got, "[credential swapped in pinned file] kubectl get pods -n shop-dev", why)
     shutil.copy(AGENT_KC, PIN)
 
     # missing policy: cluster commands fail closed, ordinary commands unaffected
@@ -266,8 +280,8 @@ def main():
     # generated policy content
     pol = json.load(open(POLICY))
     ctx = pol["kube"]["contexts"].get("lima-sdlc", {})
-    check("MP1", True, ctx.get("ca_sha256") == hashlib.sha256(CA_PEM).hexdigest() and ctx.get("server") == SERVER,
-          "make-policy pins server + CA sha256")
+    check("MP1", True, ctx.get("ca_sha256") == hashlib.sha256(CA_PEM).hexdigest() and ctx.get("server") == SERVER
+          and ctx.get("user_sha256") == hashlib.sha256(b"fake").hexdigest(), "make-policy pins server + CA + credential sha256")
     check("MP2", True, "10.10.10.2" in pol["local_hosts"] and pol["lima"]["instances"] == ["sdlc-agent", "sdlc-server"],
           "make-policy adds lab hosts and Lima instances")
 
