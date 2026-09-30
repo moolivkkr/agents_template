@@ -134,5 +134,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
 
 ```json
-{"agent":"manual_test_agent","phase":{{PHASE}},"status":"completed","report":"docs/testing/manual/phase-{{PHASE}}/","ts":"<iso8601>"}
+{"agent":"manual_test_agent","phase":{{PHASE}},"status":"completed","report":null,"ts":"<iso8601>"}
 ```

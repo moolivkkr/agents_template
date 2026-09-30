@@ -140,7 +140,10 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every failure lists the test name + error + file:line.
 - [ ] The Writer-vs-Independent table compares every writer report present this phase
       (`unit_tests.md`, `integration_tests.md`, `ui_test_results.md`, `mobile_test_results.md`); any
-      mismatch is listed as BLOCKING in `test_results.json` (`{"blocking": N, "tiers": {...}}`).
+      mismatch is listed as BLOCKING in `test_results.json`:
+      `{"blocking": N, "total": T, "passed": P, "failed": F, "tiers": {"unit": {"total":…, "passed":…, "failed":…}, …}}`.
+      Top-level `total`/`failed` are REQUIRED — verify-gate blocks on `failed > 0` or `total == 0`
+      only when they are present, so a sidecar without them let failing suites pass the gate.
 - [ ] On fix-triggered re-runs, I re-ran ALL affected tiers per the change-impact scope, not just the
       one that failed (CLAUDE.md "fixes trigger re-run of ALL tiers").
 - [ ] Logged a completion line to `agent_state/phases/${PHASE}/execution.jsonl`.

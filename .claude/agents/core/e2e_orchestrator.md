@@ -19,6 +19,8 @@ output:
   artifacts:
     - path: agent_state/e2e/results.md
     - path: agent_state/e2e/workflows.json
+    - path: agent_state/phases/{{PHASE}}/reports/e2e_results.md
+      description: "Per-phase results (what /develop-orchestrator Wave 3 and the gate read); same content as agent_state/e2e/results.md for this phase's run"
 dependencies:
   upstream: [ui_test_agent, integration_test_agent]
   runs_after: [solution_selector]
@@ -152,5 +154,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
 
 ```json
-{"agent":"e2e_orchestrator","phase":{{PHASE}},"status":"completed","report":"agent_state/e2e/","ts":"<iso8601>"}
+{"agent":"e2e_orchestrator","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/e2e_results.md","ts":"<iso8601>"}
 ```

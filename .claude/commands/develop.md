@@ -224,16 +224,13 @@ if [ ${#MISSING_CMDS[@]} -gt 0 ]; then
 fi
 
 # Tier 1: Unit tests (all phases)
-eval "$UNIT_CMD" 2>&1 | tee /tmp/gate-unit-results.txt
-UNIT_EXIT=$?
+eval "$UNIT_CMD" > /tmp/gate-unit-results.txt 2>&1; UNIT_EXIT=$?; tail -40 /tmp/gate-unit-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
 
 # Tier 2: Integration tests (all phases — requires infra running)
-eval "$INTEG_CMD" 2>&1 | tee /tmp/gate-integ-results.txt
-INTEG_EXIT=$?
+eval "$INTEG_CMD" > /tmp/gate-integ-results.txt 2>&1; INTEG_EXIT=$?; tail -40 /tmp/gate-integ-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
 
 # Tier 3: E2E tests (all phases — project-type-aware: browser for web, CLI/pipeline for CLI/libs)
-eval "$E2E_CMD" 2>&1 | tee /tmp/gate-e2e-results.txt
-E2E_EXIT=$?
+eval "$E2E_CMD" > /tmp/gate-e2e-results.txt 2>&1; E2E_EXIT=$?; tail -40 /tmp/gate-e2e-results.txt   # no "| tee": $? would be tee's status (and zsh has no PIPESTATUS)
 
 if [ $UNIT_EXIT -ne 0 ] || [ $INTEG_EXIT -ne 0 ] || [ $E2E_EXIT -ne 0 ]; then
     echo "⛔ GATE BLOCKED: Full regression test suite has failures"

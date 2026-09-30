@@ -44,6 +44,9 @@
 # Dependencies: bash, jq. Robust to being run from any cwd via CLAUDE_PROJECT_DIR / git root.
 
 set -uo pipefail
+# All diagnostics go to stderr: when this blocks as a Stop/PostToolUse hook (exit 2) Claude Code
+# shows the model stderr only, so stdout output left the model blocked without a reason.
+exec 1>&2
 
 # ---------------------------------------------------------------------------
 # 0. Locate the project root so this works regardless of the caller's cwd.
@@ -98,7 +101,10 @@ FORCED="$PHASE_DIR/gate.forced"   # user-approved override (see /develop --force
 #     phase) while STILL catching a forged gate.passed the moment it appears.
 if [ "$AUTODETECT" = "true" ]; then
   _claimed="false"
-  if [ -f "$MANIFEST" ] && jq -e . "$MANIFEST" >/dev/null 2>&1; then
+  # A gate is "claimed" by the gate.passed FILE (what /develop-orchestrator Wave 6 writes) or by
+  # manifest .gate.passed == true. Keying on the manifest field alone meant the sweep never ran.
+  [ -f "$PHASE_DIR/gate.passed" ] && _claimed="true"
+  if [ "$_claimed" != "true" ] && [ -f "$MANIFEST" ] && jq -e . "$MANIFEST" >/dev/null 2>&1; then
     _claimed="$(jq -r 'try (.gate.passed) catch false | if . == true then "true" else "false" end' "$MANIFEST" 2>/dev/null || echo false)"
   fi
   [ "$_claimed" != "true" ] && exit 0   # nothing claimed → nothing to verify → silent PASS
@@ -257,7 +263,8 @@ fi
 # ---------------------------------------------------------------------------
 echo "── (b) report integrity ──"
 # Emit "agent<TAB>report" for completed lines whose report is a non-null, non-empty string.
-REPORTS="$(jq -r 'select(.status=="completed") | select(.report != null and .report != "") | "\(.agent)\t\(.report)"' "$EXEC" 2>/dev/null | sort -u)"
+# The legacy string "null"/"none" (older completion-line templates quoted ${REPORT_PATH:-null}) is null too.
+REPORTS="$(jq -r 'select(.status=="completed") | select(.report != null and .report != "" and ((.report|ascii_downcase) as $r | ($r != "null" and $r != "none"))) | "\(.agent)\t\(.report)"' "$EXEC" 2>/dev/null | sort -u)"
 
 if [ -z "$REPORTS" ]; then
   echo "  (no completed lines carry a report path)"
@@ -270,6 +277,11 @@ while IFS=$'\t' read -r agent report; do
   candidate="$report"
   if [ ! -f "$candidate" ] && [ -f "$PHASE_DIR/$report" ]; then
     candidate="$PHASE_DIR/$report"
+  fi
+  if [ -d "$candidate" ] || [ -d "$PHASE_DIR/$report" ]; then
+    fail "report referenced by '$agent' is a directory, not a report file: $report (log the results file, e.g. ${report%/}/results.md)"
+    REPORT_ISSUES=$((REPORT_ISSUES + 1))
+    continue
   fi
   if [ ! -f "$candidate" ]; then
     fail "report referenced by '$agent' does not exist: $report"
@@ -302,10 +314,26 @@ while IFS=$'\t' read -r agent report; do
     continue
   fi
 
-  # Stub detection for test reports: "total: 0" (any spacing/case) or a bare "SKIPPED".
-  # We treat a report as a "test report" heuristically if agent name or filename implies tests,
-  # BUT the "total: 0" / "SKIPPED" check is cheap and safe to apply to all reports.
-  if grep -Eiq 'total[[:space:]]*[:=][[:space:]]*0([^0-9]|$)' "$candidate"; then
+  # The report's own machine-readable count line is authoritative when present: every Track-A/C
+  # agent must end with "BLOCKING:N WARNING:N INFO:N" (develop-orchestrator Wave 4). Prose heuristics
+  # below are only a fallback for reports without it — they false-blocked clean reports that mention
+  # "non-blocking", severity legends or zero-count table rows (review 2026-09-30, B1).
+  COUNT_LINE="$(grep -Eo 'BLOCKING:[[:space:]]*[0-9]+[[:space:]]+WARNING:[[:space:]]*[0-9]+[[:space:]]+INFO:[[:space:]]*[0-9]+' "$candidate" | tail -1)"
+  if [ -n "$COUNT_LINE" ]; then
+    nb="$(printf '%s' "$COUNT_LINE" | sed -E 's/^BLOCKING:[[:space:]]*([0-9]+).*/\1/')"
+    if [ "${nb:-0}" -gt 0 ] 2>/dev/null; then
+      fail "report '$report' (agent '$agent') count line reports BLOCKING:$nb."
+      REPORT_ISSUES=$((REPORT_ISSUES + 1))
+    else
+      ok "report OK (count line ${COUNT_LINE}): $report (agent '$agent')"
+    fi
+    continue
+  fi
+
+  # Stub detection for test reports: a "Total: 0" results line or a bare "SKIPPED". Only lines that
+  # START with total (optionally bold/bulleted/table-celled) count, so prose like "meta.total=0" or
+  # "Total: 120 | Failed: 0" no longer trips it.
+  if grep -Eiq '^[[:space:]|*_-]*total[[:space:]*_]*[:=|][[:space:]*_|]*0([^0-9]|$)' "$candidate"; then
     fail "report '$report' (agent '$agent') is a stub — contains 'total: 0' (no tests ran)."
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
     continue
@@ -333,6 +361,10 @@ while IFS=$'\t' read -r agent report; do
       # benign "none" summary lines
       if (low ~ /no[ \t]+blocking/ || low ~ /blocking[ \t]*[:=]?[ \t]*0([^0-9]|$)/ \
           || low ~ /0[ \t]+blocking/ || low ~ /blocking[ \t]*count[ \t]*[:=][ \t]*0/) next
+      # "non-blocking" is not a finding; neither is a table row whose last cell is 0
+      # (e.g. "| Copyleft License Issues (BLOCKING) | 0 |"). Legend lines are left to the count line.
+      if (low ~ /non[- ]?blocking/) next
+      if (low ~ /\|[ \t]*0[ \t]*\|[ \t]*$/) next
       if (low ~ /resolved/) { r++ ; next }
       f++
     }

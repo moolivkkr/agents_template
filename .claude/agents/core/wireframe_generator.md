@@ -126,5 +126,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path). As an internal sub-agent of ux_designer, the parent may write this line on my behalf — the line must still exist so the roster/health grep counts it:
 
 ```json
-{"agent":"wireframe_generator","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/specs/","ts":"<iso8601>"}
+{"agent":"wireframe_generator","phase":{{PHASE}},"status":"completed","report":"docs/design/phases/{{PHASE}}/specs/archetype-mapping.md","ts":"<iso8601>"}
 ```

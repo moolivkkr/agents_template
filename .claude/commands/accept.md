@@ -168,21 +168,18 @@ if [ -f "docker-compose.yml" ] || [ -f "compose.yml" ]; then
 elif [ -f "go.mod" ]; then
   # ── Go CLI/library ─────────────────────────────────────────────────
   echo "  Building Go project..."
-  go build ./... 2>&1 || { echo "  BUILD FAILED"; HEALTHY=false; }
-  go build -o bin/ ./cmd/... 2>&1 || true
-  HEALTHY=true
+  if go build ./... 2>&1; then HEALTHY=true; go build -o bin/ ./cmd/... 2>&1 || true
+  else echo "  BUILD FAILED"; HEALTHY=false; fi
 
 elif [ -f "package.json" ]; then
   # ── Node project ───────────────────────────────────────────────────
   echo "  Building Node project..."
-  npm ci 2>&1 && npm run build 2>&1 || { echo "  BUILD FAILED"; HEALTHY=false; }
-  HEALTHY=true
+  if npm ci 2>&1 && npm run build 2>&1; then HEALTHY=true; else echo "  BUILD FAILED"; HEALTHY=false; fi
 
 elif [ -f "Cargo.toml" ]; then
   # ── Rust project ───────────────────────────────────────────────────
   echo "  Building Rust project..."
-  cargo build --release 2>&1 || { echo "  BUILD FAILED"; HEALTHY=false; }
-  HEALTHY=true
+  if cargo build --release 2>&1; then HEALTHY=true; else echo "  BUILD FAILED"; HEALTHY=false; fi
 fi
 
 # Record deploy status for the acceptance report
@@ -222,22 +219,27 @@ This is the final cross-phase regression gate. Per-phase gates run regression du
 ```bash
 echo "Running full cross-phase regression (all tiers, all phases)..."
 
-# Read test commands from IMPLEMENTATION_GUIDELINES
-UNIT_CMD=$(read_from_guidelines "unit_test_command")
-INTEG_CMD=$(read_from_guidelines "integration_test_command")
-E2E_CMD=$(read_from_guidelines "e2e_test_command")
+# Read test commands from IMPLEMENTATION_GUIDELINES (same helper as /develop's gate; invents no default)
+read_cmd_from_guidelines() {
+  local label="${1}" file="docs/IMPLEMENTATION_GUIDELINES.md"
+  [ -f "$file" ] || return 1
+  grep -iE "$label" "$file" | grep -oE '`[^`]+`' | head -1 | tr -d '`'
+}
+UNIT_CMD=$(read_cmd_from_guidelines 'unit[ _-]?test')
+INTEG_CMD=$(read_cmd_from_guidelines 'integration[ _-]?test')
+E2E_CMD=$(read_cmd_from_guidelines 'e2e|end[ _-]?to[ _-]?end')
+for pair in "unit:$UNIT_CMD" "integration:$INTEG_CMD" "e2e:$E2E_CMD"; do
+  [ -n "${pair#*:}" ] || echo "⛔ REGRESSION BLOCKED: no ${pair%%:*} test command in IMPLEMENTATION_GUIDELINES (an empty command would 'pass' by running nothing)"
+done
 
 echo "  Tier 1: Unit tests..."
-eval "$UNIT_CMD" 2>&1 | tee agent_state/accept/regression_unit.txt
-UNIT_EXIT=$?
+eval "$UNIT_CMD" > agent_state/accept/regression_unit.txt 2>&1; UNIT_EXIT=$?; tail -40 agent_state/accept/regression_unit.txt   # $? of the test itself, not of a tee
 
 echo "  Tier 2: Integration tests..."
-eval "$INTEG_CMD" 2>&1 | tee agent_state/accept/regression_integration.txt
-INTEG_EXIT=$?
+eval "$INTEG_CMD" > agent_state/accept/regression_integration.txt 2>&1; INTEG_EXIT=$?; tail -40 agent_state/accept/regression_integration.txt   # $? of the test itself, not of a tee
 
 echo "  Tier 3: E2E tests..."
-eval "$E2E_CMD" 2>&1 | tee agent_state/accept/regression_e2e.txt
-E2E_EXIT=$?
+eval "$E2E_CMD" > agent_state/accept/regression_e2e.txt 2>&1; E2E_EXIT=$?; tail -40 agent_state/accept/regression_e2e.txt   # $? of the test itself, not of a tee
 
 echo ""
 echo "Cross-phase regression results:"

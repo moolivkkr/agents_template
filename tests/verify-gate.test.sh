@@ -194,6 +194,49 @@ echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 echo '{"test":"exit 1"}' > "$D/sdlc-verify.json"
 LAST_OUT="$(VERIFY_GATE_SKIP_EXEC=1 run_hook "$D" 1)"; check "exec-grounded skip env honored" 0 "$?"
 
+# --- Review 2026-09-30 regressions (B1-B4): clean reports must pass, real findings must block ---
+one_agent() {  # one_agent <fixture> <agent> <report-json-value>  → roster + completed line
+  local d="$1"; echo "{\"phase\":1,\"required\":[\"$2\"]}" > "$d/agent_state/phases/1/roster.json"
+  echo "{\"agent\":\"$2\",\"phase\":1,\"status\":\"completed\",\"report\":$3,\"ts\":\"t\"}" > "$d/agent_state/phases/1/execution.jsonl"
+}
+# B1: realistic clean reports that the old heuristics blocked
+D=$(new_phase clean_prose); one_agent "$D" dependency_scanner '"reports/dependency_scan.md"'
+cat > "$D/agent_state/phases/1/reports/dependency_scan.md" <<'R'
+# Dependency scan
+Severity legend: BLOCKING = must fix before gate; WARNING = should fix.
+| Check | Count |
+|---|---|
+| Copyleft License Issues (BLOCKING) | 0 |
+All remaining advisories are non-blocking.
+Total: 120 | Passed: 120 | Failed: 0
+The API returns meta.total=0 for an empty list.
+BLOCKING:0 WARNING:2 INFO:1
+R
+LAST_OUT="$(run_hook "$D" 1)"; check "clean report with legend/table/prose + count line PASSes" 0 "$?"
+D=$(new_phase count_blocks); one_agent "$D" code_reviewer_I '"reports/cr1.md"'
+printf 'Review\nnon-blocking notes only in prose\nBLOCKING:2 WARNING:0 INFO:0\n' > "$D/agent_state/phases/1/reports/cr1.md"
+LAST_OUT="$(run_hook "$D" 1)"; check "count line BLOCKING:2 BLOCKs even with benign prose" 2 "$?" "BLOCKING:2"
+D=$(new_phase table_no_count); one_agent "$D" dependency_scanner '"reports/ds.md"'
+printf '| Copyleft (BLOCKING) | 0 |\nAll findings are non-blocking.\n' > "$D/agent_state/phases/1/reports/ds.md"
+LAST_OUT="$(run_hook "$D" 1)"; check "zero-count BLOCKING table row + non-blocking prose PASSes (no count line)" 0 "$?"
+D=$(new_phase total_zero); one_agent "$D" unit_test_agent '"reports/unit_tests.md"'
+printf '# Unit tests\nTotal: 0 | Passed: 0 | Failed: 0\n' > "$D/agent_state/phases/1/reports/unit_tests.md"
+LAST_OUT="$(run_hook "$D" 1)"; check "a real 'Total: 0' results line still BLOCKs" 2 "$?" "stub"
+# B2: legacy "null" string and directory reports
+D=$(new_phase null_string); one_agent "$D" documentation_agent '"null"'
+LAST_OUT="$(run_hook "$D" 1)"; check "report \"null\" string treated as no report → PASS" 0 "$?"
+D=$(new_phase dir_report); one_agent "$D" e2e_orchestrator '"reports/e2e/"'; mkdir -p "$D/agent_state/phases/1/reports/e2e"
+LAST_OUT="$(run_hook "$D" 1)"; check "directory as report BLOCKs with a clear message" 2 "$?" "is a directory"
+# B3: diagnostics on stderr (exit-2 hooks show the model stderr only)
+D=$(new_phase stderr); one_agent "$D" code_reviewer_I '"reports/missing.md"'
+out_stdout="$(CLAUDE_PROJECT_DIR="$D" bash "$HOOK" 1 2>/dev/null)"; rc=$?
+if [ "$rc" = "2" ] && [ -z "$out_stdout" ]; then echo "  ✓ blocking diagnostics go to stderr, not stdout"; PASS=$((PASS+1)); else echo "  ✗ FAIL: expected exit 2 with empty stdout (got $rc, stdout=${#out_stdout} bytes)"; FAIL=$((FAIL+1)); fi
+# B4: passive Stop sweep (no phase arg) triggers on the gate.passed FILE, not only manifest .gate.passed
+D=$(new_phase sweep_file); touch "$D/agent_state/phases/1/gate.passed"
+LAST_OUT="$(run_hook "$D")"; check "Stop sweep verifies a claimed gate.passed file (no contract → BLOCK)" 2 "$?"
+D=$(new_phase sweep_quiet)
+LAST_OUT="$(run_hook "$D")"; check "Stop sweep stays silent when nothing is claimed" 0 "$?"
+
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -362,5 +362,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
 
 ```json
-{"agent":"deployment_agent","phase":{{PHASE}},"status":"completed","report":"deployment/","ts":"<iso8601>"}
+{"agent":"deployment_agent","phase":{{PHASE}},"status":"completed","report":"docker-compose.yml","ts":"<iso8601>"}
 ```

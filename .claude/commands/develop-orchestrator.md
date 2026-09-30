@@ -196,7 +196,10 @@ PY
 if it produces none). After each agent returns successfully:
 ```bash
 mkdir -p "agent_state/phases/${PHASE}"
-echo "{\"agent\":\"${AGENT_NAME}\",\"phase\":${PHASE},\"status\":\"completed\",\"report\":\"${REPORT_PATH:-null}\",\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" \
+# jq builds the line so a missing report is JSON null (a quoted "null" string, as older templates
+# wrote, made verify-gate look for a file named "null"). REPORT_PATH must be a FILE, never a directory.
+jq -nc --arg a "${AGENT_NAME}" --argjson p "${PHASE}" --arg r "${REPORT_PATH:-}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+  '{agent:$a, phase:$p, status:"completed", report:(if $r == "" then null else $r end), ts:$ts}' \
   >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
@@ -545,10 +548,10 @@ for REPORT in $REQ; do
   FILE="$R/${REPORT}"
   if [ ! -f "$FILE" ]; then echo "⛔ BLOCKED: ${REPORT} missing — its agent did not run"; continue; fi
   # Content validation — reports must contain actual test results, not just headers
-  if ! grep -qiP '(pass|fail|total|test.*\d+|\d+\s*(pass|fail|test))' "$FILE"; then
+  if ! grep -qiE '(pass|fail|total|test.*[0-9]+|[0-9]+[[:space:]]*(pass|fail|test))' "$FILE"; then
     echo "⛔ BLOCKED: ${REPORT} exists but contains no test results — likely a stub"
   fi
-  if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+run|no tests)' "$FILE"; then
+  if grep -qiE '^[[:space:]|*_-]*total[[:space:]*_]*[:=|][[:space:]*_|]*0([^0-9]|$)|(^|[^0-9])0[[:space:]]+tests?[[:space:]]+run|no tests' "$FILE"; then
     echo "⚠ WARNING: ${REPORT} reports zero tests — verify this is correct for the project type"
   fi
 done
@@ -773,7 +776,8 @@ Agent prompt: "[GROUND TRUTH] You are <reconciler> running Wave 4 Track C for Ph
 Perform bidirectional reconciliation. Report every MISSING (spec item with no code/test) and every
 EXTRA (code/test with no spec). Classify each: BLOCKING (in-scope FR-* unbuilt/untested) vs
 DEFERRED (explicitly out-of-scope, list the ID). Produce your named report.
-Definition of Done: coverage % computed, BLOCKING list explicit, deferred IDs enumerated."
+Definition of Done: coverage % computed, BLOCKING list explicit, deferred IDs enumerated, and the
+report ends with the one-line count 'BLOCKING:N WARNING:N INFO:N' (the gate reads only that line)."
 ```
 
 ### Track B — Acceptance Tests
@@ -927,9 +931,9 @@ Max 3 iteration cycles. If architectural issue → invoke debate_moderator.
 test -f agent_state/phases/${PHASE}/reports/collective_feedback.md || echo "⛔ BLOCKED"
 
 # Verify feedback document records which tiers were re-run
-if ! grep -qiP '(re-run|rerun|re.ran).*(unit|integration|e2e|acceptance)' \
+if ! grep -qiE '(re-run|rerun|re.ran).*(unit|integration|e2e|acceptance)' \
     agent_state/phases/${PHASE}/reports/collective_feedback.md 2>/dev/null; then
-  if grep -qiP '(fix|fixed|resolved)' \
+  if grep -qiE '(fix|fixed|resolved)' \
       agent_state/phases/${PHASE}/reports/collective_feedback.md 2>/dev/null; then
     echo "⚠ WARNING: Feedback shows fixes were applied but no test tier re-runs recorded"
   fi
@@ -1038,22 +1042,19 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
      in `roster.required`, so the roster check (0b) already blocks if it didn't run; this report must
      name a winner and its `BLOCKING` count must be 0 (or carried forward with a reason).
 
-   **Content validation (not just file existence):**
+   **Report presence (content is validated by `verify-gate.sh` in 0b, which reads each report's JSON
+   sidecar or its final `BLOCKING:N WARNING:N INFO:N` line — do not re-implement content regexes
+   here; the old ones matched "Failed: 0" as zero tests and every reconciler's "BLOCKING vs DEFERRED"
+   wording as a blocker):**
    ```bash
-   # Test reports: must not report zero tests.
+   # Test reports: must exist (zero-test / failure checks live in verify-gate.sh).
    in_roster() { jq -e --arg a "${1}" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
    TEST_REPORTS="unit_tests.md integration_tests.md e2e_results.md test_results.md acceptance_report.md"
    in_roster ui_test_agent     && TEST_REPORTS="$TEST_REPORTS ui_test_results.md"
    in_roster mobile_test_agent && TEST_REPORTS="$TEST_REPORTS mobile_test_results.md mobile_e2e_results.md"
    for REPORT in $TEST_REPORTS; do
      FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
-     if [ -f "$FILE" ]; then
-       if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+run|no tests (run|found|written)|SKIPPED.*all)' "$FILE"; then
-         echo "⛔ GATE BLOCKED: ${REPORT} reports ZERO tests — a test tier was skipped"
-       fi
-     else
-       echo "⛔ GATE BLOCKED: ${REPORT} missing"
-     fi
+     [ -f "$FILE" ] || echo "⛔ GATE BLOCKED: ${REPORT} missing"
    done
    report_path() { case "${1}" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/${1}" ;; *) echo "agent_state/phases/${PHASE}/reports/${1}" ;; esac; }  # each bash block runs in a fresh shell
    # Review + reconciliation reports: must exist and be non-stub.
@@ -1066,11 +1067,15 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
        echo "⛔ GATE BLOCKED: ${REPORT} is a stub — the agent did not actually run"
      fi
    done
-   # Reconciliation must have no unresolved BLOCKING findings.
+   # Reconciliation must have no unresolved BLOCKING findings — read from the report's count line.
    for REPORT in specs_vs_impl.md specs_vs_tests.md; do
      FILE="$(report_path "$REPORT")"
-     if [ -f "$FILE" ] && grep -qiP 'BLOCKING' "$FILE"; then
-       echo "⛔ GATE BLOCKED: ${REPORT} has BLOCKING reconciliation findings — resolve or carry forward with reason"
+     [ -f "$FILE" ] || continue
+     NB="$(grep -Eo 'BLOCKING:[[:space:]]*[0-9]+[[:space:]]+WARNING:' "$FILE" | tail -1 | grep -Eo '[0-9]+' | head -1)"
+     if [ -z "$NB" ]; then
+       echo "⛔ GATE BLOCKED: ${REPORT} has no final 'BLOCKING:N WARNING:N INFO:N' line — re-run the reconciler"
+     elif [ "$NB" -gt 0 ]; then
+       echo "⛔ GATE BLOCKED: ${REPORT} reports BLOCKING:${NB} — resolve or carry forward with reason"
      fi
    done
    ```
@@ -1105,6 +1110,17 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    without a verdict (0c)** AND **no BLOCKING reconciliation findings** AND Layer 1 has zero unproven
    items AND `gate_score ≥ 0.90` AND no Layer 3 claim was refuted → write gate.passed + manifest.json
    + git tag. Also write the phase decision + worklog rollup (see Post-Gate).
+
+   Record the gate in the manifest too (the verify-gate Stop sweep and `/health` read `.gate`), then
+   re-run the hook on the final state — a gate.passed that the hook would block is not a pass:
+   ```bash
+   M="agent_state/phases/${PHASE}/manifest.json"; [ -f "$M" ] || echo '{}' > "$M"
+   jq --argjson score "${GATE_SCORE:-0}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+     '.gate = {passed: true, verified_by: "verify-gate.sh", roster_complete: true, gate_score: $score, ts: $ts}' \
+     "$M" > "$M.tmp" && mv "$M.tmp" "$M"
+   touch "agent_state/phases/${PHASE}/gate.passed"
+   bash .claude/hooks/verify-gate.sh "${PHASE}" || { rm -f "agent_state/phases/${PHASE}/gate.passed"; echo "⛔ final verify-gate failed — gate NOT passed"; }
+   ```
 
 5. If any layer fails → DO NOT write gate.passed. Route failures back to Wave 5 with the specific
    unproven items / low-scoring dimensions named.
