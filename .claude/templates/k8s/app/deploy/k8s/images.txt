@@ -1,0 +1,2 @@
+# <image-name> <build-context> [dockerfile]   (image-name = the placeholder used in base/*.yaml)
+api services/api

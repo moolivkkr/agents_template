@@ -1,0 +1,11 @@
+# Base for one app. deployment_agent generates one <service>.yaml per stateless service from
+# IMPLEMENTATION_GUIDELINES (api.yaml is the pattern); overlays set namespace, host, config and digests.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+labels:
+- pairs: {app.kubernetes.io/part-of: __APP__}
+resources:
+- postgres.yaml
+- api.yaml
+- jobs.yaml
+- ingress.yaml

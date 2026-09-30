@@ -1,0 +1,22 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: __APP__-dev
+resources: [../../base]
+labels:
+- pairs: {sdlc.io/env: dev}
+configMapGenerator:
+- name: app-config
+  literals: [APP_ENV=dev]
+secretGenerator:
+- name: db-credentials
+  envs: [secrets.env]          # gitignored; created by scripts/k8s/deploy.sh if missing
+replicas:
+- {name: api, count: 1}
+patches:
+- target: {kind: Ingress, name: web}
+  patch: |-
+    - {op: replace, path: /spec/rules/0/host, value: __APP__-dev.localhost}
+# BEGIN images (managed by scripts/k8s/deploy.sh: digests only, never edit by hand)
+images:
+- {name: api, newName: localhost:5001/__APP__/api, newTag: not-deployed}
+# END images

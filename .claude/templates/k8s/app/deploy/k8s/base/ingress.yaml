@@ -1,0 +1,10 @@
+# Host is set per overlay: __APP__-<env>.localhost -> http://__APP__-<env>.localhost:18080 on the dev Mac.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata: {name: web}
+spec:
+  rules:
+  - host: placeholder.localhost
+    http:
+      paths:
+      - {path: /, pathType: Prefix, backend: {service: {name: api, port: {number: 8080}}}}
