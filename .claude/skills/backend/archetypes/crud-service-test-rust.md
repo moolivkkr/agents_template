@@ -113,7 +113,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::error::AppError;
-    use crate::models::Widget;
+    use crate::models::{Widget, WidgetStatus};
     use crate::traits::cache::MockCache;
     use crate::traits::repository::MockWidgetRepository;
     use crate::traits::audit::MockAuditWriter;
@@ -128,7 +128,7 @@ mod tests {
             tenant_id: Uuid::new_v4(),
             name: format!("widget-{}", &Uuid::new_v4().to_string()[..8]),
             description: Some("A test widget".into()),
-            status: "active".into(),
+            status: WidgetStatus::Active,
             created_at: now,
             updated_at: now,
             deleted_at: None,
@@ -229,7 +229,7 @@ mod tests {
         let (svc, tenant_id, user_id) = setup_service(
             |repo| {
                 repo.expect_create()
-                    .withf(|w: &Widget| w.version == 1 && w.status == "active")
+                    .withf(|w: &Widget| w.version == 1 && w.status == WidgetStatus::Active)
                     .times(1)
                     .returning(|_| Ok(()));
             },
@@ -753,67 +753,44 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_enforces_max_page_size() {
-        let tenant_id = Uuid::new_v4();
+    async fn list_page_size_bounds_are_enforced_not_clamped() {
+        // Outside 1..=100 is VALIDATION_FAILED on "limit" and the repo is never called; the bounds pass
+        // through unchanged. Nothing is silently rewritten (api/response-envelope.md).
+        for (page_size, accepted) in [(0, false), (-5, false), (101, false), (500, false), (1, true), (100, true)] {
+            let tenant_id = Uuid::new_v4();
+            let (svc, _, _) = setup_service(
+                |repo| {
+                    repo.expect_list()
+                        .withf(move |_, filters| filters.page_size == page_size) // exactly what was asked
+                        .times(if accepted { 1 } else { 0 })
+                        .returning(|_, _| Ok(ListResult {
+                            items: vec![],
+                            cursor: None,
+                            has_more: false,
+                            total: 0,
+                        }));
+                },
+                |_cache| {},
+                |_audit| {},
+            );
 
-        let (svc, _, _) = setup_service(
-            |repo| {
-                repo.expect_list()
-                    .withf(|_, filters| filters.page_size == 100) // clamped from 500
-                    .times(1)
-                    .returning(|_, _| Ok(ListResult {
-                        items: vec![],
-                        cursor: None,
-                        has_more: false,
-                        total: 0,
-                    }));
-            },
-            |_cache| {},
-            |_audit| {},
-        );
+            let filters = ListFilters {
+                cursor: None,
+                page_size,
+                sort_by: "created_at".into(),
+                sort_dir: "desc".into(),
+                fields: Default::default(),
+            };
 
-        let filters = ListFilters {
-            cursor: None,
-            page_size: 500, // exceeds max
-            sort_by: "created_at".into(),
-            sort_dir: "desc".into(),
-            fields: Default::default(),
-        };
-
-        let result = svc.list(tenant_id, filters).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn list_defaults_page_size_when_zero() {
-        let tenant_id = Uuid::new_v4();
-
-        let (svc, _, _) = setup_service(
-            |repo| {
-                repo.expect_list()
-                    .withf(|_, filters| filters.page_size == 20) // defaulted from 0
-                    .times(1)
-                    .returning(|_, _| Ok(ListResult {
-                        items: vec![],
-                        cursor: None,
-                        has_more: false,
-                        total: 0,
-                    }));
-            },
-            |_cache| {},
-            |_audit| {},
-        );
-
-        let filters = ListFilters {
-            cursor: None,
-            page_size: 0, // should default to 20
-            sort_by: "created_at".into(),
-            sort_dir: "desc".into(),
-            fields: Default::default(),
-        };
-
-        let result = svc.list(tenant_id, filters).await;
-        assert!(result.is_ok());
+            let result = svc.list(tenant_id, filters).await;
+            if accepted {
+                assert!(result.is_ok(), "page_size {page_size} must be accepted as-is");
+            } else {
+                let err = result.expect_err("an out-of-range page_size must be rejected");
+                assert!(matches!(err, AppError::Validation { .. }), "page_size {page_size}: {err:?}");
+                assert_eq!(err.details()[0].field, "limit");
+            }
+        }
     }
 
     #[tokio::test]

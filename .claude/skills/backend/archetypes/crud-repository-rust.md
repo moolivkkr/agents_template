@@ -25,7 +25,7 @@ use uuid::Uuid;
 
 use crate::domain::{ListFilters, ListResult};
 use crate::error::AppError;
-use crate::models::Widget;
+use crate::models::{Widget, WidgetStatus};
 
 /// Repository trait — owned by the service (consumer), implemented by the persistence layer.
 #[async_trait]
@@ -93,7 +93,7 @@ impl WidgetRepository for PgWidgetRepository {
             widget.tenant_id,
             widget.name,
             widget.description.as_deref(),
-            widget.status,
+            widget.status as WidgetStatus, // Postgres enum: the macro takes the Rust type's word for it
             widget.created_at,
             widget.updated_at,
             widget.created_by,
@@ -118,7 +118,7 @@ impl WidgetRepository for PgWidgetRepository {
         let widget = sqlx::query_as!(
             Widget,
             r#"
-            SELECT id, tenant_id, name, description, status,
+            SELECT id, tenant_id, name, description, status as "status: WidgetStatus",
                    created_at, updated_at, deleted_at,
                    created_by, updated_by, version
             FROM widgets
@@ -155,7 +155,7 @@ impl WidgetRepository for PgWidgetRepository {
             widget.id,
             widget.name,
             widget.description.as_deref(),
-            widget.status,
+            widget.status as WidgetStatus,
             widget.updated_at,
             widget.updated_by,
             widget.version,           // new version
@@ -220,12 +220,8 @@ impl WidgetRepository for PgWidgetRepository {
         qb.push_bind(tenant_id);
         qb.push(" AND deleted_at IS NULL");
 
-        // Apply dynamic field filters (allow-listed in handler)
-        for (field, value) in &filters.fields {
-            let col = sanitize_column(field);
-            qb.push(format!(" AND {col} = "));
-            qb.push_bind(value.clone());
-        }
+        // Apply dynamic field filters (allow-listed columns, typed binds)
+        push_filters(&mut qb, &filters.fields)?;
 
         // Apply cursor: keyset on (sort column, id); the cursor's value is typed for that column
         let col = sanitize_column(&filters.sort_by);
@@ -292,10 +288,8 @@ impl PgWidgetRepository {
         );
         qb.push_bind(tenant_id);
         qb.push(" AND deleted_at IS NULL");
-        for (field, value) in &filters.fields {
-            let col = sanitize_column(field);
-            qb.push(format!(" AND {col} = "));
-            qb.push_bind(value.clone());
+        if push_filters(&mut qb, &filters.fields).is_err() {
+            return 0; // list() has already rejected the filter with a 400
         }
 
         #[derive(sqlx::FromRow)]
@@ -330,7 +324,7 @@ impl PgWidgetRepository {
                     .push_bind(w.tenant_id)
                     .push_bind(&w.name)
                     .push_bind(w.description.as_deref())
-                    .push_bind(&w.status)
+                    .push_bind(w.status) // typed: widget_status
                     .push_bind(w.created_at)
                     .push_bind(w.updated_at)
                     .push_bind(w.created_by)
@@ -374,7 +368,6 @@ fn encode_cursor(col: &str, w: &Widget) -> String {
     let key = match col {
         "updated_at" => CursorKey::Ts(w.updated_at),
         "name" => CursorKey::Text(w.name.clone()),
-        "status" => CursorKey::Text(w.status.clone()),
         _ => CursorKey::Ts(w.created_at),
     };
     let payload = CursorPayload { col: col.to_owned(), key, id: w.id };
@@ -399,20 +392,42 @@ fn decode_cursor(cursor: &str, col: &str) -> Result<CursorPayload, AppError> {
 ## Column Sanitization
 
 ```rust
-use sqlx::QueryBuilder;
+use std::collections::HashMap;
 
-/// Allow-list of safe column names for ORDER BY and WHERE clauses.
+use sqlx::{Postgres, QueryBuilder};
+
+/// Allow-list of sortable columns (ORDER BY and the keyset cursor).
 /// Prevents SQL injection in dynamic query construction.
 fn sanitize_column(col: &str) -> &'static str {
     match col {
         "created_at" => "created_at",
         "updated_at" => "updated_at",
         "name" => "name",
-        "status" => "status",
-        "priority" => "priority",
-        "category" => "category",
         _ => "created_at", // safe default
     }
+}
+
+/// `AND <column> = $n` for each filterable column; any other field is ignored (the handler allow-lists
+/// the same set). `status` is the Postgres enum `widget_status`: the value is parsed and bound typed,
+/// so an unknown status is a 400 rather than a SQL error.
+fn push_filters(qb: &mut QueryBuilder<Postgres>, fields: &HashMap<String, String>) -> Result<(), AppError> {
+    for (field, value) in fields {
+        match field.as_str() {
+            "status" => {
+                let status: WidgetStatus = value.parse().map_err(|_| {
+                    AppError::validation("filter[status]", "invalid_value", "This status does not exist.")
+                })?;
+                qb.push(" AND status = ");
+                qb.push_bind(status);
+            }
+            "priority" => {
+                qb.push(" AND priority = ");
+                qb.push_bind(value.clone());
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 ```
 
@@ -469,13 +484,40 @@ pub struct Widget {
     pub tenant_id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub status: String,
+    pub status: WidgetStatus,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub deleted_at: Option<DateTime<Utc>>,
     pub created_by: Uuid,
     pub updated_by: Uuid,
     pub version: i32,
+}
+
+/// Mirrors the Postgres enum `widget_status` (migration-pattern-rust.md, 20240105). JSON carries the
+/// lowercase name. In query! / query_as! the column needs a type hint: `status as "status: WidgetStatus"`
+/// when reading, `widget.status as WidgetStatus` when binding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "widget_status", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum WidgetStatus {
+    Active,
+    Archived,
+    Draft,
+    Deleted,
+}
+
+impl std::str::FromStr for WidgetStatus {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, ()> {
+        match s {
+            "active" => Ok(Self::Active),
+            "archived" => Ok(Self::Archived),
+            "draft" => Ok(Self::Draft),
+            "deleted" => Ok(Self::Deleted),
+            _ => Err(()),
+        }
+    }
 }
 ```
 
@@ -485,7 +527,7 @@ pub struct Widget {
 - Every query MUST use sqlx bind parameters (`$1`, `$2`, or `push_bind`) — never string interpolation of user values
 - Every read query MUST include `AND deleted_at IS NULL` (soft delete filter)
 - Update operations MUST use optimistic locking: `WHERE version = $expected`
-- Column names in ORDER BY / WHERE MUST be allow-listed via `sanitize_column`
+- Column names in ORDER BY MUST be allow-listed via `sanitize_column`; filters go through `push_filters` (allow-listed columns, typed binds — an enum column is parsed, an unknown value is a 400)
 - Cursor values MUST be opaque (base64-encoded JSON) — never expose raw DB values
 - The cursor carries the last row's value of the column being sorted on (typed for it) plus `id`; a cursor from another sort is a 400
 - List queries MUST request `LIMIT + 1` to detect `has_more` without an extra count query

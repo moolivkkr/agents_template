@@ -15,7 +15,7 @@ tags:
 
 # CRUD Repository Test Archetype (Rust / sqlx::test)
 
-> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0; the 29 tests ran against Postgres 17 and pass (with the migration-pattern-rust.md migrations that apply cleanly — three do not, see that file).
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0; the 29 tests ran on Postgres 17 with the full migration-pattern-rust.md migration set and pass.
 
 Complete integration test template for the repository layer against a real PostgreSQL database. Every generated repository test MUST follow this pattern.
 
@@ -71,7 +71,7 @@ use uuid::Uuid;
 
 use yourapp::domain::ListFilters;
 use yourapp::error::AppError;
-use yourapp::models::Widget;
+use yourapp::models::{Widget, WidgetStatus};
 use yourapp::repositories::widget::PgWidgetRepository;
 use yourapp::traits::repository::WidgetRepository;
 
@@ -84,7 +84,7 @@ fn make_widget(tenant_id: Uuid) -> Widget {
         tenant_id,
         name: format!("widget-{}", &Uuid::new_v4().to_string()[..8]),
         description: Some("integration test widget".into()),
-        status: "active".into(),
+        status: WidgetStatus::Active,
         created_at: now,
         updated_at: now,
         deleted_at: None,
@@ -129,7 +129,7 @@ async fn create_and_retrieve(pool: PgPool) {
     assert_eq!(fetched.tenant_id, tenant_id);
     assert_eq!(fetched.name, widget.name);
     assert_eq!(fetched.description, widget.description);
-    assert_eq!(fetched.status, "active");
+    assert_eq!(fetched.status, WidgetStatus::Active);
     assert_eq!(fetched.version, 1);
     assert!(fetched.deleted_at.is_none());
 }
@@ -763,10 +763,10 @@ async fn list_with_status_filter(pool: PgPool) {
     let tenant_id = Uuid::new_v4();
 
     let mut active = make_widget(tenant_id);
-    active.status = "active".into();
+    active.status = WidgetStatus::Active;
 
     let mut archived = make_widget(tenant_id);
-    archived.status = "archived".into();
+    archived.status = WidgetStatus::Archived;
 
     repo.create(&active).await.unwrap();
     repo.create(&archived).await.unwrap();
@@ -784,7 +784,12 @@ async fn list_with_status_filter(pool: PgPool) {
 
     let result = repo.list(tenant_id, &filters).await.unwrap();
     assert_eq!(result.items.len(), 1);
-    assert_eq!(result.items[0].status, "active");
+    assert_eq!(result.items[0].status, WidgetStatus::Active);
+
+    // status is a Postgres enum: an unknown value is 400 VALIDATION_FAILED, not a database error
+    let mut unknown = filters.clone();
+    unknown.fields.insert("status".into(), "enabled".into());
+    assert!(matches!(repo.list(tenant_id, &unknown).await.unwrap_err(), AppError::Validation { .. }));
 }
 
 #[sqlx::test(migrations = "./migrations")]
@@ -793,9 +798,9 @@ async fn list_with_multiple_filters(pool: PgPool) {
     let tenant_id = Uuid::new_v4();
 
     // Create several widgets with different statuses
-    for (name, status) in [("A", "active"), ("B", "active"), ("C", "archived")] {
+    for (name, status) in [("A", WidgetStatus::Active), ("B", WidgetStatus::Active), ("C", WidgetStatus::Archived)] {
         let mut w = make_widget_named(tenant_id, name);
-        w.status = status.into();
+        w.status = status;
         repo.create(&w).await.unwrap();
     }
 

@@ -15,7 +15,7 @@ tags:
 
 # CRUD Handler Test Archetype (Rust / Axum)
 
-> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0, reqwest 0.13.5; the 31 tests ran against Postgres 17 and pass (with the migration-pattern-rust.md migrations that apply cleanly — three do not, see that file).
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0, reqwest 0.13.5; the 31 tests ran on Postgres 17 with the full migration-pattern-rust.md migration set and pass.
 
 Complete Axum handler test template. Every generated handler test file MUST follow this pattern.
 
@@ -130,9 +130,10 @@ impl TestApp {
             r#"
             INSERT INTO widgets (id, tenant_id, name, description, status,
                                  created_at, updated_at, created_by, updated_by, version)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9)
             "#,
-            id, tenant_id, name, "seeded", "active", now, now, user_id, user_id, 1_i32,
+            // status is the Postgres enum widget_status: a literal needs no Rust type
+            id, tenant_id, name, "seeded", now, now, user_id, user_id, 1_i32,
         )
         .execute(&self.pool)
         .await
@@ -861,18 +862,12 @@ async fn list_widgets_cursor_pagination() {
 }
 
 #[tokio::test]
-async fn list_widgets_limit_defaults_and_caps() {
+async fn list_widgets_limit_default_and_bounds() {
     let app = spawn_app().await;
     let auth = app.default_auth_header();
 
-    // limit defaults to 20 when missing, zero or negative; capped at 100
-    for (query, expected) in [
-        ("", 20),
-        ("?limit=0", 20),
-        ("?limit=-5", 20),
-        ("?limit=500", 100),
-        ("?limit=50", 50),
-    ] {
+    // limit defaults to 20 when missing; 1..=100 is used as given
+    for (query, expected) in [("", 20), ("?limit=1", 1), ("?limit=50", 50), ("?limit=100", 100)] {
         let resp = app.client
             .get(app.url(&format!("/api/v1/widgets{query}")))
             .header("Authorization", &auth)
@@ -886,6 +881,20 @@ async fn list_widgets_limit_defaults_and_caps() {
             Some(expected),
             "limit for '{query}'"
         );
+    }
+
+    // Out of range or not a whole number: 400 VALIDATION_FAILED naming `limit` — never clamped
+    for query in ["?limit=0", "?limit=-5", "?limit=101", "?limit=500", "?limit=abc", "?limit="] {
+        let resp = app.client
+            .get(app.url(&format!("/api/v1/widgets{query}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
+
+        let json = assert_error_response(resp, 400, "VALIDATION_FAILED").await;
+        assert_eq!(json["error"]["details"][0]["field"], "limit", "details for '{query}'");
+        assert_eq!(json["error"]["details"][0]["code"], "out_of_range", "details for '{query}'");
     }
 }
 
@@ -1157,7 +1166,7 @@ async fn internal_error_does_not_leak_details() {
 - DELETE MUST return 204 with empty body
 - POST create MUST return 201 Created
 - List responses MUST include `meta.pagination` `{next_cursor, has_more, limit}`; `data` is `[]` when empty; `next_cursor` is null when `has_more` is false
-- `limit` MUST be clamped: default to 20 when missing/zero/negative, cap at 100
+- `limit` defaults to 20 when missing; a value outside 1..100 (or not a whole number) MUST be 400 `VALIDATION_FAILED` with a `details[]` entry for `limit` — never clamped silently
 - Sort and filter fields MUST be allow-listed — disallowed values default to safe values
 - Cursor pagination MUST produce non-overlapping pages
 - Auth tests MUST cover: missing header (401 `UNAUTHENTICATED` + `WWW-Authenticate`), invalid JWT (401), expired JWT (401), wrong role (403 `FORBIDDEN`), wrong tenant (404 `NOT_FOUND`)

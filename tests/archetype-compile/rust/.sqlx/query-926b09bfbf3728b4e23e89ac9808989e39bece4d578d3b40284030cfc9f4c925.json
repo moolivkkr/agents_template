@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, tenant_id, name, description, status,\n                   created_at, updated_at, deleted_at,\n                   created_by, updated_by, version\n            FROM widgets\n            WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL\n            ",
+  "query": "\n            SELECT id, tenant_id, name, description, status as \"status: WidgetStatus\",\n                   created_at, updated_at, deleted_at,\n                   created_by, updated_by, version\n            FROM widgets\n            WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL\n            ",
   "describe": {
     "columns": [
       {
@@ -49,8 +49,20 @@
       },
       {
         "ordinal": 4,
-        "name": "status",
-        "type_info": "Varchar",
+        "name": "status: WidgetStatus",
+        "type_info": {
+          "Custom": {
+            "name": "widget_status",
+            "kind": {
+              "Enum": [
+                "active",
+                "archived",
+                "draft",
+                "deleted"
+              ]
+            }
+          }
+        },
         "origin": {
           "Table": {
             "table": "widgets",
@@ -145,5 +157,5 @@
       false
     ]
   },
-  "hash": "a239dbc62975251f21a1df3e260f950f0f22214b98d01bf99bdf7f9cb43d0c72"
+  "hash": "926b09bfbf3728b4e23e89ac9808989e39bece4d578d3b40284030cfc9f4c925"
 }

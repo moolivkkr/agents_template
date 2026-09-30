@@ -14,7 +14,7 @@ tags:
 
 # Migration Pattern Archetype (Rust / sqlx)
 
-> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0. Known issue (the SQL below, not yet fixed): on a clean Postgres 17, 20240103 (no `CREATE EXTENSION pg_trgm`), 20240104 (`_migration_audit` is never created) and 20240105.up (the 'active' default can't be cast to the enum) fail, so `sqlx migrate run` and every `#[sqlx::test]` fail; the migration tests pass only without those three.
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0. The full migration set below runs with `sqlx migrate run` on a clean Postgres 17 (and `sqlx migrate revert` back down), and the migration, repository and handler tests pass on it.
 
 Complete database migration patterns for sqlx-based Rust projects. Every generated project MUST follow these patterns.
 
@@ -40,11 +40,16 @@ sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate"] }
 
 ```
 migrations/
-  20240101000000_create_widgets.sql         <- forward-only (simple)
-  20240102000000_add_status_column.up.sql   <- reversible (up)
-  20240102000000_add_status_column.down.sql <- reversible (down)
-  20240103000000_seed_statuses.sql          <- data migration
-  20240104000000_add_index.sql              <- index migration
+  20240101000000_create_widgets.sql                   <- forward-only (simple)
+  20240102000000_add_priority_column.up.sql           <- reversible (up)
+  20240102000000_add_priority_column.down.sql         <- reversible (down)
+  20240103000000_add_search_index.sql                 <- index migration (+ pg_trgm)
+  20240104000000_migrate_status_values.sql            <- data migration
+  20240105000000_create_widget_status_enum.up.sql     <- type change (reversible)
+  20240105000000_create_widget_status_enum.down.sql
+  20240106000000_create_components.up.sql             <- foreign key (reversible)
+  20240106000000_create_components.down.sql
+  20240107000000_create_audit_log.sql
 ```
 
 Rule: Migration files MUST be named with a timestamp prefix `YYYYMMDDHHMMSS_description`. sqlx sorts by filename, so timestamps ensure correct ordering.
@@ -179,6 +184,10 @@ ALTER TABLE widgets DROP COLUMN IF EXISTS priority;
 ```sql
 -- migrations/20240103000000_add_search_index.sql
 
+-- gin_trgm_ops comes from the pg_trgm extension. It is a trusted extension (PostgreSQL 13+), so the
+-- migration role needs only CREATE on the database; managed Postgres (RDS, Cloud SQL, Azure) ships it.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 -- IMPORTANT: CREATE INDEX CONCURRENTLY cannot run inside a transaction.
 -- sqlx wraps migrations in transactions by default.
 -- To use CONCURRENTLY, you must:
@@ -204,23 +213,23 @@ CREATE INDEX IF NOT EXISTS idx_widgets_name_trgm
 -- Data migration: rename status values.
 -- Always idempotent — safe to run multiple times.
 
-UPDATE widgets
-SET status = 'active'
-WHERE status = 'enabled'
-  AND deleted_at IS NULL;
+-- What data migrations changed (sqlx's _sqlx_migrations records only THAT a migration ran)
+CREATE TABLE IF NOT EXISTS _migration_audit (
+    migration_name TEXT PRIMARY KEY,
+    rows_affected  BIGINT NOT NULL,
+    executed_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
-UPDATE widgets
-SET status = 'archived'
-WHERE status = 'disabled'
-  AND deleted_at IS NULL;
-
--- Log the migration for audit
-INSERT INTO _migration_audit (migration_name, rows_affected, executed_at)
-VALUES (
-    '20240104000000_migrate_status_values',
-    (SELECT COUNT(*) FROM widgets WHERE status IN ('active', 'archived')),
-    NOW()
+-- Rename and record the number of rows actually changed, in one statement. Every row, soft-deleted
+-- ones too: 20240105 casts every row's status to the enum, and a leftover 'enabled' would fail it.
+WITH renamed AS (
+    UPDATE widgets
+    SET status = CASE status WHEN 'enabled' THEN 'active' ELSE 'archived' END
+    WHERE status IN ('enabled', 'disabled')
+    RETURNING 1
 )
+INSERT INTO _migration_audit (migration_name, rows_affected)
+SELECT '20240104000000_migrate_status_values', COUNT(*) FROM renamed
 ON CONFLICT (migration_name) DO NOTHING;
 ```
 
@@ -241,18 +250,27 @@ BEGIN
 END
 $$;
 
--- Migrate the column from VARCHAR to enum
+-- Migrate the column from VARCHAR to enum. ALTER COLUMN ... TYPE does not convert the column's
+-- DEFAULT ('active'::varchar), so drop it first and set it again after
+-- (otherwise: default for column "status" cannot be cast automatically to type widget_status).
+ALTER TABLE widgets ALTER COLUMN status DROP DEFAULT;
 ALTER TABLE widgets
     ALTER COLUMN status TYPE widget_status
     USING status::widget_status;
+ALTER TABLE widgets ALTER COLUMN status SET DEFAULT 'active';
+
+-- Rust reads and binds it as the WidgetStatus enum (crud-repository-rust.md):
+--   #[derive(sqlx::Type)] #[sqlx(type_name = "widget_status", rename_all = "lowercase")]
 ```
 
 ```sql
 -- migrations/20240105000000_create_widget_status_enum.down.sql
 
+ALTER TABLE widgets ALTER COLUMN status DROP DEFAULT;
 ALTER TABLE widgets
     ALTER COLUMN status TYPE VARCHAR(50)
     USING status::text;
+ALTER TABLE widgets ALTER COLUMN status SET DEFAULT 'active';
 
 DROP TYPE IF EXISTS widget_status;
 ```
@@ -389,8 +407,8 @@ mod tests {
 
         sqlx::query!(
             "INSERT INTO widgets (id, tenant_id, name, status, created_at, updated_at, created_by, updated_by, version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            uuid::Uuid::new_v4(), tenant_id, "Unique Name", "active", now, now, user_id, user_id, 1_i32,
+             VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)", // status: enum literal
+            uuid::Uuid::new_v4(), tenant_id, "Unique Name", now, now, user_id, user_id, 1_i32,
         )
         .execute(&pool)
         .await
@@ -398,8 +416,8 @@ mod tests {
 
         let result = sqlx::query!(
             "INSERT INTO widgets (id, tenant_id, name, status, created_at, updated_at, created_by, updated_by, version) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-            uuid::Uuid::new_v4(), tenant_id, "Unique Name", "active", now, now, user_id, user_id, 1_i32,
+             VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)", // status: enum literal
+            uuid::Uuid::new_v4(), tenant_id, "Unique Name", now, now, user_id, user_id, 1_i32,
         )
         .execute(&pool)
         .await;

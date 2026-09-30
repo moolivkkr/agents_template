@@ -1063,8 +1063,11 @@ sccache --show-stats
 ### cargo-chef for Docker Builds
 
 ```dockerfile
-# Stage 1: Plan — extract dependency information
-FROM rust:1.82 AS chef
+# Stage 1: Plan — extract dependency information. Builder = toolchain file: RUST_VERSION equals
+# rust-toolchain.toml's channel; bookworm to match the runtime's glibc (the full Dockerfile, with
+# a non-root user and GIT_SHA: dockerfile-rust.md)
+ARG RUST_VERSION=1.98.1
+FROM rust:${RUST_VERSION}-bookworm AS chef
 RUN cargo install cargo-chef
 WORKDIR /app
 

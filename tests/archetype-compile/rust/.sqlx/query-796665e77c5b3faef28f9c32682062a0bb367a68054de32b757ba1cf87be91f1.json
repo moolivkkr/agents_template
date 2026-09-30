@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO widgets (id, tenant_id, name, description, status,\n                                 created_at, updated_at, created_by, updated_by, version)\n            VALUES ($1, $2, $3, $4, 'active', $5, $6, $7, $8, $9)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Timestamptz",
+        "Timestamptz",
+        "Uuid",
+        "Uuid",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "796665e77c5b3faef28f9c32682062a0bb367a68054de32b757ba1cf87be91f1"
+}

@@ -1,0 +1,6 @@
+# The Rust version the archetype samples are checked with. harness.py copies this file into the
+# generated workspace (rustup then uses exactly this toolchain), and fails the run when a Rust
+# archetype's rust-toolchain.toml block or Dockerfile builder (`ARG RUST_VERSION` / `FROM rust:<v>`)
+# names a different version. Bump it here, re-run run.sh, then update the docs it names.
+[toolchain]
+channel = "1.98.1"

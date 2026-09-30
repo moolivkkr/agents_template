@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 # ruff: noqa: E501
 # flake8: noqa
-"""Compile-check every ```rust block in .claude/skills/backend/archetypes/*.md (run via run.sh).
+"""Compile-check every ```rust block in .claude/skills/backend/archetypes/*.md, plus the skill packs in
+units.EXTRA_FILES (languages/rust.md, frameworks/axum.md) (run via run.sh).
 
 What it does, in order, and each step fails the run on its own:
   1. Extracts the ```rust and ```toml blocks from the archetypes at run time (so an edited sample is
@@ -78,16 +79,19 @@ def blocks_of(path):
     return out
 
 
+SKILLS = os.path.join(REPO, ".claude", "skills")
+
+
 def load_blocks():
-    """{(file_stem, lang): [Block]} for every archetype file."""
+    """{(file_stem, lang): [Block]} for every archetype file, plus units.EXTRA_FILES (skill packs outside
+    backend/archetypes, keyed by their path under .claude/skills without .md, e.g. "languages/rust")."""
     found = {}
-    for fn in sorted(os.listdir(ARCH)):
-        if not fn.endswith(".md"):
-            continue
-        stem = fn[:-3]
+    paths = [(fn[:-3], os.path.join(ARCH, fn)) for fn in sorted(os.listdir(ARCH)) if fn.endswith(".md")]
+    paths += [(rel[:-3], os.path.join(SKILLS, rel)) for rel in cfg.EXTRA_FILES]
+    for stem, path in paths:
         counters = {}
-        for lang, start, lines in blocks_of(os.path.join(ARCH, fn)):
-            if lang in ("rust", "toml", "protobuf", "sql"):
+        for lang, start, lines in blocks_of(path):
+            if lang in ("rust", "toml", "protobuf", "sql", "dockerfile"):
                 counters[lang] = counters.get(lang, 0) + 1
                 found.setdefault((stem, lang), []).append(Block(stem, lang, counters[lang], start, lines))
     return found
@@ -162,6 +166,23 @@ def render(part, ctx, unit_name):
 # ─── lint: doc-comment fences ─────────────────────────────────────────────────────────────────────
 DOC_FENCE = re.compile(r"^\s*//[/!]\s*(`{3,})(.*)$")
 SAFE_DOC_LANGS = {"text", "ignore", "rust,ignore", "sh", "bash", "json", "toml", "sql"}
+
+
+COLON_ROUTE = re.compile(r"\.(route|nest|route_service|nest_service)\(\s*\"[^\"]*/:[A-Za-z_]")
+
+
+def lint_colon_routes(blocks):
+    """axum 0.8 panics when a router is BUILT with a `/:param` segment (`/{param}` since 0.8). cargo
+    check can't see it, so a route string with one fails the run."""
+    bad = []
+    for (file, lang), lst in blocks.items():
+        if lang != "rust":
+            continue
+        for b in lst:
+            for k, line in enumerate(b.lines):
+                if COLON_ROUTE.search(line):
+                    bad.append(f"{file}.md:{b.start + k}: axum 0.8 route with a `:param` segment panics at startup — use `{{param}}`")
+    return bad
 
 
 def lint_doc_fences(blocks):
@@ -249,6 +270,7 @@ def assemble(ctx, only):
     deps = workspace_deps()
     os.makedirs(WORK, exist_ok=True)
     shutil.copyfile(os.path.join(HERE, "Cargo.toml"), os.path.join(WORK, "Cargo.toml"))
+    shutil.copyfile(os.path.join(HERE, "rust-toolchain.toml"), os.path.join(WORK, "rust-toolchain.toml"))
     lock = os.path.join(HERE, "Cargo.lock")
     if os.path.exists(lock):
         shutil.copyfile(lock, os.path.join(WORK, "Cargo.lock"))
@@ -437,6 +459,49 @@ def check_deps(doc, where_prefix, resolved):
     return failures
 
 
+def pinned_toolchain():
+    return tomllib.load(open(os.path.join(HERE, "rust-toolchain.toml"), "rb"))["toolchain"]["channel"]
+
+
+def check_dockerfile_toolchain(blocks):
+    """Builder = toolchain file: every Rust builder in a *-rust.md Dockerfile is the pinned version."""
+    pinned, failures, seen = pinned_toolchain(), [], 0
+    for (file, lang), lst in sorted(blocks.items()):
+        if lang != "dockerfile" or not file.endswith("-rust"):
+            continue
+        for b in lst:
+            text = "\n".join(b.lines)
+            args = re.findall(r"^\s*ARG\s+RUST_VERSION=(\S+)", text, re.M)
+            for k, line in enumerate(b.lines):
+                m = re.match(r"^\s*FROM\s+rust:(\S+)", line)
+                if not m:
+                    continue
+                seen += 1
+                tag = m.group(1)
+                where = f"{file}.md:{b.start + k}"
+                if tag.startswith("${RUST_VERSION}"):
+                    if not args:
+                        failures.append(f"{where}: FROM rust:${{RUST_VERSION}} with no ARG RUST_VERSION default in the block")
+                    continue
+                if not re.match(re.escape(pinned) + r"($|-)", tag):
+                    failures.append(f"{where}: FROM rust:{tag}, but the samples are checked with Rust {pinned}")
+            for v in args:
+                if v != pinned:
+                    failures.append(f"{file}.md:{b.start}: ARG RUST_VERSION={v}, but the samples are checked with Rust {pinned}")
+    # ...and the docs' rust-toolchain.toml blocks name the same channel
+    for (file, idx), kind in cfg.TOML.items():
+        if kind != "toolchain":
+            continue
+        lst = blocks.get((file, "toml"), [])
+        if idx > len(lst):
+            continue  # the block-count check reports it
+        channel = tomllib.loads("\n".join(lst[idx - 1].lines)).get("toolchain", {}).get("channel")
+        if channel != pinned:
+            failures.append(f"{lst[idx - 1]}: rust-toolchain.toml channel = {channel!r}, but the samples are "
+                            f"checked with {pinned!r} (tests/archetype-compile/rust/rust-toolchain.toml)")
+    return failures, seen
+
+
 def check_manifests(blocks, env):
     failures, notes = [], []
     resolved = resolved_packages(env)
@@ -450,7 +515,7 @@ def check_manifests(blocks, env):
             seen.add(key)
             kind = configured.get(key)
             if kind is None:
-                failures.append(f"{b}: toml block not listed in units.TOML (say 'deps', 'profile' or a skip reason)")
+                failures.append(f"{b}: toml block not listed in units.TOML (say 'deps', 'profile', 'toolchain' or a skip reason)")
                 continue
             if isinstance(kind, tuple):
                 notes.append(f"{b}: not checked — {kind[1]}")
@@ -565,8 +630,11 @@ def main():
         if not why or len(why) < 15:
             problems.append(f"units.SKIP {key}: give a real reason")
 
-    # 3. lint
+    # 3. lint: doctest-shaped doc-comment fences; Rust Dockerfile builders = the pinned toolchain
     problems += lint_doc_fences(blocks)
+    problems += lint_colon_routes(blocks)
+    docker_problems, n_builders = check_dockerfile_toolchain(blocks)
+    problems += docker_problems
 
     total_rust = sum(len(l) for (f, lang), l in blocks.items() if lang == "rust")
     skipped = sorted(cfg.SKIP.items())
@@ -578,7 +646,8 @@ def main():
         print("     (--only: compiling the selected units anyway; the run still fails)")
     else:
         print(f"ok   structure: {total_rust} rust blocks in {len(cfg.EXPECTED)} files; all compiled or skipped "
-              f"({len(skipped)} skip entries); no doctest-shaped doc-comment fences")
+              f"({len(skipped)} skip entries); no doctest-shaped doc-comment fences or axum `:param` routes; "
+              f"{n_builders} Dockerfile Rust builders = toolchain {pinned_toolchain()}")
     if args.coverage_only:
         return 0
 
@@ -605,7 +674,7 @@ def main():
     if not pinned:
         print("FAIL no committed Cargo.lock — run with --update-lock once")
         return 1
-    rustc = subprocess.run(["rustc", "--version"], capture_output=True, text=True).stdout.strip()
+    rustc = subprocess.run(["rustc", "--version"], cwd=WORK, capture_output=True, text=True).stdout.strip()
     print(f"     toolchain: {rustc}; sqlx macros: {'ONLINE against ' + args.prepare_sqlx if args.prepare_sqlx else 'offline (.sqlx/)'}")
     results = []
     selected = [u for u in cfg.UNITS if not args.only or u.name in args.only]

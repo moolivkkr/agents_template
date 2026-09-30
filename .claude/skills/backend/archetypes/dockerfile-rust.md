@@ -13,6 +13,8 @@ tags:
 
 # Dockerfile Archetype (Rust)
 
+> Builder tags checked 2026-09-30: `rust:1.98.1-bookworm` and `alpine:3.24` exist (registry manifest lookup), and every builder equals the `rust-toolchain.toml` channel below — tests/archetype-compile/rust/run.sh fails if they drift apart. The images were not built.
+
 Optimized multi-stage Docker build for Rust projects. Every generated project MUST follow this pattern.
 
 ## Project Structure
@@ -21,6 +23,7 @@ Optimized multi-stage Docker build for Rust projects. Every generated project MU
 .
 ├── Cargo.toml
 ├── Cargo.lock
+├── rust-toolchain.toml     <- the one Rust version; the Dockerfile builder uses the same
 ├── .dockerignore
 ├── Dockerfile
 ├── docker-compose.yml
@@ -28,6 +31,21 @@ Optimized multi-stage Docker build for Rust projects. Every generated project MU
 ├── .sqlx/                  <- offline query cache (committed)
 └── src/
     └── main.rs
+```
+
+## Toolchain file
+
+The Rust version comes from `## Commands and versions` (IMPLEMENTATION_GUIDELINES) and lives in
+`rust-toolchain.toml`. The Dockerfile's builder tag (`ARG RUST_VERSION`) equals its `channel` —
+builder = toolchain file, as for `go.mod` / `.nvmrc`. If they differ, rustup in the `rust` image
+downloads the file's toolchain during the build; a builder older than a dependency's `rust-version`
+(sqlx 0.9 needs 1.94) fails outright.
+
+```toml
+# rust-toolchain.toml
+[toolchain]
+channel = "1.98.1"
+components = ["rustfmt", "clippy"]
 ```
 
 ## .dockerignore
@@ -78,7 +96,10 @@ Thumbs.db
 # =============================================================================
 # Stage 1: Chef — Prepare the dependency recipe
 # =============================================================================
-FROM rust:1.82-bookworm AS chef
+# Builder = toolchain file: RUST_VERSION equals rust-toolchain.toml's channel. Debian bookworm, like
+# the runtime stage below, so the binary's glibc matches.
+ARG RUST_VERSION=1.98.1
+FROM rust:${RUST_VERSION}-bookworm AS chef
 
 # Install cargo-chef for dependency caching
 RUN cargo install cargo-chef --locked
@@ -126,6 +147,10 @@ RUN strip target/release/yourapp
 # =============================================================================
 FROM debian:bookworm-slim AS runtime
 
+# The deployed commit, for the version route and the smoke checks (infrastructure/docker.md)
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
 # Install runtime dependencies
 #   - ca-certificates: for HTTPS connections (to external APIs, DBs with TLS)
 #   - libssl3: for OpenSSL-linked builds (not needed if using rustls)
@@ -148,15 +173,16 @@ COPY --from=builder /app/target/release/yourapp /app/yourapp
 # Not strictly necessary if migrations are embedded, but useful for manual runs.
 COPY --from=builder /app/migrations /app/migrations
 
-# Switch to non-root user
-USER appuser
+# Switch to the non-root user: NUMERIC, on a line with no trailing comment (a named user fails
+# Kubernetes runAsNonRoot; Docker would keep a trailing comment as part of the value)
+USER 1001:1001
 
 # Expose the application port
 EXPOSE 8080
 
-# Health check — adjust the endpoint and interval as needed
+# Health check against the runtime contract's liveness path
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/healthz || exit 1
 
 # Run the application
 ENTRYPOINT ["/app/yourapp"]
@@ -170,8 +196,9 @@ ENTRYPOINT ["/app/yourapp"]
 # Produces a ~5-15 MB image (vs ~80-150 MB with debian-slim)
 # =============================================================================
 
-# Stage 1: Chef
-FROM rust:1.82-bookworm AS chef
+# Stage 1: Chef (builder = toolchain file: RUST_VERSION equals rust-toolchain.toml's channel)
+ARG RUST_VERSION=1.98.1
+FROM rust:${RUST_VERSION}-bookworm AS chef
 RUN cargo install cargo-chef --locked
 RUN rustup target add x86_64-unknown-linux-musl
 RUN apt-get update && apt-get install -y musl-tools
@@ -198,10 +225,13 @@ ENV SQLX_OFFLINE=true
 RUN cargo build --release --target x86_64-unknown-linux-musl --bin yourapp
 RUN strip target/x86_64-unknown-linux-musl/release/yourapp
 
-# Stage 4: Minimal Alpine runtime
-FROM alpine:3.20 AS runtime
+# Stage 4: Minimal Alpine runtime (a static musl binary doesn't care which libc the image has)
+FROM alpine:3.24 AS runtime
 
-# Install CA certificates (curl for health check is built into alpine)
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
+# Install CA certificates, and curl for the health check
 RUN apk add --no-cache ca-certificates curl
 
 # Non-root user
@@ -212,11 +242,11 @@ WORKDIR /app
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/yourapp /app/yourapp
 COPY --from=builder /app/migrations /app/migrations
 
-USER appuser
+USER 1001:1001
 EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8080/healthz || exit 1
 
 ENTRYPOINT ["/app/yourapp"]
 ```
@@ -230,7 +260,9 @@ ENTRYPOINT ["/app/yourapp"]
 # Use only when you have external health check infrastructure.
 # =============================================================================
 
-FROM rust:1.82-bookworm AS builder
+# Builder = toolchain file: RUST_VERSION equals rust-toolchain.toml's channel
+ARG RUST_VERSION=1.98.1
+FROM rust:${RUST_VERSION}-bookworm AS builder
 RUN cargo install cargo-chef --locked
 RUN rustup target add x86_64-unknown-linux-musl
 RUN apt-get update && apt-get install -y musl-tools
@@ -245,11 +277,13 @@ RUN cargo build --release --target x86_64-unknown-linux-musl --bin yourapp
 RUN strip target/x86_64-unknown-linux-musl/release/yourapp
 
 FROM scratch
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/yourapp /yourapp
 
-# No USER instruction — scratch has no user database.
-# The binary runs as whatever user the container runtime specifies.
+# scratch has no user database, but a NUMERIC user needs none; without USER the process is root
+USER 65532:65532
 
 EXPOSE 8080
 ENTRYPOINT ["/yourapp"]
@@ -281,7 +315,7 @@ services:
         condition: service_started
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8080/healthz"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -435,14 +469,17 @@ panic = "abort"
 
 ```
 [ ] .dockerignore excludes target/, .git/, docs/, tests/
+[ ] Builder = toolchain file: ARG RUST_VERSION equals rust-toolchain.toml's channel (and the versions table)
+[ ] Builder and runtime on the same Debian release (rust:<v>-bookworm with debian:bookworm-slim)
+[ ] ARG GIT_SHA -> ENV GIT_SHA in the runtime stage
 [ ] Multi-stage build: chef -> planner -> builder -> runtime
 [ ] Dependencies cached via cargo-chef (rebuild only when Cargo.toml/Cargo.lock change)
 [ ] SQLX_OFFLINE=true set in builder stage
 [ ] .sqlx/ directory copied into builder stage
 [ ] Binary stripped of debug symbols
 [ ] Runtime image uses debian-slim or alpine (not the full Rust image)
-[ ] Non-root user created and used (USER appuser)
-[ ] HEALTHCHECK instruction present
+[ ] Non-root user, NUMERIC (USER 1001:1001) on a line with no trailing comment
+[ ] HEALTHCHECK present, against /healthz (the runtime contract)
 [ ] Only the binary and CA certificates are in the final image
 [ ] No .env files, secrets, or source code in the final image
 [ ] EXPOSE matches the actual application port

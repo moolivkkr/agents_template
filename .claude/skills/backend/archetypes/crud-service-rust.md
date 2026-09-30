@@ -150,7 +150,7 @@ impl WidgetService {
             tenant_id,
             name: input.name,
             description: input.description,
-            status: "active".to_owned(),
+            status: WidgetStatus::Active,
             created_at: now,
             updated_at: now,
             deleted_at: None,
@@ -299,12 +299,10 @@ impl WidgetService {
         tenant_id: Uuid,
         mut filters: ListFilters,
     ) -> Result<ListResult<Widget>, AppError> {
-        // Enforce pagination defaults and maximums
-        if filters.page_size <= 0 {
-            filters.page_size = 20;
-        }
-        if filters.page_size > 100 {
-            filters.page_size = 100;
+        // The handler defaults limit to 20 and rejects values outside 1..=100. Check again rather than
+        // rewrite: a silently changed page size is a truncated list the caller can't detect.
+        if !(1..=100).contains(&filters.page_size) {
+            return Err(AppError::validation("limit", "out_of_range", "Limit must be a whole number from 1 to 100."));
         }
         if filters.sort_by.is_empty() {
             filters.sort_by = "created_at".to_owned();
@@ -363,7 +361,7 @@ impl WidgetService {
                 sqlx::query!(
                     r#"INSERT INTO widgets (id, tenant_id, name, status, created_at, updated_at, created_by, updated_by, version)
                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)"#,
-                    widget.id, widget.tenant_id, widget.name, widget.status,
+                    widget.id, widget.tenant_id, widget.name, widget.status as WidgetStatus,
                     widget.created_at, widget.updated_at, widget.created_by, widget.updated_by, widget.version,
                 )
                 .execute(&mut **tx)
@@ -497,6 +495,6 @@ use crate::error::AppError;
 - Errors MUST be typed (`AppError` enum) — no `anyhow` or string errors in the service layer
 - Max 40 lines of logic per method — extract helpers for complex steps
 - Accept trait objects (`Arc<dyn Repo>`), return concrete types — constructor takes traits, enables testing
-- Never return unbounded lists — always enforce page_size max (100)
+- Never return unbounded lists — a page_size outside 1..=100 is a VALIDATION_FAILED on `limit`, never clamped
 - Transaction closures MUST be `Send` + `'static`-compatible for sqlx
 - Cache errors MUST NOT fail the request — use `let _ =` for best-effort cache ops

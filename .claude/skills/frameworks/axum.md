@@ -1,5 +1,7 @@
 # Axum framework patterns for Rust HTTP APIs.
 
+> The Error Handling block and its bad-path test compile-checked 2026-09-30 and the test passes (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9. The other blocks are not checked yet.
+
 ## Router Setup
 ```rust
 use axum::{
@@ -230,7 +232,9 @@ impl From<QueryRejection> for AppError {
 impl From<PathRejection> for AppError {
     fn from(rejection: PathRejection) -> Self {
         tracing::debug!(error = %rejection.body_text(), "path rejected");
-        Self::NotFound("Resource") // /widgets/not-a-uuid can't name an existing resource
+        // /widgets/not-a-uuid: the client sent a malformed id → 400 VALIDATION_FAILED on `id`, the same
+        // status and code as error-handling-rust.md (not a 404)
+        Self::Validation(vec![FieldError { field: "id".into(), code: "invalid_format", message: "Must be a valid ID." }])
     }
 }
 ```
@@ -306,6 +310,34 @@ async fn test_get_widget() {
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert!(json["data"]["id"].is_string());
     assert!(json["meta"]["request_id"].is_string()); // envelope: data + meta.request_id
+}
+```
+A bad path parameter is a 400 envelope, not axum's plain-text rejection (same module as the error
+handling above):
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::Request, routing::get, Router};
+    use tower::ServiceExt; // for `oneshot`
+
+    #[tokio::test]
+    async fn test_bad_path_param_is_400_validation_failed() {
+        let app = Router::new()
+            .route("/widgets/{id}", get(|AppPath(id): AppPath<uuid::Uuid>| async move { id.to_string() }))
+            .layer(axum::middleware::from_fn(request_id_middleware));
+
+        let req = Request::builder().uri("/widgets/not-a-uuid").body(Body::empty()).unwrap();
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "VALIDATION_FAILED");
+        assert_eq!(json["error"]["details"][0]["field"], "id");
+        assert!(json["error"]["request_id"].as_str().is_some_and(|id| !id.is_empty()));
+    }
 }
 ```
 - Use `tower::ServiceExt::oneshot` — no running server needed

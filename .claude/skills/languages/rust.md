@@ -14,6 +14,8 @@ tags:
 
 # Rust patterns and conventions for safe, performant applications.
 
+> Rust blocks 1 and 3–7 (errors, envelope, axum handlers/routes, extractor) compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0; smoke-tested: the routes build, an out-of-range `limit` is a 400, the tenant comes from verified claims. The other blocks are not checked yet.
+
 ## Project Structure
 ```
 src/
@@ -68,6 +70,7 @@ impl FieldError {
             "invalid_format" => "This value has the wrong format.",
             "too_long" => "This value is too long.",
             "invalid_reference" => "This refers to something that doesn't exist.",
+            "out_of_range" => "This value is out of range.",
             _ => "This value is invalid.",
         };
         Self { field: field.into(), code, message }
@@ -271,7 +274,7 @@ impl IntoResponse for DomainError {
 
 ### Axum Handler Patterns
 ```rust
-use axum::{extract::{Path, Query, State, Json}, http::StatusCode};
+use axum::{extract::{Query, State, Json}, http::StatusCode, routing::{get, post}, Router};
 
 // Handler: Parse → Validate → Execute → Respond
 async fn create_order(
@@ -296,7 +299,12 @@ async fn list_orders(
     tenant: TenantId,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<ApiResponse<Vec<OrderResponse>>>, DomainError> {
-    let limit = params.limit.unwrap_or(20).clamp(1, 100);
+    // limit defaults to 20; outside 1..=100 is 400 VALIDATION_FAILED — never clamped silently
+    // (api/response-envelope.md: a client asking for 500 and getting 100 can't tell)
+    let limit = params.limit.unwrap_or(20);
+    if !(1..=100).contains(&limit) {
+        return Err(DomainError::Validation(vec![FieldError::new("limit", "out_of_range")]));
+    }
     let (orders, next_cursor) = state.order_service
         .list_orders(tenant.0, params.cursor.as_deref(), limit)
         .await?;
@@ -312,7 +320,8 @@ async fn list_orders(
 fn order_routes() -> Router<AppState> {
     Router::new()
         .route("/orders", post(create_order).get(list_orders))
-        .route("/orders/:id", get(get_order).put(update_order).delete(delete_order))
+        // axum 0.8: `{id}` (a `:id` segment panics when the router is built)
+        .route("/orders/{id}", get(get_order).put(update_order).delete(delete_order))
 }
 ```
 
@@ -348,7 +357,7 @@ impl Claims {
     }
 }
 
-#[async_trait]
+// axum 0.8: FromRequestParts is a native async trait — no #[async_trait]
 impl<S: Send + Sync> FromRequestParts<S> for TenantId {
     type Rejection = DomainError;
 

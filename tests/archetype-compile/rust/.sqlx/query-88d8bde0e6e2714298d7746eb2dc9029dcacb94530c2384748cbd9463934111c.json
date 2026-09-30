@@ -1,13 +1,12 @@
 {
   "db_name": "PostgreSQL",
-  "query": "INSERT INTO widgets (id, tenant_id, name, status, created_at, updated_at, created_by, updated_by, version) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+  "query": "INSERT INTO widgets (id, tenant_id, name, status, created_at, updated_at, created_by, updated_by, version) VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8)",
   "describe": {
     "columns": [],
     "parameters": {
       "Left": [
         "Uuid",
         "Uuid",
-        "Varchar",
         "Varchar",
         "Timestamptz",
         "Timestamptz",
@@ -18,5 +17,5 @@
     },
     "nullable": []
   },
-  "hash": "92cc4fc923c43d6cc52e17825e1b3ece48c320117b6882be8dd442229bf48767"
+  "hash": "88d8bde0e6e2714298d7746eb2dc9029dcacb94530c2384748cbd9463934111c"
 }
