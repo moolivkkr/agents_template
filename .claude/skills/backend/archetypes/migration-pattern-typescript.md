@@ -14,7 +14,7 @@ tags:
 
 # Migration Pattern Archetype — TypeScript
 
-> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 + @prisma/adapter-pg, Drizzle ORM 0.45, drizzle-kit 0.31, postgres.js 3.4 (tests/archetype-compile/typescript/run.sh).
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 + @prisma/adapter-pg, Drizzle ORM 0.45, drizzle-kit 0.31, postgres.js 3.4; both ```prisma blocks pass `prisma validate` with the prisma.config.ts below (tests/archetype-compile/typescript/run.sh).
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/migration-pattern.md` (Go). Both produce identical database schemas. The Go archetype covers raw SQL migrations and golang-migrate; this covers Prisma and Drizzle ORM migration tooling.
 
@@ -31,13 +31,14 @@ Complete TypeScript migration templates for Prisma and Drizzle. Every generated 
 
 generator client {
   provider = "prisma-client-js"
-  // Enable preview features as needed:
-  // previewFeatures = ["postgresqlExtensions", "multiSchema"]
+  // Enable preview features as needed (multi-schema is GA — no flag):
+  // previewFeatures = ["postgresqlExtensions"]
 }
 
+// Prisma 7: no `url` here (a schema with one fails with P1012). Migrate reads the URL from
+// prisma.config.ts (below); the app passes a driver adapter to `new PrismaClient({ adapter })`.
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
   // For multi-schema support:
   // schemas  = ["public", "tenant"]
 }
@@ -108,6 +109,29 @@ model Tenant {
 // Prisma enums map to PostgreSQL ENUMs which are hard to modify.
 // Prefer string fields with application-level validation.
 // =============================================================================
+```
+
+## Prisma Config — `prisma.config.ts` (Prisma 7)
+
+Prisma 7 reads the Migrate connection URL and the seed command from `prisma.config.ts` in the project
+root: not from `schema.prisma`, and not from `package.json#prisma.seed`, which `prisma db seed` ignores
+("No seed command configured"). The CLI no longer loads `.env` on its own, hence `dotenv/config`.
+
+```typescript
+// prisma.config.ts
+import "dotenv/config"; // Prisma 7 doesn't load .env itself; in a cluster the env var is injected
+import { defineConfig, env } from "prisma/config";
+
+export default defineConfig({
+  schema: "prisma/schema.prisma",
+  migrations: {
+    path: "prisma/migrations",
+    seed: "tsx prisma/seed.ts", // run by `prisma db seed` and `prisma migrate reset`
+  },
+  datasource: {
+    url: env("DATABASE_URL"), // throws PrismaConfigEnvError when unset — no default URL
+  },
+});
 ```
 
 ## Prisma Migrate — Development Workflow
@@ -232,8 +256,8 @@ COMMENT ON COLUMN widgets.version IS 'Optimistic lock counter — increment on e
 // prisma/seed.ts
 //
 // Run with: npx prisma db seed
-// Configure in package.json:
-// "prisma": { "seed": "tsx prisma/seed.ts" }
+// Configured in prisma.config.ts: migrations: { seed: "tsx prisma/seed.ts" }
+// (Prisma 7 ignores a "prisma": { "seed" } key in package.json)
 
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
@@ -303,17 +327,15 @@ main()
 ## Prisma Multi-Schema / Multi-Tenant
 
 ```prisma
-// prisma/schema.prisma — Multi-schema setup (preview feature)
+// prisma/schema.prisma — Multi-schema setup (GA: the old "multiSchema" preview flag is deprecated)
 
 generator client {
-  provider        = "prisma-client-js"
-  previewFeatures = ["multiSchema"]
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
-  schemas  = ["public", "tenant_data"]
+  schemas  = ["public", "tenant_data"] // the URL is in prisma.config.ts
 }
 
 // Public schema — shared lookup tables
@@ -679,7 +701,7 @@ seed().catch((err) => {
     "db:migrate:dev": "npx prisma migrate dev",
     "db:migrate:deploy": "npx prisma migrate deploy",
     "db:migrate:reset": "npx prisma migrate reset",
-    "db:seed": "tsx prisma/seed.ts",
+    "db:seed": "npx prisma db seed",
     "db:studio": "npx prisma studio",
 
     "drizzle:generate": "npx drizzle-kit generate",
@@ -687,9 +709,6 @@ seed().catch((err) => {
     "drizzle:push": "npx drizzle-kit push",
     "drizzle:studio": "npx drizzle-kit studio",
     "drizzle:seed": "tsx src/db/seed.ts"
-  },
-  "prisma": {
-    "seed": "tsx prisma/seed.ts"
   }
 }
 ```

@@ -292,11 +292,11 @@ def build_unit(unit: dict, blocks_by_ref: dict[str, Block], root: str) -> tuple[
 TSC_LINE = re.compile(r"^(?P<file>[^()\s][^()]*?)\((?P<line>\d+),(?P<col>\d+)\): (?P<msg>.*)$")
 
 
-def run_vitest(d: str, files: list[str]) -> tuple[bool, str]:
+def run_vitest(d: str, files: list[str], extra_env: dict | None = None) -> tuple[bool, str]:
     """Execute a unit's test samples (in-process: mocks and supertest only — no database, no network)."""
     vitest = os.path.join(HERE, "node_modules", ".bin", "vitest")
     p = subprocess.run([vitest, "run", *files], cwd=d, capture_output=True, text=True,
-                       env={**os.environ, "CI": "1", "NO_COLOR": "1"})
+                       env={**os.environ, "CI": "1", "NO_COLOR": "1", **(extra_env or {})})
     lines = (p.stdout + p.stderr).splitlines()
     summary = " ; ".join(l.strip() for l in lines if l.strip().startswith(("Test Files", "Tests ")))
     if p.returncode == 0:
@@ -305,11 +305,68 @@ def run_vitest(d: str, files: list[str]) -> tuple[bool, str]:
     return False, "\n".join(keep[-60:])
 
 
-def check_unit(unit: dict, d: str, src: Source, run_tests: bool) -> tuple[bool, str]:
+def run_prisma_validate(d: str, specs: list[dict]) -> tuple[bool, str]:
+    """`prisma validate` each ```prisma block named in specs, with the unit's own prisma.config.ts (a doc block).
+
+    The block is written to the config's schema path; DATABASE_URL is a placeholder (validate never connects).
+    """
+    prisma = os.path.join(HERE, "node_modules", ".bin", "prisma")
+    env = {**os.environ, "DATABASE_URL": "postgresql://validate:validate@127.0.0.1:1/validate",
+           "PRISMA_HIDE_UPDATE_MESSAGE": "1", "CHECKPOINT_DISABLE": "1"}
+    notes = []
+    for spec in specs:
+        blocks = external_blocks(spec["doc"], set(spec["langs"]))
+        if len(blocks) < spec["index"]:
+            return False, f"{spec['doc']} has no {spec['langs']} block #{spec['index']}"
+        blk = blocks[spec["index"] - 1]
+        target = os.path.join(d, spec.get("path", "prisma/schema.prisma"))
+        os.makedirs(os.path.dirname(target), exist_ok=True)
+        with open(target, "w", encoding="utf-8") as f:
+            f.write("\n".join(blk.lines) + "\n")
+        p = subprocess.run([prisma, "validate"], cwd=d, capture_output=True, text=True, env=env)
+        out = p.stdout + p.stderr
+        where = f"{blk.relfile}:{blk.start}"
+        if p.returncode != 0 or "warning" in out.lower():  # a deprecation warning fails too
+            return False, f"prisma validate FAILED for the ```prisma block at {where}:\n{out}"
+        notes.append(where.split("/")[-1])
+    return True, "prisma validate: " + ", ".join(notes)
+
+
+def run_node_probe(d: str, entry: str) -> tuple[bool, str]:
+    """Emit `entry` (and what it imports) to CommonJS WITH decorator metadata, then run it with node.
+
+    For behaviour tsc can't see — NestJS resolves constructor dependencies from emitted metadata at runtime.
+    """
+    cfg = {"compilerOptions": {"strict": True, "skipLibCheck": True, "target": "es2022", "module": "nodenext",
+                               "moduleResolution": "nodenext", "experimentalDecorators": True,
+                               "emitDecoratorMetadata": True, "esModuleInterop": True, "types": ["node"],
+                               "rootDir": "src", "outDir": "dist-probe"},
+           "files": [entry]}
+    with open(os.path.join(d, "tsconfig.probe.json"), "w") as f:
+        json.dump(cfg, f)
+    tsc = os.path.join(HERE, "node_modules", ".bin", "tsc")
+    p = subprocess.run([tsc, "-p", "tsconfig.probe.json", "--pretty", "false"], cwd=d, capture_output=True, text=True)
+    if p.returncode != 0:
+        return False, "probe emit failed:\n" + p.stdout + p.stderr
+    js = os.path.join("dist-probe", os.path.relpath(entry, "src")).rsplit(".", 1)[0] + ".js"
+    r = subprocess.run(["node", js], cwd=d, capture_output=True, text=True)
+    out = (r.stdout + r.stderr).strip()
+    return r.returncode == 0, ("node probe: " + out.splitlines()[-1]) if r.returncode == 0 else ("node probe FAILED:\n" + out)
+
+
+def check_unit(unit: dict, d: str, src: Source, run_tests: bool) -> tuple[bool, str]:  # noqa: C901
     ok, out = run_tsc(d, src)
+    if ok and unit.get("prisma_validate"):
+        ok, out = run_prisma_validate(d, unit["prisma_validate"])
+        if not ok:
+            return ok, out
+    if ok and run_tests and unit.get("node_probe"):
+        ok, out = run_node_probe(d, unit["node_probe"])
+        if not ok:
+            return ok, out
     if not ok or not run_tests or not unit.get("vitest"):
         return ok, out
-    ok, vout = run_vitest(d, unit["vitest"])
+    ok, vout = run_vitest(d, unit["vitest"], unit.get("vitest_env", {}))
     return ok, ("vitest: " + vout) if ok else ("tsc passed; the test samples FAILED when run:\n" + vout)
 
 
@@ -438,7 +495,7 @@ def main() -> int:
         blocks_desc = f"{len(u['blocks'])} blocks from {', '.join(files)}"
         if ok:
             n_pass += 1
-            print(f"PASS  {u['name']}  ({blocks_desc})" + (f"  [{out}]" if out.startswith("vitest: ") else ""))
+            print(f"PASS  {u['name']}  ({blocks_desc})" + (f"  [{out}]" if out.startswith(("vitest: ", "prisma validate: ", "node probe: ")) else ""))
         else:
             n_fail += 1
             print(f"FAIL  {u['name']}  ({blocks_desc})")

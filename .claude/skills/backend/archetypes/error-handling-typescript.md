@@ -239,7 +239,7 @@ import { randomUUID } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { AppError } from "../errors/app-error";
 import { internal, malformedRequest } from "../errors/domain-errors";
-import { logger } from "../lib/logger"; // structured logger (pino, winston, etc.)
+import { logger } from "../lib/logger"; // the app-wide pino instance
 
 /** The request's ID, set by the request-id middleware; created here if that middleware didn't run. */
 export function requestIdOf(req: Request): string {
@@ -291,13 +291,10 @@ export function errorHandler(
 
   if (e.status >= 500) {
     // The cause (driver/upstream message, stack) goes to the log under request_id — never to the client.
-    logger.error("request failed", {
-      code: e.code,
-      request_id: requestId,
-      method: req.method,
-      path: req.path,
-      err: e.cause ?? e,
-    });
+    logger.error(
+      { code: e.code, request_id: requestId, method: req.method, path: req.path, err: e.cause ?? e },
+      "request failed", // pino: fields first, message second (a trailing object would be dropped)
+    );
   }
 
   writeErrorBody(res, requestId, e);
@@ -305,6 +302,7 @@ export function errorHandler(
 
 /**
  * Async route handler wrapper — catches rejected promises and forwards to error middleware.
+ * Required on Express 4; Express 5 forwards rejected promises itself (the wrapper is harmless there).
  *
  * Usage:
  *   router.get("/users/:id", asyncHandler(async (req, res) => {

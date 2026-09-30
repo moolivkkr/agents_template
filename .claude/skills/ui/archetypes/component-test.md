@@ -91,26 +91,29 @@ function renderWithProviders(
 ## Test Factory
 
 ```tsx
+// The wire shape, exactly as the API sends it (snake_case — the backend archetypes' WidgetResponse). UI types
+// mirror data-contracts.md with no case conversion (ui/form-validation-protocol.md §Field Name Matching);
+// prefer the types generated from the contract over this hand-written copy.
 interface Widget {
     id: string;
-    tenantId: string;
+    tenant_id: string;
     name: string;
     description: string;
     status: 'active' | 'archived';
-    createdAt: string;
-    updatedAt: string;
+    created_at: string;
+    updated_at: string;
     version: number;
 }
 
 function makeWidget(overrides: Partial<Widget> = {}): Widget {
     return {
         id: crypto.randomUUID(),
-        tenantId: crypto.randomUUID(),
+        tenant_id: crypto.randomUUID(),
         name: `Widget ${Math.random().toString(36).slice(2, 8)}`,
         description: 'A test widget',
         status: 'active',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         version: 1,
         ...overrides,
     };

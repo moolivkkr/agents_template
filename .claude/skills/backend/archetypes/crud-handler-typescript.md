@@ -209,6 +209,10 @@ import type { Request, Response, NextFunction } from "express";
  * Wraps async Express route handlers to catch rejected promises
  * and forward them to error middleware.
  *
+ * Required on Express 4, where a rejection never reaches the error middleware and, unhandled, exits the
+ * process. Express 5 forwards rejected promises from handlers and middleware itself — the wrapper is
+ * harmless there, so keep it if the code may run on either.
+ *
  * Usage:
  *   router.get("/widgets/:id", asyncHandler(async (req, res) => {
  *     const widget = await widgetService.get(req.params.id);
@@ -783,4 +787,4 @@ A spec that truly needs numbered pages records it in `docs/DECISIONS.md` and sti
 - DELETE returns 204 No Content — no body
 - POST create returns 201 Created with the created resource in the body
 - Zod schemas MUST use `.trim()` on string fields to sanitize whitespace
-- The `asyncHandler` wrapper is MANDATORY for all Express route handlers — without it, rejected promises crash the process
+- Rejected promises MUST reach the error middleware: Express 5 forwards them from async handlers and middleware itself; on Express 4 wrap every async handler in `asyncHandler` — there, an unwrapped rejection never reaches the error middleware and exits the process (both verified: Express 4.22.3 exits 1, Express 5.2.1 answers 500 and keeps running)

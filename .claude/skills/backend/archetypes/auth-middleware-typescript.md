@@ -16,7 +16,7 @@ tags:
 
 # Auth Middleware Archetype — TypeScript
 
-> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, jsonwebtoken 9.0, jose 6.2, express-rate-limit 8.7, cors 2.8 (tests/archetype-compile/typescript/run.sh).
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, jsonwebtoken 9.0, jose 6.2, express-rate-limit 8.7, cors 2.8; the NestJS guard's DI and the Express auth → request-context chain are also run (tests/archetype-compile/typescript/run.sh).
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/auth-middleware.md` (Go). Both implement identical auth flows: JWT validation, tenant context injection, RBAC, rate limiting, and request ID propagation.
 
@@ -127,10 +127,10 @@ export function authMiddleware(config: JwtConfig) {
         algorithms: config.algorithms as jwt.Algorithm[],
       }) as JwtCustomPayload;
     } catch (err) {
-      logger.warn("JWT verification failed", {
-        request_id: requestId,
-        error: err instanceof Error ? err.message : "unknown",
-      });
+      logger.warn(
+        { request_id: requestId, error: err instanceof Error ? err.message : "unknown" },
+        "JWT verification failed", // pino: fields first, message second
+      );
       throw unauthenticated(); // invalid or expired token
     }
 
@@ -257,6 +257,7 @@ function extractBearerToken(req: Request): string | null {
 import {
   CanActivate,
   ExecutionContext,
+  Inject,
   Injectable,
   UnauthorizedException,
   Logger,
@@ -266,12 +267,20 @@ import jwt from "jsonwebtoken";
 import type { JwtConfig, JwtCustomPayload, AuthUser } from "../types/auth";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 
+/**
+ * DI token for the guard's JwtConfig. JwtConfig is an interface — it doesn't exist at runtime, so Nest
+ * can't inject it by type ("Nest can't resolve dependencies of the JwtAuthGuard (?, Reflector)").
+ * Provide it once, from env, failing closed (no default secret), e.g. in AppModule:
+ *   providers: [{ provide: JWT_CONFIG, useFactory: (): JwtConfig => ({ secret: requiredEnv("JWT_SECRET"), … }) }]
+ */
+export const JWT_CONFIG = Symbol("JWT_CONFIG");
+
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   private readonly logger = new Logger(JwtAuthGuard.name);
 
   constructor(
-    private readonly jwtConfig: JwtConfig,
+    @Inject(JWT_CONFIG) private readonly jwtConfig: JwtConfig,
     private readonly reflector: Reflector,
   ) {}
 
@@ -603,28 +612,34 @@ export function logEnrichment(req: Request, res: Response, next: NextFunction): 
   const tenantId = (req as any).tenantId ?? "";
 
   // Log request start
-  logger.info("request started", {
-    request_id: requestId,
-    method: req.method,
-    path: req.path,
-    user_id: userId,
-    tenant_id: tenantId,
-    user_agent: req.headers["user-agent"],
-    remote_addr: req.ip,
-  });
+  logger.info(
+    {
+      request_id: requestId,
+      method: req.method,
+      path: req.path,
+      user_id: userId,
+      tenant_id: tenantId,
+      user_agent: req.headers["user-agent"],
+      remote_addr: req.ip,
+    },
+    "request started", // pino: fields first, message second
+  );
 
   // Log response on finish
   res.on("finish", () => {
     const duration = Date.now() - start;
-    logger.info("request completed", {
-      request_id: requestId,
-      method: req.method,
-      path: req.path,
-      status: res.statusCode,
-      duration_ms: duration,
-      user_id: userId,
-      tenant_id: tenantId,
-    });
+    logger.info(
+      {
+        request_id: requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        duration_ms: duration,
+        user_id: userId,
+        tenant_id: tenantId,
+      },
+      "request completed",
+    );
   });
 
   next();

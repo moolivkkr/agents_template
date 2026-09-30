@@ -49,10 +49,12 @@ await app.listen({ port: 8080, host: "0.0.0.0" });
 import fp from "fastify-plugin";
 import { FastifyPluginAsync } from "fastify";
 import { PrismaClient } from "@prisma/client";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 // Database plugin — exposes db on fastify instance
 const dbPluginImpl: FastifyPluginAsync = async (fastify) => {
-  const prisma = new PrismaClient();
+  // Prisma 7: a driver adapter is required — `new PrismaClient()` with no options throws at startup
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL! }) });
   await prisma.$connect();
 
   fastify.decorate("db", prisma);
