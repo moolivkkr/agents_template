@@ -1,6 +1,6 @@
 ---
 skill: worker-pattern-java
-description: Java/Spring Boot worker archetype — @Scheduled, CompletableFuture, Spring Cloud Stream, ShedLock, graceful shutdown, structured logging
+description: Java/Spring Boot worker archetype — @Scheduled, job timeouts, Spring Cloud Stream, ShedLock, graceful shutdown, structured logging
 version: "1.0"
 tags:
   - java
@@ -13,6 +13,8 @@ tags:
 ---
 
 # Worker / Background Job Pattern — Java (Spring Boot)
+
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
 
 > **Canonical reference**: This is the Java counterpart to `worker-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
@@ -47,6 +49,8 @@ public record Job(
 
 ```java
 package com.example.app.worker;
+
+import com.example.app.worker.model.Job;
 
 public interface JobHandler {
     /** The job type this handler processes, e.g. "email.send". */
@@ -84,7 +88,8 @@ public class WorkerService {
     private final Map<String, JobHandler> handlers = new ConcurrentHashMap<>();
     private final QueueClient queueClient;
     private final IdempotencyStore idempotencyStore;
-    private final ExecutorService executor;
+    private final ExecutorService executor;      // the consumer loops, one thread each
+    private final ExecutorService jobExecutor;   // the handlers; a consumer waits on its job with a timeout
     private final int concurrency;
     private final Duration jobTimeout;
     private final int maxRetries;
@@ -107,10 +112,13 @@ public class WorkerService {
 
         this.executor = Executors.newFixedThreadPool(concurrency, r -> {
             Thread t = new Thread(r);
-            t.setName("worker-" + t.getId());
+            t.setName("worker-" + t.threadId());
             t.setDaemon(true);
             return t;
         });
+        // Handlers must NOT run on the consumers' pool: every consumer thread would sit in get() waiting for a
+        // task queued behind the consumers, and every job would time out.
+        this.jobExecutor = Executors.newVirtualThreadPerTaskExecutor();
 
         // Register all handlers by type
         handlerList.forEach(h -> handlers.put(h.type(), h));
@@ -172,16 +180,17 @@ public class WorkerService {
                 return;
             }
 
-            // Execute with timeout
-            CompletableFuture<Void> future = CompletableFuture.runAsync(
-                () -> {
-                    try { handler.handle(job); }
-                    catch (Exception e) { throw new CompletionException(e); }
-                },
-                executor
-            );
-
-            future.get(jobTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            // Execute with timeout; an overrunning handler is interrupted
+            Future<?> future = jobExecutor.submit(() -> {
+                handler.handle(job);
+                return null;
+            });
+            try {
+                future.get(jobTimeout.toMillis(), TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                future.cancel(true);
+                throw e;
+            }
 
             // Success
             idempotencyStore.markProcessed(job.id(), Duration.ofHours(24));
@@ -239,6 +248,7 @@ public class WorkerService {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
         }
+        jobExecutor.shutdownNow(); // consumers are done: interrupt any handler still running
 
         log.info("worker.shutdown_complete");
     }
@@ -247,6 +257,12 @@ public class WorkerService {
         try { Thread.sleep(duration.toMillis()); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
+
+    // Read by WorkerHealthIndicator
+    public boolean isQueueConnected() { return queueClient.isConnected(); }
+    public Instant getLastJobAt() { return lastJobAt.get(); }
+    public int getInFlight() { return inFlight.get(); }
+    public int getConcurrency() { return concurrency; }
 }
 ```
 
@@ -255,7 +271,6 @@ public class WorkerService {
 ```java
 package com.example.app.worker.cron;
 
-import net.javacrumbs.shedlock.core.SchedulerLock;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -393,8 +408,8 @@ public class StreamConsumers {
 ```java
 package com.example.app.worker;
 
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.health.contributor.Health;          // Spring Boot 4 package
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -425,7 +440,7 @@ public class WorkerHealthIndicator implements HealthIndicator {
             long agoSeconds = Duration.between(lastJob, Instant.now()).getSeconds();
             builder.withDetail("lastJobSecondsAgo", agoSeconds);
             if (agoSeconds > 300) {
-                builder = Health.status("DEGRADED");
+                builder.status("DEGRADED"); // keeps the details already added (Health.status(..) would drop them)
             }
         }
 
@@ -470,7 +485,8 @@ public class WorkerRunner implements ApplicationRunner {
 - Use `ShedLock` for leader election on `@Scheduled` jobs — prevents duplicate execution across replicas
 - Set `lockAtLeastFor` in ShedLock to prevent rapid re-execution if the job finishes early
 - Use `MDC` for structured logging context — clear it in `finally` blocks
-- Use `CompletableFuture.get(timeout)` to enforce job timeouts — never let a job run forever
+- Enforce job timeouts with `Future.get(timeout)` and `cancel(true)` — never let a job run forever. Run handlers on
+  their own executor, never on the pool whose threads wait for them (that deadlocks: every job times out)
 - Thread pool threads MUST be daemon threads — prevents the JVM from hanging on shutdown
 - Use `executor.awaitTermination()` with a timeout — force shutdown if drain takes too long
 - Every handler MUST be stateless — no instance-level mutable state shared across jobs

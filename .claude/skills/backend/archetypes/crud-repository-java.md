@@ -13,6 +13,8 @@ tags:
 
 # CRUD Repository Archetype (Spring Data JPA)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Spring Data JPA repository template. Every generated repository MUST follow this pattern.
 
 ## Entity Base Class
@@ -189,7 +191,7 @@ public interface WidgetRepository extends JpaRepository<Widget, UUID>, JpaSpecif
         SELECT w.* FROM widgets w
         WHERE w.tenant_id = :tenantId
         AND w.deleted_at IS NULL
-        AND w.created_at >= NOW() - INTERVAL ':days days'
+        AND w.created_at >= NOW() - (:days * INTERVAL '1 day')
         ORDER BY w.created_at DESC
         """, nativeQuery = true)
     List<Widget> findRecentByTenant(@Param("tenantId") UUID tenantId,
@@ -411,18 +413,22 @@ Window<Widget> findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(UUID tenantId, Sc
 @Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
 public class Widget extends AuditableEntity { ... }
 
-// Enable filter per request (in a servlet filter or interceptor):
+// Enable the filter INSIDE each transaction: a Hibernate filter lives on one Session, and the Session a
+// @Transactional method uses only exists once it starts. A servlet filter or HandlerInterceptor runs before
+// that, so enabling it there filters a Session no repository call uses.
 @Component
-public class TenantFilterActivator implements Filter {
+public class TenantFilterActivator {
     private final EntityManager entityManager;
 
-    @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain) {
-        var tenantId = // extract from SecurityContext
+    public TenantFilterActivator(EntityManager entityManager) {
+        this.entityManager = entityManager;
+    }
+
+    /** First call in every @Transactional service method; tenantId from the verified principal, never a header. */
+    public void enableFor(UUID tenantId) {
         entityManager.unwrap(Session.class)
             .enableFilter("tenantFilter")
             .setParameter("tenantId", tenantId);
-        chain.doFilter(request, response);
     }
 }
 ```

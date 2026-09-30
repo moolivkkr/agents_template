@@ -14,6 +14,8 @@ tags:
 
 # Dockerfile Archetype (Java / Spring Boot)
 
+> The Gradle and Maven layered-JAR and native-image build snippets were checked 2026-09-30 with Spring Boot 4.1.1, Gradle 9.8.0 and Maven 3.9.16 on JDK 25.0.4.1 (`tests/archetype-compile/java/run.sh`); the Dockerfiles themselves were not built.
+
 Complete, production-ready Docker build template for Spring Boot applications. Every generated Dockerfile MUST follow this pattern.
 
 ## Multi-Stage Dockerfile (Gradle)
@@ -252,7 +254,7 @@ ENV JAVA_OPTS="\
 ## Spring Boot Layered JAR Configuration
 
 ```kotlin
-// build.gradle.kts — enable layered JARs (default in Spring Boot 3.x)
+// build.gradle.kts — layered JARs are on by default; this customizes the layers
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
     layered {
         application {
@@ -267,6 +269,8 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
             }
             intoLayer("dependencies")
         }
+        // Required with custom layers (the build fails without it); least-changing layer first
+        layerOrder.set(listOf("dependencies", "spring-boot-loader", "snapshot-dependencies", "application"))
     }
 }
 ```

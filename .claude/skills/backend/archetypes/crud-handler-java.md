@@ -13,6 +13,8 @@ tags:
 
 # CRUD Handler Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Spring Boot REST controller template. Every generated controller MUST follow this pattern.
 
 ## Entity and DTOs
@@ -21,13 +23,17 @@ Complete, production-ready Spring Boot REST controller template. Every generated
 package com.example.app.model.entity;
 
 import jakarta.persistence.*;
+import org.hibernate.annotations.SQLDelete;
+import org.hibernate.annotations.SQLRestriction;
+
 import java.time.Instant;
 import java.util.UUID;
 
+// The full entity (audit fields in AuditableEntity, getters/setters) is in crud-repository-java.md.
 @Entity
 @Table(name = "widgets")
-@SQLDelete(sql = "UPDATE widgets SET deleted_at = NOW() WHERE id = ?1 AND version = ?2")
-@Where(clause = "deleted_at IS NULL")
+@SQLDelete(sql = "UPDATE widgets SET deleted_at = NOW() WHERE id = ? AND version = ?") // JDBC ? placeholders
+@SQLRestriction("deleted_at IS NULL") // Hibernate 7 removed @Where
 public class Widget {
 
     @Id
@@ -71,7 +77,11 @@ public class Widget {
 ```java
 package com.example.app.model.dto;
 
+import com.example.app.model.entity.Widget;
+import com.example.app.model.entity.WidgetStatus;
 import jakarta.validation.constraints.*;
+
+import java.time.Instant;
 import java.util.UUID;
 
 // Request DTOs — Java records with validation annotations
@@ -180,14 +190,13 @@ window's last position, made opaque:
 package com.example.app.common;
 
 import com.example.app.exception.ValidationException;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.data.domain.KeysetScrollPosition;
 import org.springframework.data.domain.ScrollPosition;
 import org.springframework.data.domain.Sort;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
-import java.io.IOException;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -202,7 +211,7 @@ import java.util.stream.Collectors;
  */
 public final class CursorCodec {
 
-    private static final ObjectMapper JSON = new ObjectMapper();
+    private static final ObjectMapper JSON = JsonMapper.shared(); // Jackson 3 (Spring Boot 4): tools.jackson.*
 
     // Sortable attributes and how to restore their type (JPA compares typed values)
     private static final Map<String, Function<String, Object>> TYPES = Map.of(
@@ -216,11 +225,8 @@ public final class CursorCodec {
     public static String encode(ScrollPosition position) {
         var flat = new LinkedHashMap<String, String>();
         ((KeysetScrollPosition) position).getKeys().forEach((k, v) -> flat.put(k, String.valueOf(v)));
-        try {
-            return Base64.getUrlEncoder().withoutPadding().encodeToString(JSON.writeValueAsBytes(flat));
-        } catch (JsonProcessingException e) {
-            throw new IllegalStateException("cursor encoding failed", e); // a Map<String, String> always serializes
-        }
+        // Jackson 3 exceptions are unchecked (JacksonException); a Map<String, String> always serializes
+        return Base64.getUrlEncoder().withoutPadding().encodeToString(JSON.writeValueAsBytes(flat));
     }
 
     /** First page when absent; 400 VALIDATION_FAILED (field "cursor") when tampered with or from another sort. */
@@ -237,7 +243,7 @@ public final class CursorCodec {
             var keys = new LinkedHashMap<String, Object>();
             flat.forEach((k, v) -> keys.put(k, TYPES.get(k).apply(v)));
             return ScrollPosition.forward(keys);
-        } catch (RuntimeException | IOException e) {
+        } catch (RuntimeException e) { // bad base64, bad JSON (JacksonException), wrong keys, unparsable value
             throw new ValidationException("cursor", "invalid_cursor", "This cursor is not valid. Start from the first page.");
         }
     }
@@ -251,6 +257,9 @@ package com.example.app.controller;
 
 import com.example.app.common.*;
 import com.example.app.model.dto.*;
+import com.example.app.model.entity.Widget;
+import com.example.app.model.entity.WidgetStatus;
+import com.example.app.security.UserPrincipal;
 import com.example.app.service.WidgetService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;

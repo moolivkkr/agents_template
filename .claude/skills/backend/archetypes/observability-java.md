@@ -17,6 +17,8 @@ tags:
 
 # Observability Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16; the Gradle and Maven dependency snippets resolve and compile (Gradle 9.8.0) with no OpenTelemetry API downgrade (`tests/archetype-compile/java/run.sh`).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Java/Spring Boot observability patterns. All other Java skill packs that mention tracing, metrics, or structured logging should defer to this file. For language-agnostic concepts (error taxonomy, SLOs and alerting, log levels), see `observability-patterns.md`.
 
 Complete OpenTelemetry integration for Spring Boot services. Every generated service MUST follow this pattern.
@@ -28,29 +30,39 @@ Complete OpenTelemetry integration for Spring Boot services. Every generated ser
 ```kotlin
 // build.gradle.kts
 plugins {
-    id("org.springframework.boot") version "3.3.0"
-    id("io.spring.dependency-management") version "1.1.5"
+    id("org.springframework.boot") version "4.1.1"
+    id("io.spring.dependency-management") version "1.1.7"
+}
+
+dependencyManagement {
+    imports {
+        // After Spring Boot's BOM, so it wins: Boot pins an older OpenTelemetry API than the starter needs
+        mavenBom("io.opentelemetry.instrumentation:opentelemetry-instrumentation-bom:2.31.1")
+    }
 }
 
 dependencies {
     // --- Observability Core ---
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
-    // OpenTelemetry Spring Boot starter (traces + metrics + logs)
-    implementation("io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter:2.6.0")
+    // OpenTelemetry Spring Boot starter (traces + metrics + logs); Spring Boot 4 needs 2.23 or later
+    implementation("io.opentelemetry.instrumentation:opentelemetry-spring-boot-starter")
 
     // Micrometer -> OTel bridge for custom metrics
     implementation("io.micrometer:micrometer-registry-otlp")
 
-    // Structured logging
-    implementation("net.logstash.logback:logstash-logback-encoder:7.4")
+    // Structured logging (9.x is on Jackson 3, like Spring Boot 4)
+    implementation("net.logstash.logback:logstash-logback-encoder:9.0")
 
     // OTel annotations (@WithSpan)
-    implementation("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations:2.6.0")
+    implementation("io.opentelemetry.instrumentation:opentelemetry-instrumentation-annotations")
 }
 ```
 
 ### Maven Alternative
+
+With `spring-boot-starter-parent`, a BOM imported in your own `<dependencyManagement>` overrides the
+OpenTelemetry versions the parent manages, which is what the starter needs.
 
 ```xml
 <dependencyManagement>
@@ -58,7 +70,7 @@ dependencies {
         <dependency>
             <groupId>io.opentelemetry.instrumentation</groupId>
             <artifactId>opentelemetry-instrumentation-bom</artifactId>
-            <version>2.6.0</version>
+            <version>2.31.1</version>
             <type>pom</type>
             <scope>import</scope>
         </dependency>
@@ -81,7 +93,7 @@ dependencies {
     <dependency>
         <groupId>net.logstash.logback</groupId>
         <artifactId>logstash-logback-encoder</artifactId>
-        <version>7.4</version>
+        <version>9.0</version>
     </dependency>
     <dependency>
         <groupId>io.opentelemetry.instrumentation</groupId>
@@ -240,6 +252,8 @@ import io.opentelemetry.api.trace.StatusCode;
 import io.opentelemetry.api.trace.Tracer;
 import io.opentelemetry.context.Scope;
 import org.springframework.stereotype.Service;
+
+import java.util.List;
 
 @Service
 public class BatchProcessingService {
@@ -547,6 +561,12 @@ import org.springframework.stereotype.Service;
 @Service
 public class OrderService {
 
+    private final OrderRepository orderRepository;
+
+    public OrderService(OrderRepository orderRepository) {
+        this.orderRepository = orderRepository;
+    }
+
     /**
      * @Timed creates a Timer metric that records invocation duration.
      * histogram=true enables percentile histograms for p50/p95/p99 queries.
@@ -768,8 +788,8 @@ and alert with multi-window burn rates. See `core/observability-patterns.md` §S
                 <!-- Shorten logger names for readability -->
                 <shortenedLoggerNameLength>36</shortenedLoggerNameLength>
 
-                <!-- Mask sensitive fields -->
-                <jsonGeneratorDecorator class="com.example.app.logging.SensitiveDataMaskingDecorator"/>
+                <!-- Mask sensitive fields (logstash-logback-encoder 9: <decorator>; <jsonGeneratorDecorator> is ignored) -->
+                <decorator class="com.example.app.logging.SensitiveDataMaskingDecorator"/>
             </encoder>
         </appender>
 
@@ -876,7 +896,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.MDC;
-import org.springframework.boot.autoconfigure.security.SecurityProperties;
+import org.springframework.boot.security.autoconfigure.web.servlet.SecurityFilterProperties; // Spring Boot 4
 import org.springframework.core.annotation.Order;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -891,7 +911,7 @@ import java.io.IOException;
  * Security's filter chain, once the token has been validated.
  */
 @Component
-@Order(SecurityProperties.DEFAULT_FILTER_ORDER + 1)
+@Order(SecurityFilterProperties.DEFAULT_FILTER_ORDER + 1) // just after Spring Security's filter chain
 public class TenantMdcFilter extends OncePerRequestFilter {
 
     @Override
@@ -926,11 +946,23 @@ package com.example.app.service;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.stereotype.Service;
+
+import java.math.BigDecimal;
+import java.util.UUID;
 
 @Service
 public class OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderService.class);
+
+    private final OrderRepository orderRepository;
+    private final RefundGateway refundGateway;
+
+    public OrderService(OrderRepository orderRepository, RefundGateway refundGateway) {
+        this.orderRepository = orderRepository;
+        this.refundGateway = refundGateway;
+    }
 
     public Order createOrder(String tenantId, CreateOrderRequest request) {
         // MDC fields (request_id, trace_id; tenant_id, user_id) are added by CorrelationFilter
@@ -1007,17 +1039,18 @@ whole DTOs into a log message, at any level. That also rules out `CommonsRequest
 ```java
 package com.example.app.logging;
 
-import com.fasterxml.jackson.core.JsonGenerator;
-import com.fasterxml.jackson.core.JsonStreamContext;
 import net.logstash.logback.decorate.JsonGeneratorDecorator;
+import tools.jackson.core.JsonGenerator;
+import tools.jackson.core.TokenStreamContext;
+import tools.jackson.core.util.JsonGeneratorDelegate;
 
-import java.io.IOException;
 import java.util.regex.Pattern;
 
 /**
  * Masks sensitive fields in JSON log output, by key name.
  * Any field whose name contains "password", "token", "secret", "authorization", "cookie",
  * "api_key", "session", "card", "ssn" and so on is replaced with "[REDACTED]".
+ * logstash-logback-encoder 9.x writes with Jackson 3 (tools.jackson.core), like Spring Boot 4.
  */
 public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
 
@@ -1033,37 +1066,33 @@ public class SensitiveDataMaskingDecorator implements JsonGeneratorDecorator {
         return new MaskingJsonGenerator(generator);
     }
 
-    private static class MaskingJsonGenerator extends JsonGenerator {
-        // Delegate pattern — override writeString/writeNumber to check field names
-        // and mask values when the current field name matches SENSITIVE_KEY.
-        // Full implementation wraps the delegate and intercepts value-writing methods.
-
-        private final JsonGenerator delegate;
+    // JsonGeneratorDelegate forwards every JsonGenerator method; only string values are intercepted.
+    // writeStringProperty(name, value) is final in JsonGenerator and goes through writeString, so it is covered.
+    private static class MaskingJsonGenerator extends JsonGeneratorDelegate {
 
         MaskingJsonGenerator(JsonGenerator delegate) {
-            this.delegate = delegate;
+            // false: POJO values (structured arguments like kv("password", …), markers) are serialized through
+            // THIS generator; with true the wrapped one writes them and nothing is masked
+            super(delegate, false);
         }
 
         @Override
-        public void writeString(String text) throws IOException {
-            if (isSensitiveField()) {
-                delegate.writeString("[REDACTED]");
-            } else {
-                delegate.writeString(maskEmail(text));
+        public JsonGenerator writeString(String text) {
+            if (text == null) {
+                return super.writeString(text);
             }
+            return super.writeString(isSensitiveField() ? "[REDACTED]" : maskEmail(text));
         }
 
         private boolean isSensitiveField() {
-            JsonStreamContext ctx = delegate.getOutputContext();
-            String fieldName = ctx != null ? ctx.getCurrentName() : null;
+            TokenStreamContext ctx = streamWriteContext();
+            String fieldName = ctx != null ? ctx.currentName() : null;
             return fieldName != null && SENSITIVE_KEY.matcher(fieldName).find();
         }
 
         private String maskEmail(String text) {
             return EMAIL_PATTERN.matcher(text).replaceAll("***@$2");
         }
-
-        // ... delegate all other JsonGenerator methods to `delegate`
     }
 }
 ```
@@ -1322,8 +1351,8 @@ service:
 ```java
 package com.example.app.health;
 
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.health.contributor.Health;          // Spring Boot 4 package
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
 
 import javax.sql.DataSource;

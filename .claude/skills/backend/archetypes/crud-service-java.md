@@ -13,6 +13,8 @@ tags:
 
 # CRUD Service Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Spring Boot service layer template. Every generated service MUST follow this pattern.
 
 ## Service Interface
@@ -245,11 +247,11 @@ public Widget createWithComponents(CreateWidgetWithComponentsRequest request, UU
 ```java
 package com.example.app.service;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
+import tools.jackson.databind.ObjectMapper; // Jackson 3: the mapper bean Spring Boot 4 auto-configures
 
 import java.time.Instant;
 import java.util.UUID;
@@ -302,8 +304,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
+import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 
 import java.time.Duration;
 
@@ -313,12 +316,17 @@ public class CacheConfig {
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
+        // Jackson 3 serializer (the Jackson 2 one is deprecated for removal in Spring Data Redis 4). The type
+        // id lets a cached value come back as its class; the validator only accepts your own classes.
+        var serializer = GenericJacksonJsonRedisSerializer.builder()
+            .enableDefaultTyping(BasicPolymorphicTypeValidator.builder()
+                .allowIfSubType("com.example.app.")
+                .build())
+            .build();
         var defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
             .entryTtl(Duration.ofMinutes(5))
             .disableCachingNullValues()
-            .serializeValuesWith(
-                RedisSerializationContext.SerializationPair.fromSerializer(
-                    new GenericJackson2JsonRedisSerializer()));
+            .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(serializer));
 
         // Per-cache TTL overrides
         var widgetConfig = defaultConfig.entryTtl(Duration.ofMinutes(10));

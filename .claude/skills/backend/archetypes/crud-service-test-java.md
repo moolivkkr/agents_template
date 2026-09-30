@@ -14,6 +14,8 @@ tags:
 
 # CRUD Service Test Archetype (Spring Boot)
 
+> Java samples compile-checked (test-compile) 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready service layer unit test template using Mockito and AssertJ. Every generated service test MUST follow this pattern.
 
 ## Test File Location
@@ -654,11 +656,12 @@ class CreateValidationTableDriven {
     @ParameterizedTest(name = "{0}")
     @MethodSource("com.example.app.service.WidgetServiceImplTest#createValidationCases")
     @DisplayName("Validation scenarios")
-    void create_ValidationCases(String scenario, CreateWidgetRequest request,
+    void create_ValidationCases(String scenario, CreateWidgetRequest request, boolean nameTaken,
                                  Class<? extends Exception> expectedException) {
+        // Every row states what the repository reports; an unstubbed mock would answer false
+        given(repository.existsByTenantIdAndNameIgnoreCase(any(), any())).willReturn(nameTaken);
         if (expectedException == null) {
             // Happy path — setup mocks for success
-            given(repository.existsByTenantIdAndNameIgnoreCase(any(), any())).willReturn(false);
             given(repository.save(any(Widget.class)))
                 .willAnswer(invocation -> {
                     var w = invocation.getArgument(0, Widget.class);
@@ -678,14 +681,13 @@ class CreateValidationTableDriven {
 static Stream<Arguments> createValidationCases() {
     return Stream.of(
         Arguments.of("valid input",
-            new CreateWidgetRequest("My Widget", "Description"),
+            new CreateWidgetRequest("My Widget", "Description"), false,
             null),
         Arguments.of("duplicate name",
-            new CreateWidgetRequest("Existing", "Desc"),
-            ConflictException.class),
-        Arguments.of("reserved name 'default'",
-            new CreateWidgetRequest("default", "Desc"),
-            BusinessRuleException.class)
+            new CreateWidgetRequest("Existing", "Desc"), true,
+            ConflictException.class)
+        // A domain rule (e.g. a reserved name → BusinessRuleException) gets a row once create() calls it —
+        // WidgetServiceImpl.create in crud-service-java.md has no such rule, so a row here would fail.
     );
 }
 ```

@@ -14,6 +14,8 @@ tags:
 
 # WebSocket Pattern — Java (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 > **Canonical reference**: This is the Java counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Spring Boot provides two WebSocket approaches: raw WebSocket handlers and STOMP over WebSocket. STOMP is recommended for most applications as it provides built-in pub/sub, message routing, and Spring Security integration.
@@ -149,6 +151,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.messaging.handler.annotation.*;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.messaging.simp.annotation.SubscribeMapping;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.stereotype.Controller;
 
 import java.security.Principal;
@@ -191,7 +194,8 @@ public class WebSocketController {
         log.debug("ws.message, userId={}, room={}", user.getUserId(), roomId);
 
         // Add server metadata and broadcast
-        var message = Map.of(
+        // Object, not var (Map): a Map argument also matches convertAndSend(payload, headers) — ambiguous on Spring Framework 7
+        Object message = Map.of(
             "type", "message",
             "payload", payload,
             "from", user.getUserId().toString(),
@@ -252,7 +256,8 @@ public class NotificationBroadcaster {
 
     /** Broadcast to a room (all subscribers). */
     public void broadcastToRoom(String roomId, Object payload) {
-        var message = Map.of(
+        // Object, not var (Map): a Map argument also matches convertAndSend(payload, headers) — ambiguous on Spring Framework 7
+        Object message = Map.of(
             "type", "update",
             "payload", payload,
             "room", roomId,
@@ -278,7 +283,7 @@ public class NotificationBroadcaster {
 
     /** Broadcast to all connected clients. */
     public void broadcastAll(Object payload) {
-        var message = Map.of(
+        Object message = Map.of(
             "type", "broadcast",
             "payload", payload,
             "timestamp", Instant.now().toString()
@@ -338,11 +343,12 @@ public class WebSocketEventListener {
 ```java
 package com.example.app.ws;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.web.socket.*;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
 import java.util.Map;
@@ -355,7 +361,7 @@ public class RawWebSocketHandler extends TextWebSocketHandler {
 
     private static final Logger log = LoggerFactory.getLogger(RawWebSocketHandler.class);
     private final Map<String, WebSocketSession> sessions = new ConcurrentHashMap<>();
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper = JsonMapper.shared(); // Jackson 3 (Spring Boot 4)
 
     @Override
     public void afterConnectionEstablished(WebSocketSession session) {

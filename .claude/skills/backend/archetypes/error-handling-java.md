@@ -13,6 +13,8 @@ tags:
 
 # Error Handling Archetype (Spring Boot)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Java/Spring Boot error handling patterns.
 > The wire shape it produces is the error envelope in `~/.claude/skills/api/response-envelope.md`
 > (`{"error": {code, message, details[], request_id, retryable}}`); if the two ever disagree, the envelope wins. All other Java skill packs that mention error handling should defer to this file. For the Go equivalent, see `backend/archetypes/error-handling-go.md`.
@@ -181,7 +183,7 @@ public final class BusinessRuleException extends DomainException {
 
     /** `rule` is shown to the user as-is: write it for users. */
     public BusinessRuleException(String resource, String rule) {
-        super("BUSINESS_RULE_VIOLATION", HttpStatus.UNPROCESSABLE_ENTITY, rule, resource);
+        super("BUSINESS_RULE_VIOLATION", HttpStatus.UNPROCESSABLE_CONTENT, rule, resource); // 422 (RFC 9110 name)
         this.rule = rule;
     }
 
@@ -536,11 +538,19 @@ The HTTP status carries the class; the `X-Request-Id` header equals `error.reque
 ## Testing Error Handling
 
 ```java
+// Same setup as crud-handler-test-java.md: the app's filter chain, so 401/403 are the envelope too
 @WebMvcTest(WidgetController.class)
+@Import({SecurityConfig.class, SecurityErrorDelegate.class})
+@TestPropertySource(properties = {
+    "app.jwt.secret=test-only-hmac-key-of-at-least-32-bytes", "app.jwt.issuer=test", "app.jwt.audience=test"})
 class WidgetControllerErrorTest {
 
+    // The controller reads the tenant from this principal (auth-middleware-java.md)
+    private static final UserPrincipal USER = new UserPrincipal(UUID.randomUUID(), UUID.randomUUID(),
+        "user@example.com", List.of(new SimpleGrantedAuthority("ROLE_USER")));
+
     @Autowired MockMvc mockMvc;
-    @MockBean WidgetService widgetService;
+    @MockitoBean WidgetService widgetService; // Spring Boot 4 removed @MockBean
 
     @Test
     void getById_notFound_returns404Envelope() throws Exception {
@@ -548,7 +558,7 @@ class WidgetControllerErrorTest {
         given(widgetService.findById(any(), any()))
             .willThrow(new ResourceNotFoundException("Widget", id.toString()));
 
-        mockMvc.perform(get("/api/v1/widgets/{id}", id))
+        mockMvc.perform(get("/api/v1/widgets/{id}", id).with(user(USER)))
             .andExpect(status().isNotFound())
             .andExpect(jsonPath("$.error.code").value("NOT_FOUND"))
             .andExpect(jsonPath("$.error.message").value("Widget not found."))
@@ -563,7 +573,7 @@ class WidgetControllerErrorTest {
             {"name": "", "description": "%s"}
             """.formatted("x".repeat(3000));
 
-        mockMvc.perform(post("/api/v1/widgets")
+        mockMvc.perform(post("/api/v1/widgets").with(user(USER))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(body))
             .andExpect(status().isBadRequest())
@@ -576,7 +586,7 @@ class WidgetControllerErrorTest {
         given(widgetService.update(any(), any(), any(), any()))
             .willThrow(new ConflictException("widget", "This widget was changed by someone else. Reload and try again."));
 
-        mockMvc.perform(put("/api/v1/widgets/{id}", UUID.randomUUID())
+        mockMvc.perform(put("/api/v1/widgets/{id}", UUID.randomUUID()).with(user(USER))
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"name": "Updated", "description": "desc", "version": 1}
@@ -590,7 +600,7 @@ class WidgetControllerErrorTest {
         given(widgetService.findById(any(), any()))
             .willThrow(new RuntimeException("database connection pool exhausted"));
 
-        mockMvc.perform(get("/api/v1/widgets/{id}", UUID.randomUUID()))
+        mockMvc.perform(get("/api/v1/widgets/{id}", UUID.randomUUID()).with(user(USER)))
             .andExpect(status().isInternalServerError())
             .andExpect(jsonPath("$.error.code").value("INTERNAL"))
             .andExpect(jsonPath("$.error.message").value("Something went wrong."))

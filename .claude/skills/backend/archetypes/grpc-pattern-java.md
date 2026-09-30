@@ -13,6 +13,8 @@ tags:
 
 # gRPC Pattern — Java
 
+> Java samples compile-checked 2026-09-30 against code generated from `grpc-pattern.md`'s protos: JDK 25.0.4.1, Spring Boot 4.1.1 (grpc-java 1.83.1, protobuf 4.35.1), Maven 3.9.16; the Gradle snippet generates and compiles with Gradle 9.8.0 (`tests/archetype-compile/java/run.sh`).
+
 > **Canonical reference**: This is the Java counterpart to `grpc-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Java gRPC uses `grpc-java` for the runtime, `protobuf-gradle-plugin` or `protobuf-maven-plugin` for code generation, and optionally `grpc-spring-boot-starter` for Spring Boot integration.
@@ -22,21 +24,22 @@ Java gRPC uses `grpc-java` for the runtime, `protobuf-gradle-plugin` or `protobu
 ```groovy
 // build.gradle
 plugins {
-    id 'com.google.protobuf' version '0.9.4'
+    id 'com.google.protobuf' version '0.9.6'
 }
 
 dependencies {
-    implementation 'io.grpc:grpc-netty-shaded:1.62.2'
-    implementation 'io.grpc:grpc-protobuf:1.62.2'
-    implementation 'io.grpc:grpc-stub:1.62.2'
-    implementation 'io.grpc:grpc-services:1.62.2'  // health, reflection
+    implementation 'io.grpc:grpc-netty-shaded:1.83.1'
+    implementation 'io.grpc:grpc-protobuf:1.83.1'
+    implementation 'io.grpc:grpc-stub:1.83.1'
+    implementation 'io.grpc:grpc-services:1.83.1'  // health, reflection
     compileOnly 'org.apache.tomcat:annotations-api:6.0.53'
 }
 
 protobuf {
-    protoc { artifact = 'com.google.protobuf:protoc:3.25.3' }
+    // protoc no newer than the protobuf-java runtime grpc-protobuf brings (3.25.x)
+    protoc { artifact = 'com.google.protobuf:protoc:3.25.9' }
     plugins {
-        grpc { artifact = 'io.grpc:protoc-gen-grpc-java:1.62.2' }
+        grpc { artifact = 'io.grpc:protoc-gen-grpc-java:1.83.1' }
     }
     generateProtoTasks {
         all()*.plugins { grpc {} }
@@ -49,21 +52,29 @@ protobuf {
 ```java
 package com.example.app.grpc;
 
+import com.example.app.common.CursorCodec;
 import com.example.app.model.entity.Widget;
 import com.example.app.service.WidgetService;
-import com.example.gen.yourapp.v1.*;
+import com.example.yourapp.v1.*; // generated from grpc-pattern.md's protos (option java_package)
 import com.google.protobuf.Timestamp;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.data.domain.Sort;
 
 import java.time.Instant;
 import java.util.UUID;
 
+/**
+ * The gRPC face of the same WidgetService the REST controller uses (crud-service-java.md).
+ * The generated message `Widget` has the entity's name, so the proto type is written out in full.
+ */
 public class WidgetGrpcService extends WidgetServiceGrpc.WidgetServiceImplBase {
 
     private static final Logger log = LoggerFactory.getLogger(WidgetGrpcService.class);
+    private static final Sort NEWEST_FIRST =
+        Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
     private final WidgetService widgetService;
 
     public WidgetGrpcService(WidgetService widgetService) {
@@ -86,12 +97,7 @@ public class WidgetGrpcService extends WidgetServiceGrpc.WidgetServiceImplBase {
         }
 
         try {
-            Widget result = widgetService.create(
-                request.getName(),
-                request.getDescription(),
-                tenantId,
-                userId
-            );
+            Widget result = create(request.getName(), request.getDescription(), tenantId, userId);
 
             responseObserver.onNext(
                 CreateWidgetResponse.newBuilder()
@@ -137,16 +143,16 @@ public class WidgetGrpcService extends WidgetServiceGrpc.WidgetServiceImplBase {
         int pageSize = Math.max(1, Math.min(request.getPageSize() > 0 ? request.getPageSize() : 20, 100));
 
         try {
-            var result = widgetService.list(tenantId, request.getPageToken(), pageSize);
+            // A keyset window, like the REST list: page_token is the opaque cursor. No OFFSET and no
+            // COUNT query, so total_count stays unset.
+            var position = CursorCodec.decode(request.getPageToken(), NEWEST_FIRST);
+            var window = widgetService.findAll(tenantId, null, position, NEWEST_FIRST, pageSize);
 
-            var builder = ListWidgetsResponse.newBuilder()
-                .setTotalCount(result.getTotal());
-
-            if (result.getNextCursor() != null) {
-                builder.setNextPageToken(result.getNextCursor());
+            var builder = ListWidgetsResponse.newBuilder();
+            if (window.hasNext()) {
+                builder.setNextPageToken(CursorCodec.encode(window.positionAt(window.size() - 1)));
             }
-
-            result.getItems().forEach(w -> builder.addWidgets(toProto(w)));
+            window.forEach(w -> builder.addWidgets(toProto(w)));
 
             responseObserver.onNext(builder.build());
             responseObserver.onCompleted();
@@ -156,8 +162,14 @@ public class WidgetGrpcService extends WidgetServiceGrpc.WidgetServiceImplBase {
         }
     }
 
-    private static WidgetProto toProto(Widget w) {
-        return WidgetProto.newBuilder()
+    /** The service takes the REST request DTO; createWidget and importWidgets both go through here. */
+    private Widget create(String name, String description, UUID tenantId, UUID userId) {
+        return widgetService.create(
+            new com.example.app.model.dto.CreateWidgetRequest(name, description), tenantId, userId);
+    }
+
+    private static com.example.yourapp.v1.Widget toProto(Widget w) {
+        return com.example.yourapp.v1.Widget.newBuilder()
             .setId(w.getId().toString())
             .setTenantId(w.getTenantId().toString())
             .setName(w.getName())
@@ -225,11 +237,13 @@ public StreamObserver<ImportWidgetRequest> importWidgets(
         @Override
         public void onNext(ImportWidgetRequest request) {
             try {
-                widgetService.create(request.getName(), request.getDescription(), tenantId, userId);
+                create(request.getName(), request.getDescription(), tenantId, userId);
                 imported++;
             } catch (Exception e) {
                 failed++;
-                errors.add("row " + (imported + failed) + ": " + e.getMessage());
+                // The user-safe message only: a raw exception message can carry SQL or internals
+                String reason = e instanceof DomainException d ? d.getUserMessage() : "internal error";
+                errors.add("row " + (imported + failed) + ": " + reason);
             }
         }
 
@@ -377,28 +391,35 @@ public final class GrpcContext {
 ```java
 package com.example.app.grpc;
 
-import com.example.app.errors.*;
+import com.example.app.exception.*;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 
+/**
+ * Domain exceptions (error-handling-java.md) → gRPC status, per grpc-pattern.md's table. The description is
+ * the user-safe message; anything else is INTERNAL with a generic text (the cause goes to the log).
+ */
 public final class GrpcErrorMapper {
 
     private GrpcErrorMapper() {}
 
     public static StatusRuntimeException map(Exception e) {
-        if (e instanceof NotFoundException nfe) {
-            return Status.NOT_FOUND.withDescription(nfe.getMessage()).asRuntimeException();
+        if (!(e instanceof DomainException d)) {
+            return Status.INTERNAL.withDescription("internal error").asRuntimeException();
         }
-        if (e instanceof ConflictException ce) {
-            return Status.ALREADY_EXISTS.withDescription(ce.getMessage()).asRuntimeException();
-        }
-        if (e instanceof ValidationException ve) {
-            return Status.INVALID_ARGUMENT.withDescription(ve.getMessage()).asRuntimeException();
-        }
-        if (e instanceof ForbiddenException fe) {
-            return Status.PERMISSION_DENIED.withDescription(fe.getMessage()).asRuntimeException();
-        }
-        return Status.INTERNAL.withDescription("internal error").asRuntimeException();
+        Status status = switch (d) {
+            case ValidationException ignored -> Status.INVALID_ARGUMENT;
+            case MalformedRequestException ignored -> Status.INVALID_ARGUMENT;
+            case ResourceNotFoundException ignored -> Status.NOT_FOUND;
+            case ConflictException ignored -> Status.ALREADY_EXISTS;
+            case BusinessRuleException ignored -> Status.FAILED_PRECONDITION;
+            case UnauthenticatedException ignored -> Status.UNAUTHENTICATED;
+            case ForbiddenException ignored -> Status.PERMISSION_DENIED;
+            case RateLimitException ignored -> Status.RESOURCE_EXHAUSTED;
+            case UpstreamServiceException ignored -> Status.UNAVAILABLE;
+            case InternalException ignored -> Status.INTERNAL;
+        }; // exhaustive: DomainException is sealed, so a new subtype is a compile error here
+        return status.withDescription(d.getUserMessage()).asRuntimeException();
     }
 }
 ```
@@ -408,10 +429,15 @@ public final class GrpcErrorMapper {
 ```java
 package com.example.app;
 
+import com.example.app.grpc.AuthInterceptor;
+import com.example.app.grpc.JwtValidator;
+import com.example.app.grpc.LoggingInterceptor;
+import com.example.app.grpc.WidgetGrpcService;
+import com.example.app.service.WidgetService;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import io.grpc.protobuf.services.HealthStatusManager;
-import io.grpc.protobuf.services.ProtoReflectionService;
+import io.grpc.protobuf.services.ProtoReflectionServiceV1;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -419,9 +445,8 @@ public class GrpcServer {
 
     private static final Logger log = LoggerFactory.getLogger(GrpcServer.class);
 
-    public static void main(String[] args) throws Exception {
-        int port = 50051;
-
+    /** Call from main() with your wired services (port 50051 by convention); blocks until shutdown. */
+    public static void serve(int port, WidgetService widgetService, JwtValidator jwtValidator) throws Exception {
         var healthManager = new HealthStatusManager();
 
         var builder = ServerBuilder.forPort(port)
@@ -432,7 +457,7 @@ public class GrpcServer {
 
         // Reflection (development only)
         if ("true".equals(System.getenv("ENABLE_REFLECTION"))) {
-            builder.addService(ProtoReflectionService.newInstance());
+            builder.addService(ProtoReflectionServiceV1.newInstance()); // v1 API; ProtoReflectionService is deprecated
         }
 
         Server server = builder.build().start();

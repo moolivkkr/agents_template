@@ -16,6 +16,8 @@ tags:
 
 # CRUD Repository Test Archetype (Spring Boot + Testcontainers)
 
+> Java samples compile-checked (test-compile) 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready repository integration test template using `@DataJpaTest` and Testcontainers. Every generated repository test MUST follow this pattern.
 
 ## Test File Location
@@ -39,7 +41,7 @@ package com.example.app.repository;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
-import org.testcontainers.containers.PostgreSQLContainer;
+import org.testcontainers.postgresql.PostgreSQLContainer; // Testcontainers 2 (org.testcontainers.containers.* is deprecated)
 import org.testcontainers.utility.DockerImageName;
 
 /**
@@ -51,8 +53,8 @@ public class TestcontainersConfig {
 
     @Bean
     @ServiceConnection
-    public PostgreSQLContainer<?> postgreSQLContainer() {
-        return new PostgreSQLContainer<>(DockerImageName.parse("postgres:16-alpine"))
+    public PostgreSQLContainer postgreSQLContainer() {
+        return new PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
             .withDatabaseName("testdb")
             .withUsername("test")
             .withPassword("test")
@@ -89,9 +91,9 @@ import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;          // Spring Boot 4 test-slice packages
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.ScrollPosition;
@@ -130,13 +132,8 @@ class WidgetRepositoryTest {
     private static final UUID TENANT_B = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
     private static final UUID USER_ID = UUID.fromString("cccccccc-cccc-cccc-cccc-cccccccccccc");
 
-    @AfterEach
-    void cleanUp() {
-        // Ensure test isolation — each test starts with a clean table
-        repository.deleteAll();
-        entityManager.flush();
-        entityManager.clear();
-    }
+    // No @AfterEach cleanup: @DataJpaTest runs each test in a transaction and rolls it back. A deleteAll()
+    // there would run in that same transaction, which PostgreSQL has aborted after a constraint test.
 }
 ```
 
@@ -514,9 +511,12 @@ class OptimisticLockingTests {
     void concurrentUpdate_ThrowsOptimisticLockException() {
         var widget = persistWidget(makeWidget(withName("Concurrent")));
 
-        // Simulate two concurrent reads
+        // Simulate two concurrent reads: two detached copies (in one persistence context, two finds
+        // would return the same instance and there would be nothing to conflict)
         var read1 = repository.findByIdAndTenantId(widget.getId(), TENANT_A).orElseThrow();
+        entityManager.detach(read1);
         var read2 = repository.findByIdAndTenantId(widget.getId(), TENANT_A).orElseThrow();
+        entityManager.detach(read2);
 
         // First update succeeds
         read1.setName("Update A");
@@ -806,11 +806,11 @@ class ConstraintTests {
 
         // GlobalExceptionHandler maps 23505 to 409 CONFLICT with a generic message — this proves
         // the real driver reports that SQLSTATE through Spring's exception translation.
-        assertThatThrownBy(() -> {
-            repository.save(duplicate);
-            entityManager.flush();
-        }).isInstanceOf(DataIntegrityViolationException.class)
-          .satisfies(ex -> assertThat(sqlState(ex)).isEqualTo("23505"));
+        // saveAndFlush goes through the repository proxy, which translates the driver error;
+        // TestEntityManager.flush() would surface Hibernate's raw ConstraintViolationException
+        assertThatThrownBy(() -> repository.saveAndFlush(duplicate))
+            .isInstanceOf(DataIntegrityViolationException.class)
+            .satisfies(ex -> assertThat(sqlState(ex)).isEqualTo("23505"));
     }
 
     @Test
@@ -917,7 +917,8 @@ class SqlDataSetupTests {
 - `@ServiceConnection` auto-configures datasource from the container — no manual URL setup needed.
 - Use `TestEntityManager` for direct persistence/flush/clear — ensures clean reads from DB.
 - Call `entityManager.clear()` after writes to detach entities and force fresh DB reads.
-- Use `@AfterEach` cleanup to ensure test isolation — `repository.deleteAll()` + flush + clear.
+- Rely on `@DataJpaTest`'s per-test rollback for isolation — no `@AfterEach` `deleteAll()`: it runs in the
+  test's own transaction, which PostgreSQL has aborted after a constraint test.
 - Time values: Postgres TIMESTAMPTZ has microsecond precision — use `Instant.now()` without truncation (JPA handles it).
 - Test factories MUST generate unique names with `UUID.randomUUID()` to prevent constraint violations.
 - Lists are keyset-scrolled (`findBy(spec, q -> q.sortBy(sort).limit(n).scroll(position))`) — there is no `Page`/`Pageable`/offset API to test.

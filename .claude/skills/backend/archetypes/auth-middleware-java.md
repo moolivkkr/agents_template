@@ -15,6 +15,8 @@ tags:
 
 # Auth Middleware Archetype (Spring Security)
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 Complete, production-ready Spring Security configuration template. Every generated auth layer MUST follow this pattern.
 
 ## Security Filter Chain
@@ -39,16 +41,11 @@ import org.springframework.security.web.authentication.UsernamePasswordAuthentic
 public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
-    private final JwtAuthenticationEntryPoint authEntryPoint;
-    private final CustomAccessDeniedHandler accessDeniedHandler;
+    private final SecurityErrorDelegate securityErrors; // error-handling-java.md
 
-    public SecurityConfig(
-            JwtAuthenticationFilter jwtFilter,
-            JwtAuthenticationEntryPoint authEntryPoint,
-            CustomAccessDeniedHandler accessDeniedHandler) {
+    public SecurityConfig(JwtAuthenticationFilter jwtFilter, SecurityErrorDelegate securityErrors) {
         this.jwtFilter = jwtFilter;
-        this.authEntryPoint = authEntryPoint;
-        this.accessDeniedHandler = accessDeniedHandler;
+        this.securityErrors = securityErrors;
     }
 
     @Bean
@@ -61,10 +58,10 @@ public class SecurityConfig {
             .sessionManagement(session ->
                 session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
 
-            // 3. Exception handling — custom 401/403 response format
+            // 3. 401/403 in the ONE error envelope: SecurityErrorDelegate hands them to GlobalExceptionHandler
             .exceptionHandling(exceptions -> exceptions
-                .authenticationEntryPoint(authEntryPoint)       // 401 handler
-                .accessDeniedHandler(accessDeniedHandler))       // 403 handler
+                .authenticationEntryPoint(securityErrors)       // 401 UNAUTHENTICATED + WWW-Authenticate: Bearer
+                .accessDeniedHandler(securityErrors))           // 403 FORBIDDEN
 
             // 4. Authorization rules
             .authorizeHttpRequests(auth -> auth
@@ -267,107 +264,33 @@ public record UserPrincipal(
 }
 ```
 
-## Authentication Entry Point (401 Handler)
+## 401 and 403 Responses
 
-```java
-package com.example.app.security;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.MediaType;
-import org.springframework.security.core.AuthenticationException;
-import org.springframework.security.web.AuthenticationEntryPoint;
-import org.springframework.stereotype.Component;
-
-import java.io.IOException;
-import java.util.Map;
-
-/**
- * Handles 401 Unauthorized responses with consistent JSON error format.
- * Called when an unauthenticated user tries to access a protected resource.
- */
-@Component
-public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
-
-    private final ObjectMapper objectMapper;
-
-    public JwtAuthenticationEntryPoint(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
-
-    @Override
-    public void commence(HttpServletRequest request, HttpServletResponse response,
-                          AuthenticationException authException) throws IOException {
-        response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-        response.setHeader("WWW-Authenticate", "Bearer");
-
-        var body = Map.of(
-            "error", Map.of(
-                "code", "UNAUTHORIZED",
-                "message", "Authentication required. Provide a valid Bearer token."
-            )
-        );
-        objectMapper.writeValue(response.getOutputStream(), body);
-    }
-}
-```
-
-## Access Denied Handler (403 Handler)
-
-```java
-package com.example.app.security;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.MediaType;
-import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.web.access.AccessDeniedHandler;
-import org.springframework.stereotype.Component;
-
-import java.io.IOException;
-import java.util.Map;
-
-/**
- * Handles 403 Forbidden responses with consistent JSON error format.
- * Called when an authenticated user lacks required roles/permissions.
- */
-@Component
-public class CustomAccessDeniedHandler implements AccessDeniedHandler {
-
-    private final ObjectMapper objectMapper;
-
-    public CustomAccessDeniedHandler(ObjectMapper objectMapper) {
-        this.objectMapper = objectMapper;
-    }
-
-    @Override
-    public void handle(HttpServletRequest request, HttpServletResponse response,
-                        AccessDeniedException accessDeniedException) throws IOException {
-        response.setStatus(HttpServletResponse.SC_FORBIDDEN);
-        response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-
-        var body = Map.of(
-            "error", Map.of(
-                "code", "FORBIDDEN",
-                "message", "You do not have permission to access this resource."
-            )
-        );
-        objectMapper.writeValue(response.getOutputStream(), body);
-    }
-}
-```
+Spring Security rejects a request in the filter chain, before any controller runs, so
+`@RestControllerAdvice` never sees it on its own. `SecurityErrorDelegate` (`error-handling-java.md`)
+implements both `AuthenticationEntryPoint` (401) and `AccessDeniedHandler` (403) and hands the exception to
+`GlobalExceptionHandler`, which writes the one error envelope: `{"error": {"code": "UNAUTHENTICATED"`
+or `"FORBIDDEN", "message", "request_id", "retryable": false}}`, with `WWW-Authenticate: Bearer` on 401.
+`SecurityConfig` above wires it. Don't write a JSON body in an entry point or access-denied handler: a
+hand-built `{"error": {"code": "UNAUTHORIZED", ...}}` is a second error shape (wrong code, no `request_id`,
+no `retryable`) that clients and contract tests reject.
 
 ## Role-Based Access Control (@PreAuthorize)
 
 ```java
 package com.example.app.controller;
 
+import com.example.app.model.dto.*;
+import com.example.app.security.UserPrincipal;
+import jakarta.validation.Valid;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.UUID;
+
+// Where the annotations go; method bodies are elided (the full controller is crud-handler-java.md).
 @RestController
 @RequestMapping("/api/v1/widgets")
 public class WidgetController {
@@ -459,15 +382,15 @@ public class WidgetAuthorizationService {
 ```java
 package com.example.app.config;
 
+import com.example.app.exception.RateLimitException;
 import io.github.bucket4j.Bandwidth;
 import io.github.bucket4j.Bucket;
-import io.github.bucket4j.Refill;
 import jakarta.servlet.*;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
+import org.springframework.web.servlet.HandlerExceptionResolver;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -486,6 +409,11 @@ public class RateLimitFilter implements Filter {
     private static final int BURST_CAPACITY = 200;
 
     private final Map<UUID, Bucket> tenantBuckets = new ConcurrentHashMap<>();
+    private final HandlerExceptionResolver resolver;
+
+    public RateLimitFilter(@Qualifier("handlerExceptionResolver") HandlerExceptionResolver resolver) {
+        this.resolver = resolver;
+    }
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
@@ -510,21 +438,18 @@ public class RateLimitFilter implements Filter {
                 String.valueOf(bucket.getAvailableTokens()));
             chain.doFilter(request, response);
         } else {
-            httpResponse.setStatus(HttpStatus.TOO_MANY_REQUESTS.value());
-            httpResponse.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            httpResponse.setHeader("Retry-After", "1");
             httpResponse.setHeader("X-RateLimit-Remaining", "0");
-            httpResponse.getWriter().write("""
-                {"error": {"code": "RATE_LIMITED", "message": "Too many requests. Retry after cooldown."}}
-                """);
+            // A filter runs outside @RestControllerAdvice: hand the exception to it, so the 429 is the one error
+            // envelope (RATE_LIMITED, retryable: true, request_id) with Retry-After (error-handling-java.md)
+            resolver.resolveException(httpRequest, httpResponse, null, new RateLimitException(1));
         }
     }
 
     private Bucket createBucket(UUID tenantId) {
-        var bandwidth = Bandwidth.classic(
-            BURST_CAPACITY,
-            Refill.greedy(REQUESTS_PER_SECOND, Duration.ofSeconds(1))
-        );
+        var bandwidth = Bandwidth.builder()
+            .capacity(BURST_CAPACITY)
+            .refillGreedy(REQUESTS_PER_SECOND, Duration.ofSeconds(1))
+            .build();
         return Bucket.builder().addLimit(bandwidth).build();
     }
 }
@@ -647,8 +572,13 @@ import java.util.List;
  * API key authentication as an alternative to JWT.
  * Checks X-API-Key header and resolves to a tenant/user context.
  *
- * API keys are stored as SHA-256 hashes in the database — never store plaintext.
- * Uses constant-time comparison to prevent timing attacks.
+ * API keys are stored as SHA-256 hashes in the database — never store plaintext. The lookup is by hash,
+ * so no plaintext key is ever compared.
+ *
+ * Register it in the SecurityFilterChain, after the JWT filter:
+ *   http.addFilterAfter(apiKeyFilter, JwtAuthenticationFilter.class)
+ * On its own, a @Component filter runs as a plain servlet filter AFTER Spring Security has already
+ * answered 401 — the key would never be read.
  */
 @Component
 public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
@@ -706,7 +636,7 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     private String hashKey(String key) {
         try {
             var digest = MessageDigest.getInstance("SHA-256");
-            var hash = digest.digest(key.getBytes());
+            var hash = digest.digest(key.getBytes(java.nio.charset.StandardCharsets.UTF_8));
             return java.util.HexFormat.of().formatHex(hash);
         } catch (Exception e) {
             throw new RuntimeException("Failed to hash API key", e);
