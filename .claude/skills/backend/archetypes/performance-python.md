@@ -17,6 +17,8 @@ tags:
 
 > **Canonical reference**: Python-specific performance patterns for FastAPI services. Apply these alongside `core/observability-patterns.md` for measured, observable performance improvements.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked, with a small smoke run (single-flight, hashing, msgpack round trip). SQLAlchemy 2.1.1, asyncpg 0.31.0, redis 8.1.0, cachetools 7.2.0, uvloop 0.22.1, celery 5.6.3.
+
 Every generated Python service MUST follow these patterns to avoid common performance pitfalls.
 
 ---
@@ -44,10 +46,11 @@ from functools import partial
 
 async def hash_password(password: str) -> str:
     loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
+    digest = await loop.run_in_executor(
         None,  # default ThreadPoolExecutor
         partial(hashlib.pbkdf2_hmac, "sha256", password.encode(), b"salt", 100_000),
     )
+    return digest.hex()
 
 
 # ---- CORRECT: heavy CPU work → ProcessPoolExecutor ----
@@ -63,8 +66,7 @@ async def generate_report(data: list[dict]) -> bytes:
 
 def _build_pdf(data: list[dict]) -> bytes:
     """CPU-intensive — runs in a separate process to avoid GIL."""
-    # ... PDF generation logic ...
-    pass
+    ...  # PDF generation logic
 ```
 
 ### 1.2 Connection Pooling
@@ -72,12 +74,14 @@ def _build_pdf(data: list[dict]) -> bytes:
 ```python
 # ── asyncpg pool (used directly or via SQLAlchemy) ────────────────────
 
+import os
+
 import asyncpg
 
 
 async def create_pg_pool() -> asyncpg.Pool:
     return await asyncpg.create_pool(
-        dsn="postgresql://user:pass@localhost:5432/mydb",
+        dsn=os.environ["DATABASE_URL"],  # from the environment — never a DSN with a password in code
         min_size=5,          # keep 5 connections warm
         max_size=20,         # never exceed 20
         max_inactive_connection_lifetime=300,  # recycle idle connections after 5 min
@@ -98,7 +102,7 @@ def create_redis_pool() -> aioredis.Redis:
         decode_responses=True,
         socket_connect_timeout=5,
         socket_timeout=5,
-        retry_on_timeout=True,
+        # redis-py >= 6 retries connection errors and timeouts by default; retry_on_timeout is deprecated
     )
 
 
@@ -122,11 +126,13 @@ _http_client = httpx.AsyncClient(
 ```python
 import asyncio
 
+import httpx
+
 # Limit concurrent calls to a downstream service
 _payment_semaphore = asyncio.Semaphore(10)
 
 
-async def charge_payment(order_id: str, amount: float) -> PaymentResult:
+async def charge_payment(order_id: str, amount: float) -> httpx.Response:
     async with _payment_semaphore:
         # At most 10 concurrent calls to the payment service
         return await _http_client.post(
@@ -162,10 +168,10 @@ async def fetch_dashboard_data(tenant_id: str) -> DashboardData:
         fetch_recent_orders(tenant_id),
         return_exceptions=True,  # don't cancel siblings on failure
     )
-    return DashboardData(
-        stats=stats if not isinstance(stats, Exception) else None,
-        alerts=alerts if not isinstance(alerts, Exception) else None,
-        recent=recent if not isinstance(recent, Exception) else None,
+    return DashboardData(  # BaseException, not Exception: CancelledError is a BaseException
+        stats=stats if not isinstance(stats, BaseException) else None,
+        alerts=alerts if not isinstance(alerts, BaseException) else None,
+        recent=recent if not isinstance(recent, BaseException) else None,
     )
 
 
@@ -253,28 +259,31 @@ class OrderLineSchema(BaseModel):
 ### 2.2 Generators and Async Generators for Large Result Sets
 
 ```python
+import asyncpg
+from sqlalchemy import select
+
+
 # ---- WRONG: loads all rows into memory ----
 async def get_all_orders(tenant_id: str) -> list[Order]:
     result = await session.execute(select(OrderModel).where(OrderModel.tenant_id == tenant_id))
     return [Order.from_model(row) for row in result.scalars().all()]  # OOM on large tenants
 
 
-# ---- CORRECT: async generator — yields batches ----
+# ---- CORRECT: async generator — yields batches, each starting after the last id (keyset) ----
 async def iter_orders(tenant_id: str, batch_size: int = 1000):
-    """Yield orders in batches to keep memory bounded."""
-    offset = 0
+    """Yield orders in batches to keep memory bounded. Keyset, not OFFSET: OFFSET re-reads every
+    skipped row, and skips or repeats rows when others are inserted meanwhile."""
+    last_id: str | None = None
     while True:
-        result = await session.execute(
-            select(OrderModel)
-            .where(OrderModel.tenant_id == tenant_id)
-            .offset(offset)
-            .limit(batch_size)
-        )
+        stmt = select(OrderModel).where(OrderModel.tenant_id == tenant_id)
+        if last_id is not None:
+            stmt = stmt.where(OrderModel.id > last_id)
+        result = await session.execute(stmt.order_by(OrderModel.id).limit(batch_size))
         rows = result.scalars().all()
         if not rows:
             break
         yield [Order.from_model(row) for row in rows]
-        offset += batch_size
+        last_id = rows[-1].id
 
 
 # ---- CORRECT: server-side cursor (asyncpg) — true streaming ----
@@ -382,12 +391,15 @@ def get_top_active_ids(orders: list[Order], limit: int = 100) -> list[str]:
 ```python
 # app/db.py
 
+import os
+from collections.abc import AsyncIterator
+
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 
 
 def create_engine():
     return create_async_engine(
-        "postgresql+asyncpg://user:pass@localhost:5432/mydb",
+        os.environ["DATABASE_URL"],  # postgresql+asyncpg://… from the environment, never in code
 
         # Pool settings — tune for your workload
         pool_size=10,           # baseline connections kept open
@@ -406,7 +418,7 @@ engine = create_engine()
 async_session = async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def get_session() -> AsyncSession:
+async def get_session() -> AsyncIterator[AsyncSession]:
     async with async_session() as session:
         yield session
 ```
@@ -414,24 +426,27 @@ async def get_session() -> AsyncSession:
 ### 3.2 Eager Loading vs Lazy Loading
 
 ```python
+from collections.abc import Sequence
+
 from sqlalchemy.orm import selectinload, joinedload
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 # ---- WRONG: lazy loading causes N+1 ----
-async def get_orders(session: AsyncSession, tenant_id: str) -> list[Order]:
+async def get_orders(session: AsyncSession, tenant_id: str) -> Sequence[OrderModel]:
     result = await session.execute(
         select(OrderModel).where(OrderModel.tenant_id == tenant_id)
     )
     orders = result.scalars().all()
     for order in orders:
-        # EACH access triggers a separate query — N+1!
+        # EACH access is a separate query — N+1 (in async SQLAlchemy it raises MissingGreenlet instead)
         print(order.items)
     return orders
 
 
 # ---- CORRECT: selectinload — one extra query (SELECT ... WHERE id IN (...)) ----
-async def get_orders_with_items(session: AsyncSession, tenant_id: str) -> list[Order]:
+async def get_orders_with_items(session: AsyncSession, tenant_id: str) -> Sequence[OrderModel]:
     result = await session.execute(
         select(OrderModel)
         .where(OrderModel.tenant_id == tenant_id)
@@ -441,7 +456,7 @@ async def get_orders_with_items(session: AsyncSession, tenant_id: str) -> list[O
 
 
 # ---- CORRECT: joinedload — single query with JOIN (use for to-one relationships) ----
-async def get_order_with_customer(session: AsyncSession, order_id: str) -> Order:
+async def get_order_with_customer(session: AsyncSession, order_id: str) -> OrderModel | None:
     result = await session.execute(
         select(OrderModel)
         .where(OrderModel.id == order_id)
@@ -460,8 +475,10 @@ async def get_order_with_customer(session: AsyncSession, order_id: str) -> Order
 ### 3.3 Bulk Inserts
 
 ```python
-from sqlalchemy import insert
+import asyncpg
+from sqlalchemy import func, insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 # ── Bulk insert with executemany (SQLAlchemy) ─────────────────────────
@@ -492,11 +509,12 @@ async def bulk_load_via_copy(pool: asyncpg.Pool, records: list[tuple]) -> int:
     Use for data imports, ETL, seeding.
     """
     async with pool.acquire() as conn:
-        return await conn.copy_records_to_table(
+        status = await conn.copy_records_to_table(
             "orders",
             records=records,
             columns=["id", "tenant_id", "total", "status", "created_at"],
         )
+    return int(status.split()[-1])  # asyncpg returns the command tag, e.g. "COPY 1000"
 ```
 
 ### 3.4 Read Replicas with SQLAlchemy Binds
@@ -504,17 +522,19 @@ async def bulk_load_via_copy(pool: asyncpg.Pool, records: list[tuple]) -> int:
 ```python
 # app/db.py
 
+import os
+
 from sqlalchemy.ext.asyncio import create_async_engine
 
 
 primary_engine = create_async_engine(
-    "postgresql+asyncpg://user:pass@primary:5432/mydb",
+    os.environ["DATABASE_URL"],  # URLs from the environment, never with a password in code
     pool_size=10,
     max_overflow=20,
 )
 
 replica_engine = create_async_engine(
-    "postgresql+asyncpg://user:pass@replica:5432/mydb",
+    os.environ["DATABASE_REPLICA_URL"],
     pool_size=10,
     max_overflow=20,
 )
@@ -659,11 +679,11 @@ for stat in top_stats[:10]:
 # Enable via environment variable (recommended for development)
 # PYTHONASYNCIODEBUG=1 python -m uvicorn app.main:app
 
-# Or programmatically:
+# Or programmatically, where you start the loop (inside running code:
+# asyncio.get_running_loop().set_debug(True)):
 import asyncio
 
-loop = asyncio.get_event_loop()
-loop.set_debug(True)
+asyncio.run(main(), debug=True)
 # This will:
 #   - Log coroutines that take >100ms (blocks event loop)
 #   - Log callbacks that take >100ms
@@ -679,6 +699,8 @@ loop.set_debug(True)
 
 ```python
 # Decorate the function you want to profile
+from decimal import Decimal
+
 from line_profiler import profile
 
 
@@ -700,6 +722,7 @@ def calculate_order_total(items: list[OrderLine]) -> Decimal:
 # tests/benchmarks/test_order_performance.py
 
 import pytest
+from sqlalchemy import insert
 
 
 def test_order_creation_performance(benchmark, order_factory):
@@ -756,7 +779,9 @@ class RedisCache:
         self._default_ttl = default_ttl
 
     async def get(self, key: str) -> str | None:
-        return await self._redis.get(key)
+        value = await self._redis.get(key)
+        # bytes unless the client was created with decode_responses=True
+        return value.decode() if isinstance(value, bytes) else value
 
     async def set(self, key: str, value: str, ttl: int | None = None) -> None:
         await self._redis.set(key, value, ex=ttl or self._default_ttl)
@@ -775,7 +800,7 @@ class RedisCache:
         """
         Cache-aside pattern: return cached value or compute and store.
         """
-        cached = await self._redis.get(key)
+        cached = await self.get(key)
         if cached is not None:
             return deserialize(cached)
 
@@ -786,12 +811,21 @@ class RedisCache:
 
 # ── Usage ─────────────────────────────────────────────────────────────
 
+from app.errors import NotFoundError
+
+
 class OrderService:
     async def get_order(self, ctx: RequestContext, order_id: str) -> Order:
+        async def load() -> Order:
+            order = await self._repo.find_by_id(ctx, order_id)
+            if order is None:
+                raise NotFoundError("Order")  # a miss raises: nothing is cached
+            return order
+
         cache_key = f"order:{ctx.tenant_id}:{order_id}"
         return await self._cache.get_or_set(
             key=cache_key,
-            factory=lambda: self._repo.find_by_id(ctx, order_id),
+            factory=load,
             ttl=600,  # 10 minutes
             serialize=lambda o: o.model_dump_json(),
             deserialize=lambda s: Order.model_validate_json(s),
@@ -807,9 +841,11 @@ class OrderService:
 ### 5.2 In-Process Cache (lru_cache, TTLCache)
 
 ```python
-from functools import lru_cache
-from cachetools import TTLCache
+import json
 import threading
+from functools import lru_cache
+
+from cachetools import TTLCache
 
 
 # ── lru_cache — for pure functions with immutable args ────────────────
@@ -820,7 +856,7 @@ def parse_feature_flags(raw_config: str) -> dict[str, bool]:
 
 
 # ── TTLCache — for data that expires ──────────────────────────────────
-_tenant_config_cache = TTLCache(maxsize=500, ttl=300)  # 5 min TTL
+_tenant_config_cache = TTLCache[str, TenantConfig](maxsize=500, ttl=300)  # 5 min TTL
 _cache_lock = threading.Lock()
 
 
@@ -841,7 +877,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
 # ── Async-safe TTLCache with asyncio.Lock ─────────────────────────────
 import asyncio
 
-_async_cache = TTLCache(maxsize=500, ttl=300)
+_async_cache = TTLCache[str, TenantConfig](maxsize=500, ttl=300)
 _async_lock = asyncio.Lock()
 
 
@@ -899,6 +935,8 @@ class SingleFlight:
 
 # ── Usage with RedisCache ─────────────────────────────────────────────
 
+from app.errors import NotFoundError
+
 _single_flight = SingleFlight()
 
 
@@ -916,6 +954,8 @@ class OrderService:
             cache_key,
             lambda: self._repo.find_by_id(ctx, order_id),
         )
+        if order is None:
+            raise NotFoundError("Order")  # a miss is not cached
 
         await self._cache.set(cache_key, order.model_dump_json(), ttl=600)
         return order
@@ -945,6 +985,7 @@ data = {"id": "order_123", "items": [{"sku": f"SKU_{i}", "qty": i} for i in rang
 
 # ── Recommendation: use msgpack for Redis cache values ────────────────
 import msgpack
+from pydantic import BaseModel
 
 serialized = msgpack.packb(data, use_bin_type=True)
 deserialized = msgpack.unpackb(serialized, raw=False)
@@ -998,6 +1039,10 @@ def _compress(data: bytes) -> bytes:
 ```python
 # For IO-bound work (HTTP calls, DB queries, file IO), asyncio releases
 # the GIL while waiting. No need for threads or processes.
+import asyncio
+
+import httpx
+
 
 async def fetch_multiple_apis():
     """GIL is released during await — all three run concurrently."""
@@ -1021,6 +1066,9 @@ async def fetch_multiple_apis():
 # ── ProcessPoolExecutor — use for short CPU tasks within a request ────
 # Good for: image processing, PDF generation, compression, hashing
 # Characteristics: in-process, low overhead, bounded by process pool size
+import asyncio
+from concurrent.futures import ProcessPoolExecutor
+
 _pool = ProcessPoolExecutor(max_workers=4)
 
 async def handle_request():
@@ -1065,7 +1113,8 @@ async def request_report(tenant_id: str):
 
 # ── Option 2: programmatic ────────────────────────────────────────────
 import uvloop
-uvloop.install()  # call before any asyncio code
+
+uvloop.run(main())  # instead of asyncio.run(main()); uvloop.install() is deprecated from Python 3.12
 
 # ── Option 3: uvicorn config ─────────────────────────────────────────
 # uvicorn.run(app, host="0.0.0.0", port=8000, loop="uvloop")

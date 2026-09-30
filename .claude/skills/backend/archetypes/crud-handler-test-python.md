@@ -17,6 +17,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-handler-test-go.md` (Go/chi). Both test the same response envelope (`~/.claude/skills/api/response-envelope.md`), error codes, and pagination behavior.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked and run against crud-handler-python.md's app: 51 passed. pytest 9.1.1, pytest-asyncio 1.4.0, httpx 0.28.1, FastAPI 0.142.2.
+
 Complete FastAPI handler test template using pytest + httpx. Every generated handler test file MUST follow this pattern.
 
 ## Test File Location
@@ -135,7 +137,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.domain.widget import Widget, WidgetStatus
 
@@ -152,7 +154,7 @@ def make_widget(
     updated_by: uuid.UUID | None = None,
 ) -> Widget:
     """Build a Widget domain object with sensible defaults."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return Widget(
         id=id or uuid.uuid4(),
         tenant_id=tenant_id or uuid.UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
@@ -179,8 +181,9 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
-from httpx import AsyncClient, Response
+from httpx import ASGITransport, AsyncClient, Response
 
+from app.dependencies.auth import get_current_user
 from app.domain.base import ListResult
 from app.domain.widget import Widget
 from app.errors import (
@@ -191,7 +194,8 @@ from app.errors import (
     UnavailableError,
     ValidationFailedError,
 )
-from tests.conftest import DEFAULT_TENANT_ID, DEFAULT_USER_ID
+from app.services.widget import WidgetService
+from tests.conftest import DEFAULT_TENANT_ID, DEFAULT_USER_ID, make_user
 from tests.factories import make_widget
 
 

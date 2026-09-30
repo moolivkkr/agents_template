@@ -19,6 +19,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `core/observability-patterns.md` (Go/TypeScript). All three produce identical metric names, span naming conventions, and required log fields so dashboards and alerts work across polyglot services.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the app run through TestClient (lifespan, middleware, metrics read in-process: one series per route template; log redaction). opentelemetry-sdk 1.45.0 / instrumentation 0.66b0, structlog 26.1.0, prometheus-fastapi-instrumentator 8.1.0, FastAPI 0.142.2.
+
 Complete observability stack for Python backend services built on FastAPI. Every generated Python service MUST follow this pattern.
 
 ---
@@ -581,6 +583,7 @@ Alerting.
 import logging
 import re
 import sys
+from typing import Any
 
 import structlog
 
@@ -660,7 +663,7 @@ _SENSITIVE_KEY = re.compile(
 )
 
 
-def redact_sensitive(value):
+def redact_sensitive(value: Any) -> Any:
     """Return a copy with the value of every key matching _SENSITIVE_KEY replaced, at any depth."""
     if isinstance(value, dict):
         return {k: "[REDACTED]" if _SENSITIVE_KEY.search(str(k)) else redact_sensitive(v) for k, v in value.items()}
@@ -793,7 +796,8 @@ class OrderService:
             total=str(req.total),
         )
 
-        order = await self._repo.save(ctx, Order.from_request(req))
+        order = Order.from_request(req, tenant_id=ctx.tenant_id)
+        await self._repo.save(ctx, order)
 
         logger.info(
             "order_created",
@@ -914,8 +918,9 @@ class JSONFormatter(logging.Formatter):
             log_entry["span_id"] = format(ctx.span_id, "016x")
 
         # Merge extra fields — redacted by key name, the same rule as the structlog chain, at every level
-        if hasattr(record, "extra_fields"):
-            log_entry.update(redact_sensitive(record.extra_fields))
+        extra_fields = getattr(record, "extra_fields", None)
+        if extra_fields:
+            log_entry.update(redact_sensitive(extra_fields))
 
         # Exception info
         if record.exc_info and record.exc_info[1]:

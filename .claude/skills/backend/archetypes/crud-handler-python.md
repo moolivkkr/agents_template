@@ -15,6 +15,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-handler-go.md` (Go/chi). Both produce the one response envelope in `~/.claude/skills/api/response-envelope.md` — success `{data, meta}`, error `{error}`, never both; list metadata in `meta.pagination`. If this file and the envelope ever disagree, the envelope wins.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked and `create_app()` built; crud-handler-test-python.md's tests run against it (51 passed). FastAPI 0.142.2, Starlette 1.7.0, Pydantic 2.13.5.
+
 Complete FastAPI handler set for CRUD endpoints. Every generated Python handler MUST follow this pattern.
 
 ## Domain Types — Pydantic v2 Models
@@ -159,6 +161,7 @@ class UpdateWidgetRequest(BaseModel):
 # app/dependencies/auth.py
 
 from dataclasses import dataclass
+from typing import Any
 from uuid import UUID
 
 from fastapi import Depends, Request
@@ -169,6 +172,13 @@ from app.errors import ForbiddenError, UnauthenticatedError
 # auto_error=False: a missing header reaches get_current_user, which raises UnauthenticatedError
 # (401 UNAUTHENTICATED in the envelope) instead of FastAPI's own {"detail": "Not authenticated"}.
 bearer_scheme = HTTPBearer(auto_error=False)
+
+
+def decode_jwt(token: str) -> dict[str, Any]:
+    """Placeholder: verify signature, exp, iss and aud and return the claims. The PyJWT
+    implementation is _decode_token in auth-middleware-python.md. Until it's wired, every
+    request is 401."""
+    raise NotImplementedError("wire the JWT decode from auth-middleware-python.md")
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,14 +198,13 @@ async def get_current_user(
     Dependency that extracts and validates the JWT bearer token.
     Sets the current user on the request state for downstream use.
 
-    Replace the token decode logic with your JWT library (python-jose, PyJWT, etc.).
+    Replace decode_jwt with the real decode (PyJWT; see auth-middleware-python.md).
     """
     if credentials is None:
         raise UnauthenticatedError()
     token = credentials.credentials
     try:
-        # Replace with real JWT decode
-        payload = decode_jwt(token)  # noqa: F821 — placeholder
+        payload = decode_jwt(token)
         user = CurrentUser(
             user_id=UUID(payload["sub"]),
             tenant_id=UUID(payload["tenant_id"]),

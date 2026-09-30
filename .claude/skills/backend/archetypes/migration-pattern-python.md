@@ -17,6 +17,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/migration-pattern.md` (Go/golang-migrate). Both produce identical database schemas — same tables, indexes, RLS policies, and constraints.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked; alembic 1.20.0 offline upgrade and downgrade SQL generated through env.py; the migration tests pass against PostgreSQL 16 (`run.sh --live`). SQLAlchemy 2.1.1, asyncpg 0.31.0.
+
 Complete Alembic migration setup for async SQLAlchemy + asyncpg. Every generated migration MUST follow this pattern.
 
 ## Directory Structure
@@ -118,12 +120,10 @@ if config.config_file_name is not None:
 # Target metadata for auto-generation
 target_metadata = Base.metadata
 
-# Override DB URL from environment variable (never hardcode credentials)
-database_url = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/appdb",
-)
-config.set_main_option("sqlalchemy.url", database_url)
+# DB URL from the environment: required, no default (never hardcode credentials). A caller that
+# already set sqlalchemy.url (the migration tests, via Config.set_main_option) keeps its URL.
+if not config.get_main_option("sqlalchemy.url"):
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 
 def run_migrations_offline() -> None:
@@ -607,9 +607,10 @@ from alembic.config import Config
 
 @pytest.fixture(scope="session")
 def alembic_config(pg_url: str) -> Config:
-    """Alembic config pointing at the test database."""
+    """Alembic config pointing at the test database (pg_url: the testcontainers fixture in
+    crud-repository-test-python.md, in a conftest.py this directory can see)."""
     cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", pg_url.replace("+asyncpg", ""))
+    cfg.set_main_option("sqlalchemy.url", pg_url)  # keep +asyncpg: env.py runs an async engine
     return cfg
 
 
@@ -645,8 +646,8 @@ class TestMigrations:
         for rev in revisions:
             # Apply
             command.upgrade(alembic_config, rev.revision)
-            # Rollback
-            command.downgrade(alembic_config, rev.down_revision or "base")
+            # Rollback one step ("-1", not rev.down_revision: a merge revision has a tuple of parents)
+            command.downgrade(alembic_config, "-1")
             # Re-apply
             command.upgrade(alembic_config, rev.revision)
 ```

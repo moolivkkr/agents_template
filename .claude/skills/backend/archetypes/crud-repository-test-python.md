@@ -18,6 +18,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-repository-test.md` (Go/pgx). Both test the same CRUD operations, pagination, tenant isolation, and optimistic locking against a real PostgreSQL instance.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked, collected (32 tests), and run against a postgres:16-alpine testcontainer (`run.sh --live`): 32 passed. pytest 9.1.1, pytest-asyncio 1.4.0, testcontainers 4.15.0, SQLAlchemy 2.1.1.
+
 Complete integration test template for the Python repository layer using testcontainers. Every generated repository test MUST follow this pattern.
 
 ## Test File Location
@@ -38,7 +40,6 @@ Rule: Integration tests live in `tests/repositories/`. Use separate `conftest.py
 
 from __future__ import annotations
 
-import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import datetime
@@ -52,22 +53,16 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
-from testcontainers.postgres import PostgresContainer
+from sqlalchemy.pool import NullPool
+from testcontainers.community.postgres import PostgresContainer
 
 from app.models.widget import Base, WidgetModel
 
 
 # ---------------------------------------------------------------------------
 # Session-scoped PostgreSQL container — shared across all tests in this module
+# (pytest-asyncio >= 1.0 has no `event_loop` fixture to override; loop scopes are set per fixture)
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create a session-scoped event loop for async fixtures."""
-    loop = asyncio.new_event_loop()
-    yield loop
-    loop.close()
-
 
 @pytest.fixture(scope="session")
 def pg_container():
@@ -91,10 +86,14 @@ def pg_url(pg_container) -> str:
     return f"postgresql+asyncpg://{user}:{password}@{host}:{port}/{db}"
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def engine(pg_url: str) -> AsyncIterator[AsyncEngine]:
-    """Create the async engine and run migrations (create tables)."""
-    eng = create_async_engine(pg_url, echo=False, pool_size=5)
+    """Create the async engine and the tables.
+
+    NullPool: each test runs on its own event loop and an asyncpg connection can't move between
+    loops, so no connection is kept between tests.
+    """
+    eng = create_async_engine(pg_url, echo=False, poolclass=NullPool)
 
     # Create all tables from SQLAlchemy models
     async with eng.begin() as conn:
@@ -105,7 +104,7 @@ async def engine(pg_url: str) -> AsyncIterator[AsyncEngine]:
     await eng.dispose()
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     """Session factory bound to the test engine."""
     return async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -155,7 +154,7 @@ async def clean_session(session_factory: async_sessionmaker[AsyncSession]) -> As
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import pytest_asyncio
@@ -178,7 +177,7 @@ def make_widget(
     created_at: datetime | None = None,
 ) -> Widget:
     """Build a Widget domain object with unique defaults for DB insertion."""
-    now = created_at or datetime.utcnow()
+    now = created_at or datetime.now(timezone.utc)
     return Widget(
         id=id or uuid.uuid4(),
         tenant_id=tenant_id or uuid.uuid4(),
@@ -295,7 +294,7 @@ class TestUpdate:
 
         # Update fields and increment version
         widget.name = "Updated Name"
-        widget.updated_at = datetime.utcnow()
+        widget.updated_at = datetime.now(timezone.utc)
         widget.version = 2
 
         success = await repo.update(widget)
@@ -355,7 +354,7 @@ class TestListCursorPagination:
     async def test_cursor_pagination_full_traversal(self, repo: WidgetRepository) -> None:
         """Insert 25 widgets, paginate through all of them in pages of 20 + 5."""
         tenant_id = uuid.uuid4()
-        base_time = datetime.utcnow() - timedelta(hours=1)
+        base_time = datetime.now(timezone.utc) - timedelta(hours=1)
 
         for i in range(25):
             widget = make_widget(
@@ -406,7 +405,7 @@ class TestListCursorPagination:
     @pytest.mark.asyncio
     async def test_sort_order_ascending(self, repo: WidgetRepository) -> None:
         tenant_id = uuid.uuid4()
-        base_time = datetime.utcnow()
+        base_time = datetime.now(timezone.utc)
 
         w1 = make_widget(tenant_id=tenant_id, name="alpha", created_at=base_time)
         w2 = make_widget(tenant_id=tenant_id, name="bravo", created_at=base_time + timedelta(seconds=1))
@@ -423,7 +422,7 @@ class TestListCursorPagination:
     @pytest.mark.asyncio
     async def test_sort_order_descending(self, repo: WidgetRepository) -> None:
         tenant_id = uuid.uuid4()
-        base_time = datetime.utcnow()
+        base_time = datetime.now(timezone.utc)
 
         w1 = make_widget(tenant_id=tenant_id, name="alpha", created_at=base_time)
         w2 = make_widget(tenant_id=tenant_id, name="bravo", created_at=base_time + timedelta(seconds=1))
@@ -547,7 +546,7 @@ class TestTenantIsolation:
         widget_a.tenant_id = tenant_b
         widget_a.name = "hijacked"
         widget_a.version = 2
-        widget_a.updated_at = datetime.utcnow()
+        widget_a.updated_at = datetime.now(timezone.utc)
 
         success = await repo.update(widget_a)
         assert success is False
@@ -580,14 +579,14 @@ class TestOptimisticLocking:
         # First update succeeds
         read1.name = "Update A"
         read1.version = 2
-        read1.updated_at = datetime.utcnow()
+        read1.updated_at = datetime.now(timezone.utc)
         success = await repo.update(read1)
         assert success is True
 
         # Second update fails — version was already incremented
         read2.name = "Update B"
         read2.version = 2  # same expected version, but actual is now 2
-        read2.updated_at = datetime.utcnow()
+        read2.updated_at = datetime.now(timezone.utc)
         success = await repo.update(read2)
         assert success is False
 
@@ -606,7 +605,7 @@ class TestOptimisticLocking:
         # Try to update with stale version
         widget.name = "Stale Update"
         widget.version = 3  # expects version 2, but actual is 5
-        widget.updated_at = datetime.utcnow()
+        widget.updated_at = datetime.now(timezone.utc)
         success = await repo.update(widget)
         assert success is False
 ```
@@ -740,7 +739,7 @@ class TestBatchOperations:
         await seed_widgets(repo, w1, w2)
 
         # Update both
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         w1.name = "updated-1"
         w1.version = 2
         w1.updated_at = now

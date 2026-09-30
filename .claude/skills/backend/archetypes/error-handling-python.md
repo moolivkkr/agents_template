@@ -14,6 +14,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/error-handling-go.md` (Go) and `backend/archetypes/error-handling-typescript.md` (TypeScript). The wire shape all three produce is the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`); if this file and the envelope ever disagree, the envelope wins.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and every handler path exercised through TestClient (AppError, validation, 404/405, catch-all 500). FastAPI 0.142.2, Starlette 1.7.0, Pydantic 2.13.5.
+
 Complete error handling system for Python backend services (FastAPI, Starlette). Every generated Python service MUST follow this pattern.
 
 ## AppError Base Class
@@ -572,12 +574,16 @@ class, there is no `data` key, and every error response sets `X-Request-Id` = `r
 ```python
 # app/services/widget.py
 
+from uuid import UUID
+
+from app.domain.widget import Widget, WidgetStatus
 from app.errors import (
     BusinessRuleError,
     ConflictError,
     NotFoundError,
     ValidationFailedError,
 )
+from app.services.protocols import WidgetRepository
 
 
 class WidgetService:
@@ -589,12 +595,11 @@ class WidgetService:
         if not name.strip():
             raise ValidationFailedError("name", "required", "Name is required.")
 
-        # Check for duplicates — raises 409 on conflict
-        existing = await self._repo.find_by_name(tenant_id, name)
-        if existing is not None:
-            raise ConflictError("A widget with this name already exists.")
-
-        return await self._repo.create(widget)
+        # A duplicate name is 409 CONFLICT, raised by the repository when the unique index rejects
+        # the insert (rule 1 above). A check-then-insert here would race a concurrent create.
+        widget = Widget(tenant_id=tenant_id, name=name.strip())
+        await self._repo.create(widget)
+        return widget
 
     async def get(self, *, tenant_id: UUID, widget_id: UUID) -> Widget:
         widget = await self._repo.get_by_id(tenant_id, widget_id)
@@ -613,7 +618,10 @@ class WidgetService:
         if version != existing.version:
             raise ConflictError("This widget was changed by someone else. Reload and try again.")
 
-        return await self._repo.update(existing)
+        existing.version += 1
+        if not await self._repo.update(existing):  # 0 rows: changed concurrently since the read
+            raise ConflictError("This widget was changed by someone else. Reload and try again.")
+        return existing
 ```
 
 ## Type Checking Errors

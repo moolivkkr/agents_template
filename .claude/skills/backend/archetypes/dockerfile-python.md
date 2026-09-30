@@ -15,6 +15,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to the Go multi-stage Dockerfile pattern. Both produce minimal, secure production images with non-root users, health checks, and deterministic dependencies.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): the one Python block (health endpoint) was imported, type-checked and called through TestClient. The Dockerfile and Compose blocks were not built. FastAPI 0.142.2, SQLAlchemy 2.1.1.
+
 Complete Docker build setup for Python backend services. Every generated Dockerfile MUST follow this pattern.
 
 ## .dockerignore

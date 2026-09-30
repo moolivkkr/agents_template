@@ -15,6 +15,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-service.md` (Go). Both follow the same structural conventions: dependency injection, tenant isolation, cache-aside, audit logging, and optimistic locking.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked; crud-service-test-python.md's tests run against it (43 passed). Pydantic 2.13.5.
+
 Complete, production-ready Python service layer template. Every generated service MUST follow this pattern.
 
 ## Domain Types
@@ -23,7 +25,7 @@ Complete, production-ready Python service layer template. Every generated servic
 # app/domain/base.py
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Generic, TypeVar
 from uuid import UUID, uuid4
 
@@ -36,8 +38,8 @@ class Entity:
 
     id: UUID = field(default_factory=uuid4)
     tenant_id: UUID = field(default_factory=uuid4)
-    created_at: datetime = field(default_factory=lambda: datetime.now(tz=None))
-    updated_at: datetime = field(default_factory=lambda: datetime.now(tz=None))
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     deleted_at: datetime | None = None
     created_by: UUID = field(default_factory=uuid4)
     updated_by: UUID = field(default_factory=uuid4)
@@ -157,7 +159,9 @@ class TxManager(Protocol):
 
 import json
 import logging
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID, uuid4
 
 from app.domain.base import AuditEntry, ListFilters, ListResult
@@ -212,7 +216,7 @@ class WidgetService:
         self._validate_description(description)
 
         # 2. Build domain object
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         widget = Widget(
             id=uuid4(),
             tenant_id=tenant_id,
@@ -252,9 +256,13 @@ class WidgetService:
         req_id = get_request_id()
         log = self._logger.getChild("get")
 
-        # 1. Check cache
+        # 1. Check cache — a cache error is logged and treated as a miss (the cache is an optimization)
         cache_key = f"widget:{tenant_id}:{widget_id}"
-        cached = await self._cache.get(cache_key)
+        try:
+            cached = await self._cache.get(cache_key)
+        except Exception:
+            log.warning("cache get failed", extra={"request_id": req_id, "key": cache_key}, exc_info=True)
+            cached = None
         if cached is not None:
             log.debug("cache hit", extra={"request_id": req_id, "widget_id": str(widget_id)})
             return self._deserialize_widget(cached)
@@ -304,7 +312,7 @@ class WidgetService:
         # 4. Apply changes
         existing.name = name
         existing.description = description
-        existing.updated_at = datetime.utcnow()
+        existing.updated_at = datetime.now(timezone.utc)
         existing.updated_by = user_id
         existing.version += 1
 
@@ -419,7 +427,9 @@ class WidgetService:
         user_id: UUID,
         name: str,
         description: str,
-        components: list[dict],
+        # Not `list[...]`: below `def list` the class body's `list` is that method, and
+        # `list[dict]` would raise TypeError when the class is defined.
+        components: Sequence[dict[str, Any]],
     ) -> Widget:
         """
         Create a widget and its child components within a single transaction.
@@ -433,7 +443,7 @@ class WidgetService:
         self._validate_name(name)
         self._validate_description(description)
 
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         widget = Widget(
             id=uuid4(),
             tenant_id=tenant_id,
@@ -557,7 +567,7 @@ class WidgetService:
             entity_id=entity_id,
             tenant_id=tenant_id,
             actor_id=actor_id,
-            timestamp=datetime.utcnow(),
+            timestamp=datetime.now(timezone.utc),
             changes=changes,
         )
         try:
