@@ -14,6 +14,9 @@ input:
   optional:
     - type: registry
       path: agent_state/agent_registry.json
+    - type: verify_commands
+      path: agent_state/config/verify-commands.json
+      description: "The ## Commands and versions table in machine form — CI runs these commands verbatim"
 output:
   primary: .github/workflows/
   artifacts:
@@ -24,6 +27,7 @@ dependencies:
   runs_after: [deployment_agent]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
+  - "~/.claude/skills/core/commands-and-versions.md"
   - "~/.claude/skills/infrastructure/github-actions.md"
   - "~/.claude/skills/infrastructure/docker.md"
   - "~/.claude/skills/infrastructure/secrets-management.md"
@@ -39,21 +43,32 @@ Creates CI/CD pipeline configuration based on the project's tech stack from IMPL
 ## Required Reading
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
-1. `docs/IMPLEMENTATION_GUIDELINES.md` §Tech Stack, §Infrastructure, §Design Constraints
-2. `~/.claude/skills/infrastructure/github-actions.md` — pipeline patterns
-3. `agent_state/agent_registry.json` — test commands, lint commands for the tech stack
+0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Do not re-litigate an active decision without new evidence.
+1. `docs/IMPLEMENTATION_GUIDELINES.md` — **`## Commands and versions`** (every command and every toolchain/datastore version CI uses), `## Technology stack`, `## Runtime contract` (health paths for smoke steps), §11 Deployment & CI/CD. If `## Commands and versions` is missing, report BLOCKED — don't infer commands from the stack.
+2. `agent_state/config/verify-commands.json` — the same table in machine form (orchestrator Wave 0c); regenerate with `python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json` if missing.
+3. `~/.claude/skills/infrastructure/github-actions.md` — pipeline patterns
+
+## One set of commands
+
+CI runs **exactly the commands `test_runner` and the gate run** — the `## Commands and versions`
+rows, verbatim. Never a CI-only variant: if CI needs a different flag, change the table so everyone
+runs it. Toolchain versions come from the same table (or the toolchain file it names:
+`go-version-file: go.mod`, `node-version-file: .nvmrc`); service images use the table's datastore
+major version. Tests never retry silently: Playwright `retries: 0` or `failOnFlakyTests: true` if the
+table sets retries, Go with `-count=1`.
 
 ## CI Pipeline (`ci.yml`)
 
 Triggers: push to main, PR to main
 
 Jobs (in order):
-1. **lint** — language linter from tech stack (golangci-lint, ruff, eslint, etc.)
-2. **unit-test** — run unit tests with coverage report
-3. **integration-test** — spin up DB/cache services, run integration tests
-4. **build** — build production artifact or Docker image
+1. **lint** — `commands.lint` (and `commands.typecheck`)
+2. **unit-test** — `commands["test:unit"]`; upload the JUnit/coverage files it writes as artifacts
+3. **integration-test** — datastore/cache as job `services:` with a `ports:` mapping (a runner-hosted job reaches them on `localhost`), the database name and credentials the tests expect, and a health check; then `commands["test:integration"]`
+4. **build** — `commands.build`, then the Docker image with `--build-arg GIT_SHA=${{ github.sha }}`
 5. **security-scan** — dependency vulnerability scan
-6. **k8s-manifests** (only when `deploy/k8s/` exists) — for each overlay `dev` and `qa`: write a dummy
+6. **web-e2e** (when `commands["test:e2e"]` exists) — start the app per `## Runtime contract` (wait for `/readyz`), run `commands["test:e2e"]` with `APP_BASE_URL` set, upload the report
+7. **k8s-manifests** (only when `deploy/k8s/` exists) — for each overlay `dev` and `qa`: write a dummy
    `secrets.env`, `kubectl kustomize deploy/k8s/overlays/<env>` must render, and
    `kubeconform -strict -summary` must pass on the output. No cluster is needed; the lab-cluster
    deploy itself stays local (`scripts/k8s/deploy.sh`, skill `lima-k8s-lab.md`). A CI job can't
@@ -80,7 +95,7 @@ Triggers: push to main (after CI passes), manual dispatch
 Jobs:
 1. **build-image** — Docker build + push to registry (if containerized)
 2. **deploy-staging** — deploy to staging environment
-3. **smoke-test** — hit health endpoint after deploy
+3. **smoke-test** — `/healthz` and `/readyz` (the runtime contract's paths) return 200 after deploy, and the version route reports the deployed `git_sha`
 4. **deploy-prod** — manual approval gate, then deploy
 
 ## Rules
@@ -88,12 +103,15 @@ Jobs:
 - Pin action versions (`actions/checkout@v4` not `@main`)
 - Cache hit rate > 80% — use correct cache key with lock file hash
 - Fail fast: lint before test, test before build
+- No silent retries or swallowed failures around test or build steps (retry actions, `continue-on-error: true`, `|| true`): a red step stays red
+- Versions and commands come from `## Commands and versions`; nothing in a workflow names a version the table doesn't
 
 <!-- BEGIN reference-packs -->
 ## Reference packs
 
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
+- `~/.claude/skills/core/commands-and-versions.md`
 - `~/.claude/skills/infrastructure/github-actions.md`
 - `~/.claude/skills/infrastructure/docker.md`
 - `~/.claude/skills/infrastructure/secrets-management.md`
@@ -122,8 +140,10 @@ Keep it short; the detail belongs in the artifact.
 <!-- END operating-contract -->
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
-- [ ] The generated workflow files (`ci.yml`/`cd.yml`) are written and reference REAL project commands
-      (build/test/lint) read from IMPLEMENTATION_GUIDELINES — not placeholder `echo` steps.
+- [ ] The generated workflow files (`ci.yml`/`cd.yml`) are written and run the `## Commands and versions`
+      commands verbatim (the same ones `test_runner` runs) — not placeholder `echo` steps or CI-only variants.
+- [ ] Every toolchain and service-image version matches the versions table; every job `services:` entry
+      the tests reach on `localhost` has a `ports:` mapping.
 - [ ] Each YAML parses (valid syntax) and each job's steps are runnable, not stubs.
 - [ ] No secret is hardcoded; all action versions are pinned.
 - [ ] The deploy job includes the health/smoke-test gate and the prod manual-approval gate.
