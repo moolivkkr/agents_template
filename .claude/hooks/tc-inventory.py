@@ -15,9 +15,21 @@ parametrize id, table-driven `name:` field, Maestro flow name/file) that is not 
 TODOs, skipped tests and range annotations do not count. With --results (sidecars from
 junit-to-sidecar.py / test_runner), the covering test must also have PASSED in that run.
 
---diff-base SHA: flags test weakening since the phase started — removed assertion lines, new skip / only
-markers, deleted test files. Each needs an entry in agent_state/phases/N/test-changes.json
-([{"file": ..., "kind": "removed_assertion|added_skip|added_only|deleted_test_file", "reason": ...}]).
+--diff-base SHA: checks every change to a test since the phase started. A change to a test that existed
+before the phase must say why and when, in a one-line comment next to it:
+
+    // TEST-CHANGE 2026-09-30 phase 3: <why the new expectation is right> (spec: <FR-/TC- id or spec path:line>)
+    # TEST-CHANGE 2026-09-30 phase 3: assertions moved into assertOrderEnvelope (moved: orders_test.go:88)
+
+  removed_assertion   a changed or removed assertion line — needs a TEST-CHANGE comment within 3 lines
+                      of the change that cites `spec:` (the spec changed the behaviour) or `moved:`
+  added_skip / added_only   a new skip or .only marker — needs a TEST-CHANGE comment within 3 lines
+  edited_existing_test      any other edit to a pre-existing test file — needs a TEST-CHANGE comment in the file
+  deleted_test_file   needs an entry in agent_state/phases/N/test-changes.json
+                      ([{"file": ..., "kind": "deleted_test_file", "reason": ...}]) — there is no file to comment in
+The date must be real, the phase must be this phase, and the reason must say why the expectation is right
+(15+ characters; "test was failing" is not a reason). Formatting-only hunks are ignored. Valid comments are
+listed in `test_changes` (the why-and-when ledger); malformed ones in `test_change_invalid`.
 
 Writes an sdlc.test-results/v1 sidecar (tier "tc-inventory"); exit 0 = PASS, 1 = FAIL.
 """
@@ -258,32 +270,133 @@ SKIP_ADD_RE = re.compile(r"\b(it|test|describe)\.(skip|todo|fixme)\b|\bx(it|test
 ONLY_ADD_RE = re.compile(r"\b(it|test|describe)\.only\b|\bfit\s*\(|\bfdescribe\s*\(")
 
 
-def weakening(root, base):
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+TEST_CHANGE_RE = re.compile(r"TEST-CHANGE\s+(\S+)\s+phase\s+(\S+?)\s*:\s*(.*)")
+TC_REF_RE = re.compile(r"\(?\b(spec|moved):\s*[^\s)]+\)?")
+NOT_A_REASON_RE = re.compile(r"\btests?\s+(was|were|is|are)\s+(failing|broken|red|flaky)\b|"
+                             r"\bmake\s+(it|them|the\s+tests?|tests?)\s+(pass|green)\b|"
+                             r"^\W*(fix(ed)?|update[ds]?|change[ds]?)\s+(the\s+)?(tests?|assertions?)\W*$", re.I)
+
+
+def parse_test_change(text, phase):
+    """A TEST-CHANGE comment → {date, phase, why, ref, problems}; None when the line has no marker."""
+    m = TEST_CHANGE_RE.search(text)
+    if not m:
+        return None
+    date_s, ph, rest = m.group(1), m.group(2), re.sub(r"\s*(\*/|-->|\}\})\s*$", "", m.group(3)).strip()
+    problems = []
+    try:
+        if datetime.date.fromisoformat(date_s) > datetime.date.today() + datetime.timedelta(days=1):
+            problems.append("date is in the future")
+    except ValueError:
+        problems.append("date must be YYYY-MM-DD")
+    if ph != str(phase):
+        problems.append(f"phase must be {phase}")
+    ref = TC_REF_RE.search(rest)
+    why = TC_REF_RE.sub("", rest).strip(" -—;,.")
+    if len(NOT_A_REASON_RE.sub("", why).strip(" -—;,.")) < 15:
+        problems.append("reason must say why the new expectation is right (15+ characters; 'test was failing' is not a reason)")
+    return {"date": date_s, "phase": ph, "why": why, "ref": ref.group(0).strip("()") if ref else None, "problems": problems}
+
+
+def parse_diff(diff):
+    """{path: [hunk]} from `git diff --unified=0`; hunk = {new_start, new_count, removed: [text], added: [(line, text)]}."""
+    files, cur, hunk, in_header, nl = {}, None, None, False, 0
+    for l in diff.splitlines():
+        if l.startswith("diff --git "):
+            cur, hunk, in_header = None, None, True
+            continue
+        if in_header:
+            if l.startswith("+++ "):
+                cur = l[6:] if l.startswith("+++ b/") else None
+                if cur:
+                    files.setdefault(cur, [])
+            m = HUNK_RE.match(l)
+            if not m:
+                continue
+            in_header = False
+        m = HUNK_RE.match(l)
+        if m:
+            hunk = None
+            if cur:
+                nl = int(m.group(1))
+                hunk = {"new_start": nl, "new_count": int(m.group(2)) if m.group(2) is not None else 1, "removed": [], "added": []}
+                files[cur].append(hunk)
+            continue
+        if hunk is None:
+            continue
+        if l.startswith("-"):
+            hunk["removed"].append(l[1:])
+        elif l.startswith("+"):
+            hunk["added"].append((nl, l[1:]))
+            nl += 1
+    return files
+
+
+def weakening(root, base, phase):
+    """Test changes since `base` → (findings, unacknowledged, test_changes, test_change_invalid)."""
     spec = ["--", "."] + [f":(exclude){p}" for p in CODE_EXCLUDES]
     try:
         names = subprocess.run(["git", "-C", root, "diff", "--name-status", base] + spec, capture_output=True, text=True, check=True).stdout
         diff = subprocess.run(["git", "-C", root, "diff", "--unified=0", base] + spec, capture_output=True, text=True, check=True).stdout
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        return [{"file": "-", "kind": "diff_unavailable", "detail": str(e)}]
-    found = []
+        f = [{"file": "-", "line": 0, "kind": "diff_unavailable", "detail": str(e), "acknowledged_by": None}]
+        return f, f, [], []
+    ack_path = os.path.join(root, "agent_state", "phases", str(phase), "test-changes.json")
+    acks = json.load(open(ack_path)) if os.path.exists(ack_path) else []
+    found, changes, invalid = [], [], []
     for l in names.splitlines():
         parts = l.split("\t")
         if parts[0].startswith("D") and len(parts) > 1 and is_test_file(parts[1]):
-            found.append({"file": parts[1], "kind": "deleted_test_file", "detail": ""})
-    cur = None
-    for l in diff.splitlines():
-        if l.startswith("+++ "):
-            cur = l[6:] if l.startswith("+++ b/") else None
+            ok = any(x.get("file") == parts[1] and x.get("kind") == "deleted_test_file" and len(str(x.get("reason", ""))) >= 15 for x in acks)
+            found.append({"file": parts[1], "line": 0, "kind": "deleted_test_file", "detail": "",
+                          "acknowledged_by": "test-changes.json" if ok else None})
+    squash = lambda t: re.sub(r"\s+", "", t)
+    for path, hunks in parse_diff(diff).items():
+        if not is_test_file(path):
             continue
-        if l.startswith("--- ") or cur is None or not is_test_file(cur):
-            continue
-        if l.startswith("-") and ASSERT_RE.search(l):
-            found.append({"file": cur, "kind": "removed_assertion", "detail": l[1:].strip()[:160]})
-        elif l.startswith("+") and SKIP_ADD_RE.search(l):
-            found.append({"file": cur, "kind": "added_skip", "detail": l[1:].strip()[:160]})
-        elif l.startswith("+") and ONLY_ADD_RE.search(l):
-            found.append({"file": cur, "kind": "added_only", "detail": l[1:].strip()[:160]})
-    return found
+        notes = []                                                   # (line, parsed) for every TEST-CHANGE comment added
+        for h in hunks:
+            for n, t in h["added"]:
+                c = parse_test_change(t, phase)
+                if c is None:
+                    continue
+                entry = {"file": path, "line": n, **c}
+                (invalid if c["problems"] else changes).append(entry)
+                if not c["problems"]:
+                    notes.append((n, c))
+        unflagged_edit = None
+        for h in hunks:
+            removed = [t for t in h["removed"] if t.strip()]
+            added = [t for _, t in h["added"] if t.strip() and not TEST_CHANGE_RE.search(t)]
+            if "".join(map(squash, removed)) == "".join(map(squash, added)):
+                continue                                             # formatting only (reindent, rewrap)
+            lo, hi = h["new_start"] - 3, h["new_start"] + max(h["new_count"], 1) - 1
+            near = [(n, c) for n, c in notes if lo <= n <= hi]
+            kept = set(map(squash, added))
+            flagged = False
+            for t in removed:
+                if ASSERT_RE.search(t) and squash(t) not in kept:
+                    by = next((f"{path}:{n}" for n, c in near if c["ref"]), None)
+                    found.append({"file": path, "line": h["new_start"], "kind": "removed_assertion", "detail": t.strip()[:160],
+                                  "acknowledged_by": by,
+                                  **({} if by else {"needs": "TEST-CHANGE comment within 3 lines citing spec: or moved:"})})
+                    flagged = True
+            for n, t in h["added"]:
+                kind = "added_skip" if SKIP_ADD_RE.search(t) else "added_only" if ONLY_ADD_RE.search(t) else None
+                if kind:
+                    by = next((f"{path}:{m}" for m, c in near), None)
+                    found.append({"file": path, "line": n, "kind": kind, "detail": t.strip()[:160], "acknowledged_by": by,
+                                  **({} if by else {"needs": "TEST-CHANGE comment within 3 lines"})})
+                    flagged = True
+            if removed and not flagged and unflagged_edit is None:
+                unflagged_edit = h
+        if unflagged_edit is not None:
+            by = f"{path}:{notes[0][0]}" if notes else None
+            found.append({"file": path, "line": unflagged_edit["new_start"], "kind": "edited_existing_test",
+                          "detail": (unflagged_edit["removed"][0].strip() if unflagged_edit["removed"] else "")[:160],
+                          "acknowledged_by": by, **({} if by else {"needs": "a TEST-CHANGE comment in this file: why and when"})})
+    return found, [f for f in found if not f["acknowledged_by"]], changes, invalid
 
 
 def code_state(root):
@@ -366,10 +479,7 @@ def main():
         out_cases.append({"name": tid, "ids": [tid], "priority": meta["priority"], "tier": meta["tier"],
                           "verdict": v, "tests": where})
 
-    weak = weakening(root, a.diff_base) if a.diff_base else []
-    ack_path = os.path.join(root, "agent_state", "phases", str(a.phase), "test-changes.json")
-    acks = json.load(open(ack_path)) if os.path.exists(ack_path) else []
-    unack = [w for w in weak if not any(x.get("file") == w["file"] and x.get("kind") == w["kind"] and x.get("reason") for x in acks)]
+    weak, unack, test_changes, test_change_invalid = weakening(root, a.diff_base, a.phase) if a.diff_base else ([], [], [], [])
 
     blocking_ids = [k for k, m in spec.items() if m["priority"] in ("HIGH", "MEDIUM")]
     failed = len(set(missing) | set(failing)) + len(dups) + len(dup_in_phase) + len(ranges) + len(unack)
@@ -382,6 +492,7 @@ def main():
         "code_sha": sha, "dirty": dirty, "mode": "results" if a.results else "source",
         "missing": missing, "failing": failing, "skipped_only": skipped_only, "comment_only": comment_only,
         "duplicate_ids": dups, "duplicate_in_phase": dup_in_phase, "range_annotations": ranges, "weakening": weak, "weakening_unacknowledged": unack,
+        "test_changes": test_changes, "test_change_invalid": test_change_invalid,
         "cases": out_cases,
         "ts": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -389,7 +500,12 @@ def main():
     json.dump(out, open(a.out, "w"), indent=1)
     print(f"tc-inventory phase {a.phase} ({out['mode']}): {verdict} — {out['passed']}/{out['total']} HIGH+MEDIUM covered; "
           f"missing {len(missing)}, failing {len(failing)}, skipped-only {len(skipped_only)}, comment-only {len(comment_only)}, "
-          f"duplicate ids {len(dups)} (+{len(dup_in_phase)} within phase), range annotations {len(ranges)}, unacknowledged test weakening {len(unack)}")
+          f"duplicate ids {len(dups)} (+{len(dup_in_phase)} within phase), range annotations {len(ranges)}, unacknowledged test weakening {len(unack)}"
+          + (f", documented test changes {len(test_changes)}" if a.diff_base else ""))
+    for w in unack:
+        print(f"  {w['kind']}: {w['file']}:{w['line']} {w['detail'][:80]!r} — needs {w.get('needs', 'an acknowledgement')}")
+    for c in test_change_invalid:
+        print(f"  invalid TEST-CHANGE at {c['file']}:{c['line']}: {'; '.join(c['problems'])}")
     if not spec:
         print(f"  no TC inventory tables found under docs/design/phases/{a.phase}/")
     sys.exit(0 if verdict == "PASS" else 1)

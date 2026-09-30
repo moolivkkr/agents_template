@@ -190,8 +190,10 @@ or a command is missing, report BLOCKED — don't invent a command.
 
 Existing tests: you don't author test suites (the Wave 3 test agents do). If your change breaks an
 existing test, your code is wrong (fix it) unless this phase's spec changed the behaviour the test
-asserts; then update that expectation, cite the spec line next to it in your progress file, and never
-delete, skip or loosen a test to get green.
+asserts. Then update that expectation and put the why and when on one line directly above it:
+`// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why the new expectation is right> (spec: <FR-/TC- id or spec path:line>)`.
+List the change in your progress file too. Never delete, skip or loosen a test to get green: the gate's
+test-diff check fails a changed assertion that has no such comment (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test).
 
 Then check each item with a tool where one exists (tests, linter, type checker / LSP diagnostics, grep) and fix only what fails:
 - [ ] All endpoints from the data contracts are implemented; none duplicated with an existing route

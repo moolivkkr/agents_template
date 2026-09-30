@@ -478,11 +478,17 @@ e2e (`tests/k8s-e2e.sh`, 32/32).
 - **Syntax and flags checked only against docs:** `GOFLAGS=-count=1 -race`, Vitest `--outputFile.junit=`, k6 `handleSummary` sub-metric parsing, Alembic `autocommit_block()`, Go `deadcode -test`, Spring Data `scroll()`.
 - **Archetype samples:** the ~30 per-language archetype code samples edited for the envelope and tenant rules were reviewed but not compiled.
 
-**Decisions to confirm:**
-- **Coders and existing tests.** A coder may change an *existing* test's expectation only when this
-  phase's spec changed that behaviour, citing the spec line. Coders may never delete, skip or loosen a
-  test.
-- **Mutation testing** is advisory. Turning it into a floor is a later step.
+**Decisions (confirmed by the owner, 2026-09-30):**
+- **Changing an existing test.** A coder may change an *existing* test's expectation only when this
+  phase's spec changed that behaviour. A coder may never delete, skip or loosen a test. Every change to
+  a test that existed before the phase, by a coder or a test agent, carries its why and when in the test:
+  one line directly above the change, `TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where>)`.
+  `tc-inventory.py --diff-base` enforces it. A changed or removed assertion needs a comment within 3 lines
+  citing `spec:` or `moved:`. Any other edit to a pre-existing test needs one in the file. Only deleted
+  test files and baseline images use `test-changes.json`. Valid comments form the `test_changes` ledger
+  in `specs_vs_tests.json`. Rule: `test-case-traceability.md` §Changing an existing test. Tests:
+  `evidence-tools` TT01–TT10, and `testing-agents` checks that each of the 10 coder and test agents documents it.
+- **Mutation testing** stays advisory (reported by test_runner, not a gate floor).
 
 ## Method
 

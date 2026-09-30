@@ -248,8 +248,9 @@ Then complete the sidecar, and write the use-case view the report and `/accept` 
    role (API/logic → `api_developer`/`backend_developer`; screens → `ui_developer`) with the
    criterion, expected vs actual and the request_id. You don't edit product code. After their fix,
    Wave 5v re-runs you.
-3. **The test or data setup is wrong:** fix it without weakening what's asserted. Record the change in
-   `agent_state/phases/{{PHASE}}/test-changes.json` if an assertion line changed. At most 2 rounds.
+3. **The test or data setup is wrong:** fix it without weakening what's asserted. If the test existed
+   before this phase, put the why and when on one line directly above the change: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`; a changed
+   assertion must cite `spec:` or `moved:` (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test). At most 2 rounds.
 4. Never modify an acceptance criterion to match broken behaviour.
 
 ## `/accept` mode (all phases)

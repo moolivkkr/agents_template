@@ -12,11 +12,13 @@
 > is NebulaGraph, never Neo4j") should be promoted to `docs/PROJECT_FACTS.md` via `/remember`. Most
 > decisions stay here: they are contextual ("we chose X for phase 2 because Y"), not universal laws.
 >
-> **How it's populated (automatic — no manual bookkeeping):**
+> **How it's populated.** Every entry is written by `.claude/hooks/remember.sh decide` — the guard denies
+> direct edits to this file, so the ledger can't be rewritten by a stray tool call:
 > - `adr_agent` appends a `D-NNN` line when it writes an ADR (links to the ADR file).
 > - `debate_arbitrator` appends a `D-NNN` line when it renders a verdict (links to the verdict JSON).
 > - `/develop-orchestrator` Post-Gate appends decisions captured in `decision-log.md` for the phase.
-> - Humans/agents may append directly for a notable gray-area pick.
+> - Humans and agents record a notable gray-area pick with `remember.sh decide` (`--source human:/remember`
+>   or `agent:<name>`).
 >
 > **How it reaches new work:**
 > - The `SessionStart` hook (`inject-ground-truth.sh`) surfaces active decision titles into every
@@ -29,7 +31,7 @@
 - `reversed` decisions are kept for history; ignore them for current work (but they explain *why*
   the current active decision exists — useful context).
 - If new evidence contradicts an `active` decision, don't silently diverge: append a reversing
-  decision (`reverses: D-NNN`) with rationale, or escalate to `debate_moderator`.
+  decision (`remember.sh decide … --reverses D-NNN`) with rationale, or escalate to `debate_moderator`.
 
 ## Entry format
 (Real entries live under "Active Decisions" below. This is the shape — note the placeholder status

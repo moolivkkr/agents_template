@@ -146,8 +146,87 @@ check("TW02", 4, len(inv3["weakening_unacknowledged"]), "unacknowledged weakenin
 write("agent_state/phases/2/test-changes.json", json.dumps([{"file": "web/orders.test.ts", "kind": "removed_assertion",
                                                              "reason": "assertion moved to a shared helper"}]))
 run(TCI, "--phase", "2", "--root", W, "--diff-base", BASE, "--out", f"{W}/agent_state/inv4.json")
-check("TW03", 2, len(json.load(open(f"{W}/agent_state/inv4.json"))["weakening_unacknowledged"]),
-      "an acknowledged change (file+kind+reason) no longer counts")
+check("TW03", 4, len(json.load(open(f"{W}/agent_state/inv4.json"))["weakening_unacknowledged"]),
+      "a test-changes.json entry does not acknowledge an in-file change — the why/when comment must be in the test")
+
+# ─── TEST-CHANGE comments: why and when, next to every change to a pre-existing test ─────────────
+E = tempfile.mkdtemp(prefix="evidence-tchange.")
+def ew(rel, text):
+    os.makedirs(os.path.dirname(f"{E}/{rel}"), exist_ok=True); open(f"{E}/{rel}", "w").write(text)
+def eg(*args):
+    return subprocess.run(["git", "-C", E, *args], check=True, capture_output=True, text=True).stdout.strip()
+eg("init", "-q"); eg("config", "user.email", "t@t"); eg("config", "user.name", "t")
+ew("docs/design/phases/1/s.md", "| TC ID | Priority |\n|---|---|\n" + "".join(f"| TC-E-00{i} | HIGH |\n" for i in range(1, 6)))
+ew("pkg/total_test.go", """package pkg
+import "testing"
+func TestTotal(t *testing.T) {
+	t.Run("TC-E-001 total", func(t *testing.T) {
+		if Total(2) != 4 { t.Fatalf("want 4") }
+	})
+}
+func TestFormat(t *testing.T) {
+	t.Run("TC-E-002 format", func(t *testing.T) {
+		got := Format(1)
+		if got != "1.00" { t.Errorf("got %s", got) }
+	})
+}
+""")
+ew("web/a.test.ts", "test('TC-E-003 a', () => {\n  const el = screen.getByRole('button', { name: 'Save' })\n  expect(el).toBeTruthy()\n})\n")
+ew("web/fmt.test.ts", "test('TC-E-004 f', () => { expect(1).toBe(1) })\n")
+ew("web/b.test.ts", "test('TC-E-005 b', () => { expect(2).toBe(2) })\n")
+ew("web/old.test.ts", "test('old', () => { expect(0).toBe(0) })\n")
+eg("add", "-A"); eg("commit", "-qm", "base"); EBASE = eg("rev-parse", "HEAD")
+TODAY = __import__("datetime").date.today().isoformat()
+ew("pkg/total_test.go", f"""package pkg
+import "testing"
+func TestTotal(t *testing.T) {{
+	t.Run("TC-E-001 total", func(t *testing.T) {{
+		// TEST-CHANGE {TODAY} phase 1: totals now include tax per the revised pricing rule (spec: FR-012)
+		if Total(2) != 5 {{ t.Fatalf("want 5") }}
+	}})
+}}
+func TestFormat(t *testing.T) {{
+	t.Run("TC-E-002 format", func(t *testing.T) {{
+		got := Format(1)
+		// TEST-CHANGE {TODAY} phase 1: amounts are shown with one decimal place from now on
+		if got != "1.0" {{ t.Errorf("got %s", got) }}
+	}})
+}}
+""")
+ew("web/a.test.ts", "test('TC-E-003 a', () => {\n  const el = screen.getByRole('button', { name: 'Save order' })\n  expect(el).toBeTruthy()\n})\n")
+ew("web/fmt.test.ts", "test('TC-E-004 f', () => {\n  expect(1).toBe(1)\n})\n")
+ew("web/b.test.ts", f"// TEST-CHANGE {TODAY} phase 1: test was failing (spec: FR-1)\n// TEST-CHANGE {TODAY} phase 7: copied from another phase's change note\ntest('TC-E-005 b', () => {{ expect(2).toBe(3) }})\n")
+os.remove(f"{E}/web/old.test.ts")
+ew("agent_state/phases/1/test-changes.json", json.dumps([{"file": "web/old.test.ts", "kind": "deleted_test_file",
+                                                          "reason": "legacy flow removed by FR-020; its cases moved to TC-E-003"}]))
+def einv():
+    subprocess.run([sys.executable, TCI, "--phase", "1", "--root", E, "--diff-base", EBASE, "--out", f"{E}/inv.json"], capture_output=True, text=True)
+    return json.load(open(f"{E}/inv.json"))
+ei = einv()
+by = {(f["file"], f["kind"], f["line"]): f for f in ei["weakening"]}
+tot = [f for f in ei["weakening"] if f["file"] == "pkg/total_test.go"]
+check("TT01", [("removed_assertion", "pkg/total_test.go:5"), ("removed_assertion", None)],
+      [(f["kind"], f["acknowledged_by"]) for f in tot],
+      "a changed assertion is acknowledged only by a nearby TEST-CHANGE that cites spec: or moved:")
+check("TT02", True, "spec: or moved:" in (tot[1].get("needs") or ""), "the unacknowledged one says what it needs")
+check("TT03", [("edited_existing_test", None)], [(f["kind"], f["acknowledged_by"]) for f in ei["weakening"] if f["file"] == "web/a.test.ts"],
+      "any other edit to a pre-existing test needs a TEST-CHANGE comment in the file")
+check("TT04", [], [f for f in ei["weakening"] if f["file"] == "web/fmt.test.ts"], "a formatting-only change is not a test change")
+check("TT05", [("deleted_test_file", "test-changes.json")], [(f["kind"], f["acknowledged_by"]) for f in ei["weakening"] if f["file"] == "web/old.test.ts"],
+      "a deleted test file is acknowledged in test-changes.json (no file left to comment in)")
+probs = sorted((c["line"], c["problems"][0][:14]) for c in ei["test_change_invalid"])
+check("TT06", [(1, "reason must sa"), (2, "phase must be ")], probs,
+      "'test was failing' is not a reason; a comment naming another phase is rejected")
+check("TT07", [(TODAY, "1", "spec: FR-012"), (TODAY, "1", None)], [(c["date"], c["phase"], c["ref"]) for c in ei["test_changes"]],
+      "valid comments form the why-and-when ledger (date, phase, reason, spec ref)")
+check("TT08", ["pkg/total_test.go", "web/a.test.ts", "web/b.test.ts"], sorted({f["file"] for f in ei["weakening_unacknowledged"]}),
+      "unacknowledged: TestFormat (no ref), a.test.ts (no comment), b.test.ts (invalid comment)")
+ew("web/a.test.ts", f"test('TC-E-003 a', () => {{\n  // TEST-CHANGE {TODAY} phase 1: button label renamed to 'Save order' in the orders UI spec (spec: TC-E-003)\n  const el = screen.getByRole('button', {{ name: 'Save order' }})\n  expect(el).toBeTruthy()\n}})\n")
+check("TT09", "web/a.test.ts:2", next(f["acknowledged_by"] for f in einv()["weakening"] if f["file"] == "web/a.test.ts"),
+      "adding the comment acknowledges the edit")
+ew("web/c.test.ts", "test('TC-E-009 new in this phase', () => { expect(1).toBe(1) })\n")
+check("TT10", [], [f for f in einv()["weakening"] if f["file"] == "web/c.test.ts"], "a test file new in this phase needs no comment")
+shutil.rmtree(E, ignore_errors=True)
 
 # ─── a fully covered phase passes ────────────────────────────────────────────────────────────────
 C = tempfile.mkdtemp(prefix="evidence-clean.")

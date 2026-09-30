@@ -197,7 +197,7 @@ HIGH/MEDIUM row of this phase.
 | Class | Signal | Action |
 |---|---|---|
 | **APP** | wrong behaviour, a 4xx/5xx the spec doesn't allow, contract shape, a crash in the page | **Don't touch it.** Add it to `bugs_found[]` with the TC ID, the step, expected vs actual and the trace path, owned by `ui_developer` (screens) or `api_developer`/`backend_developer` (API/logic). The tier stays FAIL. |
-| **TEST** | a selector that doesn't match the built DOM, a missing wait on a specific element or response, data setup colliding with another test | Fix the **test**, under the Test Failure Recovery Guardrails. No weaker assertion, no `.skip`/`.only`, no retries or sleeps. Record the change in `agent_state/phases/{{PHASE}}/test-changes.json` if an assertion line changed. At most 2 attempts per test, then re-run the **whole** tier (Steps 4–5). |
+| **TEST** | a selector that doesn't match the built DOM, a missing wait on a specific element or response, data setup colliding with another test | Fix the **test**, under the Test Failure Recovery Guardrails. No weaker assertion, no `.skip`/`.only`, no retries or sleeps. Put the why and when on one line directly above each change to a test that existed before this phase: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`; a changed assertion must cite `spec:` or `moved:` (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test). At most 2 attempts per test, then re-run the **whole** tier (Steps 4–5). |
 | **ENV** | the app went unhealthy mid-run, or DNS/ingress | re-run preflight; if it fails, the sidecar is BLOCKED with the reason. Don't retry until green. |
 | **FLAKY** | failOnFlakyTests reported it, or it passes and fails across runs | treat it as a failure. Find the race (double submit, unawaited request, shared data) and report it as APP or TEST. Quarantine only with an issue and an expiry (`test-results-sidecar.md`). |
 
@@ -226,7 +226,7 @@ verdict … · total … · passed … · failed … · flaky … · untested (t
 | TC ID | Class (APP/TEST/ENV/FLAKY) | Failing step | Expected vs actual | Trace path | Owner |
 
 ## Tests changed by e2e_orchestrator — verify
-| File | Change | Why | test-changes.json entry |
+| File:line | Change | Why | TEST-CHANGE comment (file:line) |
 
 ## Missing specs (spec rows with no committed test)
 | TC ID | Owner |
@@ -276,7 +276,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Scope = this phase's `Tier: e2e` rows + the full committed e2e suite as regression; nothing invented, nothing earlier dropped. In pipeline mode, every row has a committed process-level test named with its TC ID.
 - [ ] The tier ran ONCE with `commands."test:e2e"`, retries 0; `e2e_results.json` was produced by `junit-to-sidecar.py` from that run, with `UNTESTED` cases for rows no test covered and `deployed_sha` recorded. `Total: 0` is a FAIL to investigate.
 - [ ] Every failure is classified APP/TEST/ENV/FLAKY with a trace/screenshot path; APP failures went to `bugs_found[]` for the owning role — I did not edit product code.
-- [ ] Every test I changed is listed for independent verification; no assertion was weakened; changed assertion lines are acknowledged in `test-changes.json`.
+- [ ] Every test I changed is listed for independent verification; no assertion was weakened; every change to a pre-existing test has a TEST-CHANGE comment (why, when, `spec:`/`moved:` for assertions).
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).
 
 **Definition of Done is a checklist, not a self-correction loop** (agent-common Block 2b): it either passes or names a concrete miss to fix — it is not license to re-read and "improve" my own work on a hunch. Correction requires an external error signal.

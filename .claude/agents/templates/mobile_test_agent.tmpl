@@ -199,7 +199,10 @@ platform:    .maestro/platform/TC-MPLT-20103-<behaviour>.yaml   name: "TC-MPLT-2
   edit app code.
 - A test that is wrong is fixed without weakening it: never weaken an assertion, add `.skip`/`.only`,
   or raise a timeout to make a test pass (develop-orchestrator Test Failure Recovery Guardrails).
-  Record a genuine refactor in `agent_state/phases/{{PHASE}}/test-changes.json` with a reason.
+  When you fix it, put the why and when on one line directly above every change to a test that existed before this
+  phase: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`. A changed or removed assertion must cite `spec:` or `moved:`. A deleted test
+  file goes in `agent_state/phases/{{PHASE}}/test-changes.json` with a reason. `tc-inventory.py
+  --diff-base` fails any change without one (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test).
   Maximum 3 attempts, then report it.
 - A test that passes only on retry is FLAKY. Report it with the retry count, never as PASS. Flaky
   counts as failing at the gate.
@@ -304,7 +307,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every FR-* workflow the phase unlocks has a device flow that runs on both platforms, file name and `name:` starting with its TC ID, backend from `APP_BASE_URL` (Android via `10.0.2.2` + `Host` header); every applicable §6 platform behaviour has a flow or an explicit `N/A — reason`.
 - [ ] Every HIGH/MEDIUM mobile TC-M* row assigned to this phase has a test **named** with its ID, or is listed as BLOCKED/DEFERRED with an owner.
 - [ ] Tests are committed; the Node tiers ran with `commands."x:mobile-jest"`, JUnit under `agent_state/phases/{{PHASE}}/junit/`, converted by `junit-to-sidecar.py` into `reports/mobile_test_results.json` — its verdict and counts are what I report. `Total: 0` is a FAIL to investigate.
-- [ ] No retries, skips or `.only` added; genuine test refactors are in `test-changes.json`; app bugs are in `bugs_found[]` — I did not edit app code.
+- [ ] No retries, skips or `.only` added; every change to a pre-existing test has a TEST-CHANGE comment; app bugs are in `bugs_found[]` — I did not edit app code.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 
 ## Lessons Write-Back (see agent-common Block 3)

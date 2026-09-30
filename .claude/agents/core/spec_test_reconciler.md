@@ -26,7 +26,7 @@ input:
       description: "Every testable threat must have a TC-SEC row in the inventory (SEC-06/TEST-13)"
     - type: test_changes
       path: agent_state/phases/{{PHASE}}/test-changes.json
-      description: "Acknowledged test refactors (file, kind, reason)"
+      description: "Deleted test files and baseline approvals (file, kind, reason). In-file changes are TEST-CHANGE comments, which tc-inventory.py lists in test_changes[]"
 output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.md
   artifacts:
@@ -145,7 +145,7 @@ Write `agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md` from th
 - per category (spec / covered / missing);
 - the missing, failing, skipped-only and comment-only IDs;
 - duplicates and ranges;
-- the weakening findings;
+- the weakening findings, and the `test_changes` ledger (why and when each pre-existing test changed);
 - the full TC → test file:line map (the `tests` field).
 
 `pipeline_completeness_agent`, `/accept` and `/status` read it.
@@ -204,7 +204,12 @@ For each test in the suite:
 | TC ID | Category | Priority | Tier | Problem (missing/failing/skipped/comment/misaligned) | Owner (tier agent) | Spec source |
 
 ### Test weakening since the phase started
-| File | Kind | Line | Acknowledged? |
+| File | Kind | Line | Acknowledged by (TEST-CHANGE file:line / test-changes.json) | Needs |
+
+### Test changes: why and when (from `test_changes[]`)
+| File:line | Date | Phase | Why | spec / moved |
+
+Also list every `test_change_invalid` entry with its problem. A malformed comment acknowledges nothing.
 
 ## Behaviour-Level Summary
 | Metric | Value |

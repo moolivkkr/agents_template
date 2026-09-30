@@ -152,7 +152,7 @@ vitest run -t "formats"    # run tests matching name pattern
 ## Rules
 - Put the TC ID at the start of the test title: `it("TC-UI-20107 shows a skeleton while loading", …)` (`test-case-traceability.md`)
 - API mocks (MSW) are typed from the envelope (`msw.md`); `vi.mock` of the API client is for unit tests of non-UI modules only
-- Snapshots never replace behaviour assertions, and a snapshot update needs a reason in `test-changes.json`
+- Snapshots never replace behaviour assertions. A snapshot update needs a `TEST-CHANGE <date> phase <N>: <why>` comment above the `toMatchSnapshot`/`toMatchInlineSnapshot` call, and a changed `.snap` file is recorded in `test-changes.json` (`test-case-traceability.md` §Changing an existing test)
 - Use `screen.getByRole` over `getByTestId` — tests should mirror how users interact
 - Use `userEvent` over `fireEvent` — it simulates real browser behavior (focus, blur, typing)
 - Use `findBy*` (async) for elements that appear after state updates or fetches

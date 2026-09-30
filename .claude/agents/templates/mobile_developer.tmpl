@@ -202,8 +202,9 @@ non-zero exit means you are not done. If the table has no command covering the a
 `package.json` scripts, say so in the progress file, and list the missing row as a request for
 `impl_guidelines_agent`. Existing tests must still pass: you don't author test suites
 (`mobile_test_agent` does); if your change breaks one, your code is wrong unless this phase's spec
-changed the behaviour it asserts — then update that expectation, cite the spec line in your progress
-file, and never delete, skip or loosen a test.
+changed the behaviour it asserts — then update that expectation with a one-line comment directly above
+it, `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why the new expectation is right> (spec: <FR-/TC- id or spec path:line>)`, list it in your progress file, and never delete, skip or loosen a test. The gate's test-diff
+check fails a changed assertion without that comment (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test).
 
 Then build:
 - **Expo:** `npx expo prebuild --clean` then `npx expo run:ios --configuration Release` and `npx expo run:android --variant release`, or the EAS e2e profiles.

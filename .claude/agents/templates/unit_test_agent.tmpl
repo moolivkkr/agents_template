@@ -146,10 +146,11 @@ taken from the runner's output.
 - A test failing because the **code** is wrong stays committed and failing. Record the bug in
   `agent_state/phases/{{PHASE}}/unit_test_agent/manifest.json` → `bugs_found[]` (file:line, TC ID,
   expected vs actual), for the owning developer in Wave 5. You never edit production code.
-- A test failing because the **test** is wrong is yours to fix, without weakening it. A genuine
-  refactor that removes an assertion or a test gets an entry in
-  `agent_state/phases/{{PHASE}}/test-changes.json` with a reason (`tc-inventory.py --diff-base`
-  flags every removed assertion, new skip and deleted test file).
+- A test failing because the **test** is wrong is yours to fix, without weakening it. When you fix it,
+  put the why and when on one line directly above every change to a test that existed before this
+  phase: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`. A changed or removed assertion must cite `spec:` or `moved:`. A deleted test
+  file goes in `agent_state/phases/{{PHASE}}/test-changes.json` with a reason. `tc-inventory.py
+  --diff-base` fails any change without one (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test).
 
 ---
 
@@ -314,7 +315,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every behaviour has at least one negative/boundary case; dependency-error cases exist for resilience code; mocks are only at external boundaries.
 - [ ] Go tests are colocated with their packages; coverage is ≥ 80% **per changed package**, from the runner's output (or the shortfall is listed by function).
 - [ ] Tests are committed; the tier ran with `commands."test:unit"` from `verify-commands.json`, JUnit under `agent_state/phases/{{PHASE}}/junit/`, converted with `junit-to-sidecar.py` into `agent_state/phases/{{PHASE}}/reports/unit_tests.json` — verdict and counts come from that file, not from me. `Total: 0` is a FAIL to investigate.
-- [ ] No retries, no new skips or `.only`; new tests ran 3 times without a failure; any genuine test refactor is recorded in `test-changes.json`.
+- [ ] No retries, no new skips or `.only`; new tests ran 3 times without a failure; every change to a pre-existing test has a TEST-CHANGE comment (why, when, `spec:`/`moved:` for assertions).
 - [ ] Code bugs are in `bugs_found[]` with file:line and TC ID — I did not edit production code.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 

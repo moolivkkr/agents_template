@@ -90,7 +90,7 @@ report. Keeping the parts apart means a green component tier can never stand in 
 | "Use `injectAxe`/`checkA11y` with `@axe-core/playwright`" | Those two functions belong to a different package, `axe-playwright`. `@axe-core/playwright` exports `AxeBuilder`: `new AxeBuilder({ page }).withTags([...]).analyze()`. |
 | "Start the dev server and point Playwright at it" | That tests code nobody deployed. Part B targets `APP_BASE_URL`, the Wave 3.5 deploy (qa on lab projects). |
 | "The component is wrong; I'll fix it so the test passes" | You don't edit product code. The failing test stays, and the bug goes to `bugs_found[]` for `ui_developer`. |
-| "Update the snapshot/baseline so it's green" | A baseline change needs recorded approval (a `ui_standards_auditor` report or a DECISIONS entry) in `test-changes.json`. A diff on a page this phase didn't touch is a regression. |
+| "Update the snapshot/baseline so it's green" | A baseline change needs recorded approval (a `ui_standards_auditor` report or a DECISIONS entry) in `test-changes.json` (`kind: baseline_update`). A diff on a page this phase didn't touch is a regression. |
 | "Snapshot the screen and call it tested" | Snapshots pass whatever renders. Assert text, roles and state per the spec. |
 
 ## Tech Context
@@ -230,7 +230,7 @@ every control in visual order, Enter/Space operates it, and nothing traps focus.
 `expect(page).toHaveScreenshot()` per page and state, with animations disabled and dynamic regions
 (timestamps, avatars) masked. Baselines are committed.
 - The first baseline, or a baseline change, needs an approval reference (`ui_standards_auditor` report
-  or a DECISIONS entry), recorded in `test-changes.json`.
+  or a DECISIONS entry), recorded in `test-changes.json` as `{"file", "kind": "baseline_update", "reason"}`.
 - A diff on a page this phase didn't change is a failing test: a regression.
 
 ### B6. CLS
@@ -248,8 +248,10 @@ the full scope and writes `e2e_results.json`. List every spec file and its TC ID
 - A test that fails because the **product** is wrong stays committed and failing. Record it in
   `bugs_found[]` (screen, TC ID, expected vs actual) for `ui_developer`. You never edit components.
 - A test that is wrong is fixed without weakening it: no looser assertions, no removed cases, no
-  `.skip`, no `.only`, no longer timeouts. Record a genuine refactor in
-  `agent_state/phases/{{PHASE}}/test-changes.json` with a reason.
+  `.skip`, no `.only`, no longer timeouts. When you fix it, put the why and when on one line directly above every change to a test that existed before this
+  phase: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`. A changed or removed assertion must cite `spec:` or `moved:`. A deleted test
+  file goes in `agent_state/phases/{{PHASE}}/test-changes.json` with a reason. `tc-inventory.py
+  --diff-base` fails any change without one (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test).
 - Maximum 3 attempts per failing test, then report it with reproduction steps.
 
 ## Output
@@ -329,7 +331,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Part A: XSS-RENDER and SESSION-STORAGE rows are covered; component a11y checks names/roles and doesn't claim contrast.
 - [ ] Part A ran with `commands."test:ui"` after committing; JUnit under `agent_state/phases/{{PHASE}}/junit/`, converted by `junit-to-sidecar.py` into `reports/ui_test_results.json` — its verdict and counts are what I report. `Total: 0` is a FAIL to investigate.
 - [ ] Part B: a committed browser spec exists for every UI-owned `Tier: e2e` row (TC-E2E, TC-A11Y page level with AxeBuilder, responsive, visual, stored XSS, session cookie), targeting `APP_BASE_URL`; each new spec passed a 3× dry-run, and the manifest lists files and TC IDs for `e2e_orchestrator`.
-- [ ] No retries, skips or `.only`; baseline changes carry an approval reference; genuine test refactors are in `test-changes.json`.
+- [ ] No retries, skips or `.only`; baseline changes carry an approval reference; every change to a pre-existing test has a TEST-CHANGE comment.
 - [ ] Product bugs are in `bugs_found[]` — I did not edit components.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 

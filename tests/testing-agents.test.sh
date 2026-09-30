@@ -218,6 +218,20 @@ python3 "$H/tc-inventory.py" --phase 3 --root "$TMP/p3" --spec-only --out "$TMP/
 grep -q '| TC ID | Category | Description | Priority | Tier |' "$A/core/spec_writer.md" && ok "spec_writer's inventory header matches the parsed columns" || bad "spec_writer inventory header drifted"
 grep -q 'P·10000 + k·100 + i' "$A/core/spec_writer.md" && ok "spec_writer allocates project-unique IDs (TEST-02 cross-phase reuse)" || bad "spec_writer lacks project-unique ID allocation"
 
+echo "── changing an existing test: a TEST-CHANGE comment says why and when (decision 2026-09-30) ──"
+for a in unit_test_agent integration_test_agent ui_test_agent mobile_test_agent e2e_orchestrator acceptance_test_agent \
+         backend_developer api_developer ui_developer mobile_developer; do
+  f="$(file_of "$a")"
+  if grep -q 'TEST-CHANGE <YYYY-MM-DD> phase <N>:' "$f" && grep -q 'spec:' "$f"; then ok "$a documents the TEST-CHANGE comment"
+  else bad "$a does not tell the agent to write a TEST-CHANGE comment (why and when)"; fi
+  if grep -nE 'genuine (test )?refactor.*test-changes\.json|in `test-changes\.json` if an assertion line changed' "$f" >/dev/null; then
+    bad "$a still acknowledges in-file test changes in test-changes.json (the comment belongs in the test)"
+  else ok "$a: in-file changes are not acknowledged in test-changes.json"; fi
+done
+grep -q '§Changing an existing test\|### Changing an existing test' "$S/test-case-traceability.md" && ok "test-case-traceability.md defines the rule" \
+  || bad "test-case-traceability.md lacks the Changing an existing test section"
+grep -q 'test_changes' "$A/core/spec_test_reconciler.md" && ok "spec_test_reconciler reports the why-and-when ledger" || bad "spec_test_reconciler ignores test_changes[]"
+
 echo "────────────────────────────────────────────"
 echo "testing-agents.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

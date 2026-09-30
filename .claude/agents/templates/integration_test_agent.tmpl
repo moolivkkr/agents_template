@@ -236,7 +236,10 @@ services use the patterns in `external-service-mocks.md`, which already require 
   `integration_test_agent/manifest.json` → `bugs_found[]` (endpoint, TC ID, expected vs actual,
   file:line if known), for the owning developer in Wave 5. Never edit production code.
 - **The test is wrong:** fix it without weakening it (no looser assertion, no removed case, no skip).
-  Record a genuine refactor in `agent_state/phases/{{PHASE}}/test-changes.json` with a reason.
+  When you fix it, put the why and when on one line directly above every change to a test that existed before this
+  phase: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`. A changed or removed assertion must cite `spec:` or `moved:`. A deleted test
+  file goes in `agent_state/phases/{{PHASE}}/test-changes.json` with a reason. `tc-inventory.py
+  --diff-base` fails any change without one (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test).
 - **A dependency fails mid-run:** those tests fail, and the report says which dependency failed and
   how. That is a result, not an environment excuse.
 - **The harness can't start** (no container runtime, image pull denied): report `ERROR` with the
@@ -331,7 +334,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every dependency has its failure-mode tests (down, slow/timeout, recovery; soft dependencies stay ready).
 - [ ] Tests isolate by data (run-unique IDs), not by transactions around HTTP calls.
 - [ ] Tests are committed; the tier ran with `commands."test:integration"` from `verify-commands.json`, JUnit under `agent_state/phases/{{PHASE}}/junit/`, converted by `junit-to-sidecar.py` into `reports/integration_tests.json`. `Total: 0` is a FAIL to investigate.
-- [ ] No retries, skips or `.only` added; genuine test refactors are in `test-changes.json`; code bugs are in `bugs_found[]` — I did not edit production code.
+- [ ] No retries, skips or `.only` added; every change to a pre-existing test has a TEST-CHANGE comment; code bugs are in `bugs_found[]` — I did not edit production code.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
 
 ## Lessons Write-Back (see agent-common Block 3)

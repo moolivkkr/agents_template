@@ -248,15 +248,45 @@ The output is an `sdlc.test-results/v1` sidecar (`tier: tc-inventory`). It FAILs
 - unacknowledged **test weakening** since the phase's base commit: a removed assertion line, a new
   skip or `.only`, or a deleted test file.
 
-Genuine refactors that trip the weakening check are acknowledged in
-`agent_state/phases/<P>/test-changes.json`:
+### Changing an existing test: TEST-CHANGE comments (why and when)
 
-```json
-[{"file": "internal/order/total_test.go", "kind": "removed_assertion",
-  "reason": "assertion moved into assertOrderEnvelope() helper, same checks (see line 88)"}]
+A test that existed before this phase changes only for a reason you can name, and that reason goes
+into the test, on one line directly above the change, in the file's comment syntax:
+
+```go
+// TEST-CHANGE 2026-09-30 phase 3: totals now include tax per the revised pricing rule (spec: FR-012)
+if Total(order) != 107 { t.Fatalf("want 107, got %d", Total(order)) }
+```
+```python
+# TEST-CHANGE 2026-09-30 phase 3: envelope checks moved into a shared helper, same assertions (moved: tests/helpers.py:40)
+assert_order_envelope(resp)
 ```
 
-A reason must say why test strength is unchanged. "Test was failing" is not a reason.
+- **When:** the date you made the change (`YYYY-MM-DD`), and the current phase number.
+- **Why:** why the NEW expectation is right. "Test was failing", "fix test" and "make it pass" are not
+  reasons.
+- **A changed or removed assertion** must cite `spec:` (the FR-/NFR-/TC- ID or spec path:line that
+  changed the behaviour) or `moved:` (where the same check lives now). The comment goes within 3 lines
+  of the change. One comment per changed spot, not one per file.
+- **A new skip or `.only`** needs a comment within 3 lines. A skip is still not a quarantine
+  (`test-results-sidecar.md` §Flakes).
+- **Any other edit** to a pre-existing test (a selector, setup, fixture data) needs at least one
+  TEST-CHANGE comment in that file.
+- **Nothing needed:** formatting-only changes, and tests created in this phase.
+- **A deleted test file** has nowhere to comment. Add `{"file": ..., "kind": "deleted_test_file",
+  "reason": ...}` to `agent_state/phases/<P>/test-changes.json`. Baseline images and `.snap` files are
+  recorded there too, with their approval reference.
+
+Who may change an existing test:
+- **Coders** (backend, API, UI, mobile developers) only when this phase's spec changed the behaviour
+  the test asserts, so `spec:` is mandatory. A coder never deletes, skips or loosens a test.
+- **Test agents** fix a test that is wrong (a selector, setup, or an expectation that contradicts the
+  spec), never to match buggy behaviour.
+
+`tc-inventory.py --diff-base` enforces this: each unacknowledged change is a `weakening_unacknowledged`
+entry, which fails `specs_vs_tests.json` and the gate. Valid comments are listed in `test_changes`
+(the why-and-when ledger that `spec_test_reconciler` copies into its report); malformed ones (bad date,
+another phase, no real reason) are listed in `test_change_invalid` and acknowledge nothing.
 
 `spec_test_reconciler` runs this in Wave 4 and again in Wave 5v, and writes
 `specs_vs_tests.md` around the JSON. `/test --traceability` runs it standalone.

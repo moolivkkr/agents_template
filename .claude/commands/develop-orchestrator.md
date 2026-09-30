@@ -757,7 +757,10 @@ The same rules run again, deterministically, in `verify-gate.sh` at Wave 6.
 When tests fail and the test agent or a subsequent fix agent attempts auto-remediation, these guardrails are **absolute constraints** — they cannot be overridden by any agent:
 
 **NEVER do these to make tests pass** (the test-diff check `tc-inventory.py --diff-base` flags each one
-at the gate; a genuine refactor records it in `agent_state/phases/${PHASE}/test-changes.json` with a reason):
+at the gate). A legitimate change to a test that existed before the phase carries its why and when on one
+line directly above it: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where>)`.
+A changed assertion must cite `spec:` or `moved:`; a deleted test file is recorded in
+`agent_state/phases/${PHASE}/test-changes.json` (`test-case-traceability.md` §Changing an existing test):
 - Delete, `.skip`, or comment out an existing test assertion or test function
 - Reduce test coverage threshold to pass a gate
 - Downgrade a dependency version to fix a build (may reintroduce CVEs)
