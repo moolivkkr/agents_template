@@ -71,8 +71,8 @@ or waits for you. No single mechanism does this; each layer below catches what t
 **Package installs stay allowed.** `npm install`, `pip install`, `go get` and friends need no prompt:
 that is a deliberate choice, since builds download dependencies all day. The defence against
 hallucinated and typosquatted names sits one step earlier. Before a coding agent adds a **new**
-dependency it runs `.claude/guard/vet-package.py` (installed as `~/.claude/hooks/vet-package.py`). The
-script checks the registry (npm, PyPI, the Go module proxy, crates.io) for existence, first-publish
+dependency it runs `vet-package.py`. Agents call it as `~/.claude/hooks/vet-package.py`, so step 2 below
+copies it there from `.claude/guard/`. The script checks the registry (npm, PyPI, the Go module proxy, crates.io) for existence, first-publish
 age, weekly downloads where published, deprecation or yanking, and edit distance to popular names, and
 exits non-zero with reasons. Installs then run with lifecycle scripts disabled where the ecosystem
 allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.md` §5;
@@ -89,6 +89,8 @@ SERVER_SSH=tb2 SERVER_IP=10.10.10.2 AGENT_IP=10.10.10.3 .claude/templates/k8s/sc
 
 # 2. Install the guard, env hook, shims and policy generator into ~/.claude/hooks/
 ./install.sh --guard
+#    ...and the dependency vetting tool the coding agents call (not yet copied by install.sh)
+install -m 755 .claude/guard/vet-package.py ~/.claude/hooks/vet-package.py
 
 # 3. Merge the permission model into ~/.claude/settings.json (backup first; preview with --dry-run)
 python3 .claude/guard/apply-user-settings.py --github <your-github-owner> --dry-run | less
