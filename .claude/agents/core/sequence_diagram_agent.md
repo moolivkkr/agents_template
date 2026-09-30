@@ -15,6 +15,8 @@ output:
 dependencies:
   upstream: [architecture_orchestrator]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/core/software-architecture.md"
 ---
 
 # Agent: Sequence Diagram Agent
@@ -226,6 +228,14 @@ Write to `docs/architecture/sequence-diagrams.md`:
 - Use `activate`/`deactivate` consistently for all synchronous calls
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/software-architecture.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

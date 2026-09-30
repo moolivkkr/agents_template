@@ -45,6 +45,10 @@ quality_gates:
   all_requirements_traced_forward: true
   all_code_traced_backward: true
   all_reconciliation_gaps_resolved: true
+skill_packs:
+  - "~/.claude/skills/testing/test-case-traceability.md"
+  - "~/.claude/skills/requirements/traceability-matrix.md"
+  - "~/.claude/skills/core/verification-protocol.md"
 ---
 
 # Agent: Pipeline Completeness Validator
@@ -496,6 +500,16 @@ This agent is the CAPSTONE — **link 6 of 6** in the reconciliation chain:
 - A COMPLETE verdict requires 95%+ — this is intentionally strict because the pipeline promises full traceability
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/testing/test-case-traceability.md`
+- `~/.claude/skills/requirements/traceability-matrix.md`
+- `~/.claude/skills/core/verification-protocol.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

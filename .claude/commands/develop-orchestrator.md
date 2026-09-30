@@ -597,6 +597,7 @@ Read `docs/IMPLEMENTATION_GUIDELINES.md` to determine the deployment strategy:
 | CLI tool | `go build ./cmd/...` or `npm run build` | Binary exists + `./bin/app --version` exits 0 |
 | Library/SDK | `go build ./...` or `npm run build` | Build succeeds (no runtime to health check) |
 | WASM module | Build native + WASM targets | Both binaries exist |
+| React Native app (in addition to its backend row) | Build release binaries: iOS simulator `.app` + Android emulator `.apk` (commands from IMPLEMENTATION_GUIDELINES §Mobile) | Each installs on a booted device and cold-launches to its first screen with no native crash/red screen, and the first screen's API call reaches the backend (see `~/.claude/skills/frameworks/react-native.md` §Health check). `mobile_e2e_orchestrator` Step 1–3 does exactly this. |
 
 ### Execute local deploy
 
@@ -675,7 +676,7 @@ if [ -f "go.mod" ] && [ ! -f "$(ls bin/* cmd/*/main.go 2>/dev/null | head -1)" ]
 fi
 ```
 
-**Auto-checkpoint:** Write `checkpoints/wave-3.5.json` with `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: docker|cli|library`.
+**Auto-checkpoint:** Write `checkpoints/wave-3.5.json` with `deploy_status: healthy|unhealthy|not_applicable`, `deploy_type: docker|cli|library|mobile`, and for mobile `mobile_binaries: {ios: built|failed|blocked, android: built|failed|blocked}`.
 
 ---
 
@@ -701,8 +702,15 @@ Wave 4 Track A (parallel):
   ├─ Agent: tenant_isolation_verifier → reports/tenant_isolation.md    (only if multi-tenant; see IMPL_GUIDELINES)
   ├─ Agent: dependency_scanner       → reports/dependency_scan.md      (CVEs, licenses, outdated)
   ├─ Agent: code_quality_verifier    → reports/quality_gate.md         (TODOs, stubs, secrets, dead code)
-  └─ Agent: accessibility_auditor    → reports/accessibility_audit.md  (only if web UI; WCAG-AA against the BUILT UI)
+  ├─ Agent: accessibility_auditor    → reports/accessibility_audit.md  (only if web UI; WCAG-AA against the BUILT UI)
+  ├─ Agent: mobile_platform_auditor  → reports/mobile_platform_audit.md (only if mobile screens changed; iOS + Android)
+  ├─ Agent: migration_safety_reviewer → reports/migration_safety.md    (only if the phase adds migrations)
+  └─ Agent: breaking_change_reviewer → reports/breaking_change_review.md (only if a cross-phase contract changed)
 ```
+
+Spawn every Track A agent with `subagent_type: <agent name>` so it loads its own checks and skill
+packs. `code_reviewer_II` runs in parallel with `code_reviewer_I`; if I's report already exists when II
+finishes its own pass, II de-duplicates against it (a soft `runs_after`, not a hard wait).
 
 > `accessibility_auditor` runs only for web-UI phases and tests the BUILT UI (axe/keyboard/contrast/
 > ARIA) — distinct from the design-time `design_quality_reviewer`. It requires the app running (Wave
@@ -729,8 +737,18 @@ never ran under wave execution). They are now mandatory Wave-4 agents.
 
 ```
 Wave 4 Track C (parallel):
-  ├─ Agent: spec_impl_reconciler  → reports/specs_vs_impl.md      (spec ↔ code: MISSING / EXTRA / DRIFT)
-  └─ Agent: spec_test_reconciler  → reports/spec_test_coverage.md (spec ↔ tests: TC-* coverage %, deferred IDs)
+  ├─ Agent: spec_impl_reconciler  → reconciliation/phase-N/specs_vs_impl.md  (spec ↔ code: MISSING / EXTRA / DRIFT)
+  └─ Agent: spec_test_reconciler  → reconciliation/phase-N/specs_vs_tests.md (spec ↔ tests: TC-* coverage %, deferred IDs)
+```
+
+Reconciliation reports live in `agent_state/reconciliation/phase-${PHASE}/` (not `reports/`), because
+`/plan`, `/test`, `/recon` and `pipeline_completeness_agent` all read them there. Every check below
+resolves report paths through `report_path` (redefined in each bash block — the parent runs every block in a fresh shell):
+```bash
+report_path() { case "$1" in
+  specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/$1" ;;
+  *) echo "agent_state/phases/${PHASE}/reports/$1" ;;
+esac; }
 ```
 
 Each spawn prompt (prepend GROUND TRUTH):
@@ -760,18 +778,21 @@ Produce: agent_state/phases/${PHASE}/reports/acceptance_report.md"
 
 ```bash
 WAVE4_BLOCKED=false
+report_path() { case "$1" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/$1" ;; *) echo "agent_state/phases/${PHASE}/reports/$1" ;; esac; }  # each bash block runs in a fresh shell
 # Reviewers + reconcilers + acceptance. Skip tenant_isolation if roster marked it not_applicable.
 REQUIRED_W4="code_review_I.md code_review_II.md security_review.md dependency_scan.md \
-             quality_gate.md specs_vs_impl.md spec_test_coverage.md acceptance_report.md"
-# Roster is a FLAT array of real agent names ({"required":[...]}). tenant_isolation_verifier is
-# present iff the phase is multi-tenant (single-tenant phases OMIT it — see Wave 0b). Membership,
-# not a "status" object grep (the old grep never matched the flat schema → report silently dropped).
-if jq -e '.required | index("tenant_isolation_verifier")' \
-     "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; then
-  REQUIRED_W4="$REQUIRED_W4 tenant_isolation.md"
-fi
+             quality_gate.md specs_vs_impl.md specs_vs_tests.md acceptance_report.md"
+# Roster is a FLAT array of real agent names ({"required":[...]}). Each conditional reviewer is
+# present iff Wave 0b added it; its report is then required. Membership, not a "status" object grep
+# (the old grep never matched the flat schema → report silently dropped).
+in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
+in_roster tenant_isolation_verifier && REQUIRED_W4="$REQUIRED_W4 tenant_isolation.md"
+in_roster accessibility_auditor     && REQUIRED_W4="$REQUIRED_W4 accessibility_audit.md"
+in_roster mobile_platform_auditor   && REQUIRED_W4="$REQUIRED_W4 mobile_platform_audit.md"
+in_roster migration_safety_reviewer && REQUIRED_W4="$REQUIRED_W4 migration_safety.md"
+in_roster breaking_change_reviewer  && REQUIRED_W4="$REQUIRED_W4 breaking_change_review.md"
 for R in $REQUIRED_W4; do
-  F="agent_state/phases/${PHASE}/reports/${R}"
+  F="$(report_path "$R")"
   if [ ! -f "$F" ]; then
     echo "⛔ BLOCKED: Wave 4 report ${R} missing — its agent was not spawned or did not complete"
     WAVE4_BLOCKED=true
@@ -817,7 +838,7 @@ The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feed
 
 1. Read `unit_tests.md` — any failures?
 2. Read `integration_tests.md` — any failures?
-3. Read `e2e_results.md` — any failures?
+3. Read `e2e_results.md` (and `ui_test_results.md`, `mobile_test_results.md`, `mobile_e2e_results.md`, `test_results.md` when present) — any failures, per-platform failures, FLAKY flows, or writer-vs-independent count discrepancies?
 4. Read the review reports — `code_review_I.md`, `code_review_II.md`, `security_review.md`,
    `dependency_scan.md`, `quality_gate.md` — any BLOCKING/HIGH/CRITICAL findings?
 5. Read `acceptance_report.md` — any FAIL/PARTIAL?
@@ -837,6 +858,8 @@ Before spawning the fix agent, **classify each failure** using the adaptive repl
 | UI | Component render failure | UI + E2E |
 | CONFIG | Health check fail, connection refused | integration + E2E + acceptance |
 | FLAKY | Passes on retry | failing tier only |
+| MOBILE-PLATFORM | Fails on one platform only (iOS xor Android), permission/deep-link/lifecycle flow, native crash on launch | mobile component + device tier on BOTH platforms |
+| MOBILE-BUILD | iOS/Android binary fails to build or install | Wave 3.5 mobile build + ALL mobile tiers |
 
 If multiple categories → take the UNION of re-test scopes. If any is SCHEMA/CONFIG → ALL tiers.
 
@@ -967,7 +990,7 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    - e2e_results.md ✓ (non-zero test count)
    - code_review_I.md ✓ · code_review_II.md ✓ · security_review.md ✓
    - dependency_scan.md ✓ · quality_gate.md ✓
-   - specs_vs_impl.md ✓ · spec_test_coverage.md ✓  (reconciliation — BLOCKING findings must be 0)
+   - specs_vs_impl.md ✓ · specs_vs_tests.md ✓  (reconciliation, in agent_state/reconciliation/phase-N/ — BLOCKING findings must be 0)
    - tenant_isolation.md ✓ (CONDITIONAL — required only when multi-tenant; else roster omits
      tenant_isolation_verifier and the manifest records the skip)
    - acceptance_report.md ✓ (non-zero use case count)
@@ -980,6 +1003,12 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    - breaking_change_review.md — when the phase changes a contract an earlier phase consumes (breaking_change_reviewer)
    - visual_validation.md — when `*.wireframe.html` files exist for this phase
    - ui_test_results.md / ui_code_optimization.md — when `frontend.enabled = true`
+   - accessibility_audit.md — when `accessibility_auditor` is in the roster (web UI phases)
+   - test_results.md + test_results.json — always (Wave 3v `test_runner`); `blocking` must be 0
+   - mobile_test_results.md · mobile_e2e_results.md (+ .json) · mobile_platform_audit.md — when the
+     mobile agents are in the roster. `mobile_e2e_results.json` must show BOTH iOS and Android run
+     (`blocked: false`, non-zero runs, 0 failed). A platform that could not run blocks the gate unless
+     `docs/DECISIONS.md` records an accepted exception for this phase.
    - candidate_selection.md — when Wave 2 ran candidate-selection (N≥2). `solution_selector` is then
      in `roster.required`, so the roster check (0b) already blocks if it didn't run; this report must
      name a winner and its `BLOCKING` count must be 0 (or carried forward with a reason).
@@ -987,7 +1016,11 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    **Content validation (not just file existence):**
    ```bash
    # Test reports: must not report zero tests.
-   for REPORT in unit_tests.md integration_tests.md e2e_results.md acceptance_report.md; do
+   in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
+   TEST_REPORTS="unit_tests.md integration_tests.md e2e_results.md test_results.md acceptance_report.md"
+   in_roster ui_test_agent     && TEST_REPORTS="$TEST_REPORTS ui_test_results.md"
+   in_roster mobile_test_agent && TEST_REPORTS="$TEST_REPORTS mobile_test_results.md mobile_e2e_results.md"
+   for REPORT in $TEST_REPORTS; do
      FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
      if [ -f "$FILE" ]; then
        if grep -qiP '(total.*:\s*0\b|0\s+tests?\s+run|no tests (run|found|written)|SKIPPED.*all)' "$FILE"; then
@@ -997,10 +1030,11 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
        echo "⛔ GATE BLOCKED: ${REPORT} missing"
      fi
    done
+   report_path() { case "$1" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/$1" ;; *) echo "agent_state/phases/${PHASE}/reports/$1" ;; esac; }  # each bash block runs in a fresh shell
    # Review + reconciliation reports: must exist and be non-stub.
    for REPORT in code_review_I.md code_review_II.md security_review.md dependency_scan.md \
-                 quality_gate.md specs_vs_impl.md spec_test_coverage.md; do
-     FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+                 quality_gate.md specs_vs_impl.md specs_vs_tests.md; do
+     FILE="$(report_path "$REPORT")"
      if [ ! -f "$FILE" ]; then
        echo "⛔ GATE BLOCKED: ${REPORT} missing — a review/reconcile agent was skipped"
      elif [ "$(wc -l < "$FILE")" -lt 3 ]; then
@@ -1008,8 +1042,8 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
      fi
    done
    # Reconciliation must have no unresolved BLOCKING findings.
-   for REPORT in specs_vs_impl.md spec_test_coverage.md; do
-     FILE="agent_state/phases/${PHASE}/reports/${REPORT}"
+   for REPORT in specs_vs_impl.md specs_vs_tests.md; do
+     FILE="$(report_path "$REPORT")"
      if [ -f "$FILE" ] && grep -qiP 'BLOCKING' "$FILE"; then
        echo "⛔ GATE BLOCKED: ${REPORT} has BLOCKING reconciliation findings — resolve or carry forward with reason"
      fi

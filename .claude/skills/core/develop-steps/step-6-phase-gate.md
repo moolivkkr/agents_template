@@ -20,8 +20,12 @@ Gate Item                    Source File                                        
 Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests AND total > 0
 Integration tests            agent_state/phases/${PHASE}/reports/integration_tests.md   No FAILED tests AND total > 0
 E2E tests (MANDATORY)        agent_state/phases/${PHASE}/reports/e2e_results.md    No FAILED tests AND total > 0 (browser OR CLI/pipeline)
-Reconciliation (spec↔impl)   agent_state/phases/${PHASE}/reports/specs_vs_impl.md   No BLOCKING findings (MISSING resolved, unspecced acknowledged)
-Reconciliation (spec↔tests)  agent_state/phases/${PHASE}/reports/spec_test_coverage.md  No BLOCKING findings; no HIGH-priority untested behaviors
+Independent re-run            agent_state/phases/${PHASE}/reports/test_results.json   blocking == 0 (writer counts match test_runner's re-run)
+Mobile tests (if in roster)  agent_state/phases/${PHASE}/reports/mobile_test_results.md   No FAILED tests AND total > 0
+Mobile device E2E (if roster) agent_state/phases/${PHASE}/reports/mobile_e2e_results.json  iOS AND Android each run (not blocked), 0 failed
+Mobile platform (if roster)  agent_state/phases/${PHASE}/reports/mobile_platform_audit.json  blocking == 0
+Reconciliation (spec↔impl)   agent_state/reconciliation/phase-${PHASE}/specs_vs_impl.md   No BLOCKING findings (MISSING resolved, unspecced acknowledged)
+Reconciliation (spec↔tests)  agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md  No BLOCKING findings; no HIGH-priority untested behaviors
 TC-* ID inventory (if specs) agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md  100% coverage for HIGH+MEDIUM TC-* IDs (skip if no TC-* IDs in specs)
 Code review I                agent_state/phases/${PHASE}/reports/code_review_I.md   No BLOCKING issues
 Code review II               agent_state/phases/${PHASE}/reports/code_review_II.md  No architecture violations
@@ -89,8 +93,8 @@ if not bad:
 sys.exit(1 if bad else 0)
 PY
 
-# 2. TC-* coverage — HIGH+MEDIUM must be 100% (from spec_test_coverage.md / test_case_inventory).
-COV=$(ls "$REPORTS_DIR/spec_test_coverage.md" agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md 2>/dev/null | head -1)
+# 2. TC-* coverage — HIGH+MEDIUM must be 100% (from specs_vs_tests.md / test_case_inventory).
+COV=$(ls agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md 2>/dev/null | head -1)
 if [ -n "$COV" ] && grep -qiP 'coverage' "$COV"; then
   if grep -qiP '(HIGH|MEDIUM)[^\n]*(UNCOVERED|MISSING|0%|not covered)' "$COV"; then
     echo "⛔ GATE BLOCKED: HIGH/MEDIUM TC-* IDs are uncovered ($COV)"; GATE_BLOCKED=true

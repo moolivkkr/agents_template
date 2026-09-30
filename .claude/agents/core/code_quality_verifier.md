@@ -21,7 +21,7 @@ input:
       path: docs/BRD.md
       description: NFR-* coverage thresholds
 output:
-  primary: agent_state/phases/{{PHASE}}/reports/code_quality.md
+  primary: agent_state/phases/{{PHASE}}/reports/quality_gate.md
   artifacts:
     - path: agent_state/phases/{{PHASE}}/reports/quality_gate_evidence.json
       description: Machine-readable PASS/FAIL per gate item with file:line evidence
@@ -404,9 +404,9 @@ Sample up to 5 test names per test file and check if they follow a descriptive p
 
 ---
 
-## Output: `agent_state/phases/N/reports/code_quality.md`
+## Output: `agent_state/phases/N/reports/quality_gate.md`
 
-Write the full report to `agent_state/phases/{{PHASE}}/reports/code_quality.md`:
+Write the full report to `agent_state/phases/{{PHASE}}/reports/quality_gate.md`:
 
 ```markdown
 # Code Quality Report — Phase N
@@ -525,7 +525,7 @@ Keep it short; the detail belongs in the artifact.
 <!-- END operating-contract -->
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
-- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/code_quality.md` (exact frontmatter path) plus `quality_gate_evidence.json`.
+- [ ] Report written to `agent_state/phases/{{PHASE}}/reports/quality_gate.md` (exact frontmatter path) plus `quality_gate_evidence.json`.
 - [ ] Every gate item has a REAL PASS/FAIL derived from an actual grep/scan, each FAIL citing `file:line` — not an estimate.
 - [ ] "No files scanned" is stated explicitly with the reason when it happens — I do NOT emit an empty-but-present PASS that reads as success.
 - [ ] The count line (`BLOCKING:N WARNING:N INFO:N`) matches the findings tables.
@@ -541,7 +541,7 @@ When a scan surfaces something a FUTURE phase should know — a recurring stub/p
 - **Type:** issue_encountered|anti_pattern|recommendation
 - **Summary:** <one line>
 - **Detail:** <2-3 lines with context>
-- **Evidence:** agent_state/phases/{{PHASE}}/reports/code_quality.md
+- **Evidence:** agent_state/phases/{{PHASE}}/reports/quality_gate.md
 - **Reuse:** <actionable instruction for a future phase>
 ```
 Only write a lesson when there is a generalizable one — zero lessons is valid for a clean run.
@@ -550,7 +550,7 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my report path):
 
 ```json
-{"agent":"code_quality_verifier","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/code_quality.md","ts":"<iso8601>"}
+{"agent":"code_quality_verifier","phase":{{PHASE}},"status":"completed","report":"agent_state/phases/{{PHASE}}/reports/quality_gate.md","ts":"<iso8601>"}
 ```
 
 ---
@@ -561,7 +561,7 @@ When complete, return this exact format to the parent conversation — nothing m
 
 ```
 code_quality_verifier — <status: complete | blocked | partial>
-   Wrote: agent_state/phases/{{PHASE}}/reports/code_quality.md
+   Wrote: agent_state/phases/{{PHASE}}/reports/quality_gate.md
    Done:  <what was verified in one line>
    Issues: none | <N blocking / N warning>
 ```

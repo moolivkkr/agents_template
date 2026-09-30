@@ -23,6 +23,9 @@ dependencies:
   downstream: [ui_developer, ui_test_agent]  # derived by _sync-deps.py — do not hand-edit
 trigger:
   condition: "frontend.enabled = true in IMPLEMENTATION_GUIDELINES"
+skill_packs:
+  - "~/.claude/skills/ui/professional-ui-standards.md"
+  - "~/.claude/skills/ui/structured-wireframe-format.md"
 ---
 
 # Agent: UI Audit Agent
@@ -119,6 +122,15 @@ Surface any `carried_forward[]` items from the previous phase manifest that are 
 - Carried-forward issues must be listed first, before new gaps
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/ui/professional-ui-standards.md`
+- `~/.claude/skills/ui/structured-wireframe-format.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

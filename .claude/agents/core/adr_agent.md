@@ -23,6 +23,8 @@ output:
 dependencies:
   upstream: [architecture_orchestrator, spec_writer]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/core/software-architecture.md"
 ---
 
 # Agent: ADR Agent
@@ -112,6 +114,14 @@ Use the next free `D-NNN`. If this ADR supersedes a prior one, also set the prio
 Produce one ADR per warranting decision found in the in-scope specs + IMPLEMENTATION_GUIDELINES
 Sections 1–2. Write `docs/adr/README.md` as an index (ADR-NNN → title → status → related FR-*).
 Append the matching `D-NNN` entries to `docs/DECISIONS.md`.
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/software-architecture.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

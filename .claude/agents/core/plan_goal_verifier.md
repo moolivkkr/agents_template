@@ -34,6 +34,9 @@ quality_gates:
   goal_backward_analysis_complete: true
   all_gaps_documented: true
   verdict_rendered: true
+skill_packs:
+  - "~/.claude/skills/core/verification-protocol.md"
+  - "~/.claude/skills/requirements/business-objectives.md"
 ---
 
 # Agent: Plan Goal Verifier (Goal-Backward Verification)
@@ -277,6 +280,15 @@ The most dangerous plans are the ones where every spec looks perfect in isolatio
 This agent catches those systemic gaps that per-spec verification misses.
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/verification-protocol.md`
+- `~/.claude/skills/requirements/business-objectives.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

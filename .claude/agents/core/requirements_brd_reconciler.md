@@ -16,6 +16,9 @@ output:
 dependencies:
   upstream: [brd_agent]
   downstream: [brd_spec_reconciler]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/requirements/traceability-matrix.md"
+  - "~/.claude/skills/requirements/gap-analysis-checklist.md"
 ---
 
 # Agent: Requirements ↔ BRD Reconciler
@@ -105,6 +108,15 @@ For each FR-*, NFR-*, OBJ-* in `docs/BRD.md`:
 - New requirements surfaced by user during interview ARE valid — note their source as "user interview"
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/requirements/traceability-matrix.md`
+- `~/.claude/skills/requirements/gap-analysis-checklist.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

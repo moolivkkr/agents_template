@@ -33,6 +33,10 @@ skill_packs:
   - "~/.claude/skills/infrastructure/docker.md"
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"
   - "~/.claude/skills/infrastructure/localstack-aws-local.md"
+  - "~/.claude/skills/infrastructure/kubernetes.md"
+  - "~/.claude/skills/infrastructure/terraform.md"
+  - "~/.claude/skills/infrastructure/secrets-management.md"
+  - "~/.claude/skills/infrastructure/feature-flags.md"
 ---
 
 # Agent: Deployment Agent
@@ -303,6 +307,10 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/infrastructure/docker.md`
 - `~/.claude/skills/infrastructure/saas-tenancy-models.md`
 - `~/.claude/skills/infrastructure/localstack-aws-local.md`
+- `~/.claude/skills/infrastructure/kubernetes.md`
+- `~/.claude/skills/infrastructure/terraform.md`
+- `~/.claude/skills/infrastructure/secrets-management.md`
+- `~/.claude/skills/infrastructure/feature-flags.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->

@@ -21,6 +21,8 @@ output:
 dependencies:
   upstream: [brd_agent, spec_writer]
   downstream: [ux_designer]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/ui/structured-wireframe-format.md"
 ---
 
 # Agent: UI Spec Scaffolder (formerly Wireframe Generator)
@@ -68,6 +70,14 @@ Quick first-pass that maps each screen to a page archetype. Produces initial UI 
 - This is a scaffolding step — `ux_designer` produces the full specs
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/ui/structured-wireframe-format.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

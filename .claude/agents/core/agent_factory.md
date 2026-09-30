@@ -26,6 +26,9 @@ output:
 dependencies:
   upstream: [impl_guidelines_agent]
   downstream: [project_planner]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/core/agent-common.md"
+  - "~/.claude/skills/core/implementation-guidelines-template.md"
 ---
 
 # Agent: Agent Factory
@@ -264,6 +267,15 @@ Print a summary:
 
   ▶ Ready for /plan --phase=1
 ```
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/agent-common.md`
+- `~/.claude/skills/core/implementation-guidelines-template.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

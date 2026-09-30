@@ -133,8 +133,9 @@ def agent_mentions(text):
 # in parallel, so a same-wave "hard dependency" is a lie the orchestrator never honours.
 WAVE = {
     "backend_audit_agent": 1, "ui_audit_agent": 1,
-    "database_agent": 2, "migration_agent": 2, "backend_developer": 2, "api_developer": 2,
-    "ui_developer": 2, "mobile_developer": 2,
+    # Wave 2A is sequenced (develop-orchestrator 2A.1–2A.5), so its steps get sub-wave numbers.
+    "database_agent": 2.1, "migration_agent": 2.2, "backend_developer": 2.3, "api_developer": 2.4,
+    "ui_developer": 2.5,
     "solution_selector": 2.5,
     "unit_test_agent": 3, "integration_test_agent": 3, "ui_test_agent": 3, "mobile_test_agent": 3,
     "e2e_orchestrator": 3.2, "mobile_e2e_orchestrator": 3.2, "test_runner": 3.4,
@@ -144,7 +145,7 @@ WAVE = {
     "spec_impl_reconciler": 4, "spec_test_reconciler": 4, "acceptance_test_agent": 4,
 }
 
-findings = {k: [] for k in ("IO_UNPRODUCED", "WAVE_ORDER", "DANGLING_AGENT", "DANGLING_SKILL", "ASYMMETRIC", "ORPHAN_AGENT", "ORPHAN_SKILL", "NO_SKILLS", "YAML_ERROR")}
+findings = {k: [] for k in ("REPORT_NAME", "IO_UNPRODUCED", "WAVE_ORDER", "DANGLING_AGENT", "DANGLING_SKILL", "ASYMMETRIC", "ORPHAN_AGENT", "ORPHAN_SKILL", "NO_SKILLS", "YAML_ERROR")}
 edges = []  # (src, relation, dst)
 referenced_skills = set()
 invoked_agents = set()
@@ -200,6 +201,11 @@ for cname, c in commands.items():
             findings["DANGLING_SKILL"].append(f"{c['path']}: -> skills/{rel}")
 
 for sname, text in skills.items():
+    # Sibling references inside the skills tree use the bare filename: `memory-as-tools.md`.
+    for m in re.finditer(r"`([a-z0-9][a-z0-9\-]*\.md)`", text):
+        sib = os.path.join(os.path.dirname(sname), m.group(1)) if os.path.dirname(sname) else m.group(1)
+        if sib in skills and sib != sname:
+            referenced_skills.add(sib)
     for rel in skill_refs(text):
         if rel != sname:
             referenced_skills.add(rel)
@@ -237,7 +243,7 @@ for rel in sorted(skills):
     # block via {{E2E_TOOL}} / {{TEST_FRAMEWORK}}; they count as referenced when the factory names them.
     if rel.startswith("testing/") and re.search(rf"\b{re.escape(stem)}\b", FACTORY):
         continue
-    if rel in referenced_skills or rel.startswith(RUNTIME_DIRS) or rel.endswith("README.md"):
+    if rel in referenced_skills or rel.startswith(RUNTIME_DIRS) or rel.endswith(("README.md", "INDEX.md")):
         continue
     findings["ORPHAN_SKILL"].append(f".claude/skills/{rel}")
 
@@ -286,6 +292,19 @@ for name, a in sorted(agents.items()):
         hit = hit or any(fnmatch.fnmatch(c, pr) or fnmatch.fnmatch(pr, c) for pr in cmd_paths)
         if not hit:
             findings["IO_UNPRODUCED"].append(f"{a['path']}: reads {pth} — no agent output or command produces it")
+
+# Orchestrator ↔ agent report names: every "Agent: <name> → reports/<file>" line in the canonical
+# executor must name a file that agent declares in its output (primary/artifacts/reports). A mismatch
+# means the agent writes one path and the Wave verification looks for another → false BLOCK or a
+# silently-missing report.
+ORCH_TEXT = commands.get("develop-orchestrator", {}).get("text", "")
+for m in re.finditer(r"(?:Agent: |[├└]─ )([a-zA-Z_I]+)\s*(?:→|->)\s*reports/([A-Za-z0-9_.\-]+\.md)", ORCH_TEXT):
+    ag, rep = m.group(1), m.group(2)
+    if ag not in agents:
+        continue
+    outs = json.dumps(agents[ag]["fm"].get("output") or {})  # bare-string artifacts count too
+    if f"reports/{rep}" not in outs:
+        findings["REPORT_NAME"].append(f"develop-orchestrator expects {ag} → reports/{rep}, but {agents[ag]['path']} declares output: {outs or '(none)'}")
 
 # ---------------------------------------------------------------- output
 if "--json" in sys.argv:

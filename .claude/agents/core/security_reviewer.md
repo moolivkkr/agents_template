@@ -24,6 +24,8 @@ skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/core/security-owasp.md"
   - "~/.claude/skills/databases/{{DB_TECH}}.md"
+  - "~/.claude/skills/infrastructure/auth-session-flows.md"
+  - "~/.claude/skills/infrastructure/secrets-management.md"
 ---
 
 # Agent: Security Reviewer
@@ -349,6 +351,8 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/languages/{{LANG}}.md`
 - `~/.claude/skills/core/security-owasp.md`
 - `~/.claude/skills/databases/{{DB_TECH}}.md`
+- `~/.claude/skills/infrastructure/auth-session-flows.md`
+- `~/.claude/skills/infrastructure/secrets-management.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->

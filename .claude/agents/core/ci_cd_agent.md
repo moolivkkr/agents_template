@@ -23,6 +23,11 @@ dependencies:
   upstream: [impl_guidelines_agent]
   runs_after: [deployment_agent]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/infrastructure/github-actions.md"
+  - "~/.claude/skills/infrastructure/docker.md"
+  - "~/.claude/skills/infrastructure/secrets-management.md"
+  - "~/.claude/skills/core/git-workflow.md"
 ---
 
 # Agent: CI/CD Agent
@@ -65,6 +70,17 @@ Jobs:
 - Pin action versions (`actions/checkout@v4` not `@main`)
 - Cache hit rate > 80% — use correct cache key with lock file hash
 - Fail fast: lint before test, test before build
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/infrastructure/github-actions.md`
+- `~/.claude/skills/infrastructure/docker.md`
+- `~/.claude/skills/infrastructure/secrets-management.md`
+- `~/.claude/skills/core/git-workflow.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

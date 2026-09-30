@@ -43,6 +43,13 @@ arguments:
     required: false
     default: false
     description: "Run TC-* ID inventory reconciliation — checks spec TC-* IDs against implemented test annotations"
+  - name: mobile
+    required: false
+    default: false
+    description: "Run the React Native tiers: Jest+RNTL (via test_runner) and device flows on iOS simulator + Android emulator (via mobile_e2e_orchestrator)"
+  - name: platform
+    required: false
+    description: "With --mobile: restrict device flows to one platform (ios | android). Default: both. A single-platform run can never satisfy a phase gate."
 ---
 
 # /test — Standalone Test Runner
@@ -65,6 +72,10 @@ fi
 RUN_UNIT=$([ "$ARG_UNIT" = true ] || [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E" ] && echo true)
 RUN_INTEGRATION=$([ "$ARG_INTEGRATION" = true ] || [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E" ] && echo true)
 RUN_E2E=$([ "$ARG_E2E" = true ] || [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E" ] && echo true)
+# Mobile runs when asked, or by default when the project has a React Native app and no tier flag was given
+MOBILE_ENABLED=$(jq -r '.tech_profile.mobile.enabled // false' agent_state/agent_registry.json 2>/dev/null)
+RUN_MOBILE=$([ "$ARG_MOBILE" = true ] || { [ -z "$ARG_UNIT$ARG_INTEGRATION$ARG_E2E$ARG_MOBILE" ] && [ "$MOBILE_ENABLED" = true ]; } && echo true)
+PLATFORMS="${ARG_PLATFORM:-ios android}"
 ```
 
 Start infrastructure if running integration or e2e tests (read startup commands from `docs/IMPLEMENTATION_GUIDELINES.md`).
@@ -73,18 +84,20 @@ Start infrastructure if running integration or e2e tests (read startup commands 
 
 ## Step 1 — Unit Tests
 
-**Agent:** Generated `unit_test_agent`
+**Agent:** `test_runner` (`subagent_type: test_runner`). It RUNS existing tests. The generated
+`unit_test_agent` writes tests and is only used here when `--traceability` shows missing TC-* IDs
+and you choose to fill them.
 **When:** `RUN_UNIT = true`
 
 Reads: `docs/IMPLEMENTATION_GUIDELINES.md` for test commands, `agent_state/agent_registry.json` for test framework.
 
-Runs all unit tests. Reports pass/fail per component.
+Runs all unit tests. Reports pass/fail per component to `agent_state/phases/N/reports/test_results.md`.
 
 ---
 
 ## Step 2 — Integration Tests
 
-**Agent:** Generated `integration_test_agent`
+**Agent:** `test_runner` (same spawn as Step 1, integration tier). The generated `integration_test_agent` is the writer, not the runner.
 **When:** `RUN_INTEGRATION = true`
 
 Requires infra running. Uses isolated test database/namespace — never touches production data.
@@ -102,6 +115,23 @@ If `--workflow` specified: runs only that workflow.
 Full stack must be running. Writes results to `agent_state/e2e/results.md`.
 
 **Iteration:** On failure, diagnose → fix → rerun (max 2 attempts). Surface unresolved to user.
+
+---
+
+## Step 3-M — Mobile (React Native, iOS + Android) — when `RUN_MOBILE = true`
+
+1. **Node tiers** (Jest + RNTL component/integration): `test_runner`, with the mobile app dir as the
+   working directory. No device needed.
+2. **Device tiers** (TC-ME2E / TC-MPLT / TC-MVIS / TC-MPERF): spawn `mobile_e2e_orchestrator`
+   (`subagent_type: mobile_e2e_orchestrator`) with `PLATFORMS=${PLATFORMS}`. It builds release binaries,
+   boots the device matrix from IMPLEMENTATION_GUIDELINES §Mobile, runs every flow from every completed
+   phase's `mobile_test_agent` manifest, and writes `agent_state/phases/N/reports/mobile_e2e_results.md` (+ `.json`).
+   The backend must be up (Android reaches it at `10.0.2.2`).
+3. iOS needs a macOS host with Xcode. On any other host the iOS column is `BLOCKED — requires macOS`,
+   reported, not skipped silently.
+
+With `--platform=ios|android` only that platform runs. The report header says so, and the result
+cannot be used as gate evidence, which needs both platforms.
 
 ---
 

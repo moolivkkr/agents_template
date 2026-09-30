@@ -43,6 +43,9 @@ Complete index of all agents in the SDLC pipeline.
 | Validate specs match tests | `spec_test_reconciler` | `/develop` Step 5 |
 | Run acceptance tests | `acceptance_test_agent` | `/develop` Step 5 |
 | Run e2e tests | `e2e_orchestrator` | `/test --e2e` |
+| Write React Native tests (iOS + Android) | `mobile_test_agent` (generated) | `/develop` Wave 3d |
+| Run mobile device flows on simulators/emulators | `mobile_e2e_orchestrator` | `/develop` Wave 3d, `/test --mobile` |
+| Audit mobile a11y/permissions/parity | `mobile_platform_auditor` | `/develop` Wave 4 |
 | Execute test commands | `test_runner` | `/test` |
 | Run performance tests | `performance_agent` | `/test --performance` |
 | Run system smoke tests | `system_test_agent` | `/test --system` |
@@ -155,12 +158,14 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 
 | Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `test_runner` | opus/low | agent_registry.json | test results | Executes test commands |
+| `test_runner` | opus/low | agent_registry.json | test_results.md (+ .json) | Executes test commands; Wave 3v independent re-run that cross-checks every writer's pass/fail counts |
 | `acceptance_test_agent` | opus/high | BRD, PHASE_PLAN, guidelines | acceptance_report.md | Final validation before gate |
 | `e2e_orchestrator` | opus/medium | guidelines, phase manifests | e2e test results | End-to-end workflow tests |
 | `performance_agent` | opus/medium | BRD (NFR-PERF-*) | performance report | Load tests, latency/throughput |
 | `system_test_agent` | opus/medium | BRD | system smoke test results | Cross-phase boundary tests |
 | `manual_test_agent` | opus/medium | PHASE_PLAN | manual test plan | Structured QA plan for humans |
+| `mobile_e2e_orchestrator` | opus/medium | mobile_test_agent manifest, guidelines §Mobile | mobile_e2e_results.md (+ .json) | Builds RN release binaries, boots iOS simulator + Android emulator matrix, runs every device flow per platform/slot with evidence |
+| `mobile_test_agent` (template) | opus/medium | api-contracts.md, specs, guidelines §Mobile | RN tests + mobile_test_results.md | Jest+RNTL component/integration, Maestro/Detox/Appium device flows, platform-behaviour + mobile a11y (TC-MCMP/MINT/ME2E/MPLT/MA11Y) |
 
 ### Review & Security
 
@@ -170,10 +175,11 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 | `code_reviewer_II` | opus/high | guidelines, code_review_I.md | code_review_II.md | Architecture compliance (pass 2 of 2) |
 | `security_reviewer` | opus/high | guidelines, OWASP skill pack | security_review.md | OWASP Top 10, IDOR chains |
 | `tenant_isolation_verifier` | opus/high | handler + service files | isolation_report.md | tenantID trace through every route |
-| `breaking_change_reviewer` | opus/high | current diff, prior-phase contracts | breaking_change_report.md | Cross-phase contract breakage (API sig, response shape, event schema, shared types, config keys, DB columns) |
+| `breaking_change_reviewer` | opus/high | current diff, prior-phase contracts | breaking_change_review.md | Cross-phase contract breakage (API sig, response shape, event schema, shared types, config keys, DB columns) |
 | `migration_safety_reviewer` | opus/high | migration files | migration_safety.md | Destructive/irreversible ops, backfill safety, lock risk, rollback correctness |
 | `threat_model_agent` | opus/high | phase specs, data flows | threat_model.md (+ .json) | Design-time STRIDE per trust boundary; threat→mitigation→TC-SEC-* (runs in /plan for security-relevant phases) |
 | `accessibility_auditor` | opus/high | built UI, wireframes | accessibility_audit.md (+ .json) | WCAG-AA pass/fail per rule against the BUILT UI (axe/keyboard/contrast/ARIA); runs in /develop UI phases |
+| `mobile_platform_auditor` | opus/high | native config, device, mobile_e2e_results | mobile_platform_audit.md (+ .json) | VoiceOver/TalkBack + touch targets + text scale, permissions, secure storage, cleartext/ATS, deep links, iOS/Android parity; runs in /develop mobile phases |
 | `code_quality_verifier` | opus/high | guidelines, manifest | quality_gate_verification.md | TODO/stub/secret/import checks |
 | `design_quality_reviewer` | opus/medium | wireframes, guidelines | design quality report | UI spec quality validation |
 | `dependency_scanner` | opus/low | guidelines | dependency scan results | CVE detection, license compliance |
@@ -275,21 +281,27 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
     ├→ plan_goal_verifier (NEW — goal-backward verification)
     └→ adr_agent (if architectural decisions detected)
 
-/develop pipeline:
-  backend_audit_agent / ui_audit_agent (Step 1)
-    → database_agent → migration_agent (Wave 1)
-    → backend_developer → api_developer (Wave 2)
-    → [ui_developer if UI phase] (Wave 3)
-    → code_reviewer_I → code_reviewer_II → security_reviewer (Step 5, sequential)
-    → tenant_isolation_verifier (Step 5, parallel with reviewers)
-    → code_quality_verifier (Step 5, parallel with reviewers)
-    → spec_impl_reconciler → spec_test_reconciler (Step 5)
-    → acceptance_test_agent (Step 5, after all reviewers)
-    → documentation_agent (Step 6b, non-blocking)
+/develop pipeline (canonical executor: /develop-orchestrator — wave numbers match it):
+  W1  backend_audit_agent [+ ui_audit_agent]
+  W2  database_agent → migration_agent → backend_developer → api_developer (publishes api-contracts.md) → [ui_developer]
+  W3  parallel tracks:
+        unit_test_agent
+        integration_test_agent
+        [ui_test_agent →] e2e_orchestrator                 (web: component+browser; else pipeline/CLI e2e)
+        [mobile_test_agent → mobile_e2e_orchestrator]      (React Native: iOS + Android device matrix)
+  W3v test_runner                                          (independent re-run; writer-vs-independent counts)
+  W3.5 local deploy + health (web/API; mobile = binaries build, install, cold-launch)
+  W4  parallel: code_reviewer_I · code_reviewer_II (reads I's report if present) · security_reviewer ·
+      dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] ·
+      [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] ·
+      spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent
+  W5  collective feedback + fix loop     W6 gate (roster ⊆ execution.jsonl)
+  documentation_agent (Step 6b, non-blocking)
 
 /test pipeline:
   test_runner (unit/integration)
   e2e_orchestrator (--e2e flag)
+  mobile_e2e_orchestrator (--mobile flag; --platform=ios|android)
   performance_agent (--performance flag)
   system_test_agent (--system flag)
   manual_test_agent (--manual flag)
@@ -332,8 +344,8 @@ debate team (on-demand, any pipeline):
 | `/discuss` | phase_assumptions_analyzer -> decision_researcher (parallel, one per question) |
 | `/map` | codebase_mapper (parallel: tech + architecture + quality + concerns) |
 | `/plan` | project_planner -> spec_writer (parallel) -> ux_designer -> design_quality_reviewer -> spec_verifier -> brd_spec_reconciler -> plan_goal_verifier -> adr_agent |
-| `/develop` | backend_audit_agent -> database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer] -> code_reviewer_I -> code_reviewer_II -> security_reviewer -> tenant_isolation_verifier -> code_quality_verifier -> spec_impl_reconciler -> spec_test_reconciler -> acceptance_test_agent -> documentation_agent |
-| `/test` | test_runner, e2e_orchestrator, performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
+| `/develop` | (canonical: `/develop-orchestrator`) W1 backend_audit_agent [+ ui_audit_agent] -> W2 database_agent -> migration_agent -> backend_developer -> api_developer -> [ui_developer] -> W3 (parallel) unit_test_agent · integration_test_agent · [ui_test_agent ->] e2e_orchestrator · [mobile_test_agent -> mobile_e2e_orchestrator] -> W3v test_runner -> W4 (parallel) code_reviewer_I · code_reviewer_II · security_reviewer · dependency_scanner · code_quality_verifier · [tenant_isolation_verifier] · [accessibility_auditor] · [mobile_platform_auditor] · [migration_safety_reviewer] · [breaking_change_reviewer] · spec_impl_reconciler · spec_test_reconciler · acceptance_test_agent -> documentation_agent |
+| `/test` | test_runner, e2e_orchestrator, mobile_e2e_orchestrator (--mobile), performance_agent, system_test_agent, manual_test_agent (flag-dependent) |
 | `/review` | code_reviewer_I -> code_reviewer_II -> security_reviewer + dependency_scanner |
 | `/optimize` | code_optimizer + ui_code_optimizer (parallel) |
 | `/deploy` | deployment_agent + ci_cd_agent + observability_agent |
@@ -352,10 +364,10 @@ debate team (on-demand, any pipeline):
 
 | Location | Count |
 |---|---|
-| Core agents (`.claude/agents/core/`) | 66 |
-| Generation templates (`~/.claude/agents/templates/`) | 8 |
+| Core agents (`.claude/agents/core/`) | 68 |
+| Generation templates (`~/.claude/agents/templates/`) | 9 |
 | Generated agents (`.claude/agents/generated/`) | 0 in repo — populated at `/init` by `agent_factory` (gitignored) |
-| **Total agents (repo)** | **74** |
+| **Total agents (repo)** | **77** |
 
 | Category | Count |
 |---|---|
@@ -365,8 +377,8 @@ debate team (on-demand, any pipeline):
 | Planning | 6 |
 | Design | 8 (incl. `eagle_diagram_agent` — 10,000-ft strategic overview) |
 | Implementation (generated) | 4 |
-| Testing | 6 |
-| Review & Security | 10 (incl. `breaking_change_reviewer`, `migration_safety_reviewer`, `threat_model_agent` STRIDE, `accessibility_auditor` WCAG-AA) |
+| Testing | 7 (+ `mobile_test_agent` template) |
+| Review & Security | 11 (incl. `mobile_platform_auditor`, `breaking_change_reviewer`, `migration_safety_reviewer`, `threat_model_agent` STRIDE, `accessibility_auditor` WCAG-AA) |
 | Reconciliation | 6 |
 | Decision Support | 5 (incl. `solution_selector` — candidate-selection winner) |
 | Infrastructure | 4 (incl. `reliability_agent` — SLO/error-budget/runbooks) |

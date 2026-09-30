@@ -16,6 +16,10 @@ output:
 dependencies:
   upstream: [spec_verifier]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/testing/test-case-generation.md"
+  - "~/.claude/skills/core/testing-principles.md"
+  - "~/.claude/skills/testing/mobile-testing-strategy.md"
 ---
 
 # Agent: Manual Test Agent
@@ -70,6 +74,16 @@ Known quirks or things to watch for.
 - Document why automation isn't appropriate
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/testing/test-case-generation.md`
+- `~/.claude/skills/core/testing-principles.md`
+- `~/.claude/skills/testing/mobile-testing-strategy.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

@@ -18,6 +18,9 @@ dependencies:
   upstream: [backend_developer, api_developer, ui_developer]
   runs_after: [brd_spec_reconciler]
   downstream: [spec_test_reconciler]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/core/verification-protocol.md"
+  - "~/.claude/skills/core/api-design.md"
 ---
 
 # Agent: Spec ↔ Implementation Reconciler
@@ -190,6 +193,15 @@ This is **link 3 of 6** in the reconciliation chain:
 - Deviations = flagged for review (may be valid decisions made during implementation)
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/verification-protocol.md`
+- `~/.claude/skills/core/api-design.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

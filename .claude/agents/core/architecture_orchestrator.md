@@ -22,6 +22,8 @@ dependencies:
   runs_after: [brd_writer, product_manager]
   downstream: [adr_agent, api_developer, backend_developer, c4_diagram_agent, deployment_diagram_agent, eagle_diagram_agent, project_planner, sequence_diagram_agent, threat_model_agent, ui_developer]  # derived by _sync-deps.py — do not hand-edit
 subagents: [c4_diagram_agent, sequence_diagram_agent, deployment_diagram_agent, adr_agent, eagle_diagram_agent]
+skill_packs:
+  - "~/.claude/skills/core/software-architecture.md"
 ---
 
 # Agent: Architecture Orchestrator
@@ -64,6 +66,14 @@ After all subagents complete, write index `docs/architecture/README.md` listing 
 Report summary to user — no gate, just informational.
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/software-architecture.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

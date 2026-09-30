@@ -98,7 +98,7 @@ report, `specs_vs_impl.md`, rather than a separate `spec_compliance_review.md`):
 - `security_review.md` (Stage 4b)
 - `dependency_scan.md` (Stage 4b)
 - `quality_gate.md` (code_quality_verifier)
-- `specs_vs_impl.md` · `spec_test_coverage.md` (reconcilers)
+- `specs_vs_impl.md` · `specs_vs_tests.md` (reconcilers — written to `agent_state/reconciliation/phase-N/`)
 - `sast_scan.md` (Stage 4c — CONDITIONAL: only when a SAST command is configured; else a recorded skip)
 
 ### Stage 4c — Static Application Security Testing (parallel with review)

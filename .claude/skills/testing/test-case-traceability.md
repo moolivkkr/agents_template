@@ -57,7 +57,7 @@ Where:
 | `MPERF` | Mobile performance (cold start, frame rate, render count) | TC-MPERF-001 |
 
 **Category codes may contain digits** (`E2E`, `A11Y`, `ME2E`). Every scanner must use
-`TC-[A-Z0-9]+-[0-9]+`. The older `TC-[A-Z]+-\d+` silently skipped every E2E and A11Y ID;
+`TC-[A-Z0-9]+-[0-9]+`. The older letters-only category pattern silently skipped every E2E and A11Y ID;
 `tests/agent-registry.test.sh` now fails the build if that pattern comes back.
 
 **Mobile annotation:** Maestro flows are YAML, so the TC annotation is the first comment line

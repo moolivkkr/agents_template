@@ -24,6 +24,9 @@ dependencies:
   upstream: [unit_test_agent, integration_test_agent]
   runs_after: [spec_impl_reconciler]
   downstream: [acceptance_test_agent]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/testing/test-case-traceability.md"
+  - "~/.claude/skills/testing/test-case-generation.md"
 ---
 
 # Agent: Spec ↔ Test Reconciler
@@ -233,6 +236,15 @@ This is **link 4 of 6** in the reconciliation chain:
 - **LOW (informational):** cosmetic, nice-to-have validation scenarios
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/testing/test-case-traceability.md`
+- `~/.claude/skills/testing/test-case-generation.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

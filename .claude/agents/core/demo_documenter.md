@@ -18,6 +18,8 @@ output:
 dependencies:
   upstream: [backend_developer, ui_developer]
   downstream: [demo_executor]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/testing/test-case-generation.md"
 ---
 
 # Agent: Demo Documenter
@@ -291,6 +293,14 @@ curl -s -X POST $BASE_URL/<resource> -H "Authorization: Bearer $TOKEN" \
 - Connect every scenario back to a BRD objective or FR-* requirement
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/testing/test-case-generation.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

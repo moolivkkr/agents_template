@@ -19,6 +19,10 @@ output:
 dependencies:
   upstream: [e2e_orchestrator, integration_test_agent]
   downstream: []  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/core/testing-principles.md"
+  - "~/.claude/skills/testing/test-case-traceability.md"
+  - "~/.claude/skills/testing/mobile-testing-strategy.md"
 ---
 
 # Agent: System Test Agent
@@ -56,6 +60,16 @@ For each exit criterion in PHASE_PLAN.md:
 PASS — all exit criteria met
 FAIL — N criteria not met (list)
 ```
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/core/testing-principles.md`
+- `~/.claude/skills/testing/test-case-traceability.md`
+- `~/.claude/skills/testing/mobile-testing-strategy.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

@@ -18,6 +18,9 @@ dependencies:
   upstream: [spec_writer, ux_designer]
   runs_after: [requirements_brd_reconciler, spec_verifier]
   downstream: [plan_goal_verifier, spec_impl_reconciler]  # derived by _sync-deps.py — do not hand-edit
+skill_packs:
+  - "~/.claude/skills/requirements/traceability-matrix.md"
+  - "~/.claude/skills/requirements/ears-notation.md"
 ---
 
 # Agent: BRD ↔ Spec Reconciler
@@ -113,6 +116,15 @@ This is **link 2 of 6** in the reconciliation chain:
 - Misalignments always require human decision — do not auto-resolve
 
 ---
+
+<!-- BEGIN reference-packs -->
+## Reference packs
+
+These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
+
+- `~/.claude/skills/requirements/traceability-matrix.md`
+- `~/.claude/skills/requirements/ears-notation.md`
+<!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
 ## How you work as a subagent

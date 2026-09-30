@@ -134,7 +134,9 @@ PARENT SESSION executes this sequence (not delegated):
      code_quality_verifier, tenant_isolation_verifier (if multi-tenant),
      spec_impl_reconciler, spec_test_reconciler, acceptance_test_agent
    Verify: reports/{code_review_I,code_review_II,security_review,dependency_scan,quality_gate,
-           specs_vs_impl,spec_test_coverage,acceptance_report}.md all exist
+           acceptance_report}.md + reconciliation/phase-N/{specs_vs_impl,specs_vs_tests}.md all exist
+           (+ accessibility_audit / mobile_platform_audit / migration_safety / breaking_change_review
+           for each conditional reviewer in roster.json)
    ⛔ DO NOT PROCEED WITHOUT THESE FILES — a missing one means an agent was dropped
 
 5. PARENT reads all Wave 3+4 reports → builds collective feedback → Wave 5: ITERATE
