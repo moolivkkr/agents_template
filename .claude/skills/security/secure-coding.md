@@ -95,10 +95,14 @@ that are **in scope for the phase**. Implement them, don't just note them.
     `local`, `dev` or `test`**. Fail closed for every other value, including unset, `qa`, `staging`,
     `prod`, `prd` and `production`.
 - **Dependencies:** add only what the task needs.
-  - Before adding a package, confirm it exists on the official registry, is maintained, and is the
-    package you meant (typosquats differ by a character).
+  - Before adding a new package, run `python3 ~/.claude/hooks/vet-package.py -e <npm|pypi|go|crates>
+    <name>` (in the framework repo: `.claude/guard/vet-package.py`) and add the package only if it
+    exits 0; if it fails or can't reach the registry, use the well-known package it names or record
+    the name, the vet output and your reason under `new_dependencies[]` in your manifest for the
+    reviewer, and don't install it.
   - Pin it via the lockfile. Install with lifecycle scripts disabled where the ecosystem allows
-    (`npm ci --ignore-scripts`, then run the needed builds explicitly).
+    (`npm ci --ignore-scripts`, `pnpm install --ignore-scripts`, `pip install --only-binary=:all:`
+    where wheels exist), then run the needed build steps explicitly.
 - **Proof:** `ERR-LEAK` (forced 500 → body has no stack or SQL), `SECRET-FAILCLOSED` (start with
   `APP_ENV=qa` and no secret → exits non-zero).
 

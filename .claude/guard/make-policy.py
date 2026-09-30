@@ -27,9 +27,13 @@ DEFAULT_SHELL_ALLOW = [
     "k3s ctr images ls", "k3s ctr -n k8s.io images ls", "k3s ctr images import",
     "journalctl -u k3s", "journalctl -u k3s-agent", "systemctl status k3s", "systemctl status k3s-agent",
     "cat /etc/rancher/k3s/registries.yaml", "uptime", "df -h", "free -m"]
-# never read or copied by agents (any command naming them is denied); the admin kubeconfig is the key one
+# never read or copied by agents (any command naming them, literally or by glob, is denied); the admin
+# kubeconfig is the key one. Registry/forge tokens and the keychain files were added after the
+# 2026-09-30 board review (SEC-03); the guard also unions its own baseline, so older policies are covered.
 DEFAULT_SECRET = ["~/.kube/sdlc-lab-admin.yaml", "~/.kube/config", "~/.ssh", "~/.aws", "~/.config/gcloud",
-                  "~/.azure", "~/.docker/config.json", "~/.lima/sdlc-server/copied-from-guest"]
+                  "~/.azure", "~/.docker/config.json", "~/.lima/sdlc-server/copied-from-guest",
+                  "~/.config/gh", "~/.netrc", "~/.npmrc", "~/.pypirc", "~/.git-credentials", "~/.gnupg",
+                  "~/Library/Keychains"]
 DEFAULT_PROTECTED = [
     "~/.claude/settings.json", "~/.claude/settings.local.json", "~/.claude/hooks",
     "/Library/Application Support/ClaudeCode", "~/.config/sdlc-guard", "~/.kube", "~/.lima/_config"]
