@@ -4,3 +4,4 @@
 # they must NOT be committed to the framework repo (they ship stale/divergent otherwise).
 .claude/agents/generated/*.md
 !.claude/agents/generated/.gitkeep
+.claude/worktrees/
