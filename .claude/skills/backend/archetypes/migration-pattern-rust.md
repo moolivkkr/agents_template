@@ -14,13 +14,15 @@ tags:
 
 # Migration Pattern Archetype (Rust / sqlx)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0. Known issue (the SQL below, not yet fixed): on a clean Postgres 17, 20240103 (no `CREATE EXTENSION pg_trgm`), 20240104 (`_migration_audit` is never created) and 20240105.up (the 'active' default can't be cast to the enum) fail, so `sqlx migrate run` and every `#[sqlx::test]` fail; the migration tests pass only without those three.
+
 Complete database migration patterns for sqlx-based Rust projects. Every generated project MUST follow these patterns.
 
 ## Dependencies (Cargo.toml)
 
 ```toml
 [dependencies]
-sqlx = { version = "0.8", features = [
+sqlx = { version = "0.9", features = [ # 0.9 needs Rust 1.94+
     "runtime-tokio",
     "tls-rustls",
     "postgres",
@@ -31,7 +33,7 @@ sqlx = { version = "0.8", features = [
 ] }
 
 [dev-dependencies]
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate"] }
 ```
 
 ## Directory Structure
@@ -99,7 +101,7 @@ pub async fn run_migrations(pool: &PgPool) -> Result<(), AppError> {
 
 /// Usage in main.rs:
 ///
-/// ```rust
+/// ```ignore
 /// #[tokio::main]
 /// async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     let pool = PgPool::connect(&database_url).await?;

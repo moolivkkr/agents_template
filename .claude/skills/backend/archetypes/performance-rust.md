@@ -15,6 +15,8 @@ tags:
 
 # Performance Archetype (Rust)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0 (query! macros against a harness-only orders schema — no archetype defines one), deadpool-redis 0.23.1, reqwest 0.13.5, criterion 0.8.2. Compiled, not run.
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Rust backend performance patterns. All other Rust skill packs that mention pooling, caching, async tuning, or profiling should defer to this file.
 
 Production-grade performance patterns for Rust services. Every generated service MUST follow these patterns for connection management, memory efficiency, async execution, and database optimization.
@@ -87,6 +89,7 @@ pub async fn check_db_health(pool: &PgPool) -> Result<(), String> {
 
 ```rust
 use deadpool_redis::{Config, Pool, Runtime};
+use std::time::Duration;
 
 pub fn create_redis_pool(redis_url: &str) -> Pool {
     let cfg = Config::from_url(redis_url);
@@ -177,7 +180,8 @@ fn process_name(name: &str) -> &str {
 use std::borrow::Cow;
 
 /// Returns borrowed &str when no transformation needed, owned String only when modified.
-fn normalize_tenant_id(input: &str) -> Cow<'_, str> {
+/// (pub: the criterion benchmark below calls it from benches/)
+pub fn normalize_tenant_id(input: &str) -> Cow<'_, str> {
     if input.chars().all(|c| c.is_lowercase() || c == '-') {
         // No allocation — just borrows the input
         Cow::Borrowed(input)
@@ -225,23 +229,29 @@ let state = Arc::new(app_state);
 ```rust
 use smallvec::SmallVec;
 
+use crate::error::{AppError, FieldError}; // error-handling-rust.md
+
+fn required(field: &str) -> FieldError {
+    FieldError { field: field.to_owned(), code: "required".to_owned(), message: "This field is required.".to_owned() }
+}
+
 /// When you know most collections will be small (e.g., <=8 items),
 /// SmallVec stores them on the stack and only heap-allocates when exceeded.
-fn validate_fields(input: &CreateRequest) -> Result<(), ValidationErrors> {
+fn validate_fields(input: &CreateRequest) -> Result<(), AppError> {
     // Most validation runs produce 0-3 errors. Stack allocation avoids heap.
     let mut errors: SmallVec<[FieldError; 4]> = SmallVec::new();
 
     if input.name.is_empty() {
-        errors.push(FieldError::new("name", "required"));
+        errors.push(required("name"));
     }
     if input.email.is_empty() {
-        errors.push(FieldError::new("email", "required"));
+        errors.push(required("email"));
     }
 
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(ValidationErrors(errors.into_vec()))
+        Err(AppError::Validation { details: errors.into_vec() }) // 400 VALIDATION_FAILED
     }
 }
 ```
@@ -419,10 +429,10 @@ impl RateLimitedClient {
     pub async fn get(&self, url: &str) -> Result<reqwest::Response, AppError> {
         // Acquire a permit — blocks if max_concurrent requests are in flight
         let _permit = self.semaphore.acquire().await
-            .map_err(|_| AppError::Internal(anyhow::anyhow!("semaphore closed")))?;
+            .map_err(|_| AppError::internal("semaphore closed"))?;
 
         self.client.get(url).send().await.map_err(|e| {
-            AppError::upstream("external-service", e)
+            AppError::unavailable("external-service", e) // 503, retryable
         })
         // permit is dropped here, releasing the slot
     }
@@ -570,14 +580,16 @@ pub async fn copy_insert_events(
 
     let mut buf = Vec::with_capacity(events.len() * 200);
     for event in events {
-        use std::fmt::Write;
+        use std::io::Write; // bytes into a Vec<u8> (std::fmt::Write is for Strings)
+        // CSV quotes a free-text field and doubles its quotes; a backslash is not a CSV escape
+        let payload = event.payload.replace('"', "\"\"");
         writeln!(
             buf,
-            "{},{},{},{},{}",
+            "{},{},{},\"{}\",{}",
             event.id, event.tenant_id, event.event_type,
-            event.payload.replace(',', "\\,"),
+            payload,
             event.created_at.to_rfc3339()
-        ).unwrap();
+        ).unwrap(); // writing to a Vec cannot fail
     }
 
     copy.send(buf).await?;
@@ -619,18 +631,27 @@ impl OrderRepo {
     #[tracing::instrument(skip(self))]
     pub async fn find_by_id(&self, tenant_id: &str, id: &str) -> Result<Order, AppError> {
         // READ from replica
-        sqlx::query_as!(Order, "SELECT ... FROM orders WHERE tenant_id = $1 AND id = $2", tenant_id, id)
-            .fetch_optional(&self.pools.read)
-            .await?
-            .ok_or(AppError::not_found("order", id))
+        sqlx::query_as!(
+            Order,
+            r#"SELECT id, tenant_id, user_id, total, status as "status: OrderStatus", created_at
+               FROM orders WHERE tenant_id = $1 AND id = $2"#,
+            tenant_id,
+            id,
+        )
+        .fetch_optional(&self.pools.read)
+        .await?
+        .ok_or_else(|| AppError::not_found("Order")) // also for another tenant's order
     }
 
     #[tracing::instrument(skip(self, order))]
     pub async fn insert(&self, order: &Order) -> Result<(), AppError> {
         // WRITE to primary
-        sqlx::query!("INSERT INTO orders (...) VALUES (...)", /* ... */)
-            .execute(&self.pools.write)
-            .await?;
+        sqlx::query!(
+            "INSERT INTO orders (id, tenant_id, user_id, total, status, created_at) VALUES ($1, $2, $3, $4, $5, $6)",
+            order.id, order.tenant_id, order.user_id, order.total, order.status.as_str(), order.created_at,
+        )
+        .execute(&self.pools.write)
+        .await?;
         Ok(())
     }
 }
@@ -642,6 +663,7 @@ impl OrderRepo {
 use deadpool_redis::Pool as RedisPool;
 use redis::AsyncCommands;
 use serde::{de::DeserializeOwned, Serialize};
+use std::time::Duration;
 
 pub struct CacheLayer {
     redis: RedisPool,
@@ -702,7 +724,8 @@ impl CacheLayer {
         let mut conn = self.redis.get().await
             .map_err(|e| AppError::Internal(e.into()))?;
 
-        conn.set_ex(key, json, ttl.as_secs()).await
+        // Name the reply type: an unused generic reply falls back to `!` in edition 2024 and fails
+        let _: () = conn.set_ex(key, json, ttl.as_secs()).await
             .map_err(|e| AppError::Internal(e.into()))?;
 
         Ok(())
@@ -712,7 +735,7 @@ impl CacheLayer {
     pub async fn invalidate(&self, key: &str) -> Result<(), AppError> {
         let mut conn = self.redis.get().await
             .map_err(|e| AppError::Internal(e.into()))?;
-        conn.del(key).await
+        let _: () = conn.del(key).await
             .map_err(|e| AppError::Internal(e.into()))?;
         Ok(())
     }
@@ -745,8 +768,13 @@ impl OrderService {
 ```rust
 // BAD: N+1 — one query per order to get items
 async fn list_orders_with_items(pool: &PgPool, tenant_id: &str) -> Result<Vec<OrderWithItems>, AppError> {
-    let orders = sqlx::query_as!(Order, "SELECT * FROM orders WHERE tenant_id = $1", tenant_id)
-        .fetch_all(pool).await?;
+    let orders = sqlx::query_as!(
+        Order,
+        r#"SELECT id, tenant_id, user_id, total, status as "status: OrderStatus", created_at
+           FROM orders WHERE tenant_id = $1"#,
+        tenant_id,
+    )
+    .fetch_all(pool).await?;
 
     let mut result = Vec::with_capacity(orders.len());
     for order in orders {
@@ -780,8 +808,13 @@ async fn list_orders_with_items(pool: &PgPool, tenant_id: &str) -> Result<Vec<Or
 
 // GOOD: Batch loading — fetch all items for all orders in one query
 async fn list_orders_with_items(pool: &PgPool, tenant_id: &str) -> Result<Vec<OrderWithItems>, AppError> {
-    let orders = sqlx::query_as!(Order, "SELECT * FROM orders WHERE tenant_id = $1", tenant_id)
-        .fetch_all(pool).await?;
+    let orders = sqlx::query_as!(
+        Order,
+        r#"SELECT id, tenant_id, user_id, total, status as "status: OrderStatus", created_at
+           FROM orders WHERE tenant_id = $1"#,
+        tenant_id,
+    )
+    .fetch_all(pool).await?;
 
     let order_ids: Vec<&str> = orders.iter().map(|o| o.id.as_str()).collect();
 
@@ -817,7 +850,7 @@ async fn list_orders_with_items(pool: &PgPool, tenant_id: &str) -> Result<Vec<Or
 ```toml
 # Cargo.toml
 [dev-dependencies]
-criterion = { version = "0.5", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 [[bench]]
 name = "order_benchmarks"
@@ -826,7 +859,8 @@ harness = false
 
 ```rust
 // benches/order_benchmarks.rs
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
+use std::hint::black_box; // criterion::black_box is deprecated
 
 fn bench_normalize_tenant_id(c: &mut Criterion) {
     let inputs = vec![
@@ -895,8 +929,12 @@ cargo flamegraph --release --bin order-service
 ### DHAT for Heap Profiling
 
 ```toml
-[dev-dependencies]
-dhat = "0.3"
+[dependencies]
+# optional + behind a feature: main() uses it, and a dev-dependency is not available to the binary
+dhat = { version = "0.3", optional = true }
+
+[features]
+dhat-heap = ["dep:dhat"]  # cargo run --features dhat-heap
 
 [profile.release]
 debug = true  # needed for DHAT symbolication
@@ -930,11 +968,13 @@ cargo run --features dhat-heap
 
 ```toml
 [dependencies]
-console-subscriber = "0.4"
+console-subscriber = "0.5"
 ```
 
 ```rust
 // In main.rs — replace or combine with tracing-subscriber
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+
 fn init_telemetry_with_console() {
     // tokio-console layer for async task inspection
     let console_layer = console_subscriber::spawn();
@@ -958,10 +998,11 @@ tokio-console
 
 ```toml
 [dependencies]
-tracing-timing = "0.6"
+tracing-timing = "0.7"
 ```
 
 ```rust
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_timing::{Builder, Histogram};
 
 fn init_timing_layer() {

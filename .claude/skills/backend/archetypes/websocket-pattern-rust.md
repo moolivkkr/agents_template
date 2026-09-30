@@ -14,6 +14,8 @@ tags:
 
 # WebSocket Pattern — Rust
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9 (ws), tokio 1.53.1. Compiled, not run.
+
 > **Canonical reference**: This is the Rust counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Rust WebSocket servers use `axum`'s built-in WebSocket support (backed by `tokio-tungstenite`) for the upgrade handler, plus `tokio::sync::broadcast` or `mpsc` channels for message distribution.
@@ -174,6 +176,12 @@ impl ConnectionManager {
         }
     }
 
+    pub async fn send_to_conn(&self, conn_id: &str, msg: WsMessage) {
+        if let Some((_, tx)) = self.connections.read().await.get(conn_id) {
+            let _ = tx.send(msg);
+        }
+    }
+
     pub async fn send_to_user(&self, user_id: &str, msg: WsMessage) {
         let user_conns = {
             let users = self.users.read().await;
@@ -216,13 +224,15 @@ use uuid::Uuid;
 
 use super::manager::ConnectionManager;
 use super::types::{ConnectedUser, WsMessage};
-use crate::auth::validate_jwt;
+use crate::auth::redeem_ws_ticket;
 
 const MAX_MESSAGE_SIZE: usize = 65536; // 64KB
 
+/// `?ticket=` is a single-use, ~30s ticket from `POST /api/v1/ws-tickets` (websocket-pattern.md,
+/// Option 1). Never a bearer token: query strings end up in proxy and access logs.
 #[derive(Deserialize)]
 pub struct WsQuery {
-    token: String,
+    ticket: String,
 }
 
 pub async fn ws_upgrade(
@@ -230,8 +240,8 @@ pub async fn ws_upgrade(
     Query(query): Query<WsQuery>,
     State(manager): State<Arc<ConnectionManager>>,
 ) -> impl IntoResponse {
-    // Authenticate before upgrade
-    let claims = match validate_jwt(&query.token) {
+    // Authenticate before upgrade: atomically redeem (GET+DELETE) the ticket
+    let claims = match redeem_ws_ticket(&query.ticket).await {
         Ok(c) => c,
         Err(e) => {
             warn!(error = %e, "ws.auth_failed");
@@ -364,11 +374,8 @@ async fn send_ack(conn_id: &str, reference: Option<&str>, manager: &Arc<Connecti
             reference: Some(r.to_string()),
             timestamp: None,
         };
-        // Send via manager (it has the sender)
-        let conns = manager.connections.read().await;
-        if let Some((_, tx)) = conns.get(conn_id) {
-            let _ = tx.send(ack);
-        }
+        // Send via manager (it owns the connection map and the senders)
+        manager.send_to_conn(conn_id, ack).await;
     }
 }
 ```

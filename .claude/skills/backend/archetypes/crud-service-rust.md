@@ -12,6 +12,8 @@ tags:
 
 # CRUD Service Archetype (Rust)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0, redis 1.7.1, deadpool-redis 0.23.1, async-trait 0.1.92 — alone and composed with the handler/repository archetypes; crud-service-test-rust.md's tests ran and pass.
+
 Complete, production-ready Rust service layer template. Every generated service MUST follow this pattern.
 
 ## Domain Types
@@ -79,6 +81,7 @@ pub trait WidgetRepository: Send + Sync {
     async fn update(&self, widget: &Widget) -> Result<(), AppError>;
     async fn soft_delete(&self, tenant_id: Uuid, id: Uuid) -> Result<(), AppError>;
     async fn list(&self, tenant_id: Uuid, filters: &ListFilters) -> Result<ListResult<Widget>, AppError>;
+    async fn batch_create(&self, widgets: &[Widget]) -> Result<(), AppError>; // PgWidgetRepository implements all six
 }
 
 /// Cache trait — abstracts Redis or any other caching backend.
@@ -247,8 +250,8 @@ impl WidgetService {
         let cache_key = format!("widget:{tenant_id}:{id}");
         let _ = self.cache.delete(&cache_key).await;
 
-        // 7. Audit log
-        self.audit_log("widget.updated", id, tenant_id, user_id, Some(&input)).await;
+        // 7. Audit log (the new state; `input`'s fields were moved into `existing` above)
+        self.audit_log("widget.updated", id, tenant_id, user_id, Some(&existing)).await;
 
         tracing::info!("widget updated");
         Ok(existing)
@@ -413,7 +416,8 @@ impl Cache for RedisCache {
     async fn set(&self, key: &str, value: &[u8], ttl: Duration) -> Result<(), AppError> {
         let mut conn = self.pool.get().await
             .map_err(|e| AppError::Internal(e.into()))?;
-        conn.set_ex(key, value, ttl.as_secs()).await
+        // Name the reply type: an unused generic reply falls back to `!` in edition 2024 and fails
+        let _: () = conn.set_ex(key, value, ttl.as_secs()).await
             .map_err(|e| AppError::Internal(e.into()))?;
         Ok(())
     }
@@ -421,7 +425,7 @@ impl Cache for RedisCache {
     async fn delete(&self, key: &str) -> Result<(), AppError> {
         let mut conn = self.pool.get().await
             .map_err(|e| AppError::Internal(e.into()))?;
-        conn.del(key).await
+        let _: () = conn.del(key).await
             .map_err(|e| AppError::Internal(e.into()))?;
         Ok(())
     }

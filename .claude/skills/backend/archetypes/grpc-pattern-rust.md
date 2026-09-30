@@ -14,36 +14,46 @@ tags:
 
 # gRPC Pattern — Rust
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, tonic 0.14.6, prost 0.14.4, tonic-prost-build 0.14.6 (protoc 36.2, grpc-pattern.md's .proto files), tonic-health/-reflection 0.14.6. Compiled, not run.
+
 > **Canonical reference**: This is the Rust counterpart to `grpc-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
-Rust gRPC uses `tonic` for the server/client runtime and `prost` for Protobuf serialization. Code generation happens at build time via `tonic-build`.
+Rust gRPC uses `tonic` for the server/client runtime and `prost` for Protobuf serialization. Code generation happens at build time via `tonic-prost-build` (tonic 0.14; earlier versions used `tonic-build`), which needs `protoc` installed.
 
 ## Build Setup
 
 ```toml
 # Cargo.toml
 [dependencies]
-tonic = "0.11"
-prost = "0.12"
-prost-types = "0.12"
+tonic = "0.14"
+tonic-prost = "0.14"        # prost codec the generated code uses (split out of tonic in 0.14)
+prost = "0.14"
+prost-types = "0.14"        # google.protobuf.Timestamp
 tokio = { version = "1", features = ["full"] }
-tonic-health = "0.11"
-tonic-reflection = "0.11"
-tower = "0.4"
+tokio-stream = "0.1"        # ReceiverStream for server streaming
+tonic-health = "0.14"
+tonic-reflection = "0.14"
+tower = "0.5"
+http = "1"                  # the auth layer is a tower Service over http::Request
 uuid = { version = "1", features = ["v4", "serde"] }
 tracing = "0.1"
 
 [build-dependencies]
-tonic-build = "0.11"
+tonic-prost-build = "0.14"  # was tonic-build before 0.14; needs protoc on PATH
 ```
 
 ```rust
-// build.rs
+// build.rs — tonic 0.14 moved prost codegen to tonic-prost-build (needs `protoc` on PATH)
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tonic_build::configure()
+    let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR")?);
+    tonic_prost_build::configure()
         .build_server(true)
         .build_client(true)
-        .compile(
+        // RPCs this server does not implement yet answer UNIMPLEMENTED (Go: embed Unimplemented…Server)
+        .generate_default_stubs(true)
+        // for tonic-reflection: proto::FILE_DESCRIPTOR_SET below
+        .file_descriptor_set_path(out_dir.join("yourapp_descriptor.bin"))
+        .compile_protos(
             &["proto/yourapp/v1/widget_service.proto"],
             &["proto"],
         )?;
@@ -62,6 +72,7 @@ use uuid::Uuid;
 
 pub mod proto {
     tonic::include_proto!("yourapp.v1");
+    pub const FILE_DESCRIPTOR_SET: &[u8] = tonic::include_file_descriptor_set!("yourapp_descriptor");
 }
 
 use proto::widget_service_server::WidgetService;
@@ -69,7 +80,12 @@ use proto::*;
 
 use crate::services::WidgetSvc;
 use crate::grpc::context::{tenant_id_from_request, user_id_from_request};
+use crate::grpc::convert::{event_to_proto, to_proto}; // domain → proto mapping (not shown)
 use crate::grpc::errors::map_error;
+
+/// What a server-streaming RPC returns when build.rs sets generate_default_stubs(true).
+type WidgetEventStream =
+    std::pin::Pin<Box<dyn tokio_stream::Stream<Item = Result<WidgetEvent, Status>> + Send + 'static>>;
 
 pub struct WidgetGrpcServer {
     svc: std::sync::Arc<dyn WidgetSvc>,
@@ -147,13 +163,12 @@ impl WidgetService for WidgetGrpcServer {
         }))
     }
 
-    // Server streaming
-    type WatchWidgetsStream = tokio_stream::wrappers::ReceiverStream<Result<WidgetEvent, Status>>;
-
+    // Server streaming. With generate_default_stubs(true) (build.rs) a streaming RPC returns a boxed
+    // stream; without it, declare `type WatchWidgetsStream = ReceiverStream<…>;` and return that.
     async fn watch_widgets(
         &self,
         request: Request<WatchWidgetsRequest>,
-    ) -> Result<Response<Self::WatchWidgetsStream>, Status> {
+    ) -> Result<Response<WidgetEventStream>, Status> {
         let tenant_id = tenant_id_from_request(&request)?;
 
         let (tx, rx) = tokio::sync::mpsc::channel(128);
@@ -169,7 +184,7 @@ impl WidgetService for WidgetGrpcServer {
             info!(tenant_id = %tenant_id, "watch.ended");
         });
 
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+        Ok(Response::new(Box::pin(tokio_stream::wrappers::ReceiverStream::new(rx))))
     }
 
     // Client streaming
@@ -190,7 +205,9 @@ impl WidgetService for WidgetGrpcServer {
                 Ok(_) => imported += 1,
                 Err(e) => {
                     failed += 1;
-                    errors.push(format!("row {}: {}", imported + failed, e));
+                    // user-safe text only; the cause (Display) stays in the server log
+                    tracing::warn!(error = %e, row = imported + failed, "import row failed");
+                    errors.push(format!("row {}: {}", imported + failed, e.user_message()));
                 }
             }
         }
@@ -210,9 +227,11 @@ impl WidgetService for WidgetGrpcServer {
 // src/grpc/auth_layer.rs
 
 use std::task::{Context, Poll};
-use tonic::{Request, Status};
+use tonic::Status;
 use tower::{Layer, Service};
 use uuid::Uuid;
+
+use crate::auth::JwtValidator; // your token validator: validate(&str) -> Result<Claims, _> (not shown)
 
 /// Extension type stored in tonic::Request extensions.
 #[derive(Debug, Clone)]
@@ -251,7 +270,7 @@ pub struct AuthService<S> {
 
 impl<S, B> Service<http::Request<B>> for AuthService<S>
 where
-    S: Service<http::Request<B>, Response = http::Response<tonic::body::BoxBody>>
+    S: Service<http::Request<B>, Response = http::Response<tonic::body::Body>> // BoxBody before tonic 0.13
         + Clone
         + Send
         + 'static,
@@ -287,11 +306,14 @@ where
         let mut inner = self.inner.clone();
 
         Box::pin(async move {
-            let token = token.ok_or_else(|| Status::unauthenticated("missing authorization"))?;
-
-            let claims = validator
-                .validate(&token)
-                .map_err(|_| Status::unauthenticated("invalid token"))?;
+            // A rejection is a gRPC status sent as the HTTP response (the inner service's error
+            // type is generic, so a Status can't be returned with `?`)
+            let Some(token) = token else {
+                return Ok(Status::unauthenticated("missing authorization").into_http());
+            };
+            let Ok(claims) = validator.validate(&token) else {
+                return Ok(Status::unauthenticated("invalid token").into_http());
+            };
 
             req.extensions_mut().insert(AuthContext {
                 tenant_id: claims.tenant_id,
@@ -337,15 +359,25 @@ pub fn user_id_from_request<T>(request: &Request<T>) -> Result<Uuid, Status> {
 // src/grpc/errors.rs
 
 use tonic::Status;
-use crate::errors::AppError;
+use crate::error::AppError; // the one AppError (error-handling-rust.md)
 
+/// AppError → gRPC status (grpc-pattern.md table). The message is the same user-safe text the HTTP
+/// envelope carries; the cause (Display) goes to the log only.
 pub fn map_error(err: AppError) -> Status {
-    match err {
-        AppError::NotFound(msg) => Status::not_found(msg),
-        AppError::Conflict(msg) => Status::already_exists(msg),
-        AppError::Validation(msg) => Status::invalid_argument(msg),
-        AppError::Forbidden(msg) => Status::permission_denied(msg),
-        AppError::Internal(_) => Status::internal("internal error"),
+    let msg = err.user_message();
+    match &err {
+        AppError::MalformedRequest(_) | AppError::Validation { .. } => Status::invalid_argument(msg),
+        AppError::Unauthenticated => Status::unauthenticated(msg),
+        AppError::Forbidden => Status::permission_denied(msg),
+        AppError::NotFound { .. } => Status::not_found(msg),
+        AppError::Conflict { .. } | AppError::IdempotencyKeyReused => Status::already_exists(msg),
+        AppError::BusinessRule { .. } => Status::failed_precondition(msg),
+        AppError::RateLimited { .. } => Status::resource_exhausted(msg),
+        AppError::Unavailable { .. } => Status::unavailable(msg),
+        AppError::Internal(_) => {
+            tracing::error!(error = %err, "grpc request failed");
+            Status::internal(msg)
+        }
     }
 }
 ```
@@ -355,18 +387,26 @@ pub fn map_error(err: AppError) -> Status {
 ```rust
 // src/main.rs
 
+mod app; // your wiring: wire() -> (Arc<dyn WidgetSvc>, Arc<dyn JwtValidator>) (not shown)
+mod grpc; // widget_server, auth_layer, context, convert, errors
+
 use tonic::transport::Server;
 use tonic_health::server::health_reporter;
 use tonic_reflection::server::Builder as ReflectionBuilder;
+
+use grpc::auth_layer::AuthLayer;
+use grpc::widget_server::{proto, WidgetGrpcServer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let addr = "[::]:50051".parse()?;
+    // Your wiring (not shown): the WidgetSvc implementation and the JWT validator
+    let (widget_svc, jwt_validator) = app::wire().await?;
 
     // Health service
-    let (mut health_reporter, health_service) = health_reporter();
+    let (health_reporter, health_service) = health_reporter();
     health_reporter
         .set_serving::<proto::widget_service_server::WidgetServiceServer<WidgetGrpcServer>>()
         .await;
@@ -376,7 +416,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(
             ReflectionBuilder::configure()
                 .register_encoded_file_descriptor_set(proto::FILE_DESCRIPTOR_SET)
-                .build()?,
+                .build_v1()?, // grpc.reflection.v1 (build_v1alpha() for older clients)
         )
     } else {
         None
@@ -399,8 +439,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// SIGTERM is what Kubernetes and Docker send on stop; Ctrl+C (SIGINT) for local runs.
 async fn shutdown_signal() {
-    tokio::signal::ctrl_c().await.ok();
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        .expect("failed to install SIGTERM handler");
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
     tracing::info!("shutdown signal received");
 }
 ```
@@ -411,7 +457,7 @@ async fn shutdown_signal() {
 - Use `#[tonic::async_trait]` on service implementations — required for async trait methods
 - Use `Request::extensions()` for auth context — injected by Tower middleware layer
 - Return `Status::xxx()` for all errors — tonic maps them to proper gRPC codes
-- Server streaming returns a `ReceiverStream` — use `mpsc::channel` and spawn a task
+- Server streaming returns a boxed `ReceiverStream` (the generated signature with `generate_default_stubs(true)`) — use `mpsc::channel` and spawn a task
 - Client streaming receives `tonic::Streaming<T>` — iterate with `stream.message().await`
 - Use `serve_with_shutdown` for graceful shutdown — takes a future that resolves on signal
 - Use `tonic-health` for standard health check service

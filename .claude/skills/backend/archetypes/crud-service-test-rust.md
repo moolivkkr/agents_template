@@ -14,6 +14,8 @@ tags:
 
 # CRUD Service Test Archetype (Rust / mockall)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, mockall 0.15.0, tokio 1.53.1; the tests ran against crud-service-rust.md and pass.
+
 Complete unit test template for the Rust service layer. Every generated service test MUST follow this pattern.
 
 ## Test Module Location
@@ -36,8 +38,8 @@ Rule: Unit tests live inside `#[cfg(test)] mod tests` at the bottom of the produ
 ```toml
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-mockall = "0.13"
-claims = "0.7"
+mockall = "0.15"
+claims = "0.8"
 uuid = { version = "1", features = ["v4"] }
 serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
@@ -67,6 +69,7 @@ pub trait WidgetRepository: Send + Sync {
         tenant_id: Uuid,
         filters: &ListFilters,
     ) -> Result<ListResult<Widget>, AppError>;
+    async fn batch_create(&self, widgets: &[Widget]) -> Result<(), AppError>;
 }
 
 // src/traits/cache.rs
