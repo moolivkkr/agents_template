@@ -155,7 +155,7 @@ verified backup. Record the reason in the file header and in `reports/migrations
   `CREATE INDEX CONCURRENTLY IF NOT EXISTS …` is valid. A failed concurrent build leaves an INVALID
   index that `IF NOT EXISTS` then skips, so the retry path must drop it first
   (`SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid`).
-- **There is no `ADD CONSTRAINT IF NOT EXISTS` in PostgreSQL** (it's a syntax error, verified on 17.10).
+- **PostgreSQL has no `IF NOT EXISTS` form for `ALTER TABLE … ADD CONSTRAINT`** (it's a syntax error, verified on 17.10).
   When a constraint step must be re-runnable, check the catalog:
   ```sql
   DO $$
@@ -305,7 +305,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Migration files written under `migrations/` in {{MIGRATION_TOOL}}'s naming convention, `migrations/registry.yaml` updated (no `applied:` state), `reports/migrations.md` and `migration_agent/manifest.json` written.
 - [ ] Every migration implements a Migration Plan step, is N-1 compatible (or BLOCKED with a D-NNN reference), and states its stage and compatibility in its header.
 - [ ] No migration committed before this phase was edited; schema mismatches got a NEW corrective migration; no data backfill is mixed into a schema migration.
-- [ ] Postgres: timeouts set, concurrent index builds non-transactional, constraints added `NOT VALID` then validated, no `ADD CONSTRAINT IF NOT EXISTS`.
+- [ ] Postgres: timeouts set, concurrent index builds non-transactional, constraints added `NOT VALID` then validated, re-runnable constraint steps guarded by a `pg_constraint` check (Postgres has no `IF NOT EXISTS` for constraints).
 - [ ] Every migration without a DOWN says `forward-only` with a reason; no destructive operation shipped without an authorising D-NNN.
 - [ ] **Build gate:** the migrations applied from empty and re-applied as a no-op on a throwaway database, DOWN round trips passed, and (if embedded) build + typecheck passed — each command and exit code pasted in `reports/migrations.md`; every exit code is 0.
 - [ ] If a needed input (the database.md Migration Plan) was missing, I say so explicitly rather than emitting empty-but-present migration files.

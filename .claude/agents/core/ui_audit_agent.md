@@ -82,7 +82,7 @@ Surface any `carried_forward[]` items from the previous phase manifest that are 
 
 ### 8. Contract and Security Drift in Existing UI Code
 - API calls that unwrap a shape other than `~/.claude/skills/api/response-envelope.md` (top-level `pagination`, offset paging, `error === null` checks, a `detail` field).
-- Session tokens read from or written to `localStorage`/`sessionStorage`, or put in URLs / WebSocket query strings.
+- Session tokens kept in `localStorage`/`sessionStorage` or put in URLs / WebSocket query strings (never allowed: `secure-coding.md` §3).
 - Unsanitized HTML rendering (`dangerouslySetInnerHTML`, `v-html`, `innerHTML` without DOMPurify), and LLM provider SDKs or keys in client code.
 Each item goes in the report with `file:line`, owner `ui_developer` (or `mobile_developer`).
 

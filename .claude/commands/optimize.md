@@ -98,8 +98,8 @@ mkdir -p agent_state/optimize
 git rev-parse HEAD > agent_state/optimize/pre_sha      # the agents verify this before changing anything
 PRE_SHA="$(cat agent_state/optimize/pre_sha)"
 ```
-Every optimization is its own commit, so each can be reverted with `git revert`. Nothing in this
-command uses `git reset --hard`.
+Every optimization is its own commit, so each can be reverted with `git revert`.
+Nothing in this command uses `git reset --hard`.
 
 ### Load context
 - `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, §Commands and versions
