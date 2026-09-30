@@ -252,7 +252,7 @@ ENV JAVA_OPTS="\
 ## Spring Boot Layered JAR Configuration
 
 ```kotlin
-// build.gradle.kts — enable layered JARs (default in Spring Boot 3.x)
+// build.gradle.kts — layered JARs are on by default; this customizes the layers
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
     layered {
         application {
@@ -267,6 +267,8 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
             }
             intoLayer("dependencies")
         }
+        // Required with custom layers (the build fails without it); least-changing layer first
+        layerOrder.set(listOf("dependencies", "spring-boot-loader", "snapshot-dependencies", "application"))
     }
 }
 ```

@@ -1,6 +1,6 @@
 ---
 skill: crud-handler-test-java
-description: Spring Boot controller test archetype — @WebMvcTest, MockMvc, @MockBean, JSON path assertions, pagination, validation, auth, error responses, parameterized tests
+description: Spring Boot controller test archetype — @WebMvcTest, MockMvc, @MockitoBean, JSON path assertions, pagination, validation, auth, error responses, parameterized tests
 version: "1.0"
 tags:
   - java
@@ -25,7 +25,7 @@ src/test/java/com/example/app/
   TestFixtures.java              <- shared test factories
 ```
 
-Rule: Controller tests use `@WebMvcTest` slicing — only the controller layer and its dependencies are loaded. The service layer is mocked via `@MockBean`.
+Rule: Controller tests use `@WebMvcTest` slicing — only the controller layer and its dependencies are loaded. The service layer is mocked via `@MockitoBean` (Spring Boot 4 removed `@MockBean`).
 
 ## Test Setup
 
@@ -41,20 +41,20 @@ import com.example.app.config.SecurityConfig;
 import com.example.app.security.SecurityErrorDelegate;
 import com.example.app.security.UserPrincipal;
 import com.example.app.service.WidgetService;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.*;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.bean.MockBean;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.domain.*;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.util.*;
@@ -82,9 +82,9 @@ class WidgetControllerTest {
     private MockMvc mockMvc;
 
     @Autowired
-    private ObjectMapper objectMapper;
+    private ObjectMapper objectMapper; // Jackson 3 (tools.jackson): the mapper Spring Boot 4 auto-configures
 
-    @MockBean
+    @MockitoBean
     private WidgetService widgetService;
 
     private static final UUID TENANT_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
@@ -923,7 +923,7 @@ class ContentNegotiationTests {
 ## Critical Rules
 
 - Every controller test MUST use `@WebMvcTest` — do NOT use `@SpringBootTest` for controller tests (too slow, loads full context).
-- `@MockBean` for every service dependency — controllers are tested in isolation.
+- `@MockitoBean` for every service dependency — controllers are tested in isolation (`@MockBean` is gone in Spring Boot 4).
 - `user(testPrincipal())` MUST be used on every request that requires authentication — this simulates Spring Security's `@AuthenticationPrincipal`.
 - Malformed JSON, an empty body or a non-JSON content type MUST return 400 `MALFORMED_REQUEST`.
 - `@Valid` constraint violations and bad path/query types MUST return 400 `VALIDATION_FAILED` with `details[]`; domain rules 422 `BUSINESS_RULE_VIOLATION`.

@@ -1,6 +1,6 @@
 ---
 skill: migration-pattern-java
-description: Flyway migration archetype — SQL naming conventions, repeatable migrations, Java-based migrations, rollback patterns, seed data, multi-tenant schema, @FlywayTest integration
+description: Flyway migration archetype — SQL naming conventions, repeatable migrations, Java-based migrations, rollback patterns, seed data, multi-tenant schema, migration tests (Flyway clean + migrate)
 version: "1.0"
 tags:
   - java
@@ -376,7 +376,7 @@ import org.flywaydb.core.api.callback.Context;
 import org.flywaydb.core.api.callback.Event;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.flyway.FlywayConfigurationCustomizer;
+import org.springframework.boot.flyway.autoconfigure.FlywayConfigurationCustomizer; // Spring Boot 4 package
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -485,20 +485,20 @@ CREATE INDEX idx_tenants_active ON tenants (id) WHERE is_active = TRUE;
 --     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 ```
 
-## Testing Migrations (@FlywayTest)
+## Testing Migrations
 
 ```java
 package com.example.app.repository;
 
-import org.flywaydb.test.annotation.FlywayTest;
-import org.flywaydb.test.junit5.FlywayTestExtension;
+import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;          // Spring Boot 4 test-slice packages
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.transaction.annotation.Propagation;
+import org.springframework.transaction.annotation.Transactional;
 
 import javax.sql.DataSource;
 import java.sql.SQLException;
@@ -517,6 +517,9 @@ class MigrationTest {
 
     @Autowired
     private DataSource dataSource;
+
+    @Autowired
+    private Flyway flyway; // the one Spring Boot ran at startup
 
     @Test
     void allMigrationsApplyCleanly() throws SQLException {
@@ -563,13 +566,12 @@ class MigrationTest {
     }
 
     @Test
-    @FlywayTest(locationsForMigrate = "db/migration")
-    void migrationsAreIdempotent() throws SQLException {
-        // @FlywayTest re-runs all migrations from scratch
-        // If this passes, migrations are safe to re-apply
-        try (var conn = dataSource.getConnection()) {
-            assertThat(conn.isValid(5)).isTrue();
-        }
+    @Transactional(propagation = Propagation.NOT_SUPPORTED) // clean() drops the schema: not inside the test transaction
+    void migrationsRebuildFromEmptySchema() {
+        // Drop everything and replay every migration from scratch. Needs spring.flyway.clean-disabled: false
+        // in the test profile — Flyway refuses clean() by default, and must keep refusing in every other one.
+        flyway.clean();
+        assertThat(flyway.migrate().success).isTrue();
     }
 }
 ```

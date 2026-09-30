@@ -119,29 +119,31 @@ spring:
 ```java
 package com.example.app.config;
 
+import org.apache.hc.client5.http.config.ConnectionConfig;
 import org.apache.hc.client5.http.impl.classic.CloseableHttpClient;
 import org.apache.hc.client5.http.impl.classic.HttpClients;
 import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManager;
+import org.apache.hc.client5.http.impl.io.PoolingHttpClientConnectionManagerBuilder;
 import org.apache.hc.core5.util.TimeValue;
 import org.apache.hc.core5.util.Timeout;
-import org.springframework.boot.web.client.RestTemplateBuilder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.client.HttpComponentsClientHttpRequestFactory;
 import org.springframework.web.client.RestClient;
-
-import java.time.Duration;
 
 @Configuration
 public class HttpClientConfig {
 
     @Bean
     public RestClient restClient() {
-        PoolingHttpClientConnectionManager connectionManager =
-                new PoolingHttpClientConnectionManager();
-        connectionManager.setMaxTotal(100);                    // Max total connections
-        connectionManager.setDefaultMaxPerRoute(20);           // Max per host
-        connectionManager.setValidateAfterInactivity(TimeValue.ofSeconds(5));
+        PoolingHttpClientConnectionManager connectionManager = PoolingHttpClientConnectionManagerBuilder.create()
+                .setMaxConnTotal(100)                          // Max total connections
+                .setMaxConnPerRoute(20)                        // Max per host
+                .setDefaultConnectionConfig(ConnectionConfig.custom()
+                        .setConnectTimeout(Timeout.ofSeconds(2))           // the default is 3 minutes
+                        .setValidateAfterInactivity(TimeValue.ofSeconds(5))
+                        .build())
+                .build();
 
         CloseableHttpClient httpClient = HttpClients.custom()
                 .setConnectionManager(connectionManager)
@@ -557,25 +559,28 @@ public class Order {
 ```java
 /**
  * Projection interface — JPA generates SQL that selects only these columns.
- * Use for list/summary endpoints where you don't need the full entity.
+ * Use for list/summary endpoints where you don't need the full entity. Each getter names an entity
+ * property; a computed value (an item count) belongs in the DTO query below.
  */
 public interface OrderSummaryProjection {
     UUID getId();
     String getStatus();
     BigDecimal getTotal();
     Instant getCreatedAt();
-    int getItemCount();
 }
 
 public interface OrderRepository extends JpaRepository<Order, UUID> {
 
     /**
-     * Returns only id, status, total, created_at, and item_count — NOT SELECT *.
+     * Returns only id, status, total and created_at — NOT SELECT *. Keyset-scrolled like every list
+     * (ScrollPosition in, Window out): no OFFSET, no COUNT query.
      */
-    List<OrderSummaryProjection> findByTenantId(UUID tenantId, Pageable pageable);
+    Window<OrderSummaryProjection> findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(UUID tenantId,
+                                                                                    ScrollPosition position);
 
     /**
-     * JPQL with DTO constructor expression — even more control.
+     * JPQL with DTO constructor expression — even more control. A fixed top-N (Limit), not a page:
+     * list endpoints scroll with a keyset as above.
      */
     @Query("""
         SELECT new com.example.app.dto.OrderListItem(
@@ -583,9 +588,9 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
         )
         FROM Order o
         WHERE o.tenantId = :tenantId
-        ORDER BY o.createdAt DESC
+        ORDER BY o.createdAt DESC, o.id DESC
         """)
-    List<OrderListItem> findOrderList(@Param("tenantId") UUID tenantId, Pageable pageable);
+    List<OrderListItem> findRecentOrders(@Param("tenantId") UUID tenantId, Limit limit);
 }
 ```
 
@@ -595,7 +600,7 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
 package com.example.app.config;
 
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.jdbc.DataSourceProperties;
+import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties; // Spring Boot 4 package
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -658,8 +663,8 @@ public class DataSourceRoutingConfig {
 public class OrderQueryService {
 
     @Transactional(readOnly = true)  // Routes to replica
-    public Page<OrderSummaryProjection> listOrders(UUID tenantId, Pageable pageable) {
-        return orderRepository.findByTenantId(tenantId, pageable);
+    public Window<OrderSummaryProjection> listOrders(UUID tenantId, ScrollPosition position) {
+        return orderRepository.findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(tenantId, position);
     }
 
     @Transactional  // Routes to primary
@@ -938,7 +943,7 @@ public class OrderController {
 }
 ```
 
-### 6b. Structured Concurrency (Preview — Java 21+)
+### 6b. Structured Concurrency (Preview — JDK 25 API)
 
 ```java
 import java.util.concurrent.StructuredTaskScope;
@@ -946,12 +951,14 @@ import java.util.concurrent.StructuredTaskScope;
 /**
  * Structured concurrency — fan-out, fan-in with proper lifecycle management.
  * If any subtask fails, all others are cancelled. No leaked threads.
- * Requires: --enable-preview
+ * Requires: --enable-preview, and the preview API of YOUR JDK: this is the JDK 25 shape (JEP 505).
+ * JDK 21–24 had `new StructuredTaskScope.ShutdownOnFailure()` + throwIfFailed(), which JDK 25 removed.
  */
-public EnrichedOrder getEnrichedOrder(UUID orderId) throws Exception {
+public EnrichedOrder getEnrichedOrder(UUID orderId) throws InterruptedException {
     Order order = orderRepository.findById(orderId).orElseThrow();
 
-    try (var scope = new StructuredTaskScope.ShutdownOnFailure()) {
+    // open(): wait for all subtasks; the first failure cancels the others
+    try (var scope = StructuredTaskScope.open()) {
         var profileTask = scope.fork(() ->
                 customerClient.getProfile(order.getUserId()));
         var shippingTask = scope.fork(() ->
@@ -959,8 +966,7 @@ public EnrichedOrder getEnrichedOrder(UUID orderId) throws Exception {
         var inventoryTask = scope.fork(() ->
                 inventoryClient.checkStock(order.getItemIds()));
 
-        scope.join();            // Wait for all tasks
-        scope.throwIfFailed();   // Propagate first failure
+        scope.join();            // Waits for all; throws StructuredTaskScope.FailedException on a failure
 
         return new EnrichedOrder(
                 order,
@@ -979,6 +985,10 @@ public EnrichedOrder getEnrichedOrder(UUID orderId) throws Exception {
 public class OrderEnrichmentService {
 
     private final Executor taskExecutor;
+
+    public OrderEnrichmentService(Executor taskExecutor) { // the bounded executor from 6d, not the common pool
+        this.taskExecutor = taskExecutor;
+    }
 
     /**
      * Fan-out to multiple services concurrently, combine results.
@@ -1092,22 +1102,20 @@ import java.time.Duration;
 @EnableCaching
 public class CacheConfig {
 
+    /**
+     * ONE CacheManager: with @EnableCaching, two CacheManager beans and no CachingConfigurer fail
+     * ("expected single matching CacheManager").
+     */
     @Bean
     public CacheManager cacheManager() {
         CaffeineCacheManager manager = new CaffeineCacheManager();
+        // Default for caches created on first use
         manager.setCaffeine(Caffeine.newBuilder()
                 .maximumSize(10_000)
                 .expireAfterWrite(Duration.ofMinutes(15))
                 .recordStats());     // Enable cache statistics for monitoring
-        return manager;
-    }
 
-    /**
-     * Named caches with different configurations.
-     */
-    @Bean
-    public CacheManager multiCacheManager() {
-        CaffeineCacheManager manager = new CaffeineCacheManager();
+        // Named caches with different configurations
         manager.registerCustomCache("products",
                 Caffeine.newBuilder()
                         .maximumSize(5_000)
@@ -1124,7 +1132,7 @@ public class CacheConfig {
                 Caffeine.newBuilder()
                         .maximumSize(1_000)
                         .expireAfterWrite(Duration.ofHours(1))
-                        .refreshAfterWrite(Duration.ofMinutes(30))
+                        // no refreshAfterWrite here: it needs a CacheLoader (build(loader)); build() throws
                         .recordStats()
                         .build());
         return manager;
@@ -1224,8 +1232,9 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.data.redis.cache.RedisCacheConfiguration;
 import org.springframework.data.redis.cache.RedisCacheManager;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer;
 import org.springframework.data.redis.serializer.RedisSerializationContext;
+import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 
 import java.time.Duration;
 import java.util.Map;
@@ -1236,11 +1245,16 @@ public class RedisCacheConfig {
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
+        // Jackson 3 serializer (GenericJackson2JsonRedisSerializer is deprecated for removal); type ids restore
+        // the cached class, and the validator only accepts your own classes
+        var serializer = GenericJacksonJsonRedisSerializer.builder()
+                .enableDefaultTyping(BasicPolymorphicTypeValidator.builder()
+                        .allowIfSubType("com.example.app.")
+                        .build())
+                .build();
         RedisCacheConfiguration defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
                 .entryTtl(Duration.ofMinutes(15))
-                .serializeValuesWith(
-                        RedisSerializationContext.SerializationPair.fromSerializer(
-                                new GenericJackson2JsonRedisSerializer()))
+                .serializeValuesWith(RedisSerializationContext.SerializationPair.fromSerializer(serializer))
                 .prefixCacheNameWith("order-service:")
                 .disableCachingNullValues();
 
@@ -1267,8 +1281,9 @@ public class RedisCacheConfig {
  * Two-tier cache: Caffeine (in-process, microseconds) -> Redis (distributed, milliseconds).
  * Check Caffeine first; on miss, check Redis; on miss, call the database.
  * Write-through: updates write to both caches.
+ * Not a @Service: Spring can't inject the String/Duration/int arguments — construct one per cache in a
+ * @Bean method.
  */
-@Service
 public class TwoTierCacheService<K, V> {
 
     private final Cache<K, V> localCache;   // Caffeine

@@ -48,6 +48,8 @@ public record Job(
 ```java
 package com.example.app.worker;
 
+import com.example.app.worker.model.Job;
+
 public interface JobHandler {
     /** The job type this handler processes, e.g. "email.send". */
     String type();
@@ -107,7 +109,7 @@ public class WorkerService {
 
         this.executor = Executors.newFixedThreadPool(concurrency, r -> {
             Thread t = new Thread(r);
-            t.setName("worker-" + t.getId());
+            t.setName("worker-" + t.threadId());
             t.setDaemon(true);
             return t;
         });
@@ -247,6 +249,12 @@ public class WorkerService {
         try { Thread.sleep(duration.toMillis()); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
     }
+
+    // Read by WorkerHealthIndicator
+    public boolean isQueueConnected() { return queueClient.isConnected(); }
+    public Instant getLastJobAt() { return lastJobAt.get(); }
+    public int getInFlight() { return inFlight.get(); }
+    public int getConcurrency() { return concurrency; }
 }
 ```
 
@@ -255,7 +263,6 @@ public class WorkerService {
 ```java
 package com.example.app.worker.cron;
 
-import net.javacrumbs.shedlock.core.SchedulerLock;
 import net.javacrumbs.shedlock.spring.annotation.EnableSchedulerLock;
 import net.javacrumbs.shedlock.spring.annotation.SchedulerLock;
 import org.slf4j.Logger;
@@ -393,8 +400,8 @@ public class StreamConsumers {
 ```java
 package com.example.app.worker;
 
-import org.springframework.boot.actuate.health.Health;
-import org.springframework.boot.actuate.health.HealthIndicator;
+import org.springframework.boot.health.contributor.Health;          // Spring Boot 4 package
+import org.springframework.boot.health.contributor.HealthIndicator;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
@@ -425,7 +432,7 @@ public class WorkerHealthIndicator implements HealthIndicator {
             long agoSeconds = Duration.between(lastJob, Instant.now()).getSeconds();
             builder.withDetail("lastJobSecondsAgo", agoSeconds);
             if (agoSeconds > 300) {
-                builder = Health.status("DEGRADED");
+                builder.status("DEGRADED"); // keeps the details already added (Health.status(..) would drop them)
             }
         }
 

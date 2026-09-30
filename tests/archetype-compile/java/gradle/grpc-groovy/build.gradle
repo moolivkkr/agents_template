@@ -1,0 +1,9 @@
+// Harness project: the snippet's plugins join this block; the .proto files come from grpc-pattern.md.
+plugins {
+    id 'java'
+@PLUGINS@
+}
+
+repositories { mavenCentral() }
+
+@SNIPPET@

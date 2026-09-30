@@ -181,7 +181,7 @@ public final class BusinessRuleException extends DomainException {
 
     /** `rule` is shown to the user as-is: write it for users. */
     public BusinessRuleException(String resource, String rule) {
-        super("BUSINESS_RULE_VIOLATION", HttpStatus.UNPROCESSABLE_ENTITY, rule, resource);
+        super("BUSINESS_RULE_VIOLATION", HttpStatus.UNPROCESSABLE_CONTENT, rule, resource); // 422 (RFC 9110 name)
         this.rule = rule;
     }
 
@@ -540,7 +540,7 @@ The HTTP status carries the class; the `X-Request-Id` header equals `error.reque
 class WidgetControllerErrorTest {
 
     @Autowired MockMvc mockMvc;
-    @MockBean WidgetService widgetService;
+    @MockitoBean WidgetService widgetService; // Spring Boot 4 removed @MockBean
 
     @Test
     void getById_notFound_returns404Envelope() throws Exception {
