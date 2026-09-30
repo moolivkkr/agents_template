@@ -31,6 +31,35 @@ for CLASS in DANGLING_AGENT DANGLING_SKILL ASYMMETRIC WAVE_ORDER IO_UNPRODUCED R
   fi
 done
 
+# 1b. Regression (board review 2026-09-30, ARCH-08): the IO check's glob must be segment-aware. With
+#     fnmatch, '*' crossed '/', so a command naming agent_state/phases/${PHASE}/manifest.json "produced"
+#     every per-agent agent_state/phases/N/<agent>/manifest.json input, including ones nobody writes.
+FX="$(mktemp -d "${TMPDIR:-/tmp}/depgraph-fx.XXXXXX")"
+mkdir -p "$FX/.claude/agents/core" "$FX/.claude/commands" "$FX/.claude/skills/core"
+printf '%s\n' '---' 'name: producer_agent' 'skill_packs: []' 'output:' \
+  '  primary: "agent_state/phases/{{PHASE}}/producer_agent/manifest.json"' '---' '# producer' \
+  > "$FX/.claude/agents/core/producer_agent.md"
+printf '%s\n' '---' 'name: consumer_agent' 'skill_packs: []' 'input:' '  required:' \
+  '    - path: agent_state/phases/{{PHASE}}/producer_agent/manifest.json' \
+  '    - path: agent_state/phases/{{PHASE}}/no_such_agent/manifest.json' \
+  '    - path: agent_state/phases/{{PHASE}}/manifest.json' '---' '# consumer' \
+  > "$FX/.claude/agents/core/consumer_agent.md"
+printf '%s\n' '# run' 'Spawn producer_agent then consumer_agent.' \
+  'The parent writes agent_state/phases/${PHASE}/manifest.json at the gate.' > "$FX/.claude/commands/run.md"
+FXOUT="$(DEPGRAPH_ROOT="$FX" python3 "$TEST_DIR/lib/depgraph.py" --json 2>&1)"
+UNPROD="$(printf '%s' "$FXOUT" | jq -r '.findings.IO_UNPRODUCED[]?' 2>/dev/null)"
+if printf '%s\n' "$UNPROD" | grep -q "no_such_agent/manifest.json"; then
+  ok "IO check reports an unproduced per-agent manifest input (a '*' no longer crosses '/')"
+else
+  bad "IO check missed agent_state/phases/N/no_such_agent/manifest.json (fnmatch '*' crossing '/'?): ${FXOUT:0:300}"
+fi
+if printf '%s\n' "$UNPROD" | grep -qE "producer_agent/manifest.json|phases/TMPL_PHASE/manifest.json"; then
+  bad "IO check false-positive on a produced input: $UNPROD"
+else
+  ok "IO check still accepts inputs an agent or command produces at the same depth"
+fi
+rm -rf "$FX"
+
 # 2. Derived downstream lists are in sync (nobody hand-edited one).
 if python3 "$ROOT/.claude/agents/_sync-deps.py" --check >/dev/null 2>&1; then
   ok "dependency blocks in sync with _sync-deps.py"

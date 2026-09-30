@@ -18,6 +18,7 @@ and reports the reference classes that break communication between them:
 Usage: python3 tests/lib/depgraph.py [--json] [--strict CLASS,CLASS]
 Exit code is non-zero only when a class listed in --strict has findings.
 """
+import fnmatch
 import json
 import os
 import re
@@ -25,7 +26,8 @@ import sys
 
 import yaml
 
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+# DEPGRAPH_ROOT points the analysis at another tree (the regression fixtures in dependency-graph.test.sh).
+ROOT = os.path.abspath(os.environ.get("DEPGRAPH_ROOT") or os.path.join(os.path.dirname(__file__), "..", ".."))
 C = os.path.join(ROOT, ".claude")
 CORE = os.path.join(C, "agents", "core")
 TMPL = os.path.join(C, "agents", "templates")
@@ -270,6 +272,17 @@ def _canon(pth):
     return re.sub(r"\*+", "*", pth)
 
 
+def _seg_match(a, b):
+    """Do two canonical paths name the same file? Segment-aware: the same number of '/' segments, and
+    each pair of segments matches as a glob one way or the other. A '*' never crosses '/'. (fnmatch's
+    '*' does, so 'agent_state/phases/*/manifest.json' used to "produce" every per-agent
+    'agent_state/phases/*/<agent>/manifest.json' input — board review 2026-09-30, ARCH-08.)"""
+    sa, sb = a.split("/"), b.split("/")
+    if len(sa) != len(sb):
+        return False
+    return all(x == y or fnmatch.fnmatchcase(x, y) or fnmatch.fnmatchcase(y, x) for x, y in zip(sa, sb))
+
+
 PRODUCED_AREAS = ("agent_state/phases/", "docs/product-workflows/", "agent_state/e2e/", "agent_state/mobile/")
 produced = set()
 for a in agents.values():
@@ -287,9 +300,7 @@ for name, a in sorted(agents.items()):
             continue
         if c.endswith("/") or c.endswith("*"):
             continue  # a directory/glob input — any producer inside it satisfies it
-        import fnmatch
-        hit = any(fnmatch.fnmatch(c, pr) or fnmatch.fnmatch(pr, c) or c == pr for pr in produced)
-        hit = hit or any(fnmatch.fnmatch(c, pr) or fnmatch.fnmatch(pr, c) for pr in cmd_paths)
+        hit = any(_seg_match(c, pr) for pr in produced) or any(_seg_match(c, pr) for pr in cmd_paths)
         if not hit:
             findings["IO_UNPRODUCED"].append(f"{a['path']}: reads {pth} — no agent output or command produces it")
 
