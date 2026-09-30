@@ -8,7 +8,7 @@ cluster bootstrap has created the sdlc-agent ServiceAccount kubeconfig:
       --kubeconfig agent-kubeconfig.yaml \
       --pin ~/.kube/sdlc-lab.json \
       --namespaces '*-dev,*-qa' \
-      --lima-instance sdlc-agent --lab-host 10.10.10.2 --lab-host 10.10.10.3 \
+      --lima-instance sdlc-agent --lab-host 10.10.10.20 --lab-host 10.10.10.30 \
       --out ~/.config/sdlc-guard/policy.json
 
 What it pins, per context: the API server URL and the SHA-256 of the cluster CA, so a prod cluster

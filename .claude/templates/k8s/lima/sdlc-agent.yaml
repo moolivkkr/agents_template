@@ -5,8 +5,8 @@
 # 127.0.0.1. The agent reaches the server's API at https://<serverIP>:6443 over the link.
 #
 # Create:  limactl create --name sdlc-agent \
-#            --set '.param.serverURL="https://10.10.10.2:6443"' --set ".param.token=\"$(ssh tb2 limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/server/node-token)\"" \
-#            --set '.param.externalIP="10.10.10.3"' --set '.param.nodeIP="172.30.10.3"' \
+#            --set '.param.serverURL="https://10.10.10.20:6443"' --set ".param.token=\"$(ssh tb2 limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/server/node-token)\"" \
+#            --set '.param.externalIP="10.10.10.30"' --set '.param.nodeIP="172.30.10.3"' \
 #            sdlc-agent.yaml && limactl start sdlc-agent
 #          (scripts/cluster-up.sh does all of this, plus the cluster bootstrap)
 minimumLimaVersion: 2.0.0
@@ -20,9 +20,9 @@ containerd:
   system: false
   user: false
 param:
-  serverURL: "https://10.10.10.2:6443"
+  serverURL: "https://10.10.10.20:6443"
   token: ""
-  externalIP: "10.10.10.3"
+  externalIP: "10.10.10.30"
   nodeIP: "172.30.10.3"
 provision:
 - mode: system
@@ -64,7 +64,7 @@ portForwards:
   guestIP: "0.0.0.0"
   guestIPMustBeZero: false
   proto: udp
-  hostIP: "10.10.10.3"   # literal (Lima does not template hostIP); override with --set
+  hostIP: "10.10.10.30"   # literal (Lima does not template hostIP); override with --set
 # The two below are STATIC (set up by the host agent at start): the guest agent discovers NodePorts and
 # LoadBalancer ports by watching Services with the admin kubeconfig, which only the server VM has.
 - guestPort: 30501          # in-cluster registry NodePort -> push to localhost:5001 from this Mac

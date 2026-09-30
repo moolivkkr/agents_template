@@ -1,7 +1,7 @@
 # sdlc-server.yaml — Lima VM running the k3s SERVER for the framework's non-prod cluster.
 #
 # Topology (two Macs joined by a Thunderbolt bridge, 10.10.10.0/24):
-#   server VM on the host at 10.10.10.2  <── TB ──>  agent VM on the host at 10.10.10.3
+#   server VM on the host at 10.10.10.20  <── TB ──>  agent VM on the host at 10.10.10.30
 # Lima cannot bridge a VM onto a Thunderbolt Bridge (vmnet only bridges physical interfaces), so
 # the VMs stay on Lima's user-mode network and each host forwards ONLY what the cluster needs onto
 # its Thunderbolt address — no routes, no sudo:
@@ -15,7 +15,7 @@
 # Each node also gets a unique internal node IP on a dummy interface (both VMs would otherwise share
 # Lima's 192.168.5.15, and the agent tunnel routes kubelet traffic by node IP).
 #
-# Create:  limactl create --name sdlc-server --set '.param.externalIP="10.10.10.2"' \
+# Create:  limactl create --name sdlc-server --set '.param.externalIP="10.10.10.20"' \
 #            --set '.param.nodeIP="172.30.10.2"' sdlc-server.yaml && limactl start sdlc-server
 minimumLimaVersion: 2.0.0
 base: template:_images/ubuntu-lts
@@ -28,7 +28,7 @@ containerd:
   system: false
   user: false
 param:
-  externalIP: "10.10.10.2"
+  externalIP: "10.10.10.20"
   nodeIP: "172.30.10.2"
 provision:
 - mode: system
@@ -72,22 +72,22 @@ probes:
   hint: 'Check: limactl shell sdlc-server sudo journalctl -u k3s'
 portForwards:
 - guestPort: 6443
-  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+  hostIP: "10.10.10.20"   # literal (Lima does not template hostIP); override with --set
 - guestPort: 51820
   guestIP: "0.0.0.0"
   guestIPMustBeZero: false
   proto: udp
-  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+  hostIP: "10.10.10.20"   # literal (Lima does not template hostIP); override with --set
 - guestPort: 30501
   guestIP: "0.0.0.0"
   guestIPMustBeZero: false
   hostPort: 5001
-  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+  hostIP: "10.10.10.20"   # literal (Lima does not template hostIP); override with --set
 - guestPort: 80
   guestIP: "0.0.0.0"
   guestIPMustBeZero: false
   hostPort: 18080
-  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+  hostIP: "10.10.10.20"   # literal (Lima does not template hostIP); override with --set
 - guestIP: "0.0.0.0"
   proto: any
   ignore: true

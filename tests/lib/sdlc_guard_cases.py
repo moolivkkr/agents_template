@@ -18,7 +18,7 @@ W = tempfile.mkdtemp(prefix="sdlc-guard-test.")
 SCRATCH = os.path.join(W, "scratch")
 PIN = os.path.join(W, "sdlc-lab.json")
 POLICY = os.path.join(W, "policy.json")
-SERVER = "https://10.10.10.2:6443"
+SERVER = "https://10.10.10.20:6443"
 CA_PEM = b"-----BEGIN CERTIFICATE-----\nFAKE-SDLC-LAB-CA\n-----END CERTIFICATE-----\n"
 
 
@@ -43,7 +43,7 @@ WRONG_CA = dump(kubeconfig(ca=b"-----BEGIN CERTIFICATE-----\nOTHER-CA\n-----END 
 
 gen = subprocess.run([sys.executable, MAKE_POLICY, "--kubeconfig", AGENT_KC, "--pin", PIN, "--write-pin",
                       "--namespaces", "*-dev,*-qa", "--lima-instance", "sdlc-agent", "--lima-instance", "sdlc-server",
-                      "--lab-host", "10.10.10.2", "--lab-host", "10.10.10.3", "--out", POLICY],
+                      "--lab-host", "10.10.10.20", "--lab-host", "10.10.10.30", "--out", POLICY],
                      capture_output=True, text=True)
 if gen.returncode != 0:
     print("FAIL make-policy could not generate the test policy:", gen.stderr)
@@ -156,7 +156,7 @@ CASES = [
  ("D09", "deny", "Bash", "docker -H tcp://10.0.0.5:2376 ps"),
  ("D10", "deny", "Bash", "docker --context prod-swarm ps"),
  ("D11", "allow","Bash", "docker compose down"),
- ("D12", "allow","Bash", "docker push 10.10.10.2:5001/shop/api:3f2a1c9"),                      # lab registry
+ ("D12", "allow","Bash", "docker push 10.10.10.20:5001/shop/api:3f2a1c9"),                      # lab registry
  # --- git
  ("G01", "allow","Bash", "git add -A && git commit -m 'feat: x'"),
  ("G02", "allow","Bash", "git push origin phase-2-implementation"),
@@ -196,9 +196,10 @@ CASES = [
  ("N08", "ask",  "Bash", "ssh ops@bastion"),
  ("N09", "allow","Bash", "curl -so out.json localhost:18080/api/v1/items"),
  ("N10", "allow","Bash", "curl -sf http://api.dev.localhost:18080/health"),
- ("N11", "allow","Bash", "curl -sf -H 'Host: shop-qa.sdlc.localhost' http://10.10.10.2:18080/healthz"),  # lab ingress
+ ("N11", "allow","Bash", "curl -sf -H 'Host: shop-qa.sdlc.localhost' http://10.10.10.20:18080/healthz"),  # lab ingress
  ("N12", "ask",  "Bash", "curl -sf http://10.10.10.9:18080/"),                                  # not a lab host
  ("N13", "ask",  "Bash", "ssh tb2 limactl list"),                                               # ssh always asks
+ ("N14", "ask",  "Bash", "curl -sf http://10.10.10.2:18080/"),                                  # same /24 as the lab, other site's host
  # --- cloud / prod / meta
  ("C01", "deny", "Bash", "aws s3 ls"),
  ("C02", "allow","Bash", "aws --endpoint-url http://localhost:4566 route53 list-hosted-zones"),
@@ -371,7 +372,7 @@ def main():
     ctx = pol["kube"]["contexts"].get("lima-sdlc", {})
     check("MP1", True, ctx.get("ca_sha256") == hashlib.sha256(CA_PEM).hexdigest() and ctx.get("server") == SERVER
           and ctx.get("user_sha256") == hashlib.sha256(b"fake").hexdigest(), "make-policy pins server + CA + credential sha256")
-    check("MP2", True, "10.10.10.2" in pol["local_hosts"] and pol["lima"]["instances"] == ["sdlc-agent", "sdlc-server"],
+    check("MP2", True, "10.10.10.20" in pol["local_hosts"] and pol["lima"]["instances"] == ["sdlc-agent", "sdlc-server"],
           "make-policy adds lab hosts and Lima instances")
 
     # generator refusals
@@ -422,7 +423,7 @@ def main():
     check("AS1", True, p.returncode == 0 and "Bash" not in pm["allow"] and "Bash(git push*)" in pm["allow"]
           and "Bash(git push* --force*)" in pm["deny"] and s["model"] == "opus", "apply-user-settings: drops bare Bash, keeps existing keys/rules", p.stderr)
     check("AS2", True, pm["defaultMode"] == "auto" and "Bash(sudo *)" in pm["deny"] and "Bash(git reset --hard*)" in pm["ask"]
-          and "https://10.10.10.2:6443" in json.dumps(s["autoMode"]), "apply-user-settings: mode, deny/ask lists, autoMode from policy")
+          and "https://10.10.10.20:6443" in json.dumps(s["autoMode"]), "apply-user-settings: mode, deny/ask lists, autoMode from policy")
     check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")
     check("AS4", True, len(pm["allow"]) == len(set(pm["allow"])) and any(f.startswith("settings.json.bak-") for f in os.listdir(os.path.join(fh, ".claude"))),
           "apply-user-settings: no duplicate rules, backup written")
