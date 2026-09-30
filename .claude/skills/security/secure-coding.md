@@ -71,7 +71,8 @@ that are **in scope for the phase**. Implement them, don't just note them.
 
 ## 4. Output, browser and headers
 
-- **XSS:** render text through the framework's escaping.
+- **XSS:** render text through the framework's escaping. The full UI rules (sinks, URL schemes,
+  markdown, redirects, postMessage) and the test are in `~/.claude/skills/ui/secure-rendering.md`.
   - `dangerouslySetInnerHTML` / `v-html` / `[innerHTML]` / `bypassSecurityTrust*` only on HTML
     sanitized with a maintained sanitizer (DOMPurify), and each use is commented with the reason.
   - Never build URLs for `href`/`src` from user input without allowing only `https:`/`mailto:` schemes.
