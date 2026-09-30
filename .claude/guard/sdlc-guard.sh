@@ -224,14 +224,16 @@ def check_ledger(p, shown):
 
 GLOB_CHARS = "*?["
 def brace_expand(s, limit=64):
-    """Bash-style {a,b} expansion (enough to see through `~/.{ssh,aws}/…`); capped."""
+    """Bash-style {a,b} expansion (enough to see through `~/.{ssh,aws}/…`). Past the cap, the brace
+    groups are also tried as `*`, so padding a group with many alternatives can't hide `ssh`."""
     m = re.search(r"\{([^{}]*,[^{}]*)\}", s)
     if not m: return [s]
     out = []
     for alt in m.group(1).split(","):
         out += brace_expand(s[:m.start()] + alt + s[m.end():], limit)
-        if len(out) >= limit: break
-    return out[:limit]
+        if len(out) >= limit:
+            return out[:limit] + [re.sub(r"\{[^{}]*\}", "*", s)]
+    return out
 
 def glob_hits_root(pattern, root):
     """True if a shell glob could match `root` or anything beneath it (segment-wise; a `*` never crosses

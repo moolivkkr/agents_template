@@ -79,7 +79,7 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (258 cases, including 13 offline `vet-package.py` cases).
+test table is `tests/sdlc-guard.test.sh` (259 cases, including 13 offline `vet-package.py` cases).
 
 ## Set up once per machine
 
@@ -103,7 +103,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 258/258
+bash tests/sdlc-guard.test.sh     # 259/259
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own

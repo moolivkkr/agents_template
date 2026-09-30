@@ -240,6 +240,7 @@ CASES = [
  ("SG6", "deny", "Bash", "ls ~/**/id_rsa"),
  ("SG7", "allow","Bash", "ls ~/*"),                                                              # a bare * never matches .ssh
  ("SG8", "allow","Bash", "ls ~/.config"),                                                        # parent of a secret, not a secret
+ ("SG9", "deny", "Bash", "cat ~/.{" + ",".join("x%d" % i for i in range(80)) + ",ssh}/id_rsa"),  # padded brace group
  ("SC1", "deny", "Bash", "cat ~/.config/gh/hosts.yml"),
  ("SC2", "deny", "Read", {"file_path": HOME + "/.config/gh/hosts.yml"}),
  ("SC3", "deny", "Bash", "cat ~/.netrc"),
