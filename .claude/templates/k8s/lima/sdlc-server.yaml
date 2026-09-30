@@ -1,0 +1,101 @@
+# sdlc-server.yaml — Lima VM running the k3s SERVER for the framework's non-prod cluster.
+#
+# Topology (two Macs joined by a Thunderbolt bridge, 10.10.10.0/24):
+#   server VM on the host at 10.10.10.2  <── TB ──>  agent VM on the host at 10.10.10.3
+# Lima cannot bridge a VM onto a Thunderbolt Bridge (vmnet only bridges physical interfaces), so
+# the VMs stay on Lima's user-mode network and each host forwards ONLY what the cluster needs onto
+# its Thunderbolt address — no routes, no sudo:
+#   6443/tcp   k3s API + supervisor (agents join through it)
+#   51820/udp  WireGuard (flannel wireguard-native pod network between nodes)
+#   5001/tcp   in-cluster image registry (NodePort 30501)
+#   18080/tcp  ingress (Traefik web entrypoint)
+# k3s runs in its documented "distributed / multicloud" mode: --node-external-ip + wireguard-native
+# + --flannel-external-ip (https://docs.k3s.io/networking/distributed-multicloud).
+# Each node also gets a unique internal node IP on a dummy interface (both VMs would otherwise share
+# Lima's 192.168.5.15, and the agent tunnel routes kubelet traffic by node IP).
+#
+# Create:  limactl create --name sdlc-server --set '.param.externalIP="10.10.10.2"' \
+#            --set '.param.nodeIP="172.30.10.2"' sdlc-server.yaml && limactl start sdlc-server
+minimumLimaVersion: 2.0.0
+base: template:_images/ubuntu-lts
+vmType: vz
+cpus: 12
+memory: 48GiB
+disk: 200GiB
+mounts: []
+containerd:
+  system: false
+  user: false
+param:
+  externalIP: "10.10.10.2"
+  nodeIP: "172.30.10.2"
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    # unique internal node IP (persistent via systemd-networkd)
+    cat >/etc/systemd/network/10-sdlc0.netdev <<'EOF'
+    [NetDev]
+    Name=sdlc0
+    Kind=dummy
+    EOF
+    cat >/etc/systemd/network/10-sdlc0.network <<EOF
+    [Match]
+    Name=sdlc0
+    [Network]
+    Address={{.Param.nodeIP}}/32
+    EOF
+    systemctl restart systemd-networkd
+    # pull images pushed to localhost:5001 from the in-cluster registry (NodePort 30501 on this node)
+    mkdir -p /etc/rancher/k3s
+    cat >/etc/rancher/k3s/registries.yaml <<EOF
+    mirrors:
+      "localhost:5001":
+        endpoint: ["http://{{.Param.externalIP}}:5001"]
+    EOF
+    if [ ! -d /var/lib/rancher/k3s ]; then
+      curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644 \
+        --node-ip={{.Param.nodeIP}} --node-external-ip={{.Param.externalIP}} \
+        --flannel-backend=wireguard-native --flannel-external-ip \
+        --tls-san={{.Param.externalIP}} --tls-san=127.0.0.1" sh -
+    fi
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 60s bash -c "until test -f /etc/rancher/k3s/k3s.yaml; do sleep 3; done"; then
+      echo >&2 "k3s is not running yet"; exit 1
+    fi
+  hint: 'Check: limactl shell sdlc-server sudo journalctl -u k3s'
+portForwards:
+- guestPort: 6443
+  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+- guestPort: 6443
+  hostIP: "127.0.0.1"
+- guestPort: 51820
+  guestIP: "0.0.0.0"
+  guestIPMustBeZero: false
+  proto: udp
+  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+- guestPort: 30501
+  guestIP: "0.0.0.0"
+  guestIPMustBeZero: false
+  hostPort: 5001
+  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+- guestPort: 80
+  guestIP: "0.0.0.0"
+  guestIPMustBeZero: false
+  hostPort: 18080
+  hostIP: "10.10.10.2"   # literal (Lima does not template hostIP); override with --set
+- guestIP: "0.0.0.0"
+  proto: any
+  ignore: true
+copyToHost:
+- guest: "/etc/rancher/k3s/k3s.yaml"
+  host: "{{.Dir}}/copied-from-guest/kubeconfig.yaml"
+  deleteOnStop: true
+message: |
+  k3s server ready. Kubeconfig (API on 127.0.0.1:6443 and {{.Param.externalIP}}:6443):
+    {{.Dir}}/copied-from-guest/kubeconfig.yaml
+  Join token for agents: limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/server/node-token

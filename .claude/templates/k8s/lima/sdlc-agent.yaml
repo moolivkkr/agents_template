@@ -1,0 +1,68 @@
+# sdlc-agent.yaml — Lima VM running a k3s AGENT that joins the sdlc-server over the Thunderbolt link.
+# See sdlc-server.yaml for the topology. This host forwards only WireGuard (51820/udp) onto its
+# Thunderbolt address; the agent reaches the server's API at https://<serverIP>:6443 directly.
+#
+# Create:  limactl create --name sdlc-agent \
+#            --set '.param.serverURL="https://10.10.10.2:6443"' --set ".param.token=\"$(ssh tb2 limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/server/node-token)\"" \
+#            --set '.param.externalIP="10.10.10.3"' --set '.param.nodeIP="172.30.10.3"' \
+#            --set '.param.registryIP="10.10.10.2"' sdlc-agent.yaml && limactl start sdlc-agent
+minimumLimaVersion: 2.0.0
+base: template:_images/ubuntu-lts
+vmType: vz
+cpus: 6
+memory: 24GiB
+disk: 100GiB
+mounts: []
+containerd:
+  system: false
+  user: false
+param:
+  serverURL: "https://10.10.10.2:6443"
+  token: ""
+  externalIP: "10.10.10.3"
+  nodeIP: "172.30.10.3"
+  registryIP: "10.10.10.2"
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    cat >/etc/systemd/network/10-sdlc0.netdev <<'EOF'
+    [NetDev]
+    Name=sdlc0
+    Kind=dummy
+    EOF
+    cat >/etc/systemd/network/10-sdlc0.network <<EOF
+    [Match]
+    Name=sdlc0
+    [Network]
+    Address={{.Param.nodeIP}}/32
+    EOF
+    systemctl restart systemd-networkd
+    mkdir -p /etc/rancher/k3s
+    cat >/etc/rancher/k3s/registries.yaml <<EOF
+    mirrors:
+      "localhost:5001":
+        endpoint: ["http://{{.Param.registryIP}}:5001"]
+    EOF
+    if [ ! -d /var/lib/rancher/k3s ]; then
+      curl -sfL https://get.k3s.io | K3S_URL="{{.Param.serverURL}}" K3S_TOKEN="{{.Param.token}}" \
+        INSTALL_K3S_EXEC="agent --node-ip={{.Param.nodeIP}} --node-external-ip={{.Param.externalIP}}" sh -
+    fi
+probes:
+- script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    if ! timeout 60s bash -c "until systemctl is-active --quiet k3s-agent; do sleep 3; done"; then
+      echo >&2 "k3s-agent is not running yet"; exit 1
+    fi
+  hint: 'Check: limactl shell sdlc-agent sudo journalctl -u k3s-agent'
+portForwards:
+- guestPort: 51820
+  guestIP: "0.0.0.0"
+  guestIPMustBeZero: false
+  proto: udp
+  hostIP: "10.10.10.3"   # literal (Lima does not template hostIP); override with --set
+- guestIP: "0.0.0.0"
+  proto: any
+  ignore: true
