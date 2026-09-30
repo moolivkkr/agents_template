@@ -1,6 +1,6 @@
 ---
 name: tenant_isolation_verifier
-description: "Traces tenantID from every HTTP handler with an ID parameter through every data access call - PASS/FAIL per route, and any failure blocks the phase gate. Use in the /develop review wave for multi-tenant code."
+description: "Traces tenantID (and, where the spec defines ownership, the owner) from every HTTP handler with an ID parameter through every data access call - PASS/FAIL per route, and any failure blocks the phase gate. Use in the /develop review wave for multi-tenant code."
 model: opus
 effort: high
 category: review
@@ -15,6 +15,9 @@ input:
   optional:
     - type: phase_manifest
       path: agent_state/phases/{{PHASE}}/api_developer/manifest.json
+    - type: phase_spec
+      path: docs/design/phases/{{PHASE}}/specs/
+      description: Which resources have an owner (created_by/assignee/"only their own") — drives Step 6
 output:
   primary: agent_state/phases/{{PHASE}}/reports/tenant_isolation.md
 dependencies:
@@ -22,6 +25,7 @@ dependencies:
   downstream: [security_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"
+  - "~/.claude/skills/security/secure-coding.md"
 ---
 
 # Agent: Tenant Isolation Verifier
@@ -103,6 +107,28 @@ For each repository/data-access call identified in Step 4:
 **Why not-found instead of forbidden?**
 403 Forbidden tells the attacker the resource exists under a different tenant — that is itself an information leak. 404 Not Found reveals nothing about cross-tenant existence.
 
+### Step 6 — Same-tenant ownership (where the spec defines an owner)
+
+Tenant scoping stops tenant A reading tenant B. It does **not** stop user A reading or editing user B's
+record **inside the same tenant** (board review 2026-09-30, SEC-12; `secure-coding.md` §1).
+
+1. From the phase specs, list every resource with an owner: a `created_by`/`owner_id`/`assignee_id`
+   column, or acceptance criteria like "a user sees only their own drafts" or "only the author can
+   edit".
+2. For each ID-based route on such a resource, trace the **caller's user ID** the same way you traced
+   tenantID: auth extraction → service parameter → the query (`AND owner_id = $N`), or an explicit
+   permission check that grants the cross-user access the spec describes (a manager role, a sharing
+   table).
+3. The mismatch returns **404**, the same as cross-tenant.
+4. Check list, search, export and bulk endpoints too: a list of "my items" filtered only by tenant is
+   the same leak in bulk.
+5. Confirm a test proves it: an integration test named with the abuse row `AUTHZ-OBJ` (two users in one
+   tenant; user B's GET/PATCH/DELETE on user A's record → 404) exists for each such resource. If it's
+   missing, record a WARNING that names the route, so the test tier adds it.
+
+Resources with no owner in the spec (tenant-shared data) are marked `n/a — tenant-shared (spec: …)`.
+They are not skipped silently.
+
 ---
 
 ## Failure Modes Reference
@@ -115,6 +141,8 @@ For each repository/data-access call identified in Step 4:
 | IDOR-4 | tenantID not in query | Repository | `WHERE id = $1` — missing tenant filter |
 | IDOR-5 | In-memory ownership not checked | Service | `store[resourceID]` returned without tenantID check |
 | IDOR-6 | 403 instead of 404 on mismatch | Service/Handler | `return ErrForbidden` when tenantID mismatches |
+| IDOR-7 | Owner not enforced (same tenant) | Service/Repository | spec says "only the author edits" but `WHERE id = $1 AND tenant_id = $2` has no owner predicate or permission check |
+| IDOR-8 | Tenant from the client | Handler/Middleware | tenantID read from a header, query or body (`X-Tenant-ID`) instead of the verified credential |
 
 All failure modes are CRITICAL — immediate phase gate block.
 
@@ -129,10 +157,11 @@ All failure modes are CRITICAL — immediate phase gate block.
 PASS | N CRITICAL findings
 
 ## Route Trace Table
-| Route | Handler | Auth extracted | tenantID forwarded | tenantID in query | Result |
-|-------|---------|----------------|--------------------|-------------------|--------|
-| GET /api/v1/resources/:id | handleGetResource | YES | YES | YES | ✅ PASS |
-| DELETE /api/v1/items/:id  | handleDeleteItem  | YES (discarded) | NO | N/A | ❌ FAIL IDOR-1,2 |
+| Route | Handler | Auth extracted | tenantID forwarded | tenantID in query | Owner enforced (Step 6) | Result |
+|-------|---------|----------------|--------------------|-------------------|-------------------------|--------|
+| GET /api/v1/resources/:id | handleGetResource | YES | YES | YES | n/a — tenant-shared (spec §2.1) | ✅ PASS |
+| PATCH /api/v1/notes/:id   | handleUpdateNote  | YES | YES | YES | NO — any tenant user can edit | ❌ FAIL IDOR-7 |
+| DELETE /api/v1/items/:id  | handleDeleteItem  | YES (discarded) | NO | N/A | — | ❌ FAIL IDOR-1,2 |
 
 ## CRITICAL Findings (phase gate BLOCKED until resolved)
 | Route | Failure Mode | File | Line | Description | Fix |
@@ -144,7 +173,12 @@ PASS | N CRITICAL findings
 
 ## Routes Cleared (no ID parameters — not IDOR-susceptible)
 [List of routes that don't take resource IDs]
+
+BLOCKING:N WARNING:N INFO:N
 ```
+
+The last line is exactly `BLOCKING:N WARNING:N INFO:N` (every CRITICAL counts as BLOCKING); the gate reads
+only that line. Give each finding a stable ID (`TI-<phase>-<n>`) so a human can acknowledge it individually.
 
 CRITICAL findings block the phase gate immediately. Do not continue to subsequent review steps until all CRITICAL findings are resolved.
 
@@ -156,6 +190,7 @@ CRITICAL findings block the phase gate immediately. Do not continue to subsequen
 These hold the conventions and patterns for the work you're doing. Before writing or reviewing, read the ones that apply to this task and skip the rest. `{{VAR}}` placeholders resolve from `agent_state/agent_registry.json` (for example `{{LANG}}` to `go`); if a resolved file doesn't exist, note it in your final message and continue.
 
 - `~/.claude/skills/infrastructure/saas-tenancy-models.md`
+- `~/.claude/skills/security/secure-coding.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
@@ -181,6 +216,8 @@ Keep it short; the detail belongs in the artifact.
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Report written to `agent_state/phases/{{PHASE}}/reports/tenant_isolation.md` (exact frontmatter path) using the template above.
 - [ ] Every ID-bearing route and every multi-tenant store was traced — the audit tables are populated, not summarized. Routes with no ID parameter are listed under "Routes Cleared".
+- [ ] Every resource the spec gives an owner has its Step 6 owner trace (list/search/export included); tenant-shared resources are marked n/a with the spec reference.
+- [ ] The report's LAST line is `BLOCKING:N WARNING:N INFO:N`.
 - [ ] Every finding cites `file:line`; CRITICAL findings escalate immediately.
 - [ ] A `PASS` with zero routes traced is a FAIL to investigate, never a silent PASS. If no code produced this phase, say so explicitly with the reason.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.
