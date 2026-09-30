@@ -39,7 +39,7 @@ The PARENT session runs this directly (no subagent needed — it's pure consolid
 ```bash
 OUT="docs/WORKLOG.md"
 PHASES=$(ls -d agent_state/phases/*/ 2>/dev/null | grep -oE '[0-9]+' | sort -n)
-[ -n "${1:-}" ] && PHASES="$1"   # optional single-phase arg
+[ -n "${ARG_PHASE:-}" ] && PHASES="${ARG_PHASE}"   # optional --phase=N (never a bare positional parameter: Claude Code substitutes those in command bodies)
 
 python3 - "$OUT" $PHASES << 'PY'
 import json, os, sys, glob, datetime

@@ -116,7 +116,7 @@ Never assume `docs/BRD.md` + `docs/design/phases/`. Discover, in priority order,
 what exists in a normalized recon manifest. Missing artifacts are findings, not errors.
 
 ```bash
-ROOT="$1"   # repo root
+ROOT="${PRODUCT_ROOT:-.}"   # repo root of the product being reconciled (set per product when fanning out)
 # --- BRD (may be multiple / root-level / absent) ---
 BRD=$(ls "$ROOT"/docs/BRD.md "$ROOT"/BRD.md "$ROOT"/brd*.md "$ROOT"/*BRD*.md 2>/dev/null)
 # --- Requirements (recursive; may be absent) ---

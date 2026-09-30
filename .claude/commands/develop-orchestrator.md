@@ -533,7 +533,7 @@ Produce: agent_state/phases/${PHASE}/reports/test_results.md + test_results.json
 
 ```bash
 R="agent_state/phases/${PHASE}/reports"
-in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
+in_roster() { jq -e --arg a "${1}" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
 
 # Reports required for this phase = base tiers + one per conditional agent in the roster
 REQ="unit_tests.md integration_tests.md e2e_results.md test_results.md"
@@ -761,9 +761,9 @@ Reconciliation reports live in `agent_state/reconciliation/phase-${PHASE}/` (not
 `/plan`, `/test`, `/recon` and `pipeline_completeness_agent` all read them there. Every check below
 resolves report paths through `report_path` (redefined in each bash block — the parent runs every block in a fresh shell):
 ```bash
-report_path() { case "$1" in
-  specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/$1" ;;
-  *) echo "agent_state/phases/${PHASE}/reports/$1" ;;
+report_path() { case "${1}" in
+  specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/${1}" ;;
+  *) echo "agent_state/phases/${PHASE}/reports/${1}" ;;
 esac; }
 ```
 
@@ -796,14 +796,14 @@ Produce: agent_state/phases/${PHASE}/reports/acceptance_report.md"
 
 ```bash
 WAVE4_BLOCKED=false
-report_path() { case "$1" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/$1" ;; *) echo "agent_state/phases/${PHASE}/reports/$1" ;; esac; }  # each bash block runs in a fresh shell
+report_path() { case "${1}" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/${1}" ;; *) echo "agent_state/phases/${PHASE}/reports/${1}" ;; esac; }  # each bash block runs in a fresh shell
 # Reviewers + reconcilers + acceptance. Skip tenant_isolation if roster marked it not_applicable.
 REQUIRED_W4="code_review_I.md code_review_II.md security_review.md dependency_scan.md \
              quality_gate.md specs_vs_impl.md specs_vs_tests.md acceptance_report.md"
 # Roster is a FLAT array of real agent names ({"required":[...]}). Each conditional reviewer is
 # present iff Wave 0b added it; its report is then required. Membership, not a "status" object grep
 # (the old grep never matched the flat schema → report silently dropped).
-in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
+in_roster() { jq -e --arg a "${1}" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
 in_roster tenant_isolation_verifier && REQUIRED_W4="$REQUIRED_W4 tenant_isolation.md"
 in_roster accessibility_auditor     && REQUIRED_W4="$REQUIRED_W4 accessibility_audit.md"
 in_roster mobile_platform_auditor   && REQUIRED_W4="$REQUIRED_W4 mobile_platform_audit.md"
@@ -1041,7 +1041,7 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    **Content validation (not just file existence):**
    ```bash
    # Test reports: must not report zero tests.
-   in_roster() { jq -e --arg a "$1" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
+   in_roster() { jq -e --arg a "${1}" '.required | index($a)' "agent_state/phases/${PHASE}/roster.json" >/dev/null 2>&1; }
    TEST_REPORTS="unit_tests.md integration_tests.md e2e_results.md test_results.md acceptance_report.md"
    in_roster ui_test_agent     && TEST_REPORTS="$TEST_REPORTS ui_test_results.md"
    in_roster mobile_test_agent && TEST_REPORTS="$TEST_REPORTS mobile_test_results.md mobile_e2e_results.md"
@@ -1055,7 +1055,7 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
        echo "⛔ GATE BLOCKED: ${REPORT} missing"
      fi
    done
-   report_path() { case "$1" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/$1" ;; *) echo "agent_state/phases/${PHASE}/reports/$1" ;; esac; }  # each bash block runs in a fresh shell
+   report_path() { case "${1}" in specs_vs_impl.md|specs_vs_tests.md|test_case_inventory.md|brd_vs_specs.md) echo "agent_state/reconciliation/phase-${PHASE}/${1}" ;; *) echo "agent_state/phases/${PHASE}/reports/${1}" ;; esac; }  # each bash block runs in a fresh shell
    # Review + reconciliation reports: must exist and be non-stub.
    for REPORT in code_review_I.md code_review_II.md security_review.md dependency_scan.md \
                  quality_gate.md specs_vs_impl.md specs_vs_tests.md; do

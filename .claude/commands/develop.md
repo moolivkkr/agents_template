@@ -202,7 +202,7 @@ echo "Running full regression test suite (all phases, all tiers)..."
 # read_cmd_from_guidelines <label-regex> — greps the guidelines for a labelled command and echoes it.
 # Prints nothing (and returns non-zero) if not found. It invents NO default.
 read_cmd_from_guidelines() {
-  local label="$1" file="docs/IMPLEMENTATION_GUIDELINES.md"
+  local label="${1}" file="docs/IMPLEMENTATION_GUIDELINES.md"
   [ -f "$file" ] || return 1
   # Accept either a table row  | Run unit tests | `<cmd>` |  or a line  unit_test_command: <cmd>
   # Extract the first backtick-quoted command on a line matching the label.

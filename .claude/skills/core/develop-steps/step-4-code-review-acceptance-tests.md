@@ -117,7 +117,7 @@ Run SAST scan on all code changed in this phase:
 # invents no default, returns empty when not found. (Redefined here because shell state does not
 # persist across steps.)
 read_cmd_from_guidelines() {
-  local label="$1" file="docs/IMPLEMENTATION_GUIDELINES.md"
+  local label="${1}" file="docs/IMPLEMENTATION_GUIDELINES.md"
   [ -f "$file" ] || return 1
   grep -iE "$label" "$file" | grep -oE '`[^`]+`' | head -1 | tr -d '`'
 }

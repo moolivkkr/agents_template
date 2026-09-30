@@ -61,6 +61,13 @@ if jq -r '.. | .command? // empty' "$S" | grep -E '\.claude/hooks/' | grep -vq '
 grep -q 'hooks/startup' "$ROOT/install.sh" && ok "install.sh stages hooks" || bad "install.sh never installs hooks"
 grep -q '.claude/hooks' "$ROOT/new-project.sh" && ok "new-project.sh copies hooks into the project" || bad "new-project.sh never copies hooks"
 
+# 6. Command bodies must not contain bare positional parameters. Claude Code rewrites `$N` (as
+#    `$ARGUMENTS[N]`, regex /\$(\d+)(?!\w)/, even inside code blocks) when a command gets 2+ args,
+#    so `in_roster "$1"` silently becomes `in_roster "--auto"` under /autonomous. Use ${1} instead.
+bare="$(grep -rnE '\$[0-9]([^0-9A-Za-z_]|$)' "$C" "$ROOT/.claude/skills/core/develop-steps" 2>/dev/null || true)"
+[ -z "$bare" ] && ok "no bare positional parameters in command bodies" \
+  || { bad "bare positional parameters (use \${N}):"; printf '%s\n' "$bare" | head -5 | sed 's/^/      /'; }
+
 echo "────────────────────────────────────────────"
 echo "autonomous-chain.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -544,7 +544,7 @@ KNOWN=$(
     ls .claude/agents/generated/*.md 2>/dev/null | xargs -n1 basename | sed 's/\.md$//'
   } | sort -u
 )
-is_known() { printf '%s\n' "$KNOWN" | grep -qxF "$1"; }
+is_known() { printf '%s\n' "$KNOWN" | grep -qxF "${1}"; }
 
 for phase_dir in agent_state/phases/*/; do
   [ -d "$phase_dir" ] || continue
