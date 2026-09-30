@@ -18,19 +18,27 @@ deleted_at  timestamptz  -- soft delete (nullable)
 
 ## Connection Pooling
 ```go
-// pgxpool (Go) — production config
-config, _ := pgxpool.ParseConfig(connStr)
-config.MaxConns = 50
-config.MinConns = 10
+// pgxpool (Go) — sized from the connection-pool budget, not a constant
+config, err := pgxpool.ParseConfig(connStr)
+if err != nil {
+    return nil, fmt.Errorf("db config: %w", err)
+}
+config.MaxConns = int32(cfg.DBMaxConns) // e.g. 7: see the budget in core/resiliency-patterns.md
+config.MinConns = 1
 config.MaxConnLifetime = 30 * time.Minute
 config.MaxConnIdleTime = 5 * time.Minute
 config.HealthCheckPeriod = 30 * time.Second
-pool, _ := pgxpool.NewWithConfig(ctx, config)
+config.ConnConfig.RuntimeParams["statement_timeout"] = "5000"                  // ms: a runaway query can't hold a connection
+config.ConnConfig.RuntimeParams["idle_in_transaction_session_timeout"] = "10000" // ms
+pool, err := pgxpool.NewWithConfig(ctx, config)
 ```
 - Always use connection pooling — never single connections
-- Set `MaxConns` based on `(CPU cores * 2) + effective_spindle_count`
+- **Size `MaxConns` from the budget:** `max replicas × pools per process × MaxConns + jobs + admin ≤
+  max_connections − superuser_reserved_connections` (Postgres defaults: 100 − 3). Two replicas at
+  `MaxConns = 50` already use all 100. See `core/resiliency-patterns.md` §Connection-Pool Budget.
+- Pool acquisition waits count against the request's context deadline; keep acquire waits under ~1 s
 - Health checks prevent stale connections
-- PgBouncer for external pooling, pgxpool/HikariCP/asyncpg for in-app pooling
+- PgBouncer (transaction mode) when the budget can't fit; pgxpool/HikariCP/asyncpg for in-app pooling
 
 ## Indexes
 ```sql
@@ -135,7 +143,7 @@ CREATE INDEX ON policies USING GIN (config jsonb_path_ops);
 ## Performance
 - `EXPLAIN (ANALYZE, BUFFERS)` before optimizing — measure first
 - Connection pooling: PgBouncer (external) or pgx pool (in-app) — never unlimited connections
-- Max connections: `100` per Postgres instance; set `pool_max_conns` accordingly
+- `max_connections` defaults to 100 (3 reserved for superusers): budget every pool against it
 
 ## Rules
 - UUIDs vs serial: prefer `gen_random_uuid()` for distributed-safe IDs

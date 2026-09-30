@@ -1,6 +1,6 @@
 ---
 skill: observability-patterns
-description: Structured logging, OpenTelemetry metrics/traces, tenant-aware observability, error taxonomy, SLA metrics, correlation IDs
+description: Structured logging with enforced redaction, OpenTelemetry metrics with bounded labels (http.route template, no tenant_id), traces with tenant_id, SLIs from histograms and burn-rate alerts, correlation IDs
 version: "1.0"
 tags:
   - observability
@@ -15,50 +15,42 @@ tags:
 
 Every service must be observable from day one. Logging, metrics, and tracing are not afterthoughts — they are first-class requirements.
 
-## tenant_id on EVERY Log/Metric/Trace
+## tenant_id on every log line and span — never on a metric
 
-Non-negotiable. Every log line, every metric label, every trace span must include `tenant_id`. This is how you debug multi-tenant systems.
+Every log line and every trace span carries `tenant_id`; that is how you debug a multi-tenant system.
+**Metrics are different.** Each distinct label value creates a new time series, multiplied by every
+other label and by ~14 histogram buckets. With `tenant_id` × raw URL path, 2,000 tenants and UUIDs in
+paths produce millions of series. Prometheus runs out of memory (or the SaaS bill spikes) and the SLO
+alerts go blind during the next incident (board review 2026-09-30, SRE-04). So:
+
+| Signal | tenant_id? | Path |
+|---|---|---|
+| Logs | **yes**, every line | the raw path is fine, **without the query string** (it can carry tokens and PII) |
+| Trace spans | **yes**, as a span attribute | `http.route` + `url.path` |
+| Metrics | **no**. At most a *bounded* `tenant.tier` (free/pro/enterprise), or a top-N allowlist | **the route template only** (`http.route` = `/api/v1/orders/{id}`) |
+
+For per-tenant questions ("is tenant X slow?"), query traces or logs by `tenant_id`, or use exemplars.
+A metric is not the tool for them.
 
 ```go
-// Middleware extracts tenant_id and injects it into context
-func TenantMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        tenantID := r.Header.Get("X-Tenant-ID")
-        if tenantID == "" {
-            http.Error(w, "missing tenant ID", http.StatusBadRequest)
-            return
-        }
-        ctx := context.WithValue(r.Context(), tenantIDKey, tenantID)
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
-}
-
+// The tenant comes from the VERIFIED token the auth middleware put in the context — never from a
+// client header (X-Tenant-ID is spoofable).
 func TenantFromContext(ctx context.Context) string {
-    if v, ok := ctx.Value(tenantIDKey).(string); ok {
+    if v, ok := auth.TenantID(ctx); ok {
         return v
     }
     return "unknown"
 }
 
-// Every log line includes tenant_id
+// Every log line includes tenant_id (the logging middleware adds it once; see Correlation IDs)
 func (s *Service) ProcessOrder(ctx context.Context, order *Order) error {
     s.logger.InfoContext(ctx, "processing order",
         "tenant_id", TenantFromContext(ctx),
         "order_id", order.ID,
-        "amount", order.Total,
+        "amount_cents", order.TotalCents,
     )
     // ...
 }
-
-// Every metric includes tenant_id label
-requestCount.Add(ctx, 1,
-    metric.WithAttributes(
-        attribute.String("tenant_id", TenantFromContext(ctx)),
-        attribute.String("endpoint", "/api/v1/orders"),
-        attribute.String("method", "POST"),
-        attribute.Int("status_code", 201),
-    ),
-)
 
 // Every trace span includes tenant_id
 ctx, span := tracer.Start(ctx, "OrderService.ProcessOrder",
@@ -68,30 +60,18 @@ ctx, span := tracer.Start(ctx, "OrderService.ProcessOrder",
     ),
 )
 defer span.End()
+
+// Metrics: bounded labels only (see the metrics middleware below)
 ```
 
 ```typescript
-// Middleware injects tenant_id into request context and logger
-function tenantMiddleware(req: Request, res: Response, next: NextFunction) {
-  const tenantId = req.headers['x-tenant-id'] as string;
-  if (!tenantId) {
-    return res.status(400).json({ error: 'missing tenant ID' });
-  }
-  req.tenantId = tenantId;
-  req.logger = logger.child({ tenant_id: tenantId, request_id: req.id });
+// req.auth is set by the auth middleware from the verified token
+function contextLogger(req: Request, _res: Response, next: NextFunction) {
+  req.logger = logger.child({ tenant_id: req.auth?.tenantId ?? "unknown", request_id: req.id, trace_id: getTraceId(req) });
   next();
 }
 
-// Every log line
-req.logger.info({ order_id: order.id, amount: order.total }, 'processing order');
-
-// Every metric
-requestCounter.add(1, {
-  tenant_id: req.tenantId,
-  endpoint: req.path,
-  method: req.method,
-  status_code: res.statusCode,
-});
+req.logger.info({ order_id: order.id, amount_cents: order.totalCents }, "processing order");
 ```
 
 ## Structured Logging
@@ -192,7 +172,7 @@ reqLogger.info({
 | `timestamp` | Logger auto-generates | When it happened |
 | `level` | Logger | Severity |
 | `msg` | Developer | What happened |
-| `tenant_id` | Context/middleware | Whose request |
+| `tenant_id` | Verified credential, via context | Whose request |
 | `request_id` | Generated at edge | Correlate within a request |
 | `trace_id` | OpenTelemetry | Correlate across services |
 | `service` | Config | Which service |
@@ -200,152 +180,127 @@ reqLogger.info({
 
 ## OpenTelemetry Metrics at Every Boundary
 
-Instrument every boundary: HTTP handlers, service methods, repository calls, external API calls.
+Instrument every boundary: HTTP handlers, repository calls, external API calls, queues. HTTP server
+metrics follow the **stable OTel HTTP semantic conventions**:
+- `http.server.request.duration` is a histogram in seconds. Its attributes are
+  `http.request.method`, `http.route`, `http.response.status_code`, `url.scheme` and `error.type`.
+- `http.route` is the route **template**. The spec says the URI path can NOT substitute it; when the
+  router can't supply the template (an unmatched 404), leave the attribute out.
+- A method outside the known set is recorded as `_OTHER`.
+- The request count comes from the histogram's count, so don't keep a separate counter.
+
+(Spec: https://opentelemetry.io/docs/specs/semconv/http/http-metrics/.)
 
 ```go
 import (
     "go.opentelemetry.io/otel/metric"
 )
 
-// Define meters at package level
 var (
-    meter = otel.Meter("order-service")
-
-    requestCount metric.Int64Counter
+    meter           = otel.Meter("order-service")
     requestDuration metric.Float64Histogram
-    activeRequests metric.Int64UpDownCounter
-    orderTotal metric.Float64Counter
+    ordersPlaced    metric.Int64Counter
 )
 
-func initMetrics() {
+func initMetrics() error {
     var err error
-
-    requestCount, err = meter.Int64Counter("http.server.request.total",
-        metric.WithDescription("Total HTTP requests"),
-        metric.WithUnit("{request}"),
-    )
-
     requestDuration, err = meter.Float64Histogram("http.server.request.duration",
-        metric.WithDescription("HTTP request duration in seconds"),
+        metric.WithDescription("Duration of HTTP server requests"),
         metric.WithUnit("s"),
-        metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+        metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10),
     )
-
-    activeRequests, err = meter.Int64UpDownCounter("http.server.active_requests",
-        metric.WithDescription("Currently active requests"),
-        metric.WithUnit("{request}"),
-    )
-
-    // Business metric
-    orderTotal, err = meter.Float64Counter("business.order.total",
-        metric.WithDescription("Total order value processed"),
-        metric.WithUnit("USD"),
-    )
+    if err != nil {
+        return err
+    }
+    ordersPlaced, err = meter.Int64Counter("business.orders.placed", metric.WithUnit("{order}"))
+    return err
 }
 
-// Metrics middleware
+var knownMethods = map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "OPTIONS": true}
+
+// Metrics middleware — every label is bounded.
 func MetricsMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         start := time.Now()
-        tenantID := TenantFromContext(r.Context())
+        rec := &statusRecorder{ResponseWriter: w, statusCode: 200}
+        next.ServeHTTP(rec, r)
 
-        attrs := metric.WithAttributes(
-            attribute.String("tenant_id", tenantID),
-            attribute.String("method", r.Method),
-            attribute.String("endpoint", r.URL.Path),
-        )
-
-        activeRequests.Add(r.Context(), 1, attrs)
-        defer activeRequests.Add(r.Context(), -1, attrs)
-
-        wrapped := &statusRecorder{ResponseWriter: w, statusCode: 200}
-        next.ServeHTTP(wrapped, r)
-
-        duration := time.Since(start).Seconds()
-        statusAttrs := metric.WithAttributes(
-            attribute.String("tenant_id", tenantID),
-            attribute.String("method", r.Method),
-            attribute.String("endpoint", r.URL.Path),
-            attribute.Int("status_code", wrapped.statusCode),
-        )
-
-        requestCount.Add(r.Context(), 1, statusAttrs)
-        requestDuration.Record(r.Context(), duration, statusAttrs)
+        method := r.Method
+        if !knownMethods[method] {
+            method = "_OTHER"
+        }
+        attrs := []attribute.KeyValue{
+            attribute.String("http.request.method", method),
+            attribute.Int("http.response.status_code", rec.statusCode),
+            attribute.String("url.scheme", scheme(r)),
+        }
+        // The TEMPLATE, known only after routing: net/http ServeMux exposes it as r.Pattern (go.dev/issue/66405);
+        // chi: chi.RouteContext(r.Context()).RoutePattern(). Never r.URL.Path.
+        if route := routePattern(r); route != "" {
+            attrs = append(attrs, attribute.String("http.route", route))
+        }
+        if rec.statusCode >= 500 {
+            attrs = append(attrs, attribute.String("error.type", strconv.Itoa(rec.statusCode)))
+        }
+        requestDuration.Record(r.Context(), time.Since(start).Seconds(), metric.WithAttributes(attrs...))
     })
 }
 
-// Business event metrics
+// Business event metrics — bounded labels (payment method is a small enum); no tenant_id
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderReq) (*Order, error) {
     order, err := s.processOrder(ctx, req)
     if err != nil {
         return nil, err
     }
-
-    // Record business metric
-    orderTotal.Add(ctx, order.Total.InexactFloat64(),
-        metric.WithAttributes(
-            attribute.String("tenant_id", TenantFromContext(ctx)),
-            attribute.String("payment_method", order.PaymentMethod),
-        ),
-    )
+    ordersPlaced.Add(ctx, 1, metric.WithAttributes(attribute.String("payment_method", string(order.PaymentMethod))))
     return order, nil
 }
 ```
 
 ```typescript
-import { metrics } from '@opentelemetry/api';
+import { metrics } from "@opentelemetry/api";
 
-const meter = metrics.getMeter('order-service');
-
-const requestCount = meter.createCounter('http.server.request.total', {
-  description: 'Total HTTP requests',
-  unit: '{request}',
+const meter = metrics.getMeter("order-service");
+const requestDuration = meter.createHistogram("http.server.request.duration", {
+  description: "Duration of HTTP server requests",
+  unit: "s",
+  advice: { explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10] },
 });
+const KNOWN = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
 
-const requestDuration = meter.createHistogram('http.server.request.duration', {
-  description: 'HTTP request duration in seconds',
-  unit: 's',
-  advice: { explicitBucketBoundaries: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10] },
-});
-
-const orderTotal = meter.createCounter('business.order.total', {
-  description: 'Total order value processed',
-  unit: 'USD',
-});
-
-// Middleware
 function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
   const start = process.hrtime.bigint();
-
-  res.on('finish', () => {
-    const durationNs = Number(process.hrtime.bigint() - start);
-    const durationSec = durationNs / 1e9;
-
-    const attrs = {
-      tenant_id: req.tenantId,
-      method: req.method,
-      endpoint: req.route?.path || req.path,
-      status_code: res.statusCode,
+  res.on("finish", () => {
+    const attrs: Record<string, string | number> = {
+      "http.request.method": KNOWN.has(req.method) ? req.method : "_OTHER",
+      "http.response.status_code": res.statusCode,
+      "url.scheme": req.protocol,
     };
-
-    requestCount.add(1, attrs);
-    requestDuration.record(durationSec, attrs);
+    // Express: req.baseUrl + req.route.path is the template ("/api/v1/orders/:id"); an unmatched request
+    // has no req.route → no http.route. NEVER fall back to req.path (raw path = unbounded series).
+    if (req.route?.path) attrs["http.route"] = `${req.baseUrl}${req.route.path}`;
+    if (res.statusCode >= 500) attrs["error.type"] = String(res.statusCode);
+    requestDuration.record(Number(process.hrtime.bigint() - start) / 1e9, attrs);
   });
-
   next();
 }
 ```
 
 ### Key metrics to instrument
 
-| Metric | Type | Labels | Purpose |
+| Metric | Type | Labels (all bounded) | Purpose |
 |--------|------|--------|---------|
-| `http.server.request.total` | Counter | tenant_id, method, endpoint, status_code | Request volume and error rates |
-| `http.server.request.duration` | Histogram | tenant_id, method, endpoint | Latency distribution (p50/p95/p99) |
-| `http.server.active_requests` | UpDownCounter | tenant_id, endpoint | Concurrency / saturation |
-| `db.query.duration` | Histogram | tenant_id, operation, table | Database performance |
-| `external.request.duration` | Histogram | tenant_id, service, endpoint | Upstream latency |
-| `business.<event>.total` | Counter | tenant_id, type | Business KPIs |
+| `http.server.request.duration` | Histogram (s) | `http.request.method`, `http.route`, `http.response.status_code`, `url.scheme`, `error.type` | Rate, errors and latency (RED); the count *is* the request count |
+| `http.server.active_requests` | UpDownCounter | `http.request.method`, `url.scheme` | Concurrency / saturation (no route: it isn't known when the request starts) |
+| `db.client.operation.duration` | Histogram (s) | `db.operation.name`, `db.collection.name` (table) | Database performance |
+| `db.client.connection.count` / pool wait | Gauge/Histogram | `state` (idle/used), pool name | Pool saturation against the connection budget |
+| `http.client.request.duration` | Histogram (s) | `server.address` (dependency host), `http.request.method`, `http.response.status_code` | Upstream latency and errors |
+| `business.<event>` | Counter | a small enum (`type`, `payment_method`); at most a bounded `tenant.tier` | Business KPIs |
+
+**Cardinality rule:** a label value must come from a small, known set. Never use IDs, emails, raw
+paths, query strings, error messages or `tenant_id`. A unit test proves the route template is used:
+request `/api/v1/orders/123` and `/api/v1/orders/456`, then assert exactly one series with
+`http.route="/api/v1/orders/{id}"`.
 
 ## Distributed Tracing
 
@@ -457,170 +412,47 @@ async function createOrder(ctx: Context, req: CreateOrderReq): Promise<Order> {
 
 ## Domain Error Taxonomy
 
-Categorize all errors. Map them consistently to HTTP status codes and include machine-readable error codes.
+The taxonomy, codes and wire shape are defined once: `~/.claude/skills/api/response-envelope.md` (what
+the client sees) and `~/.claude/skills/backend/archetypes/error-handling-{{LANG}}.md` (the AppError type
+and middleware). This pack only adds what observability needs from errors:
 
-```go
-type DomainError struct {
-    Category  ErrorCategory
-    Code      string // machine-readable: "ORDER_NOT_FOUND", "INSUFFICIENT_STOCK"
-    Message   string // human-readable
-    Details   map[string]interface{}
-    Cause     error  // wrapped underlying error
-}
+- Log each failed request **once**, at the top of the stack. Log the full cause chain, the `code`, the
+  `request_id` and the `tenant_id`. Use ERROR for 5xx and WARN for handled 4xx that suggest abuse (401
+  and 403 bursts, 429).
+- Mark the span as an error (`span.RecordError(err)`, `span.SetStatus(codes.Error, code)`) for 5xx
+  only. A 404 is not a server error.
+- Metrics carry `error.type` (the status code or a small enum), never the error message.
 
-type ErrorCategory int
+## SLOs and Alerting
 
-const (
-    ErrCategoryValidation   ErrorCategory = iota // 400 — bad input
-    ErrCategoryNotFound                           // 404 — resource doesn't exist
-    ErrCategoryConflict                           // 409 — duplicate, version mismatch
-    ErrCategoryUnauthorized                       // 401 — not authenticated
-    ErrCategoryForbidden                          // 403 — authenticated but not allowed
-    ErrCategoryInternal                           // 500 — our fault
-    ErrCategoryUpstream                           // 502/503 — dependency failure
+SLOs come from the NFR-* targets (`reliability_agent` writes the SLO table). **Compute SLIs at query
+time from the request histogram; don't compute them in-process.** Percentiles can't be averaged
+across pods, and an in-memory 30-day window resets on every restart, so per-pod `sla.latency.p99` or
+`sla.budget_remaining` gauges look healthy while the fleet breaches.
+
+```promql
+# Availability SLI (5-minute rate): the share of requests that did not fail server-side
+1 - (
+  sum(rate(http_server_request_duration_seconds_count{service="order-service", http_response_status_code=~"5.."}[5m]))
+/ sum(rate(http_server_request_duration_seconds_count{service="order-service"}[5m]))
 )
 
-// Constructors
-func NewValidationError(code, message string, details map[string]interface{}) *DomainError {
-    return &DomainError{Category: ErrCategoryValidation, Code: code, Message: message, Details: details}
-}
-
-func NewNotFoundError(resource, id string) *DomainError {
-    return &DomainError{
-        Category: ErrCategoryNotFound,
-        Code:     strings.ToUpper(resource) + "_NOT_FOUND",
-        Message:  fmt.Sprintf("%s with id %s not found", resource, id),
-    }
-}
-
-func NewUpstreamError(service string, cause error) *DomainError {
-    return &DomainError{
-        Category: ErrCategoryUpstream,
-        Code:     "UPSTREAM_" + strings.ToUpper(service) + "_FAILURE",
-        Message:  fmt.Sprintf("%s service unavailable", service),
-        Cause:    cause,
-    }
-}
-
-// Map to HTTP status in handler layer
-func httpStatusFromError(err error) int {
-    var domErr *DomainError
-    if !errors.As(err, &domErr) {
-        return http.StatusInternalServerError
-    }
-    switch domErr.Category {
-    case ErrCategoryValidation:
-        return http.StatusBadRequest
-    case ErrCategoryNotFound:
-        return http.StatusNotFound
-    case ErrCategoryConflict:
-        return http.StatusConflict
-    case ErrCategoryUnauthorized:
-        return http.StatusUnauthorized
-    case ErrCategoryForbidden:
-        return http.StatusForbidden
-    case ErrCategoryUpstream:
-        return http.StatusBadGateway
-    default:
-        return http.StatusInternalServerError
-    }
-}
+# Latency SLI: the share of requests faster than the NFR threshold (0.5 s must be a bucket boundary)
+  sum(rate(http_server_request_duration_seconds_bucket{service="order-service", le="0.5"}[5m]))
+/ sum(rate(http_server_request_duration_seconds_count{service="order-service"}[5m]))
 ```
 
-```typescript
-enum ErrorCategory {
-  Validation = 'VALIDATION',
-  NotFound = 'NOT_FOUND',
-  Conflict = 'CONFLICT',
-  Unauthorized = 'UNAUTHORIZED',
-  Forbidden = 'FORBIDDEN',
-  Internal = 'INTERNAL',
-  Upstream = 'UPSTREAM',
-}
+(Metric names are as the OTel → Prometheus exporter renders them; check your exporter's naming.)
 
-class DomainError extends Error {
-  constructor(
-    public readonly category: ErrorCategory,
-    public readonly code: string,
-    message: string,
-    public readonly details?: Record<string, unknown>,
-    public readonly cause?: Error,
-  ) {
-    super(message);
-    this.name = 'DomainError';
-  }
-
-  get httpStatus(): number {
-    const statusMap: Record<ErrorCategory, number> = {
-      [ErrorCategory.Validation]: 400,
-      [ErrorCategory.NotFound]: 404,
-      [ErrorCategory.Conflict]: 409,
-      [ErrorCategory.Unauthorized]: 401,
-      [ErrorCategory.Forbidden]: 403,
-      [ErrorCategory.Internal]: 500,
-      [ErrorCategory.Upstream]: 502,
-    };
-    return statusMap[this.category] || 500;
-  }
-}
-
-// Error handler middleware
-function errorHandler(err: Error, req: Request, res: Response, next: NextFunction) {
-  if (err instanceof DomainError) {
-    req.logger.warn({ error_code: err.code, category: err.category }, err.message);
-    return res.status(err.httpStatus).json({
-      error: { code: err.code, message: err.message, details: err.details },
-    });
-  }
-  req.logger.error({ err }, 'unhandled error');
-  return res.status(500).json({
-    error: { code: 'INTERNAL_ERROR', message: 'an unexpected error occurred' },
-  });
-}
-```
-
-## SLA Metrics
-
-Define and measure SLOs for every service.
-
-```go
-// SLA targets (define in config, not code)
-type SLAConfig struct {
-    AvailabilityTarget float64       `yaml:"availability_target"` // 99.9%
-    LatencyP99Target   time.Duration `yaml:"latency_p99_target"`  // 500ms
-    ErrorRateTarget    float64       `yaml:"error_rate_target"`   // 0.1%
-}
-
-// SLA metrics
-var (
-    slaAvailability = meter.Float64ObservableGauge("sla.availability",
-        metric.WithDescription("Service availability percentage"),
-        metric.WithUnit("%"),
-    )
-
-    slaLatencyP99 = meter.Float64ObservableGauge("sla.latency.p99",
-        metric.WithDescription("P99 latency in seconds"),
-        metric.WithUnit("s"),
-    )
-
-    slaErrorRate = meter.Float64ObservableGauge("sla.error_rate",
-        metric.WithDescription("Error rate percentage"),
-        metric.WithUnit("%"),
-    )
-
-    slaBudgetRemaining = meter.Float64ObservableGauge("sla.budget_remaining",
-        metric.WithDescription("Remaining error budget percentage"),
-        metric.WithUnit("%"),
-    )
-)
-```
-
-**SLA dashboard per service must include:**
-- Availability over rolling 30-day window
-- P50, P95, P99 latency
-- Error rate (5xx / total requests)
-- Error budget remaining
-- SLO breach alerts
+- **Alert on symptoms with multi-window burn rates,** not on ERROR log lines. These are the Google SRE
+  Workbook defaults for a 30-day window:
+  - page at 14.4× (the 1 h and 5 m windows both burning);
+  - page at 6× (the 6 h and 30 m windows);
+  - open a ticket at 1× (the 3 d and 6 h windows).
+- Recording rules, alert rules and the dashboard are **code** in the repo (`deploy/observability/`),
+  generated from the SLO table.
+- **Dashboard per service:** request rate, error ratio and latency percentiles by `http.route`; error
+  budget remaining over the SLO window; pool saturation; dependency latency.
 
 ## Log Levels
 
@@ -628,10 +460,10 @@ Use log levels consistently across all services.
 
 | Level | When to use | Example | Action required |
 |-------|------------|---------|-----------------|
-| **ERROR** | Something broke that needs investigation | Database connection lost, unhandled exception | Alert on-call, investigate immediately |
+| **ERROR** | Something broke that needs investigation | Database connection lost, unhandled exception | Investigate; alerts come from SLO burn rates, not from this level |
 | **WARN** | Something concerning but handled | Circuit breaker opened, retry succeeded, degraded mode | Review in daily ops check |
 | **INFO** | Normal business events | Order created, user signed up, request completed | Audit trail, no action needed |
-| **DEBUG** | Troubleshooting detail | SQL query, request/response body, cache hit/miss | Off in production by default |
+| **DEBUG** | Troubleshooting detail | Query shape, cache hit/miss, timing breakdown | Off in production by default |
 
 ```go
 // ERROR — actionable, needs investigation
@@ -653,57 +485,89 @@ logger.WarnContext(ctx, "circuit breaker opened for payment service",
 logger.InfoContext(ctx, "order placed successfully",
     "tenant_id", tenantID,
     "order_id", order.ID,
-    "total", order.Total,
+    "amount_cents", order.TotalCents,
     "item_count", len(order.Items),
 )
 
-// DEBUG — troubleshooting (off in prod)
+// DEBUG — troubleshooting (off in prod). The query shape, never the parameter values.
 logger.DebugContext(ctx, "executing database query",
     "query", "SELECT * FROM orders WHERE tenant_id = $1",
-    "params", []interface{}{tenantID},
+    "param_count", 1,
 )
 ```
 
+### Redaction is enforced at the logger, not remembered per call site
+
+DEBUG gets switched on in production exactly during incidents, and that is when request bodies with
+passwords and tokens get shipped to the log backend (SRE-14). So the handler redacts **by key name**
+at every level, and bodies are never logged whole:
+
+```go
+var sensitive = regexp.MustCompile(`(?i)(pass(word)?|secret|token|authorization|cookie|api[-_]?key|session|card|cvv|iban|ssn)`)
+
+logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+    Level: logLevel, // from config; DEBUG stays safe because of the line below
+    ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+        if sensitive.MatchString(a.Key) {
+            return slog.String(a.Key, "[REDACTED]")
+        }
+        return a
+    },
+}))
+```
+
+```typescript
+const logger = pino({
+  level: process.env.LOG_LEVEL ?? "info",
+  redact: {
+    paths: ["password", "*.password", "token", "*.token", "req.headers.authorization", "req.headers.cookie",
+            "*.apiKey", "*.secret", "*.cardNumber"],
+    censor: "[REDACTED]",
+  },
+});
+```
+
 **Rules:**
-- ERROR logs trigger alerts — don't use ERROR for expected conditions
+- ERROR means a server-side failure someone should look at. Alerts come from SLO burn rates, not from
+  counting ERROR lines.
 - WARN is for handled degradation — circuit breakers, retries, fallbacks
 - INFO is for business events — one INFO per significant state transition
-- DEBUG is verbose and off in production — enable per-service when troubleshooting
-- Never log sensitive data (passwords, tokens, PII) at any level
-- Never log request/response bodies at INFO level — use DEBUG
+- DEBUG is off in production. Turning it on must stay safe, because redaction applies at every level.
+- Never log request or response bodies. Log an allow-listed set of fields.
+- Never log passwords, tokens, session IDs, API keys, full card or bank numbers, or free-text PII. A
+  unit test logs such fields and asserts they come out `[REDACTED]`.
 
 ## Correlation IDs
 
-Generate a unique request ID at the edge (API gateway, load balancer, or first service). Propagate it through every service call, log line, and trace span.
+Generate a unique request ID at the edge (API gateway, load balancer, or first service). Propagate it
+through every service call, log line, trace span, **and error body** (`error.request_id`, see the envelope).
 
 ```go
-// Middleware — generate or extract request ID
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
+
+// Middleware — accept a well-formed inbound ID (from our own gateway), otherwise generate one
 func RequestIDMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        requestID := r.Header.Get("X-Request-ID")
-        if requestID == "" {
-            requestID = "req_" + uuid.New().String()
+        requestID := r.Header.Get("X-Request-Id")
+        if !validRequestID.MatchString(requestID) { // bounded length and charset: no log injection
+            requestID = "req_" + uuid.NewString()
         }
-
         ctx := context.WithValue(r.Context(), requestIDKey, requestID)
-        w.Header().Set("X-Request-ID", requestID)
-
+        w.Header().Set("X-Request-Id", requestID)
         next.ServeHTTP(w, r.WithContext(ctx))
     })
 }
 
 // Propagate to downstream services
 func (c *httpClient) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-    // Forward request ID
     if reqID := RequestIDFromContext(ctx); reqID != "" {
-        req.Header.Set("X-Request-ID", reqID)
+        req.Header.Set("X-Request-Id", reqID)
     }
-    // Forward trace context (W3C Trace Context propagation via OTel SDK)
+    // W3C Trace Context (traceparent) via the OTel propagator
     otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
     return c.client.Do(req)
 }
 
-// Every log includes request_id
 func RequestIDFromContext(ctx context.Context) string {
     if v, ok := ctx.Value(requestIDKey).(string); ok {
         return v
@@ -711,7 +575,7 @@ func RequestIDFromContext(ctx context.Context) string {
     return ""
 }
 
-// Logging middleware adds request_id and trace_id to every log
+// Logging middleware adds request_id, trace_id and tenant_id to every log line of the request
 func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -721,7 +585,7 @@ func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
                 "trace_id", TraceIDFromContext(ctx),
                 "tenant_id", TenantFromContext(ctx),
                 "method", r.Method,
-                "path", r.URL.Path,
+                "path", r.URL.Path, // no query string: it can carry tokens and PII
             )
             ctx = context.WithValue(ctx, loggerKey, reqLogger)
             next.ServeHTTP(w, r.WithContext(ctx))
@@ -731,25 +595,24 @@ func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 ```
 
 ```typescript
-// Middleware
+const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
+
 function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
-  const requestId = req.headers['x-request-id'] as string || `req_${randomUUID()}`;
-  req.id = requestId;
-  res.setHeader('X-Request-ID', requestId);
+  const inbound = req.header("x-request-id");
+  req.id = inbound && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`;
+  res.setHeader("X-Request-Id", req.id);
   next();
 }
 
-// Propagate to downstream calls
+// Propagate to downstream calls. The downstream service authenticates the CALLER (service token or
+// mTLS) and takes the tenant from that credential. A forwarded X-Tenant-ID header is a hint for
+// logging only, never an authorization input.
 async function callDownstream(ctx: RequestContext, url: string, body: unknown): Promise<Response> {
   return fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Request-ID': ctx.requestId,
-      'X-Tenant-ID': ctx.tenantId,
-      // trace context propagated automatically by OTel SDK
-    },
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Request-Id": ctx.requestId, Authorization: `Bearer ${ctx.serviceToken}` },
     body: JSON.stringify(body),
+    signal: ctx.signal, // the inbound deadline
   });
 }
 ```
@@ -766,15 +629,33 @@ Client → API Gateway (generates req_abc123)
 
 All logs across all services for a single request can be queried with: `request_id = "req_abc123"`
 
+## What coding agents implement (the checklist reviewers verify)
+
+1. A JSON logger with a redacting handler. Each request's logger carries `request_id`, `trace_id`,
+   `tenant_id`, `method` and `path` (without the query string).
+2. The request-ID middleware: it validates an inbound ID, generates one otherwise, and echoes
+   `X-Request-Id`. The same ID appears in `meta.request_id` and in `error.request_id`.
+3. OTel tracing with W3C propagation on inbound and outbound HTTP and on DB calls. `tenant_id` is a
+   span attribute.
+4. The `http.server.request.duration` histogram with the bounded label set above. `http.route` is the
+   template, and there is no `tenant_id` label.
+5. Pool and dependency metrics: connections in use and wait time, and outbound call duration by
+   dependency.
+6. Tests:
+   - two IDs on one route produce one `http.route` series;
+   - a `password`/`authorization` field is logged as `[REDACTED]`;
+   - an error response's `request_id` equals the `X-Request-Id` header.
+
 ## Critical Rules
 
-- `tenant_id` on every log, metric, and trace — zero exceptions
+- `tenant_id` on every log line and span — and on no metric (at most a bounded `tenant.tier`)
+- Metric labels come from bounded sets. `http.route` is the route template, never `r.URL.Path`/`req.path`.
 - Structured logging only — no string concatenation or template literals for log messages
 - JSON format in production — human-readable format only in local development
 - Request ID and trace ID on every log line — for cross-service correlation
-- ERROR level means "wake someone up" — don't overuse it
-- Never log sensitive data — passwords, tokens, API keys, PII
-- Metrics at every boundary — HTTP, service, repository, external calls
+- Redaction happens in the logger handler at every level; bodies are never logged
+- The tenant comes from the verified credential, never from a client-supplied header
+- Metrics at every boundary — HTTP, repository, external calls, pools
 - Every span records errors — don't swallow errors silently in spans
-- SLA dashboards per service — availability, latency, error rate with alerting
+- SLIs come from histograms at query time; alerts use multi-window burn rates; dashboards and alert rules are code
 - Log levels are meaningful — follow the table above consistently
