@@ -24,10 +24,8 @@ output:
     - type: agent_registry
       path: agent_state/agent_registry.json
 dependencies:
-  upstream:
-    - impl_guidelines_agent
-  downstream:
-    - project_planner
+  upstream: [impl_guidelines_agent]
+  downstream: [project_planner]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Agent Factory

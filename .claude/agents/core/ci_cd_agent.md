@@ -21,6 +21,8 @@ output:
     - path: .github/workflows/cd.yml
 dependencies:
   upstream: [impl_guidelines_agent]
+  runs_after: [deployment_agent]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: CI/CD Agent

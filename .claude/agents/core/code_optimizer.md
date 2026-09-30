@@ -31,7 +31,8 @@ output:
       path: agent_state/phases/{{PHASE}}/reports/optimizations.md
 dependencies:
   upstream: [backend_developer, api_developer, unit_test_agent]
-  downstream: [code_reviewer_I]
+  runs_after: [codebase_mapper]
+  downstream: [code_reviewer_I]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{FRAMEWORK}}.md"

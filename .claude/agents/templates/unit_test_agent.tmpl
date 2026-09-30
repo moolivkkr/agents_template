@@ -27,7 +27,8 @@ quality_gates:
   table_driven_tests_used: true
 dependencies:
   upstream: [backend_developer, api_developer]
-  downstream: [integration_test_agent, code_reviewer_I]
+  runs_after: [solution_selector]
+  downstream: [code_optimizer, code_reviewer_I, integration_test_agent, spec_test_reconciler, test_runner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/testing/{{TEST_FRAMEWORK}}.md"

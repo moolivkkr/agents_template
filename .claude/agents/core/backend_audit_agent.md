@@ -21,7 +21,8 @@ output:
   primary: agent_state/phases/{{PHASE}}/audit_report.md
 dependencies:
   upstream: [spec_verifier]
-  downstream: [backend_developer, api_developer]
+  runs_after: [codebase_mapper, plan_goal_verifier, project_planner]
+  downstream: [api_developer, backend_developer]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Backend Audit Agent

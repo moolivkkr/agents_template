@@ -30,8 +30,9 @@ output:
     - path: agent_state/phases/{{PHASE}}/test-data/seed-cleanup.md
       description: How to reset the system after acceptance tests
 dependencies:
-  upstream: [code_reviewer_II, security_reviewer]
-  downstream: []
+  upstream: [e2e_orchestrator]
+  runs_after: [code_quality_verifier, code_reviewer_II, security_reviewer, spec_test_reconciler]
+  downstream: [pipeline_completeness_agent]  # derived by _sync-deps.py — do not hand-edit
 quality_gates:
   all_in_scope_use_cases_pass: true
   all_personas_exercised: true

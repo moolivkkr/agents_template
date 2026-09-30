@@ -18,7 +18,8 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/security_review.md
 dependencies:
   upstream: [backend_developer, api_developer]
-  downstream: []
+  runs_after: [code_reviewer_II, codebase_mapper, dependency_scanner, tenant_isolation_verifier, threat_model_agent]
+  downstream: [acceptance_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/core/security-owasp.md"

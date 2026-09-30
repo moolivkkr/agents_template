@@ -15,6 +15,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/test_results.md
 dependencies:
   upstream: [unit_test_agent, integration_test_agent]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Test Runner

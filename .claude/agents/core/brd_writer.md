@@ -23,13 +23,8 @@ quality_gates:
   traceability_complete: true
   quality_checklists_present: true
 dependencies:
-  upstream:
-    - brd_analyzer
-    - brd_interviewer
-  downstream:
-    - product_manager
-    - ux_designer
-    - architecture_orchestrator
+  upstream: [brd_analyzer, brd_interviewer]
+  downstream: [architecture_orchestrator, product_manager, ux_designer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/requirements/acceptance-criteria.md"

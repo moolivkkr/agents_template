@@ -16,8 +16,9 @@ input:
 output:
   primary: agent_state/phases/{{PHASE}}/reports/code_review_II.md
 dependencies:
-  upstream: [code_reviewer_I]
-  downstream: [security_reviewer]
+  upstream: []
+  runs_after: [api_developer, backend_developer, code_reviewer_I, ui_developer]
+  downstream: [acceptance_test_agent, security_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{FRAMEWORK}}.md"

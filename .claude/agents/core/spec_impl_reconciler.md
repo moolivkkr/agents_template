@@ -16,7 +16,8 @@ output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/specs_vs_impl.md
 dependencies:
   upstream: [backend_developer, api_developer, ui_developer]
-  downstream: [spec_test_reconciler]
+  runs_after: [brd_spec_reconciler]
+  downstream: [spec_test_reconciler]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Spec ↔ Implementation Reconciler

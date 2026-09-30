@@ -28,7 +28,8 @@ output:
     - path: "agent_state/phases/{{PHASE}}/open_questions.md"
       description: "Questions requiring user or research input"
 dependencies:
-  downstream: [decision_researcher, project_planner]
+  upstream: []
+  downstream: [decision_researcher, project_planner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/verification-protocol.md"
 quality_gates:

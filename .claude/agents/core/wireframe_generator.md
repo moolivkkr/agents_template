@@ -20,7 +20,7 @@ output:
   primary: docs/design/phases/{{PHASE}}/specs/
 dependencies:
   upstream: [brd_agent, spec_writer]
-  downstream: [ux_designer]
+  downstream: [ux_designer]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: UI Spec Scaffolder (formerly Wireframe Generator)

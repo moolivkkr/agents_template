@@ -18,6 +18,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/system_test_results.md
 dependencies:
   upstream: [e2e_orchestrator, integration_test_agent]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: System Test Agent

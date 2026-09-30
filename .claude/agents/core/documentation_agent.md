@@ -24,6 +24,7 @@ output:
     - path: docs/developer-guide.md
 dependencies:
   upstream: [api_developer, backend_developer]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Documentation Agent

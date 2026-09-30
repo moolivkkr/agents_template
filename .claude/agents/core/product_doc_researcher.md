@@ -24,7 +24,8 @@ output:
     - path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/sources.md"
       description: "All documentation URLs with evidence grades"
 dependencies:
-  downstream: [capability_flow_mapper, workflow_synthesizer]
+  upstream: []
+  downstream: [capability_flow_mapper, product_api_researcher, product_video_researcher, workflow_synthesizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/product-workflow-research.md"
   - "~/.claude/skills/core/deep-research.md"

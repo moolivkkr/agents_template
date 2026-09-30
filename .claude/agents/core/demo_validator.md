@@ -12,6 +12,7 @@ output:
   primary: agent_state/demos/phase-{{PHASE}}/validation_report.md
 dependencies:
   upstream: [demo_executor]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Demo Validator

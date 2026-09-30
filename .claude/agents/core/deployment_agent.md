@@ -28,7 +28,7 @@ output:
     - path: localstack/init/
 dependencies:
   upstream: [backend_developer, ui_developer]
-  downstream: [ci_cd_agent, observability_agent]
+  downstream: [ci_cd_agent, observability_agent, reliability_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/infrastructure/docker.md"
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"

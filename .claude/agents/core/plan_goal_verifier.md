@@ -29,7 +29,7 @@ output:
   primary: "agent_state/phases/{{PHASE}}/plan_check.md"
 dependencies:
   upstream: [spec_verifier, brd_spec_reconciler]
-  downstream: [backend_audit_agent, project_planner]
+  downstream: [backend_audit_agent, project_planner]  # derived by _sync-deps.py — do not hand-edit
 quality_gates:
   goal_backward_analysis_complete: true
   all_gaps_documented: true

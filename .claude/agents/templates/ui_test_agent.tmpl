@@ -38,10 +38,9 @@ quality_gates:
   all_interaction_flows_tested: true
   e2e_workflows_pass: true
 dependencies:
-  upstream:
-    - ui_developer
-  downstream:
-    - e2e_orchestrator
+  upstream: [ui_developer]
+  runs_after: [ui_audit_agent]
+  downstream: [e2e_orchestrator, ui_code_optimizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{UI_FRAMEWORK}}.md"

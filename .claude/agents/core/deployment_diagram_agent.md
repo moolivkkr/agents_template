@@ -12,6 +12,7 @@ output:
   primary: docs/architecture/deployment-diagram.md
 dependencies:
   upstream: [architecture_orchestrator]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Deployment Diagram Agent

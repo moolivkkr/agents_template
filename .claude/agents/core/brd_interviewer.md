@@ -26,10 +26,8 @@ auto_spawn:  # Only valid when run standalone — ignored when invoked via brd_a
 quality_gates:
   critical_gaps_resolved: true
 dependencies:
-  upstream:
-    - brd_analyzer
-  downstream:
-    - brd_writer
+  upstream: [brd_analyzer]
+  downstream: [brd_writer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/requirements/acceptance-criteria.md"

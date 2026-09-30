@@ -21,6 +21,8 @@ output:
     - path: agent_state/e2e/workflows.json
 dependencies:
   upstream: [ui_test_agent, integration_test_agent]
+  runs_after: [solution_selector]
+  downstream: [acceptance_test_agent, system_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/core/testing-principles.md"

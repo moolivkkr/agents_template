@@ -25,11 +25,7 @@ quality_gates:
   traceability_matrix_generated: true
 dependencies:
   upstream: []
-  downstream:
-    - product_manager
-    - ux_designer
-    - architecture_orchestrator
-    - impl_guidelines_agent
+  downstream: [architecture_orchestrator, impl_guidelines_agent, product_manager, project_planner, requirements_brd_reconciler, ux_designer, wireframe_generator]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/requirements/acceptance-criteria.md"

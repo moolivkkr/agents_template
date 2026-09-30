@@ -20,6 +20,7 @@ output:
   primary: docs/architecture/eagle-overview.md
 dependencies:
   upstream: [architecture_orchestrator]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Eagle Diagram — Strategic Architecture Overview

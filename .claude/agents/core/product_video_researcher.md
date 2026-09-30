@@ -19,7 +19,7 @@ output:
   primary: "docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md"
 dependencies:
   upstream: [product_doc_researcher]
-  downstream: [capability_flow_mapper]
+  downstream: [capability_flow_mapper, workflow_synthesizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/product-workflow-research.md"
 quality_gates:

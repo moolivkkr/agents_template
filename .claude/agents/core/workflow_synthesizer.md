@@ -14,11 +14,11 @@ input:
       path: "docs/product-workflows/{{PRODUCT_SLUG}}/CAPABILITY-TAXONOMY.md"
   optional:
     - type: doc_corpus
-      path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/doc-corpus.md"
+      path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md"
     - type: video_intelligence
-      path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/video-intelligence.md"
+      path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md"
     - type: api_intelligence
-      path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-intelligence.md"
+      path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/api-intelligence.md"
 output:
   primary: "docs/product-workflows/{{PRODUCT_SLUG}}/OVERVIEW.md"
   artifacts:
@@ -32,6 +32,7 @@ output:
     - path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/sources.md"
 dependencies:
   upstream: [capability_flow_mapper, product_doc_researcher, product_video_researcher, product_api_researcher]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/product-workflow-research.md"
 quality_gates:
@@ -87,9 +88,9 @@ Build an inventory per capability:
 ### 1.2 Read API Intelligence
 
 ```
-Read: docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-intelligence.md
-Read: docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-coverage-matrix.md
-Read: docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-schemas.yaml
+Read: docs/product-workflows/{{PRODUCT_SLUG}}/research/api-intelligence.md
+Read: docs/product-workflows/{{PRODUCT_SLUG}}/research/api-coverage-matrix.md
+Read: docs/product-workflows/{{PRODUCT_SLUG}}/research/api-schemas.yaml
 ```
 
 Extract per capability:
@@ -102,7 +103,7 @@ Extract per capability:
 ### 1.3 Read Video Intelligence
 
 ```
-Read: docs/product-workflows/{{PRODUCT_SLUG}}/reference/video-intelligence.md
+Read: docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md
 ```
 
 Extract:
@@ -114,7 +115,7 @@ Extract:
 ### 1.4 Read Documentation Corpus
 
 ```
-Read: docs/product-workflows/{{PRODUCT_SLUG}}/reference/doc-corpus.md
+Read: docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md
 ```
 
 Extract:
@@ -654,13 +655,13 @@ Aggregated from all capabilities, ordered by estimated impact:
 | Persona Flows | [personas/](personas/) | Per-persona cross-capability workflows |
 | Screen Hierarchy | [reference/screen-hierarchy.yaml](reference/screen-hierarchy.yaml) | Full UI screen tree (machine-readable) |
 | Config Schemas | [reference/config-schemas.yaml](reference/config-schemas.yaml) | All fields across all screens |
-| API Intelligence | [reference/api-intelligence.md](reference/api-intelligence.md) | Complete API surface documentation |
-| API Schemas | [reference/api-schemas.yaml](reference/api-schemas.yaml) | Machine-readable endpoint inventory |
-| API Coverage | [reference/api-coverage-matrix.md](reference/api-coverage-matrix.md) | UI → API mapping with gaps |
+| API Intelligence | [research/api-intelligence.md](research/api-intelligence.md) | Complete API surface documentation |
+| API Schemas | [research/api-schemas.yaml](research/api-schemas.yaml) | Machine-readable endpoint inventory |
+| API Coverage | [research/api-coverage-matrix.md](research/api-coverage-matrix.md) | UI → API mapping with gaps |
 | Integration Map | [reference/integration-map.md](reference/integration-map.md) | External touchpoints |
 | Sources | [reference/sources.md](reference/sources.md) | Deduplicated source reference |
-| Doc Corpus | [reference/doc-corpus.md](reference/doc-corpus.md) | Structured knowledge base |
-| Video Intelligence | [reference/video-intelligence.md](reference/video-intelligence.md) | Video-extracted workflows |
+| Doc Corpus | [research/doc-corpus.md](research/doc-corpus.md) | Structured knowledge base |
+| Video Intelligence | [research/video-intelligence.md](research/video-intelligence.md) | Video-extracted workflows |
 | Capability Taxonomy | [CAPABILITY-TAXONOMY.md](CAPABILITY-TAXONOMY.md) | Full capability tree |
 ```
 

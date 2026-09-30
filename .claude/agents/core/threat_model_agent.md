@@ -24,7 +24,7 @@ output:
     - agent_state/phases/{{PHASE}}/reports/threat_model.json
 dependencies:
   upstream: [spec_writer, architecture_orchestrator]
-  downstream: [spec_writer, security_reviewer]
+  downstream: [security_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/security-owasp.md"
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"

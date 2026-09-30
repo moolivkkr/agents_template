@@ -24,12 +24,9 @@ quality_gates:
   all_stories_have_acceptance_criteria: true
   requirements_traceable: true
 dependencies:
-  upstream:
-    - brd_agent
-  downstream:
-    - ux_designer
-    - architecture_orchestrator
-    - project_planner
+  upstream: [brd_agent]
+  runs_after: [brd_writer, impl_guidelines_agent]
+  downstream: [architecture_orchestrator, project_planner, ux_designer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/requirements/acceptance-criteria.md"

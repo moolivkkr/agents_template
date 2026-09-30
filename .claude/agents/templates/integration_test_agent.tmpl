@@ -46,11 +46,9 @@ quality_gates:
   response_shapes_match_contracts: true
   cross_tenant_idor_tested: true
 dependencies:
-  upstream:
-    - backend_developer
-    - api_developer
-    - migration_agent
-  downstream: []
+  upstream: [backend_developer, api_developer, migration_agent]
+  runs_after: [solution_selector, unit_test_agent]
+  downstream: [e2e_orchestrator, spec_test_reconciler, system_test_agent, test_runner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/databases/{{DB_TECH}}.md"

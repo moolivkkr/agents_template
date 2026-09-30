@@ -16,7 +16,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/breaking_change_review.md
 dependencies:
   upstream: [backend_developer, api_developer, ui_developer, migration_agent]
-  downstream: []
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/core/api-excellence.md"

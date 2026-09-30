@@ -15,6 +15,7 @@ output:
   primary: docs/testing/manual/phase-{{PHASE}}/
 dependencies:
   upstream: [spec_verifier]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Manual Test Agent

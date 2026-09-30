@@ -23,7 +23,7 @@ output:
     - agent_state/debates/{topic}-transcript.md
 dependencies:
   upstream: []
-  downstream: []
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 subagents: [debate_researcher, debate_advocate, debate_arbitrator]
 skill_packs:
   - "~/.claude/skills/core/debate-protocol.md"

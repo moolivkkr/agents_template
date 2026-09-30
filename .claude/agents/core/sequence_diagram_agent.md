@@ -14,6 +14,7 @@ output:
   primary: docs/architecture/sequence-diagrams.md
 dependencies:
   upstream: [architecture_orchestrator]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Sequence Diagram Agent

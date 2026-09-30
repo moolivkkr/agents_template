@@ -14,7 +14,7 @@ output:
   primary: agent_state/demos/phase-{{PHASE}}/
 dependencies:
   upstream: [demo_documenter]
-  downstream: [demo_validator]
+  downstream: [demo_validator]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Demo Executor

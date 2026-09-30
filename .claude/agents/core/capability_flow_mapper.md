@@ -16,6 +16,9 @@ input:
     - type: video_intelligence
       path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/video-intelligence.md"
       description: "Video research findings"
+    - type: api_coverage
+      path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/api-coverage-matrix.md"
+      description: "UI capability → API endpoint map from product_api_researcher — feeds 4g integration touchpoints"
     - type: screenshots
       description: "Screenshot images for this capability"
     - type: taxonomy
@@ -34,7 +37,8 @@ output:
       description: "Known limitations and workarounds"
 dependencies:
   upstream: [product_doc_researcher, product_video_researcher]
-  downstream: [workflow_synthesizer]
+  runs_after: [product_api_researcher]
+  downstream: [workflow_synthesizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/product-workflow-research.md"
 quality_gates:

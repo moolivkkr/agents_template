@@ -21,8 +21,8 @@ output:
   artifacts:
     - agent_state/phases/{{PHASE}}/reports/accessibility_audit.json
 dependencies:
-  upstream: [ui_developer, frontend_developer]
-  downstream: []
+  upstream: [ui_developer]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/ui/accessibility-patterns.md"
   - "~/.claude/skills/languages/{{LANG}}.md"

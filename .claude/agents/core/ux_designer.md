@@ -28,7 +28,8 @@ output:
     - path: docs/design/phases/{{PHASE}}/specs/{{SCREEN}}.wireframe.md
 dependencies:
   upstream: [spec_writer]
-  downstream: [design_quality_reviewer, ui_developer]
+  runs_after: [brd_agent, brd_writer, product_manager, wireframe_generator]
+  downstream: [brd_spec_reconciler, design_quality_reviewer, spec_verifier, ui_developer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/ui/README.md"
   - "~/.claude/skills/ui/vertix-portal-design-system.md"

@@ -15,7 +15,7 @@ output:
   primary: agent_state/reconciliation/requirements_vs_brd.md
 dependencies:
   upstream: [brd_agent]
-  downstream: [brd_spec_reconciler]
+  downstream: [brd_spec_reconciler]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Requirements ↔ BRD Reconciler

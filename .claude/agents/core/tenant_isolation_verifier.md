@@ -19,7 +19,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/tenant_isolation.md
 dependencies:
   upstream: [backend_developer, api_developer]
-  downstream: [security_reviewer]
+  downstream: [security_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"
 ---

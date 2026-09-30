@@ -27,7 +27,7 @@ output:
       description: Machine-readable PASS/FAIL per gate item with file:line evidence
 dependencies:
   upstream: [backend_developer, api_developer, ui_developer]
-  downstream: [acceptance_test_agent]
+  downstream: [acceptance_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/core/code-quality.md"

@@ -22,12 +22,8 @@ quality_gates:
   local_dev_setup_defined: true
   all_components_have_technology: true
 dependencies:
-  upstream:
-    - brd_agent
-  downstream:
-    - architecture_orchestrator
-    - product_manager
-    - project_planner
+  upstream: [brd_agent]
+  downstream: [agent_factory, architecture_orchestrator, ci_cd_agent, product_manager, project_planner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/auto-research.md"
 ---

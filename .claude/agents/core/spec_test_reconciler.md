@@ -22,7 +22,8 @@ output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.md
 dependencies:
   upstream: [unit_test_agent, integration_test_agent]
-  downstream: [acceptance_test_agent]
+  runs_after: [spec_impl_reconciler]
+  downstream: [acceptance_test_agent]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Spec ↔ Test Reconciler

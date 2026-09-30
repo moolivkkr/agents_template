@@ -13,18 +13,18 @@ input:
       description: "Capabilities to map API coverage for"
   optional:
     - type: doc_corpus
-      path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/doc-corpus.md"
+      path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/doc-corpus.md"
       description: "Documentation corpus for cross-referencing"
 output:
-  primary: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-intelligence.md"
+  primary: "docs/product-workflows/{{PRODUCT_SLUG}}/research/api-intelligence.md"
   artifacts:
-    - path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-schemas.yaml"
+    - path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/api-schemas.yaml"
       description: "Machine-readable API endpoint inventory with request/response schemas"
-    - path: "docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-coverage-matrix.md"
+    - path: "docs/product-workflows/{{PRODUCT_SLUG}}/research/api-coverage-matrix.md"
       description: "UI capability → API endpoint mapping showing automation gaps"
 dependencies:
   upstream: [product_doc_researcher]
-  downstream: [capability_flow_mapper, workflow_synthesizer]
+  downstream: [capability_flow_mapper, workflow_synthesizer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/product-workflow-research.md"
   - "~/.claude/skills/core/deep-research.md"
@@ -854,7 +854,7 @@ Keep it short; the detail belongs in the artifact.
 <!-- END operating-contract -->
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
-- [ ] API intelligence written to `docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-intelligence.md` (exact frontmatter `output.primary`), plus the api-schemas.yaml and api-coverage-matrix.md artifacts.
+- [ ] API intelligence written to `docs/product-workflows/{{PRODUCT_SLUG}}/research/api-intelligence.md` (exact frontmatter `output.primary`), plus the api-schemas.yaml and api-coverage-matrix.md artifacts.
 - [ ] Every documented endpoint cites its source (official API docs URL via WebSearch, not memory); vendor/API claims are researched, never asserted from training.
 - [ ] Each endpoint carries an evidence grade; inferred/unconfirmed endpoints are labelled as such, not stated as fact.
 - [ ] The UI-capability → API-endpoint coverage matrix honestly shows automation GAPS, not just what maps cleanly.
@@ -873,7 +873,7 @@ When this run surfaces something a FUTURE phase should know — a pattern that w
 - **Type:** pattern_that_worked|issue_encountered|agent_issue|anti_pattern|recommendation
 - **Summary:** <one line>
 - **Detail:** <2-3 lines with context>
-- **Evidence:** docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-intelligence.md
+- **Evidence:** docs/product-workflows/{{PRODUCT_SLUG}}/research/api-intelligence.md
 - **Reuse:** <actionable instruction for a future phase>
 ```
 Only write a lesson when there is a generalizable one — zero lessons is valid for a clean, unremarkable run.
@@ -882,5 +882,5 @@ Only write a lesson when there is a generalizable one — zero lessons is valid 
 After the DoD passes, append one line to `agent_state/phases/{{PHASE}}/execution.jsonl` (my real agent name + my primary output path):
 
 ```json
-{"agent":"product_api_researcher","phase":{{PHASE}},"status":"completed","report":"docs/product-workflows/{{PRODUCT_SLUG}}/reference/api-intelligence.md","ts":"<iso8601>"}
+{"agent":"product_api_researcher","phase":{{PHASE}},"status":"completed","report":"docs/product-workflows/{{PRODUCT_SLUG}}/research/api-intelligence.md","ts":"<iso8601>"}
 ```

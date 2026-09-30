@@ -36,9 +36,7 @@ quality_gates:
   connection_pool_configured: true
 dependencies:
   upstream: []
-  downstream:
-    - migration_agent
-    - backend_developer
+  downstream: [backend_developer, migration_agent, migration_safety_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/databases/{{DB_TECH}}.md"
   - "~/.claude/skills/frameworks/{{ORM}}.md"

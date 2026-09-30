@@ -34,7 +34,7 @@ output:
       path: agent_state/phases/{{PHASE}}/reports/ui_optimizations.md
 dependencies:
   upstream: [ui_developer, ui_test_agent]
-  downstream: [code_reviewer_I]
+  downstream: [code_reviewer_I]  # derived by _sync-deps.py — do not hand-edit
 trigger:
   condition: "frontend.enabled = true in IMPLEMENTATION_GUIDELINES"
 skill_packs:

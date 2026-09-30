@@ -20,7 +20,8 @@ output:
   primary: docs/design/phases/{{PHASE}}/specs/{{COMPONENT}}.md
 dependencies:
   upstream: [project_planner]
-  downstream: [brd_spec_reconciler, spec_verifier]
+  runs_after: [codebase_mapper]
+  downstream: [adr_agent, brd_spec_reconciler, reliability_agent, spec_verifier, threat_model_agent, ux_designer, wireframe_generator]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/acceptance-criteria.md"
   - "~/.claude/skills/requirements/ears-notation.md"

@@ -17,6 +17,7 @@ output:
     - path: docs/demos/phase-{{PHASE}}/test-data.md
 dependencies:
   upstream: [backend_developer, ui_developer]
+  downstream: [demo_executor]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Demo Documenter

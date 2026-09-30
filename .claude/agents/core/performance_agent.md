@@ -19,6 +19,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/performance_report.md
 dependencies:
   upstream: [backend_developer, api_developer]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/testing/load-testing.md"
 ---

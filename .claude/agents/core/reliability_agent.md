@@ -26,7 +26,7 @@ output:
       description: generated runbook stubs (one per service)
 dependencies:
   upstream: [project_planner, spec_writer, deployment_agent]
-  downstream: []
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/resiliency-patterns.md"
   - "~/.claude/skills/core/observability-patterns.md"

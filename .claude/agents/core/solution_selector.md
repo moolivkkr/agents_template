@@ -22,7 +22,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/candidate_selection.md
 dependencies:
   upstream: [backend_developer, api_developer]
-  downstream: [unit_test_agent, integration_test_agent, e2e_orchestrator]
+  downstream: [e2e_orchestrator, integration_test_agent, unit_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/candidate-selection.md"
   - "~/.claude/skills/core/code-quality.md"

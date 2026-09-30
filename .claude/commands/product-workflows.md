@@ -248,6 +248,29 @@ product_video_researcher complete -> wrote ${OUTPUT}/${PRODUCT_SLUG}/research/vi
 
 ---
 
+## Step 2b — API Surface Research (PARALLEL with Step 2)
+
+**Agent:** `product_api_researcher`
+**Skip if:** `--depth=quick`
+**Depends on:** Step 1 (reads `research/doc-corpus.md` and the capability taxonomy)
+
+Discover the product's programmatic interfaces (REST, GraphQL, SOAP, SDKs, CLIs), map object schemas, and link every UI capability to its API counterpart — or record the automation gap. `capability_flow_mapper` (Step 4) uses this for its 4g integration touchpoints, and `workflow_synthesizer` (Step 5) builds the API coverage section from it.
+
+### Output
+
+- **`${OUTPUT}/${PRODUCT_SLUG}/research/api-intelligence.md`** — full API surface, auth model, rate limits
+- **`${OUTPUT}/${PRODUCT_SLUG}/research/api-schemas.yaml`** — machine-readable endpoint inventory
+- **`${OUTPUT}/${PRODUCT_SLUG}/research/api-coverage-matrix.md`** — UI capability → API endpoint, gaps flagged
+
+### Agent return
+```
+product_api_researcher complete -> wrote ${OUTPUT}/${PRODUCT_SLUG}/research/api-intelligence.md
+   Summary: N endpoints across N APIs. N/N capabilities API-accessible. N automation gaps.
+   Issues: none | N endpoints undocumented (grade E only)
+```
+
+---
+
 ## Step 3 — Screenshot Analysis (if --screenshots provided)
 
 **Skip if:** `--screenshots` not provided
@@ -286,7 +309,7 @@ screenshot_analyzer complete -> wrote ${OUTPUT}/${PRODUCT_SLUG}/screens/
 ## Step 4 — Capability Flow Mapping (PARALLEL per capability)
 
 **Agent:** `capability_flow_mapper` (one instance per capability)
-**Depends on:** Step 1 (doc corpus + taxonomy), Step 2 (video intelligence), Step 3 (screenshots — if available)
+**Depends on:** Step 1 (doc corpus + taxonomy), Step 2 (video intelligence), Step 2b (API coverage matrix), Step 3 (screenshots — if available)
 **Parallelization:** Launch one agent per capability. Max 5 concurrent agents — queue remaining.
 
 For each capability (from `--capabilities` or from the discovered taxonomy in Step 1):

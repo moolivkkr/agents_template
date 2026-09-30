@@ -41,11 +41,8 @@ quality_gates:
   sequential_ids_no_gaps: true
   registry_updated: true
 dependencies:
-  upstream:
-    - database_agent
-  downstream:
-    - backend_developer
-    - integration_test_agent
+  upstream: [database_agent]
+  downstream: [backend_developer, breaking_change_reviewer, integration_test_agent, migration_safety_reviewer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/databases/{{DB_TECH}}.md"
   - "~/.claude/skills/infrastructure/saas-tenancy-models.md"

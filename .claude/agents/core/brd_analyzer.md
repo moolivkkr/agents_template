@@ -27,9 +27,7 @@ quality_gates:
   gaps_categorized: true
 dependencies:
   upstream: []
-  downstream:
-    - brd_interviewer
-    - brd_writer
+  downstream: [brd_interviewer, brd_writer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/requirements/gap-analysis-checklist.md"

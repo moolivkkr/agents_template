@@ -19,7 +19,8 @@ output:
   primary: docs/design/phases/{{PHASE}}/VERIFICATION_REPORT.md
 dependencies:
   upstream: [project_planner, ux_designer]
-  downstream: [backend_audit_agent]
+  runs_after: [spec_writer]
+  downstream: [backend_audit_agent, brd_spec_reconciler, manual_test_agent, plan_goal_verifier]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/acceptance-criteria.md"
   - "~/.claude/skills/requirements/edge-case-taxonomy.md"

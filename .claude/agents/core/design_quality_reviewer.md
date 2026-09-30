@@ -18,7 +18,7 @@ output:
   primary: docs/design/phases/{{PHASE}}/DESIGN_REVIEW.md
 dependencies:
   upstream: [ux_designer]
-  downstream: [ui_developer]
+  downstream: [ui_developer]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/ui/README.md"
   - "~/.claude/skills/ui/vertix-portal-design-system.md"

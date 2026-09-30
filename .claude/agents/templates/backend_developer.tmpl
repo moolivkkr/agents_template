@@ -23,7 +23,8 @@ quality_gates:
   no_todo_placeholders: true
 dependencies:
   upstream: [architecture_orchestrator, project_planner]
-  downstream: [code_reviewer_I, code_reviewer_II, test_developer]
+  runs_after: [backend_audit_agent, codebase_mapper, database_agent, migration_agent]
+  downstream: [breaking_change_reviewer, code_optimizer, code_quality_verifier, code_reviewer_I, code_reviewer_II, demo_documenter, dependency_scanner, deployment_agent, documentation_agent, integration_test_agent, observability_agent, performance_agent, security_reviewer, solution_selector, spec_impl_reconciler, tenant_isolation_verifier, unit_test_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/languages/{{LANG}}.md"
   - "~/.claude/skills/frameworks/{{FRAMEWORK}}.md"

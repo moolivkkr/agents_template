@@ -18,7 +18,7 @@ output:
   primary: "agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md"
 dependencies:
   upstream: [phase_assumptions_analyzer]
-  downstream: [project_planner]
+  downstream: [project_planner]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/core/auto-research.md"
   - "~/.claude/skills/core/deep-research.md"

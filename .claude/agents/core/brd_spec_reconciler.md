@@ -16,8 +16,8 @@ output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/brd_vs_specs.md
 dependencies:
   upstream: [spec_writer, ux_designer]
-  runs_after: [spec_verifier]
-  downstream: [spec_impl_reconciler]
+  runs_after: [requirements_brd_reconciler, spec_verifier]
+  downstream: [plan_goal_verifier, spec_impl_reconciler]  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: BRD ↔ Spec Reconciler

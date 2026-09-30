@@ -38,7 +38,8 @@ output:
     - docs/design/phases/{{PHASE}}/phase_context.md
 dependencies:
   upstream: [impl_guidelines_agent, brd_agent]
-  downstream: [spec_verifier, backend_audit_agent]
+  runs_after: [agent_factory, architecture_orchestrator, codebase_mapper, decision_researcher, phase_assumptions_analyzer, plan_goal_verifier, product_manager]
+  downstream: [api_developer, backend_audit_agent, backend_developer, reliability_agent, spec_verifier, spec_writer, ui_audit_agent]  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/requirements/requirement-clarity.md"
   - "~/.claude/skills/requirements/acceptance-criteria.md"

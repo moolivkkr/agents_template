@@ -16,6 +16,8 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/observability_report.md
 dependencies:
   upstream: [backend_developer, api_developer]
+  runs_after: [deployment_agent]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: Observability Agent

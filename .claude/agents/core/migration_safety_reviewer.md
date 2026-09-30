@@ -18,7 +18,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/migration_safety.md
 dependencies:
   upstream: [migration_agent, database_agent]
-  downstream: []
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 skill_packs:
   - "~/.claude/skills/databases/{{DB_TECH}}.md"
   - "~/.claude/skills/languages/{{LANG}}.md"

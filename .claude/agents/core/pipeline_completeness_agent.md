@@ -40,7 +40,7 @@ output:
       description: All gaps that were logged but never resolved across the pipeline
 dependencies:
   upstream: [acceptance_test_agent]
-  downstream: []
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 quality_gates:
   all_requirements_traced_forward: true
   all_code_traced_backward: true

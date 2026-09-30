@@ -14,6 +14,7 @@ output:
   primary: docs/architecture/c4-diagram.md
 dependencies:
   upstream: [architecture_orchestrator]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: C4 Diagram Agent

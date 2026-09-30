@@ -22,6 +22,7 @@ output:
     - docs/DECISIONS.md  # appends a D-NNN ledger entry per ADR
 dependencies:
   upstream: [architecture_orchestrator, spec_writer]
+  downstream: []  # derived by _sync-deps.py — do not hand-edit
 ---
 
 # Agent: ADR Agent
