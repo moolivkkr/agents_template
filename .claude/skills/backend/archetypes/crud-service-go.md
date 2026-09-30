@@ -12,6 +12,8 @@ tags:
 
 # CRUD Service Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0, and exercised by the crud-service-test-go.md tests, which were run (tests/archetype-compile/go/run.sh).
+
 Complete, production-ready Go service layer template. Every generated service MUST follow this pattern.
 
 ## Domain Types
@@ -72,6 +74,7 @@ package widget
 
 import (
     "context"
+    "time"
 
     "github.com/google/uuid"
     "yourapp/internal/domain"
@@ -102,6 +105,11 @@ type Cache interface {
     Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
     Delete(ctx context.Context, key string) error
 }
+
+// AuditWriter records mutations (an event bus publisher or an append-only table).
+type AuditWriter interface {
+    Write(ctx context.Context, entry domain.AuditEntry) error
+}
 ```
 
 ## Constructor with Dependency Injection
@@ -130,6 +138,7 @@ type Metrics struct {
 type service struct {
     repo    Repository
     cache   Cache
+    audit   AuditWriter
     logger  *slog.Logger
     metrics Metrics
     tracer  trace.Tracer
@@ -142,12 +151,14 @@ type service struct {
 func NewService(
     repo Repository,
     cache Cache,
+    audit AuditWriter,
     logger *slog.Logger,
     metrics Metrics,
 ) *service {
     return &service{
         repo:     repo,
         cache:    cache,
+        audit:    audit,
         logger:   logger.With("service", "widget"),
         metrics:  metrics,
         tracer:   otel.Tracer("widget-service"),
@@ -155,6 +166,12 @@ func NewService(
     }
 }
 ```
+
+The method blocks below are the rest of package `widget`. Between them they import `context`,
+`encoding/json`, `fmt`, `strings`, `time`, `github.com/google/uuid`,
+`go.opentelemetry.io/otel/attribute`, `go.opentelemetry.io/otel/metric`, and the project's
+`internal/apperr` (error-handling-go.md), `internal/domain` and `internal/middleware` (the context
+accessors in auth-middleware-go.md) — `goimports` adds exactly these.
 
 ## Create Implementation
 
@@ -169,7 +186,7 @@ func (s *service) Create(ctx context.Context, input CreateInput) (*Widget, error
     }()
 
     // Extract request_id for structured logging across the service layer
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := s.logger.With("request_id", reqID, "method", "Create")
 
     // 1. Validate input
@@ -179,11 +196,11 @@ func (s *service) Create(ctx context.Context, input CreateInput) (*Widget, error
     }
 
     // 2. Extract tenant context — every operation is tenant-scoped
-    tenantID, err := TenantIDFromContext(ctx)
+    tenantID, err := middleware.TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthenticatedError()
+        return nil, apperr.NewUnauthenticatedError()
     }
-    userID, _ := UserIDFromContext(ctx)
+    userID, _ := middleware.UserIDFromContext(ctx)
 
     // 3. Build domain object
     now := time.Now().UTC()
@@ -232,12 +249,12 @@ func (s *service) Get(ctx context.Context, id uuid.UUID) (*Widget, error) {
             metric.WithAttributes(attribute.String("op", "get")))
     }()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := s.logger.With("request_id", reqID, "method", "Get", "widget_id", id)
 
-    tenantID, err := TenantIDFromContext(ctx)
+    tenantID, err := middleware.TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthenticatedError()
+        return nil, apperr.NewUnauthenticatedError()
     }
 
     // 1. Check cache
@@ -280,7 +297,7 @@ func (s *service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (
             metric.WithAttributes(attribute.String("op", "update")))
     }()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := s.logger.With("request_id", reqID, "method", "Update", "widget_id", id)
 
     if err := input.Validate(); err != nil {
@@ -288,11 +305,11 @@ func (s *service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (
         return nil, err // already a VALIDATION_FAILED *AppError carrying details[]
     }
 
-    tenantID, err := TenantIDFromContext(ctx)
+    tenantID, err := middleware.TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthenticatedError()
+        return nil, apperr.NewUnauthenticatedError()
     }
-    userID, _ := UserIDFromContext(ctx)
+    userID, _ := middleware.UserIDFromContext(ctx)
 
     // 1. Fetch current (ensures tenant-scoping)
     existing, err := s.repo.GetByID(ctx, tenantID, id)
@@ -302,7 +319,7 @@ func (s *service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (
 
     // 2. Optimistic lock check
     if input.Version != existing.Version {
-        return nil, NewConflictError("This widget was changed by someone else. Reload and try again.")
+        return nil, apperr.NewConflictError("This widget was changed by someone else. Reload and try again.")
     }
 
     // 3. Apply changes
@@ -337,14 +354,14 @@ func (s *service) Delete(ctx context.Context, id uuid.UUID) error {
     ctx, span := s.tracer.Start(ctx, "widget.delete")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := s.logger.With("request_id", reqID, "method", "Delete", "widget_id", id)
 
-    tenantID, err := TenantIDFromContext(ctx)
+    tenantID, err := middleware.TenantIDFromContext(ctx)
     if err != nil {
-        return NewUnauthenticatedError()
+        return apperr.NewUnauthenticatedError()
     }
-    userID, _ := UserIDFromContext(ctx)
+    userID, _ := middleware.UserIDFromContext(ctx)
 
     // 1. Soft delete (sets deleted_at, does not remove row)
     if err := s.repo.SoftDelete(ctx, tenantID, id); err != nil {
@@ -372,12 +389,12 @@ func (s *service) List(ctx context.Context, filters domain.ListFilters) (*domain
     ctx, span := s.tracer.Start(ctx, "widget.list")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := s.logger.With("request_id", reqID, "method", "List")
 
-    tenantID, err := TenantIDFromContext(ctx)
+    tenantID, err := middleware.TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthenticatedError()
+        return nil, apperr.NewUnauthenticatedError()
     }
 
     // Enforce pagination defaults and maximums
@@ -412,12 +429,21 @@ func (s *service) List(ctx context.Context, filters domain.ListFilters) (*domain
 ## Transaction Support for Multi-Step Operations
 
 ```go
-// TxManager abstracts database transactions for service-layer orchestration.
+// TxManager abstracts database transactions for service-layer orchestration. WithTx puts the
+// transaction in txCtx; the repositories MUST run their queries on that transaction, not the pool.
 type TxManager interface {
     WithTx(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
-func (s *service) CreateWithRelations(ctx context.Context, input CreateWithRelationsInput) (*Widget, error) {
+// relationsService is the widget service plus what a multi-step write needs, injected like every
+// other dependency.
+type relationsService struct {
+    *service
+    txManager     TxManager
+    componentRepo ComponentRepository
+}
+
+func (s *relationsService) CreateWithRelations(ctx context.Context, input CreateWithRelationsInput) (*Widget, error) {
     ctx, span := s.tracer.Start(ctx, "widget.create_with_relations")
     defer span.End()
 
@@ -425,12 +451,18 @@ func (s *service) CreateWithRelations(ctx context.Context, input CreateWithRelat
         return nil, err // already a VALIDATION_FAILED *AppError carrying details[]
     }
 
+    // The tenant comes from the verified token in ctx, never from the input.
+    tenantID, err := middleware.TenantIDFromContext(ctx)
+    if err != nil {
+        return nil, apperr.NewUnauthenticatedError()
+    }
+
     var created *Widget
 
-    err := s.txManager.WithTx(ctx, func(txCtx context.Context) error {
+    err = s.txManager.WithTx(ctx, func(txCtx context.Context) error {
         // Step 1: Create parent widget
-        w, err := s.repo.Create(txCtx, input.ToWidget())
-        if err != nil {
+        w := input.ToWidget(tenantID)
+        if err := s.repo.Create(txCtx, w); err != nil {
             return fmt.Errorf("create widget: %w", err)
         }
         created = w
@@ -466,7 +498,7 @@ func (s *service) auditLog(ctx context.Context, action string, entityID, tenantI
     }
     // Fire-and-forget to audit logger — never block the business operation.
     // In production this publishes to an event bus or writes to an append-only table.
-    if err := s.auditWriter.Write(ctx, entry); err != nil {
+    if err := s.audit.Write(ctx, entry); err != nil {
         s.logger.ErrorContext(ctx, "audit log failed",
             "action", action,
             "entity_id", entityID,
@@ -486,13 +518,13 @@ type CreateInput struct {
 
 func (i CreateInput) Validate() error {
     if strings.TrimSpace(i.Name) == "" {
-        return NewValidationError("name", "required", "Name is required.")
+        return apperr.NewValidationError("name", "required", "Name is required.")
     }
     if len(i.Name) > 255 {
-        return NewValidationError("name", "too_long", "Name must be 255 characters or fewer.")
+        return apperr.NewValidationError("name", "too_long", "Name must be 255 characters or fewer.")
     }
     if len(i.Description) > 2000 {
-        return NewValidationError("description", "too_long", "Description must be 2,000 characters or fewer.")
+        return apperr.NewValidationError("description", "too_long", "Description must be 2,000 characters or fewer.")
     }
     return nil
 }

@@ -17,6 +17,8 @@ tags:
 
 # Go Observability Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0 (SDK, OTLP exporters), otelhttp v0.71.0, OTel Prometheus exporter v0.68.0, otelsql v0.44.0, go-redis v9.22.0; `buildResource` was run (tests/archetype-compile/go/run.sh).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Go observability implementation. It is the language-specific complement to `core/observability-patterns.md`, which defines the cross-language strategy and required fields. Every generated Go service MUST follow these patterns.
 
 Complete OpenTelemetry integration for Go backend services covering traces, metrics, structured logging, and full correlation across all three signals.
@@ -25,21 +27,23 @@ Complete OpenTelemetry integration for Go backend services covering traces, metr
 
 ## Dependencies
 
-```go
-// go.mod — required observability modules
+```text
+// go.mod — required observability modules (the versions these samples were compile-checked
+// against on 2026-09-30; take the current release with `go get <module>@latest`).
+// log/slog is the standard library (Go 1.21+) — it is not a go.mod requirement.
 require (
-    go.opentelemetry.io/otel                       v1.28.0
-    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.28.0
-    go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.28.0
-    go.opentelemetry.io/otel/exporters/prometheus   v0.50.0
-    go.opentelemetry.io/otel/sdk                    v1.28.0
-    go.opentelemetry.io/otel/sdk/metric             v1.28.0
-    go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.53.0
-    go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.53.0
-    github.com/prometheus/client_golang             v1.19.1
-    github.com/XSAM/otelsql                        v0.33.0
-    github.com/redis/go-redis/extra/redisotel/v9   v9.5.1
-    log/slog                                        // stdlib since Go 1.21
+    go.opentelemetry.io/otel                                           v1.46.0
+    go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc    v1.46.0
+    go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc  v1.46.0
+    go.opentelemetry.io/otel/exporters/prometheus                      v0.68.0
+    go.opentelemetry.io/otel/sdk                                       v1.46.0
+    go.opentelemetry.io/otel/sdk/metric                                v1.46.0
+    go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp      v0.71.0
+    go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc v0.71.0 // gRPC services; no sample below uses it
+    github.com/prometheus/client_golang                                v1.24.1
+    github.com/XSAM/otelsql                                            v0.44.0
+    github.com/redis/go-redis/v9                                       v9.22.0
+    github.com/redis/go-redis/extra/redisotel/v9                       v9.22.0
 )
 ```
 
@@ -55,8 +59,6 @@ package main
 import (
     "context"
     "fmt"
-    "log/slog"
-    "os"
     "time"
 
     "go.opentelemetry.io/otel"
@@ -64,25 +66,30 @@ import (
     "go.opentelemetry.io/otel/propagation"
     "go.opentelemetry.io/otel/sdk/resource"
     sdktrace "go.opentelemetry.io/otel/sdk/trace"
-    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+    semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 )
 
-// initTracer sets up the global TracerProvider with OTLP gRPC export.
-// Call shutdown() in main's defer to flush remaining spans.
-func initTracer(ctx context.Context, serviceName, serviceVersion string) (shutdown func(context.Context) error, err error) {
+// buildResource describes this service on every span and metric. The attributes are added
+// schemaless: resource.Default() carries the SDK's own semconv schema URL, and merging a resource
+// built with any other semconv version fails with "conflicting Schema URL" — at startup.
+func buildResource(serviceName, serviceVersion, env string) (*resource.Resource, error) {
     res, err := resource.Merge(
         resource.Default(),
-        resource.NewWithAttributes(
-            semconv.SchemaURL,
+        resource.NewSchemaless(
             semconv.ServiceName(serviceName),
             semconv.ServiceVersion(serviceVersion),
-            semconv.DeploymentEnvironment(os.Getenv("APP_ENV")),
+            semconv.DeploymentEnvironmentNameKey.String(env),
         ),
     )
     if err != nil {
         return nil, fmt.Errorf("creating resource: %w", err)
     }
+    return res, nil
+}
 
+// initTracer sets up the global TracerProvider with OTLP gRPC export.
+// Call shutdown() in main's defer to flush remaining spans.
+func initTracer(ctx context.Context, res *resource.Resource) (shutdown func(context.Context) error, err error) {
     // OTLP exporter — reads OTEL_EXPORTER_OTLP_ENDPOINT env var by default
     exporter, err := otlptracegrpc.New(ctx,
         otlptracegrpc.WithInsecure(), // remove for production TLS
@@ -117,12 +124,15 @@ package order
 
 import (
     "context"
+    "fmt"
     "net/http"
 
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/codes"
     "go.opentelemetry.io/otel/trace"
+
+    "yourapp/internal/middleware" // context accessors (1.8)
 )
 
 // One tracer per package — named after the module
@@ -136,8 +146,8 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
     // Add business attributes to the current span.
     span := trace.SpanFromContext(ctx)
     span.SetAttributes(
-        attribute.String("tenant_id", TenantFromContext(ctx)),
-        attribute.String("user_id", UserIDFromContext(ctx)),
+        attribute.String("tenant_id", middleware.TenantFromContext(ctx)),
+        attribute.String("user_id", middleware.UserIDFromContext(ctx)),
     )
 
     order, err := h.service.CreateOrder(ctx, parseCreateRequest(r))
@@ -157,7 +167,7 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 func (s *Service) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
     ctx, span := tracer.Start(ctx, "OrderService.CreateOrder",
         trace.WithAttributes(
-            attribute.String("tenant_id", TenantFromContext(ctx)),
+            attribute.String("tenant_id", middleware.TenantFromContext(ctx)),
         ),
     )
     defer span.End()
@@ -198,7 +208,7 @@ func (r *PostgresOrderRepo) Save(ctx context.Context, order *Order) error {
             attribute.String("db.system", "postgresql"),
             attribute.String("db.operation", "INSERT"),
             attribute.String("db.sql.table", "orders"),
-            attribute.String("tenant_id", TenantFromContext(ctx)),
+            attribute.String("tenant_id", middleware.TenantFromContext(ctx)),
         ),
     )
     defer span.End()
@@ -239,12 +249,13 @@ package server
 import (
     "fmt"
     "net/http"
+    "time"
 
     "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
     "go.opentelemetry.io/otel/metric/noop"
 )
 
-// WrapHandler wraps your root mux so every incoming request gets a span.
+// NewServer wraps your root handler so every incoming request gets a span.
 func NewServer(handler http.Handler) *http.Server {
     // otelhttp creates a root span for every request with:
     //   - span name = "HTTP {METHOD} {route}"
@@ -286,22 +297,24 @@ package database
 import (
     "database/sql"
     "fmt"
+    "time"
 
     "github.com/XSAM/otelsql"
-    semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
+    _ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+    semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 )
 
 // OpenDB wraps database/sql with automatic span creation for every query.
 func OpenDB(dsn string) (*sql.DB, error) {
     db, err := otelsql.Open("pgx", dsn,
         otelsql.WithAttributes(
-            semconv.DBSystemPostgreSQL,
+            semconv.DBSystemNamePostgreSQL,
+            semconv.DBNamespace("myapp"),
         ),
-        otelsql.WithDBName("myapp"),
         otelsql.WithSpanOptions(otelsql.SpanOptions{
             Ping:      true,
-            RowsNext:  false, // avoid noisy per-row spans
-            RowsClose: false,
+            RowsNext: false, // no event per row
+            OmitRows: true,  // no sql.rows span per result set
         }),
     )
     if err != nil {
@@ -325,6 +338,8 @@ func OpenDB(dsn string) (*sql.DB, error) {
 package cache
 
 import (
+    "fmt"
+
     "github.com/redis/go-redis/extra/redisotel/v9"
     "github.com/redis/go-redis/v9"
 )
@@ -463,6 +478,7 @@ package main
 import (
     "context"
     "fmt"
+    "log/slog"
     "net/http"
     "time"
 
@@ -657,6 +673,10 @@ exactly one series, with `http.route="/api/v1/orders/{id}"`.
 package repository
 
 import (
+    "context"
+    "fmt"
+    "time"
+
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/metric"
@@ -688,13 +708,13 @@ func recordQueryDuration(ctx context.Context, start time.Time, operation, table 
     ))
 }
 
-// Usage in repo methods:
-func (r *PostgresOrderRepo) FindByID(ctx context.Context, id string) (*Order, error) {
-    start := time.Now()
-    defer recordQueryDuration(ctx, start, "SELECT", "orders")
-
-    // ... query execution ...
-}
+// Usage — first lines of every repo method:
+//
+//     func (r *PostgresOrderRepo) FindByID(ctx context.Context, id string) (*Order, error) {
+//         start := time.Now()
+//         defer recordQueryDuration(ctx, start, "SELECT", "orders")
+//         // ... query execution ...
+//     }
 ```
 
 ### 2.4 Gauge — Active Connections, Goroutines, Queue Depth
@@ -705,6 +725,7 @@ package observability
 import (
     "context"
     "database/sql"
+    "fmt"
     "runtime"
 
     "go.opentelemetry.io/otel"
@@ -794,6 +815,9 @@ func RegisterQueueGauge(queueLen func() int64) error {
 package service
 
 import (
+    "context"
+    "fmt"
+
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/metric"
@@ -890,8 +914,6 @@ layout are in `core/observability-patterns.md` §SLOs and Alerting.
 package logging
 
 import (
-    "context"
-    "io"
     "log/slog"
     "os"
     "regexp"
@@ -1040,13 +1062,9 @@ func LoggerFromContext(ctx context.Context) *slog.Logger {
 }
 
 // Usage in service/repository code:
-func (s *Service) Process(ctx context.Context, id string) error {
-    logger := LoggerFromContext(ctx)
-    logger.InfoContext(ctx, "processing entity",
-        "entity_id", id,
-    )
-    // ...
-}
+//
+//     logger := middleware.LoggerFromContext(ctx)
+//     logger.InfoContext(ctx, "processing entity", "entity_id", id)
 ```
 
 ### 3.4 Log Level Strategy
@@ -1064,7 +1082,8 @@ Dynamic log level (change at runtime without restart):
 // Use slog.LevelVar for runtime level changes.
 var programLevel = new(slog.LevelVar) // default INFO
 
-func NewLogger(env string) *slog.Logger {
+// NewLeveledLogger is NewLogger (3.1) with a level you can change at runtime.
+func NewLeveledLogger(env string) *slog.Logger {
     if env == "development" {
         programLevel.Set(slog.LevelDebug)
     }
@@ -1077,8 +1096,9 @@ func NewLogger(env string) *slog.Logger {
     return slog.New(NewTracingHandler(handler))
 }
 
-// Expose an admin endpoint to change log level at runtime:
-func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
+// Expose an admin endpoint to change log level at runtime — on the internal admin port behind
+// authentication, never on the public router:
+func HandleSetLogLevel(w http.ResponseWriter, r *http.Request) {
     level := r.URL.Query().Get("level")
     switch strings.ToUpper(level) {
     case "DEBUG":
@@ -1122,11 +1142,12 @@ func MaskCard(card string) string {
 
 // Usage — NEVER log raw PII. The handler redacts keys matching sensitiveKey outright, so put a
 // masked value under a key that doesn't match:
-logger.InfoContext(ctx, "payment processed",
-    "contact_hint", MaskEmail(user.Email),     // j***@example.com
-    "pan_last4", MaskCard(payment.CardNumber), // ****1234
-    "amount", payment.Amount,
-)
+//
+//     logger.InfoContext(ctx, "payment processed",
+//         "contact_hint", MaskEmail(user.Email),     // j***@example.com
+//         "pan_last4", MaskCard(payment.CardNumber), // ****1234
+//         "amount", payment.Amount,
+//     )
 ```
 
 ---
@@ -1147,7 +1168,9 @@ logger.InfoContext(ctx, "payment processed",
 Middleware MUST be applied in this order:
 
 ```go
-func buildMiddlewareChain(logger *slog.Logger, handler http.Handler) http.Handler {
+// BuildMiddlewareChain wraps the ServeMux in the correlation middleware, in order.
+// AuthMiddleware is auth-middleware-go.md's JWTAuth(cfg) — the tenant comes from the verified token.
+func BuildMiddlewareChain(logger *slog.Logger, handler http.Handler) http.Handler {
     // Applied bottom-to-top (last middleware runs first):
     h := handler
 
@@ -1196,8 +1219,8 @@ import (
     "time"
 
     "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-    "go.opentelemetry.io/otel"
-    "go.opentelemetry.io/otel/propagation"
+
+    "yourapp/internal/middleware"
 )
 
 // Client wraps http.Client with trace propagation and request_id forwarding.
@@ -1218,7 +1241,7 @@ func NewClient() *Client {
 func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
     // OTel transport automatically injects traceparent and tracestate headers.
     // We additionally forward our application-level correlation IDs:
-    if reqID := RequestIDFromContext(ctx); reqID != "" {
+    if reqID := middleware.RequestIDFromContext(ctx); reqID != "" {
         req.Header.Set("X-Request-ID", reqID)
     }
     // No tenant header: the downstream authenticates THIS service (service token or mTLS) and takes
@@ -1276,6 +1299,14 @@ import (
     "os/signal"
     "syscall"
     "time"
+
+    "yourapp/internal/cache"
+    "yourapp/internal/database"
+    "yourapp/internal/logging"
+    "yourapp/internal/middleware"
+    "yourapp/internal/observability"
+    "yourapp/internal/order"
+    "yourapp/internal/server"
 )
 
 func main() {
@@ -1286,12 +1317,16 @@ func main() {
     serviceName := "order-service"
     serviceVersion := "1.0.0"
 
-    // 1. Logger — must be first so other init functions can log
-    logger := NewLogger(serviceName, serviceVersion, env)
-    slog.SetDefault(logger)
+    // 1. Logger — must be first so other init functions can log (NewLogger also sets the default)
+    logger := logging.NewLogger(serviceName, serviceVersion, env)
 
-    // 2. Tracer
-    shutdownTracer, err := initTracer(ctx, serviceName, serviceVersion)
+    // 2. Resource shared by traces and metrics, then the tracer
+    res, err := buildResource(serviceName, serviceVersion, env)
+    if err != nil {
+        slog.Error("failed to build resource", "error", err)
+        os.Exit(1)
+    }
+    shutdownTracer, err := initTracer(ctx, res)
     if err != nil {
         slog.Error("failed to init tracer", "error", err)
         os.Exit(1)
@@ -1299,7 +1334,6 @@ func main() {
     defer shutdownTracer(context.Background())
 
     // 3. Metrics
-    res := buildResource(serviceName, serviceVersion, env)
     shutdownMetrics, err := initMetrics(ctx, res)
     if err != nil {
         slog.Error("failed to init metrics", "error", err)
@@ -1312,7 +1346,7 @@ func main() {
     defer metricsSrv.Shutdown(context.Background())
 
     // 5. Database (with instrumentation)
-    db, err := OpenDB(os.Getenv("DATABASE_URL"))
+    db, err := database.OpenDB(os.Getenv("DATABASE_URL"))
     if err != nil {
         slog.Error("failed to open database", "error", err)
         os.Exit(1)
@@ -1320,26 +1354,26 @@ func main() {
     defer db.Close()
 
     // 6. Redis (with instrumentation)
-    rdb := NewRedisClient(os.Getenv("REDIS_URL"))
+    rdb := cache.NewRedisClient(os.Getenv("REDIS_URL"))
     defer rdb.Close()
 
     // 7. Runtime metrics (goroutines, db pool)
-    if err := RegisterRuntimeMetrics(db); err != nil {
+    if err := observability.RegisterRuntimeMetrics(db); err != nil {
         slog.Error("failed to register runtime metrics", "error", err)
         os.Exit(1)
     }
 
     // 8. Build handler chain
-    repo := NewPostgresOrderRepo(db)
-    svc := NewOrderService(repo)
-    handler := NewOrderHandler(svc)
+    repo := order.NewPostgresOrderRepo(db)
+    svc := order.NewOrderService(repo)
+    handler := order.NewOrderHandler(svc)
 
     mux := http.NewServeMux()
     mux.HandleFunc("POST /api/v1/orders", handler.CreateOrder)
     mux.HandleFunc("GET /api/v1/orders/{id}", handler.GetOrder)
 
-    chain := buildMiddlewareChain(logger, mux)
-    srv := NewServer(chain) // wraps with otelhttp
+    chain := middleware.BuildMiddlewareChain(logger, mux)
+    srv := server.NewServer(chain) // wraps with otelhttp
 
     // 9. Start server
     slog.Info("server starting",

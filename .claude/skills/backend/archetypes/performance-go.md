@@ -16,6 +16,8 @@ tags:
 
 # Go Performance Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, go-redis v9.22.0, OpenTelemetry v1.46.0; the 4.6 benchmarks were run once each (tests/archetype-compile/go/run.sh).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Go performance patterns. Every generated Go service MUST follow these patterns for connection pooling, memory management, concurrency, and profiling.
 
 ---
@@ -28,6 +30,7 @@ tags:
 package database
 
 import (
+    "context"
     "database/sql"
     "fmt"
     "time"
@@ -129,7 +132,6 @@ func NewPgxPool(ctx context.Context, dsn string) (*pgxpool.Pool, error) {
 package cache
 
 import (
-    "context"
     "time"
 
     "github.com/redis/go-redis/v9"
@@ -241,6 +243,7 @@ package encoding
 import (
     "bytes"
     "encoding/json"
+    "net/http"
     "sync"
 )
 
@@ -427,22 +430,15 @@ func logBad(v any) { // any = interface{}, forces heap allocation of v
 ```go
 package main
 
-import (
-    _ "go.uber.org/automaxprocs" // Automatically sets GOMAXPROCS to match cgroup CPU quota
-)
-
-// Container CPU limits use cgroups. By default, GOMAXPROCS = host CPU count,
-// which is wrong in containers. For example:
-//   Host: 64 cores, Container limit: 2 CPUs
-//   Default GOMAXPROCS: 64 (too many threads, cache thrashing, scheduling overhead)
-//   With automaxprocs: 2 (correct)
+// Go 1.25+ (the `go` line in go.mod says 1.25 or later): the runtime already sets GOMAXPROCS from
+// the container's cgroup CPU limit, and keeps updating it if the limit changes. Import nothing.
+// Setting GOMAXPROCS yourself — or importing go.uber.org/automaxprocs — turns those updates off.
 //
-// Simply importing go.uber.org/automaxprocs fixes this automatically.
-// The import init() reads /sys/fs/cgroup and adjusts.
+// go.mod at 1.24 or earlier: GOMAXPROCS defaults to the host CPU count, which is wrong in
+// containers (host 64 cores, limit 2 CPUs → 64 threads contending for 2 CPUs). There, add
+//   import _ "go.uber.org/automaxprocs" // reads the cgroup quota at startup
 //
-// Manual override if needed:
-//   runtime.GOMAXPROCS(2)
-//   or: GOMAXPROCS=2 environment variable
+// Manual override if needed: the GOMAXPROCS=2 environment variable.
 ```
 
 ### 3.2 Worker Pool Pattern
@@ -452,6 +448,7 @@ package worker
 
 import (
     "context"
+    "log/slog"
     "sync"
 )
 
@@ -645,6 +642,7 @@ func (sm *ShardedMap[V]) Set(key string, value V) {
 package main
 
 import (
+    "log/slog"
     "net/http"
     _ "net/http/pprof" // registers /debug/pprof/* handlers
 )
@@ -748,16 +746,29 @@ go tool trace trace.out
 ### 4.6 Benchmark Tests
 
 ```go
-package encoding_test
+package encoding // same package as MarshalJSON (2.1)
 
 import (
     "encoding/json"
+    "fmt"
     "testing"
 )
 
+// Fixture types for the benchmarks.
+type Item struct {
+    SKU      string `json:"sku"`
+    Quantity int    `json:"quantity"`
+}
+
+type Order struct {
+    ID         string `json:"id"`
+    TotalCents int64  `json:"total_cents"` // money in integer minor units
+    Items      []Item `json:"items"`
+}
+
 // Basic benchmark
 func BenchmarkMarshalJSON(b *testing.B) {
-    order := Order{ID: "ord_123", Total: 99.99, Items: make([]Item, 10)}
+    order := Order{ID: "ord_123", TotalCents: 9999, Items: make([]Item, 10)}
 
     b.ReportAllocs() // report allocations per operation
     b.ResetTimer()   // exclude setup time
@@ -771,7 +782,7 @@ func BenchmarkMarshalJSON(b *testing.B) {
 
 // Compare implementations with sub-benchmarks
 func BenchmarkMarshal(b *testing.B) {
-    order := Order{ID: "ord_123", Total: 99.99, Items: make([]Item, 10)}
+    order := Order{ID: "ord_123", TotalCents: 9999, Items: make([]Item, 10)}
 
     b.Run("encoding/json", func(b *testing.B) {
         b.ReportAllocs()
@@ -789,13 +800,15 @@ func BenchmarkMarshal(b *testing.B) {
 }
 
 // Benchmark with varying input sizes
-func BenchmarkProcessItems(b *testing.B) {
+func BenchmarkMarshalJSONSizes(b *testing.B) {
     for _, size := range []int{10, 100, 1000, 10000} {
-        items := generateItems(size)
-        b.Run(fmt.Sprintf("size=%d", size), func(b *testing.B) {
+        order := Order{ID: "ord_123", Items: make([]Item, size)}
+        b.Run(fmt.Sprintf("items=%d", size), func(b *testing.B) {
             b.ReportAllocs()
             for i := 0; i < b.N; i++ {
-                processItemsGood(items)
+                if _, err := MarshalJSON(order); err != nil {
+                    b.Fatal(err)
+                }
             }
         })
     }
@@ -978,10 +991,13 @@ func (r *PostgresOrderRepo) init(ctx context.Context) error {
         return fmt.Errorf("preparing get-by-id: %w", err)
     }
 
+    // Keyset page: ($2, $3) is the (created_at, id) of the previous page's last row (prepare the
+    // first page as its own statement, without that condition). Never OFFSET — it re-scans every
+    // skipped row and skips or repeats rows under concurrent writes.
     r.stmtListByTenant, err = r.db.PrepareContext(ctx,
         `SELECT id, tenant_id, total, status, created_at
-         FROM orders WHERE tenant_id = $1
-         ORDER BY created_at DESC LIMIT $2 OFFSET $3`)
+         FROM orders WHERE tenant_id = $1 AND (created_at, id) < ($2, $3)
+         ORDER BY created_at DESC, id DESC LIMIT $4`)
     if err != nil {
         return fmt.Errorf("preparing list-by-tenant: %w", err)
     }
@@ -991,8 +1007,13 @@ func (r *PostgresOrderRepo) init(ctx context.Context) error {
 
 // Usage — avoids parse + plan on every execution:
 func (r *PostgresOrderRepo) FindByID(ctx context.Context, tenantID, id string) (*Order, error) {
-    row := r.stmtGetByID.QueryRowContext(ctx, id, tenantID)
-    // ...scan...
+    var o Order
+    err := r.stmtGetByID.QueryRowContext(ctx, id, tenantID).
+        Scan(&o.ID, &o.TenantID, &o.Total, &o.Status, &o.CreatedAt)
+    if err != nil {
+        return nil, fmt.Errorf("find order %s: %w", id, err)
+    }
+    return &o, nil
 }
 ```
 
@@ -1003,9 +1024,16 @@ package repository
 
 import (
     "context"
+    "fmt"
 
     "github.com/jackc/pgx/v5"
+    "go.opentelemetry.io/otel"
+    "go.opentelemetry.io/otel/attribute"
+    "go.opentelemetry.io/otel/codes"
+    "go.opentelemetry.io/otel/trace"
 )
+
+var tracer = otel.Tracer("myapp/internal/repository")
 
 // BulkInsertOrders uses PostgreSQL COPY protocol — 10-100x faster than
 // individual INSERTs for large batches.
@@ -1063,7 +1091,13 @@ func (r *PgxOrderRepo) BatchInsert(ctx context.Context, orders []Order) error {
 ```go
 package database
 
-import "context"
+import (
+    "context"
+    "fmt"
+    "sync/atomic"
+
+    "github.com/jackc/pgx/v5/pgxpool"
+)
 
 // DBRouter directs reads to replicas and writes to the primary.
 type DBRouter struct {
@@ -1108,7 +1142,7 @@ func (r *DBRouter) Reader() *pgxpool.Pool {
 }
 
 // Usage:
-//   db := NewDBRouter(primaryDSN, []string{replica1DSN, replica2DSN})
+//   db, err := NewDBRouter(primaryDSN, []string{replica1DSN, replica2DSN})
 //   // Reads
 //   rows, err := db.Reader().Query(ctx, "SELECT ...")
 //   // Writes
@@ -1128,6 +1162,12 @@ import (
 
     "github.com/redis/go-redis/v9"
 )
+
+// Repository is the database repository CachedRepo wraps. Keys are tenant-scoped.
+type Repository[T any] interface {
+    FindByID(ctx context.Context, tenantID, id string) (*T, error)
+    Save(ctx context.Context, tenantID, id string, entity *T) error
+}
 
 // CachedRepo wraps a repository with Redis caching.
 // Cache strategy: cache-aside (read-through with manual invalidation on write).
@@ -1229,11 +1269,11 @@ func (r *PostgresOrderRepo) ListWithItems(ctx context.Context, tenantID string) 
     }
     defer rows.Close()
 
-    // Group rows by order
-    orderMap := make(map[string]*OrderWithItems)
+    // Group rows by order: scan each row, append the item to its order (keep a map of order ID →
+    // index into result so each order appears once, in query order).
     var result []OrderWithItems
     // ... scan and group ...
-    return result, nil
+    return result, rows.Err()
 }
 
 // GOOD — Batch lookup with IN clause
@@ -1256,7 +1296,7 @@ func (r *PostgresItemRepo) ListByOrderIDs(ctx context.Context, orderIDs []string
         }
         result[orderID] = append(result[orderID], item)
     }
-    return result, nil
+    return result, rows.Err() // an error that ended the iteration early
 }
 
 // Detection: log slow queries (> 50ms) and count queries per request.
@@ -1269,7 +1309,7 @@ func (r *PostgresItemRepo) ListByOrderIDs(ctx context.Context, orderIDs []string
 
 1. **Never use http.DefaultClient** — it has no timeouts. Always configure Transport and Timeout.
 2. **Set MaxIdleConnsPerHost** — the default (2) causes connection churn under load. Set to 10-20.
-3. **GOMAXPROCS in containers** — import `go.uber.org/automaxprocs` or set manually. Wrong value causes thread contention.
+3. **GOMAXPROCS in containers** — Go 1.25+ follows the cgroup CPU limit by itself (don't override it); on go.mod ≤ 1.24 import `go.uber.org/automaxprocs`. A wrong value causes thread contention.
 4. **Pre-allocate slices and maps** — use `make([]T, 0, n)` and `make(map[K]V, n)` when size is known.
 5. **Profile before optimizing** — use pprof to find actual bottlenecks. Never guess.
 6. **Benchmark to validate** — use `testing.B` with `b.ReportAllocs()` to prove improvements.

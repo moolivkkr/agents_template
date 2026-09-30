@@ -13,6 +13,8 @@ tags:
 
 # CRUD Repository Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, OpenTelemetry v1.46.0; the crud-repository-test-go.md integration tests were also run once against postgres:16-alpine (tests/archetype-compile/go/run.sh).
+
 Complete pgx-based PostgreSQL repository template. Every generated repository MUST follow this pattern.
 
 ## Interface Definition
@@ -64,8 +66,16 @@ import (
 
     "yourapp/internal/apperr"
     "yourapp/internal/domain"
+    "yourapp/internal/middleware"
     "yourapp/internal/widget"
 )
+
+// RedisClient is the L2 cache this repository needs (a thin adapter over go-redis in production).
+type RedisClient interface {
+    Get(ctx context.Context, key string) ([]byte, error)
+    Set(ctx context.Context, key string, value []byte, ttl time.Duration) error
+    Delete(ctx context.Context, key string) error
+}
 
 type widgetRepo struct {
     pool   *pgxpool.Pool
@@ -113,7 +123,7 @@ func (r *widgetRepo) Create(ctx context.Context, w *widget.Widget) error {
     ctx, span := r.tracer.Start(ctx, "repo.widget.create")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := r.logger.With("request_id", reqID, "method", "Create")
 
     ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -144,7 +154,7 @@ func (r *widgetRepo) GetByID(ctx context.Context, tenantID, id uuid.UUID) (*widg
     ctx, span := r.tracer.Start(ctx, "repo.widget.get_by_id")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := r.logger.With("request_id", reqID, "method", "GetByID", "widget_id", id)
 
     cacheKey := fmt.Sprintf("widget:%s:%s", tenantID, id)
@@ -300,11 +310,16 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
     ctx, span := r.tracer.Start(ctx, "repo.widget.list")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := r.logger.With("request_id", reqID, "method", "List")
 
     ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
     defer cancel()
+
+    // Column and direction come from allow-lists here too, not only in the handler: they are the
+    // two parts of this query that can't be bind parameters.
+    sortCol := sanitizeColumn(filters.SortBy)
+    sortDir := sanitizeDirection(filters.SortDir)
 
     // Build query with dynamic filters
     qb := newQueryBuilder()
@@ -328,10 +343,10 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
         if err != nil {
             return nil, apperr.NewValidationError("cursor", "invalid_cursor", "The page cursor is invalid or expired.").WithError(err)
         }
-        if filters.SortDir == "desc" {
-            qb.WriteString(fmt.Sprintf(` AND (%s, id) < (`, sanitizeColumn(filters.SortBy)))
+        if sortDir == "DESC" {
+            qb.WriteString(fmt.Sprintf(` AND (%s, id) < (`, sortCol))
         } else {
-            qb.WriteString(fmt.Sprintf(` AND (%s, id) > (`, sanitizeColumn(filters.SortBy)))
+            qb.WriteString(fmt.Sprintf(` AND (%s, id) > (`, sortCol))
         }
         qb.AddParam(ts)
         qb.WriteString(`, `)
@@ -340,8 +355,7 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
     }
 
     // Order and limit (request limit+1 to detect has_more)
-    qb.WriteString(fmt.Sprintf(` ORDER BY %s %s, id %s`,
-        sanitizeColumn(filters.SortBy), filters.SortDir, filters.SortDir))
+    qb.WriteString(fmt.Sprintf(` ORDER BY %s %s, id %s`, sortCol, sortDir, sortDir))
     qb.WriteString(` LIMIT `)
     qb.AddParam(filters.PageSize + 1)
 
@@ -559,6 +573,14 @@ func sanitizeColumn(col string) string {
     }
     return "created_at" // safe default
 }
+
+// sanitizeDirection maps the requested direction to one of two SQL keywords.
+func sanitizeDirection(dir string) string {
+    if strings.EqualFold(dir, "asc") {
+        return "ASC"
+    }
+    return "DESC"
+}
 ```
 
 ## Error Mapping
@@ -611,7 +633,7 @@ func (r *widgetRepo) mapError(err error, operation string) error {
 - Every read query MUST include `AND deleted_at IS NULL` (soft delete filter)
 - Every query MUST have a `context.WithTimeout` — never allow unbounded queries
 - Update operations MUST use optimistic locking: `WHERE version = $expected`
-- Column names in ORDER BY / WHERE MUST be allow-listed via `sanitizeColumn`
+- Column names in ORDER BY / WHERE MUST be allow-listed via `sanitizeColumn`, and the sort direction via `sanitizeDirection` — in the repository itself, not only in the handler
 - Cursor values MUST be opaque (base64-encoded JSON) — never expose raw DB values
 - List queries MUST request `LIMIT + 1` to detect `has_more` without extra count query
 - Batch inserts SHOULD use `pgx.CopyFrom` for performance (thousands of rows)

@@ -14,6 +14,8 @@ tags:
 
 # Auth Middleware Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, chi v5.3.2, golang-jwt v5.3.1, x/time v0.16.0, together with the error, service and handler archetypes; the handler/service unit tests that use `RequestID` and `WithIdentity` were run (tests/archetype-compile/go/run.sh).
+
 Complete authentication and authorization middleware for chi router. Every generated auth layer MUST follow this pattern.
 
 ## Context Key Types
@@ -23,19 +25,20 @@ package middleware
 
 import (
     "context"
-    "crypto/subtle"
     "errors"
     "fmt"
     "log/slog"
     "net/http"
+    "regexp"
     "strings"
     "sync"
-    "time"
 
     "github.com/go-chi/chi/v5"
     "github.com/golang-jwt/jwt/v5"
     "github.com/google/uuid"
     "golang.org/x/time/rate"
+
+    "yourapp/internal/apperr"
 )
 
 // Context key types — unexported to prevent collisions.
@@ -73,6 +76,13 @@ func UserIDFromContext(ctx context.Context) (uuid.UUID, error) {
     return id, nil
 }
 
+// WithIdentity returns ctx carrying the authenticated tenant and user. Only the auth middleware
+// (from verified credentials) and tests call it; never pass it values read from the request.
+func WithIdentity(ctx context.Context, tenantID, userID uuid.UUID) context.Context {
+    ctx = context.WithValue(ctx, ctxKeyTenantID, tenantID)
+    return context.WithValue(ctx, ctxKeyUserID, userID)
+}
+
 // RolesFromContext extracts the user's roles.
 func RolesFromContext(ctx context.Context) []string {
     roles, _ := ctx.Value(ctxKeyRoles).([]string)
@@ -97,13 +107,15 @@ func LoggerFromContext(ctx context.Context) *slog.Logger {
 ## Request ID Middleware
 
 ```go
-// RequestID generates or extracts a unique request ID for tracing.
-// Checks X-Request-ID header first (client correlation), generates UUID if absent.
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
+
+// RequestID accepts a well-formed inbound X-Request-ID (client correlation) or generates one.
+// Charset and length are bounded: no log injection, and no huge IDs copied onto every log line.
 func RequestID(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         reqID := r.Header.Get("X-Request-ID")
-        if reqID == "" {
-            reqID = uuid.New().String()
+        if !validRequestID.MatchString(reqID) {
+            reqID = uuid.NewString()
         }
 
         // Set on response header for client correlation
@@ -128,7 +140,7 @@ func RequestIDFromContext(ctx context.Context) string {
 ```go
 // JWTConfig holds configuration for JWT token validation.
 type JWTConfig struct {
-    SigningKey     []byte // HMAC key or public key for RS256
+    VerifyKey     any    // []byte for HS256; *rsa.PublicKey for RS256; *ecdsa.PublicKey for ES256
     Issuer        string // Expected issuer claim
     Audience      string // Expected audience claim
     SigningMethod string // "HS256", "RS256", etc.
@@ -139,35 +151,34 @@ func JWTAuth(cfg JWTConfig) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             // 1. Extract token from Authorization header
+            // Every failure is the same 401 UNAUTHENTICATED: the reason goes to the log, not the client.
             token, err := extractBearerToken(r)
             if err != nil {
-                writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", err.Error())
+                writeAuthError(w, r, apperr.NewUnauthenticatedError().WithError(err))
                 return
             }
 
             // 2. Parse and validate token
             claims, err := validateToken(token, cfg)
             if err != nil {
-                writeAuthError(w, http.StatusUnauthorized, "INVALID_TOKEN", "invalid or expired token")
+                writeAuthError(w, r, apperr.NewUnauthenticatedError().WithError(err))
                 return
             }
 
             // 3. Extract claims
             userID, err := uuid.Parse(claims.Subject)
             if err != nil {
-                writeAuthError(w, http.StatusUnauthorized, "INVALID_TOKEN", "invalid subject claim")
+                writeAuthError(w, r, apperr.NewUnauthenticatedError().WithError(fmt.Errorf("sub claim: %w", err)))
                 return
             }
             tenantID, err := uuid.Parse(claims.TenantID)
             if err != nil {
-                writeAuthError(w, http.StatusUnauthorized, "INVALID_TOKEN", "invalid tenant_id claim")
+                writeAuthError(w, r, apperr.NewUnauthenticatedError().WithError(fmt.Errorf("tenant_id claim: %w", err)))
                 return
             }
 
-            // 4. Inject into context
-            ctx := r.Context()
-            ctx = context.WithValue(ctx, ctxKeyUserID, userID)
-            ctx = context.WithValue(ctx, ctxKeyTenantID, tenantID)
+            // 4. Inject into context — tenant and user come ONLY from the verified token
+            ctx := WithIdentity(r.Context(), tenantID, userID)
             ctx = context.WithValue(ctx, ctxKeyRoles, claims.Roles)
             ctx = context.WithValue(ctx, ctxKeyPermissions, claims.Permissions)
 
@@ -214,7 +225,7 @@ func validateToken(tokenString string, cfg JWTConfig) (*CustomClaims, error) {
         if token.Method.Alg() != cfg.SigningMethod {
             return nil, fmt.Errorf("unexpected signing method: %s", token.Method.Alg())
         }
-        return cfg.SigningKey, nil
+        return cfg.VerifyKey, nil
     },
         jwt.WithIssuer(cfg.Issuer),
         jwt.WithAudience(cfg.Audience),
@@ -254,19 +265,17 @@ func APIKeyAuth(cfg APIKeyConfig) func(http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             apiKey := r.Header.Get("X-API-Key")
             if apiKey == "" {
-                writeAuthError(w, http.StatusUnauthorized, "UNAUTHORIZED", "missing X-API-Key header")
+                writeAuthError(w, r, apperr.NewUnauthenticatedError())
                 return
             }
 
             identity, err := cfg.LookupFunc(r.Context(), apiKey)
             if err != nil {
-                writeAuthError(w, http.StatusUnauthorized, "INVALID_API_KEY", "invalid API key")
+                writeAuthError(w, r, apperr.NewUnauthenticatedError().WithError(err))
                 return
             }
 
-            ctx := r.Context()
-            ctx = context.WithValue(ctx, ctxKeyUserID, identity.UserID)
-            ctx = context.WithValue(ctx, ctxKeyTenantID, identity.TenantID)
+            ctx := WithIdentity(r.Context(), identity.TenantID, identity.UserID)
             ctx = context.WithValue(ctx, ctxKeyRoles, identity.Roles)
             ctx = context.WithValue(ctx, ctxKeyPermissions, identity.Permissions)
 
@@ -292,8 +301,8 @@ func RequireRole(roles ...string) func(http.Handler) http.Handler {
                     }
                 }
             }
-            writeAuthError(w, http.StatusForbidden, "FORBIDDEN",
-                fmt.Sprintf("requires one of roles: %s", strings.Join(roles, ", ")))
+            // Generic 403: listing the roles that would have worked maps your authz model for an attacker.
+            writeAuthError(w, r, apperr.NewForbiddenError())
         })
     }
 }
@@ -309,8 +318,7 @@ func RequirePermission(permissions ...string) func(http.Handler) http.Handler {
             }
             for _, required := range permissions {
                 if !permSet[required] {
-                    writeAuthError(w, http.StatusForbidden, "FORBIDDEN",
-                        fmt.Sprintf("missing permission: %s", required))
+                    writeAuthError(w, r, apperr.NewForbiddenError())
                     return
                 }
             }
@@ -371,10 +379,9 @@ func (trl *TenantRateLimiter) RateLimit() func(http.Handler) http.Handler {
 
             limiter := trl.getLimiter(tenantID)
             if !limiter.Allow() {
-                w.Header().Set("Retry-After", "1")
                 w.Header().Set("X-RateLimit-Limit", fmt.Sprintf("%.0f", float64(trl.rps)))
                 w.Header().Set("X-RateLimit-Remaining", "0")
-                writeAuthError(w, http.StatusTooManyRequests, "RATE_LIMITED", "too many requests — retry after cooldown")
+                writeAuthError(w, r, apperr.NewRateLimitError(1)) // 429, Retry-After: 1, retryable
                 return
             }
 
@@ -461,6 +468,13 @@ func LogEnrichment(baseLogger *slog.Logger) func(http.Handler) http.Handler {
 ## Middleware Stack Assembly
 
 ```go
+// AppConfig is the part of the application config the middleware stack needs.
+type AppConfig struct {
+    CORS   CORSConfig
+    JWT    JWTConfig
+    Logger *slog.Logger
+}
+
 // SetupMiddleware assembles the full middleware stack in correct order.
 // Order matters: outermost middleware runs first.
 func SetupMiddleware(r chi.Router, cfg AppConfig) {
@@ -474,7 +488,7 @@ func SetupMiddleware(r chi.Router, cfg AppConfig) {
     r.Use(LogEnrichment(cfg.Logger))
 
     // 4. Recovery — catch panics, log, return 500
-    r.Use(RecoveryMiddleware(cfg.Logger))
+    r.Use(apperr.RecoveryMiddleware(cfg.Logger))
 
     // 5. Authentication — JWT or API key (sets tenant/user context)
     r.Use(JWTAuth(cfg.JWT))
@@ -492,18 +506,14 @@ func SetupMiddleware(r chi.Router, cfg AppConfig) {
 ## Auth Error Response Helper
 
 ```go
-func writeAuthError(w http.ResponseWriter, status int, code, message string) {
-    w.Header().Set("Content-Type", "application/json; charset=utf-8")
-    if status == http.StatusUnauthorized {
-        w.Header().Set("WWW-Authenticate", "Bearer")
+// writeAuthError writes a 401/403/429 in the one error envelope (api/response-envelope.md):
+// {"error": {code, message, request_id, retryable}}. apperr sets WWW-Authenticate: Bearer on 401 and
+// Retry-After on 429. The cause (WithError) is logged here and never sent; it never contains the token.
+func writeAuthError(w http.ResponseWriter, r *http.Request, e *apperr.AppError) {
+    if e.Err != nil {
+        LoggerFromContext(r.Context()).WarnContext(r.Context(), "auth rejected", "code", e.Code, "error", e.Err)
     }
-    w.WriteHeader(status)
-    json.NewEncoder(w).Encode(map[string]any{
-        "error": map[string]any{
-            "code":    code,
-            "message": message,
-        },
-    })
+    apperr.ErrorMapper(w, r, e)
 }
 ```
 

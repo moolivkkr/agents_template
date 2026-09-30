@@ -77,6 +77,8 @@ syntax = "proto3";
 
 package yourapp.v1;
 
+option go_package = "yourapp/gen/proto/yourapp/v1;widgetv1";
+
 import "google/protobuf/timestamp.proto";
 
 // Widget is the core domain entity.
@@ -156,6 +158,11 @@ message ListWidgetsResponse {
 syntax = "proto3";
 
 package yourapp.v1;
+
+option go_package = "yourapp/gen/proto/yourapp/v1;widgetv1";
+
+import "google/protobuf/timestamp.proto";
+import "yourapp/v1/widget.proto";
 
 // WidgetEvent is used in the WatchWidgets server stream.
 message WidgetEvent {

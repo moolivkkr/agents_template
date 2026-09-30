@@ -14,6 +14,8 @@ tags:
 
 # CRUD Handler Test Archetype
 
+> Go samples compile-checked and run 2026-09-30 with Go 1.27.1, chi v5.3.2, testify v1.12.1, against the handler, service, error and auth archetypes (tests/archetype-compile/go/run.sh).
+
 Complete HTTP handler test template. Every generated handler test file MUST follow this pattern.
 
 ## Test File Location
@@ -87,7 +89,6 @@ package widget
 
 import (
     "bytes"
-    "context"
     "encoding/json"
     "fmt"
     "io"
@@ -105,6 +106,7 @@ import (
 
     "yourapp/internal/apperr"
     "yourapp/internal/domain"
+    "yourapp/internal/middleware"
 )
 
 // testRouter creates a chi router with the handler mounted and auth middleware injected.
@@ -115,18 +117,16 @@ func testRouter(t *testing.T, svc Service) *chi.Mux {
 
     r := chi.NewRouter()
 
-    // Inject tenant/user/request-id context via test middleware
+    // Production order: the real RequestID middleware (X-Request-Id header + ctx), then auth.
+    // The test auth middleware injects a fixed tenant/user the way JWTAuth does after verifying a
+    // token; the context keys are private to the middleware package, so use its setter.
+    r.Use(middleware.RequestID)
     r.Use(func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ctx := r.Context()
-            // Default test tenant/user — override per-test if needed
-            if _, err := TenantIDFromContext(ctx); err != nil {
-                ctx = context.WithValue(ctx, ctxKeyTenantID, uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"))
-                ctx = context.WithValue(ctx, ctxKeyUserID, uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"))
-            }
-            if RequestIDFromContext(ctx) == "" {
-                ctx = context.WithValue(ctx, ctxKeyRequestID, "test-req-id")
-            }
+            ctx := middleware.WithIdentity(r.Context(),
+                uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), // tenant
+                uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"), // user
+            )
             next.ServeHTTP(w, r.WithContext(ctx))
         })
     })
@@ -542,16 +542,20 @@ func TestListHandler_NextPageWithCursor(t *testing.T) {
 func TestListHandler_PageSizeLimits(t *testing.T) {
     t.Parallel()
 
+    // limit defaults to 20; outside 1..100 is 400 VALIDATION_FAILED, never silently clamped.
     tests := []struct {
         name         string
         queryParam   string
-        wantPageSize int
+        wantStatus   int
+        wantPageSize int // checked when wantStatus is 200
     }{
-        {"default when missing", "/api/v1/widgets", 20},
-        {"default when zero", "/api/v1/widgets?limit=0", 20},
-        {"default when negative", "/api/v1/widgets?limit=-5", 20},
-        {"clamped to max 100", "/api/v1/widgets?limit=500", 100},
-        {"respects valid size", "/api/v1/widgets?limit=50", 50},
+        {"default when missing", "/api/v1/widgets", http.StatusOK, 20},
+        {"respects valid size", "/api/v1/widgets?limit=50", http.StatusOK, 50},
+        {"max allowed", "/api/v1/widgets?limit=100", http.StatusOK, 100},
+        {"zero is rejected", "/api/v1/widgets?limit=0", http.StatusBadRequest, 0},
+        {"negative is rejected", "/api/v1/widgets?limit=-5", http.StatusBadRequest, 0},
+        {"above max is rejected, not clamped", "/api/v1/widgets?limit=500", http.StatusBadRequest, 0},
+        {"non-numeric is rejected", "/api/v1/widgets?limit=abc", http.StatusBadRequest, 0},
     }
 
     for _, tt := range tests {
@@ -561,15 +565,21 @@ func TestListHandler_PageSizeLimits(t *testing.T) {
 
             svc := new(mockService)
             router := testRouter(t, svc)
-
-            svc.On("List", mock.Anything, mock.MatchedBy(func(f domain.ListFilters) bool {
-                return f.PageSize == tt.wantPageSize
-            })).Return(&domain.ListResult[Widget]{Items: []Widget{}, Total: 0}, nil)
+            if tt.wantStatus == http.StatusOK {
+                svc.On("List", mock.Anything, mock.MatchedBy(func(f domain.ListFilters) bool {
+                    return f.PageSize == tt.wantPageSize
+                })).Return(&domain.ListResult[Widget]{Items: []Widget{}, Total: 0}, nil)
+            }
 
             req := makeRequest(t, http.MethodGet, tt.queryParam, nil, nil)
             resp := executeRequest(t, router, req)
 
-            assert.Equal(t, http.StatusOK, resp.Code)
+            if tt.wantStatus == http.StatusOK {
+                assert.Equal(t, http.StatusOK, resp.Code)
+            } else {
+                assertErrorResponse(t, resp, http.StatusBadRequest, "VALIDATION_FAILED")
+                svc.AssertNotCalled(t, "List", mock.Anything, mock.Anything)
+            }
             svc.AssertExpectations(t)
         })
     }
@@ -726,8 +736,9 @@ func TestAuth_MissingTenantContext(t *testing.T) {
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
     h := NewHandler(svc, logger)
 
-    // Router WITHOUT auth middleware — no tenant in context
+    // Router WITHOUT auth middleware — no tenant in context (RequestID still runs first)
     r := chi.NewRouter()
+    r.Use(middleware.RequestID)
     r.Mount("/api/v1/widgets", h.Routes())
 
     svc.On("Get", mock.Anything, mock.Anything).
@@ -867,7 +878,7 @@ func TestResponseShape_ErrorResource(t *testing.T) {
 - DELETE MUST return 204 with empty body
 - POST create MUST return 201 Created
 - List responses MUST include `meta.pagination` `{next_cursor, has_more, limit}`; `data` is `[]` when empty
-- `limit` MUST be clamped: default to 20 when missing/zero, cap at 100
+- `limit` defaults to 20 when missing; a value outside 1..100 MUST be 400 `VALIDATION_FAILED` — never clamped silently
 - Sort and filter fields MUST be allow-listed — disallowed values default to safe values
 - Use `t.Parallel()` on every test function for speed
 - Use `mock.MatchedBy(func)` to assert specific filter/input values reach the service

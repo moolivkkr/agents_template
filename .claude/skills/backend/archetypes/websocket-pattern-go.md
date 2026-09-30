@@ -1,6 +1,6 @@
 ---
 skill: websocket-pattern-go
-description: Go WebSocket archetype — gorilla/websocket or nhooyr/websocket, goroutine per connection, hub pattern, graceful shutdown
+description: Go WebSocket archetype — github.com/coder/websocket (formerly nhooyr.io/websocket) or gorilla/websocket, goroutine per connection, hub pattern, graceful shutdown
 version: "1.0"
 tags:
   - go
@@ -13,9 +13,11 @@ tags:
 
 # WebSocket Pattern — Go
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, github.com/coder/websocket v1.8.15, chi v5.3.2; a two-client upgrade/subscribe/broadcast round trip was run (tests/archetype-compile/go/run.sh).
+
 > **Canonical reference**: This is the Go counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
-Go WebSocket servers use `nhooyr.io/websocket` (modern, maintained) or `github.com/gorilla/websocket` (widely used). Each connection gets a read and write goroutine coordinated via channels.
+Go WebSocket servers use `github.com/coder/websocket` (maintained; it is the former `nhooyr.io/websocket`, which is deprecated — same API, new import path) or `github.com/gorilla/websocket` (widely used). Each connection gets a read and write goroutine coordinated via channels.
 
 ## Connection and Hub Types
 
@@ -30,8 +32,8 @@ import (
     "sync"
     "time"
 
-    "nhooyr.io/websocket"
-    "nhooyr.io/websocket/wsjson"
+    "github.com/coder/websocket"
+    "github.com/coder/websocket/wsjson"
 )
 
 // Message is the wire format for all WebSocket messages.
@@ -182,23 +184,27 @@ const (
 
 // HandleUpgrade is the HTTP handler that upgrades to WebSocket.
 func (h *Hub) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
-    // 1. Authenticate
-    token := r.URL.Query().Get("token")
-    if token == "" {
-        http.Error(w, "missing token", http.StatusUnauthorized)
+    // 1. Authenticate with a single-use ticket (websocket-pattern.md §Authentication on Upgrade).
+    // Never a bearer token in the URL: query strings end up in access logs and browser history.
+    // The client got the ticket from an authenticated POST /api/v1/ws-tickets; redeeming it is an
+    // atomic get-and-delete, so a ticket seen in a log is already useless.
+    ticket := r.URL.Query().Get("ticket")
+    if ticket == "" {
+        http.Error(w, "missing ticket", http.StatusUnauthorized)
         return
     }
 
-    claims, err := validateJWT(token)
+    claims, err := redeemTicket(r.Context(), ticket)
     if err != nil {
         h.logger.Warn("ws.auth_failed", "error", err)
-        http.Error(w, "invalid token", http.StatusUnauthorized)
+        http.Error(w, "invalid ticket", http.StatusUnauthorized)
         return
     }
 
-    // 2. Upgrade connection
+    // 2. Upgrade connection. Accept checks the Origin header against these host patterns
+    // (same-origin is always allowed); never "*", which lets any site open a socket as your user.
     wsConn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-        OriginPatterns: []string{"*"}, // Configure for your domain
+        OriginPatterns: []string{"app.example.com"}, // your front-end origin(s)
     })
     if err != nil {
         h.logger.Error("ws.upgrade_failed", "error", err)
@@ -217,11 +223,13 @@ func (h *Hub) HandleUpgrade(w http.ResponseWriter, r *http.Request) {
         rooms:    make(map[string]bool),
     }
 
-    // 4. Register and start goroutines
+    // 4. Register, then pump until the socket closes. readPump runs on THIS goroutine: net/http
+    // cancels r.Context() as soon as the handler returns (hijacked or not), so returning early would
+    // cancel both pumps at once.
     h.register <- conn
 
     go h.writePump(r.Context(), conn)
-    go h.readPump(r.Context(), conn)
+    h.readPump(r.Context(), conn)
 }
 ```
 
@@ -448,14 +456,13 @@ func RegisterWebSocketRoutes(r chi.Router, hub *Hub) {
     r.Get("/ws", hub.HandleUpgrade)
 }
 
-// Start hub before server:
-func main() {
-    hub := ws.NewHub(logger)
-    go hub.Run(ctx)
-
-    r := chi.NewRouter()
-    ws.RegisterWebSocketRoutes(r, hub)
-}
+// Start the hub before the server (in main):
+//
+//     hub := ws.NewHub(logger)
+//     go hub.Run(ctx)
+//
+//     r := chi.NewRouter()
+//     ws.RegisterWebSocketRoutes(r, hub)
 ```
 
 ## Critical Rules
@@ -468,3 +475,5 @@ func main() {
 - Room authorization MUST be checked on subscribe — do not trust the client
 - Close the `send` channel to signal the write pump to exit — do not close the WebSocket from the hub
 - Always `defer unregister` in the read pump — ensures cleanup on any exit path
+- Run the read pump on the handler's goroutine: `r.Context()` is cancelled when the handler returns
+- Authenticate the upgrade with a single-use ticket (or cookie + Origin allowlist) — never a token in the URL, never `OriginPatterns: ["*"]`

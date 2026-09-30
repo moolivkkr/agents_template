@@ -1,5 +1,7 @@
 # Go Dockerfile Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh). The Dockerfiles themselves were not built.
+
 > Production-ready, multi-stage Docker builds for Go services.
 > Static binaries, distroless runtime, build-cache optimization, and security hardening.
 
@@ -292,6 +294,8 @@ docker build \
 // cmd/server/main.go — receive injected build metadata
 package main
 
+import "log/slog"
+
 var (
     version   = "dev"     // set by -ldflags
     commitSHA = "unknown" // set by -ldflags
@@ -299,7 +303,7 @@ var (
 )
 
 func main() {
-    log.Info("starting",
+    slog.Info("starting",
         slog.String("version", version),
         slog.String("commit", commitSHA),
         slog.String("built_at", buildTime),
@@ -456,7 +460,9 @@ jobs:
 ## Health Check Endpoint (Go Implementation)
 
 ```go
-// internal/handler/health.go
+// internal/handler/health.go — /healthz (liveness) and /readyz (readiness).
+// Liveness never checks the database: a DB outage would restart every pod at once. Readiness checks
+// only hard dependencies. Full rules: core/resiliency-patterns.md §Health Checks.
 package handler
 
 import (
@@ -471,7 +477,7 @@ type HealthChecker interface {
 }
 
 type HealthHandler struct {
-    db      HealthChecker
+    db      HealthChecker // the primary database: a hard dependency
     version string
 }
 
@@ -479,32 +485,30 @@ func NewHealthHandler(db HealthChecker, version string) *HealthHandler {
     return &HealthHandler{db: db, version: version}
 }
 
-func (h *HealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-    ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+// Liveness serves GET /healthz: the process is up. Nothing external is checked.
+func (h *HealthHandler) Liveness(w http.ResponseWriter, r *http.Request) {
+    writeHealth(w, http.StatusOK, map[string]string{"status": "alive", "version": h.version})
+}
+
+// Readiness serves GET /readyz: 503 while the primary database doesn't answer within its own
+// timeout (well under the probe's timeoutSeconds). Never a cache or other optional dependency.
+func (h *HealthHandler) Readiness(w http.ResponseWriter, r *http.Request) {
+    ctx, cancel := context.WithTimeout(r.Context(), 500*time.Millisecond)
     defer cancel()
 
-    status := "ok"
-    httpStatus := http.StatusOK
-
-    dbErr := h.db.Ping(ctx)
-    dbStatus := "ok"
-    if dbErr != nil {
-        dbStatus = "degraded"
-        status = "degraded"
-        httpStatus = http.StatusServiceUnavailable
+    if err := h.db.Ping(ctx); err != nil {
+        // The reason goes to the logs, never the body (it can name hosts and users).
+        writeHealth(w, http.StatusServiceUnavailable, map[string]string{"status": "database_unavailable"})
+        return
     }
+    writeHealth(w, http.StatusOK, map[string]string{"status": "ready"})
+}
 
-    resp := map[string]any{
-        "status":  status,
-        "version": h.version,
-        "checks": map[string]string{
-            "database": dbStatus,
-        },
-    }
-
+func writeHealth(w http.ResponseWriter, status int, body map[string]string) {
     w.Header().Set("Content-Type", "application/json")
-    w.WriteHeader(httpStatus)
-    json.NewEncoder(w).Encode(resp)
+    w.Header().Set("Cache-Control", "no-store")
+    w.WriteHeader(status)
+    _ = json.NewEncoder(w).Encode(body)
 }
 ```
 

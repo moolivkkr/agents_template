@@ -13,6 +13,8 @@ tags:
 
 # CRUD Handler Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, chi v5.3.2, OpenTelemetry v1.46.0, bluemonday v1.0.27, and exercised by the crud-handler-test-go.md tests, which were run (tests/archetype-compile/go/run.sh).
+
 Complete HTTP handler set for chi router. Every generated handler MUST follow this pattern.
 
 ## Handler Struct and Constructor
@@ -22,6 +24,7 @@ package widget
 
 import (
     "encoding/json"
+    "fmt"
     "log/slog"
     "net/http"
     "strconv"
@@ -32,8 +35,9 @@ import (
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/trace"
 
-    "yourapp/internal/domain"
     "yourapp/internal/apperr"
+    "yourapp/internal/domain"
+    "yourapp/internal/middleware"
 )
 
 type Handler struct {
@@ -104,12 +108,12 @@ func (h *Handler) Create(w http.ResponseWriter, r *http.Request) {
     ctx, span := h.tracer.Start(r.Context(), "handler.widget.create")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := h.logger.With("request_id", reqID, "method", "Create")
 
     // 1. Decode request body (malformed JSON → 400, not 422)
     var input CreateInput
-    if err := decodeJSON(r, &input); err != nil {
+    if err := decodeJSON(w, r, &input); err != nil {
         logger.WarnContext(ctx, "invalid request body", "error", err)
         writeError(w, r, apperr.NewMalformedRequestError(err))
         return
@@ -142,7 +146,7 @@ func (h *Handler) Get(w http.ResponseWriter, r *http.Request) {
     ctx, span := h.tracer.Start(r.Context(), "handler.widget.get")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := h.logger.With("request_id", reqID, "method", "Get")
 
     // 1. Parse path parameter
@@ -174,7 +178,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
     ctx, span := h.tracer.Start(r.Context(), "handler.widget.update")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := h.logger.With("request_id", reqID, "method", "Update")
 
     // 1. Parse path parameter
@@ -186,7 +190,7 @@ func (h *Handler) Update(w http.ResponseWriter, r *http.Request) {
 
     // 2. Decode request body (malformed JSON → 400, not 422)
     var input UpdateInput
-    if err := decodeJSON(r, &input); err != nil {
+    if err := decodeJSON(w, r, &input); err != nil {
         logger.WarnContext(ctx, "invalid request body", "error", err)
         writeError(w, r, apperr.NewMalformedRequestError(err))
         return
@@ -216,7 +220,7 @@ func (h *Handler) Delete(w http.ResponseWriter, r *http.Request) {
     ctx, span := h.tracer.Start(r.Context(), "handler.widget.delete")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
     logger := h.logger.With("request_id", reqID, "method", "Delete")
 
     // 1. Parse path parameter
@@ -252,10 +256,14 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
     ctx, span := h.tracer.Start(r.Context(), "handler.widget.list")
     defer span.End()
 
-    reqID := RequestIDFromContext(ctx)
+    reqID := middleware.RequestIDFromContext(ctx)
 
-    // 1. Parse pagination and filter params from query string
-    filters := parseListFilters(r)
+    // 1. Parse pagination and filter params from query string (bad limit → 400 VALIDATION_FAILED)
+    filters, err := parseListFilters(r)
+    if err != nil {
+        writeError(w, r, err)
+        return
+    }
 
     // 2. Call service
     result, err := h.svc.List(ctx, filters)
@@ -284,15 +292,18 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseListFilters extracts pagination and filter parameters from the query string.
-func parseListFilters(r *http.Request) domain.ListFilters {
+// limit defaults to 20. A limit outside 1..100 is a 400 VALIDATION_FAILED, never clamped silently: a
+// client asking for 500 and getting 100 can't tell it was truncated (api/response-envelope.md).
+func parseListFilters(r *http.Request) (domain.ListFilters, error) {
     q := r.URL.Query()
 
-    pageSize, _ := strconv.Atoi(q.Get("limit"))
-    if pageSize <= 0 {
-        pageSize = 20
-    }
-    if pageSize > 100 {
-        pageSize = 100
+    pageSize := 20
+    if raw := q.Get("limit"); raw != "" {
+        n, err := strconv.Atoi(raw)
+        if err != nil || n < 1 || n > 100 {
+            return domain.ListFilters{}, apperr.NewValidationError("limit", "out_of_range", "Limit must be a whole number from 1 to 100.")
+        }
+        pageSize = n
     }
 
     sortBy := q.Get("sort_by")
@@ -324,7 +335,7 @@ func parseListFilters(r *http.Request) domain.ListFilters {
         SortBy:   sortBy,
         SortDir:  sortDir,
         Fields:   fields,
-    }
+    }, nil
 }
 ```
 
@@ -332,9 +343,9 @@ func parseListFilters(r *http.Request) domain.ListFilters {
 
 ```go
 // decodeJSON reads and decodes the request body with size limit.
-func decodeJSON(r *http.Request, dst any) error {
-    // Cap body at 1MB to prevent abuse
-    r.Body = http.MaxBytesReader(nil, r.Body, 1<<20) // pass the ResponseWriter in real code so the server can close
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+    // Cap body at 1MB to prevent abuse (w lets the server close the connection on overflow)
+    r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
     dec := json.NewDecoder(r.Body)
     dec.DisallowUnknownFields()
@@ -370,13 +381,8 @@ func parseUUID(raw string) (uuid.UUID, error) {
     return id, nil
 }
 
-// RequestIDFromContext extracts the request ID set by middleware.
-func RequestIDFromContext(ctx context.Context) string {
-    if id, ok := ctx.Value(ctxKeyRequestID).(string); ok {
-        return id
-    }
-    return ""
-}
+// The request ID comes from middleware.RequestIDFromContext (auth-middleware-go.md): the context
+// key is private to that package, so a local copy of the accessor would never find the value.
 ```
 
 ## Input Sanitization Pattern
@@ -400,7 +406,7 @@ func (i *CreateInput) Sanitize() {
 - `json.Decoder.DisallowUnknownFields()` MUST be set to catch typos early
 - Error responses MUST map domain errors to correct HTTP status codes
 - Internal error messages MUST NOT leak to clients — return generic message for 500s
-- Pagination MUST enforce max page size (100) — never return unbounded lists
+- Pagination MUST bound `limit`: default 20, and a value outside 1..100 is 400 `VALIDATION_FAILED` (never clamped silently) — never return unbounded lists
 - Filter fields MUST be allow-listed — never pass arbitrary query params to the DB
 - Sort fields MUST be allow-listed — never allow sorting by arbitrary columns
 - Every response MUST use the envelope format: `{"data": T, "meta": {...}}`
