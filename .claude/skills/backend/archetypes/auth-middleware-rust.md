@@ -21,7 +21,7 @@ Complete middleware stack for Axum REST APIs. Every generated project MUST follo
 
 ```toml
 [dependencies]
-axum = "0.8"
+axum = { version = "0.8", features = ["macros"] } # macros: AppJson/AppPath/AppQuery (error-handling-rust.md)
 axum-extra = { version = "0.10", features = ["typed-header"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "propagate-header"] }
@@ -52,7 +52,8 @@ use crate::error::AppError;
 pub struct JwtClaims {
     /// Subject — the user ID.
     pub sub: Uuid,
-    /// Tenant ID — all queries scoped to this tenant.
+    /// Tenant ID — all queries scoped to this tenant. It comes ONLY from these verified claims
+    /// (or a server-side API-key record), never from a client header such as X-Tenant-ID.
     pub tenant_id: Uuid,
     /// Roles assigned to this user (e.g., "admin", "editor", "viewer").
     pub roles: Vec<String>,
@@ -79,17 +80,10 @@ impl JwtClaims {
             &validation,
         )
         .map_err(|e| {
-            tracing::warn!(error = %e, "JWT validation failed");
-            match e.kind() {
-                jsonwebtoken::errors::ErrorKind::ExpiredSignature => {
-                    AppError::Unauthorized("token expired".into())
-                }
-                jsonwebtoken::errors::ErrorKind::InvalidToken
-                | jsonwebtoken::errors::ErrorKind::InvalidSignature => {
-                    AppError::Unauthorized("invalid token".into())
-                }
-                _ => AppError::Unauthorized("authentication failed".into()),
-                }
+            // The reason (expired, bad signature, malformed) is for the security log only; every
+            // failure is the same 401 UNAUTHENTICATED to the client, so it can't probe tokens.
+            tracing::warn!(error = %e, kind = ?e.kind(), "JWT validation failed");
+            AppError::Unauthenticated
         })?;
 
         Ok(token_data.claims)
@@ -113,22 +107,19 @@ impl JwtClaims {
 // src/auth/middleware.rs
 
 use axum::{
-    body::Body,
     extract::Request,
-    http::{header::AUTHORIZATION, StatusCode},
+    http::header::AUTHORIZATION,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 
 use crate::auth::claims::JwtClaims;
 use crate::config::AppConfig;
 use crate::error::AppError;
 
-/// Request extension — inserted by auth middleware, consumed by extractors.
-#[derive(Clone, Debug)]
-pub struct RequestId(pub String);
-
 /// Axum middleware function: validates the JWT and injects claims into request extensions.
+/// Every failure is `AppError::Unauthenticated` → 401 envelope with `WWW-Authenticate: Bearer`
+/// (written by `AppError`'s `IntoResponse`, error-handling-rust.md).
 ///
 /// Usage in router:
 /// ```rust
@@ -151,14 +142,14 @@ pub async fn jwt_auth_middleware(
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
             tracing::debug!("missing Authorization header");
-            AppError::Unauthorized("missing Authorization header".into())
+            AppError::Unauthenticated
         })?;
 
     let token = auth_header
         .strip_prefix("Bearer ")
         .ok_or_else(|| {
             tracing::debug!("Authorization header missing 'Bearer ' prefix");
-            AppError::Unauthorized("invalid Authorization header format".into())
+            AppError::Unauthenticated
         })?;
 
     // 2. Validate JWT
@@ -167,11 +158,13 @@ pub async fn jwt_auth_middleware(
     // 3. Optional: check token revocation (e.g., Redis blocklist)
     // if let Some(jti) = &claims.jti {
     //     if config.token_blocklist.is_revoked(jti).await? {
-    //         return Err(AppError::Unauthorized("token revoked".into()));
+    //         tracing::warn!(jti = %jti, "revoked token used");
+    //         return Err(AppError::Unauthenticated);
     //     }
     // }
 
-    // 4. Inject claims into request extensions for downstream extractors
+    // 4. Inject the verified claims for downstream extractors. This is the ONLY source of
+    //    tenant_id: a client-sent X-Tenant-ID (or similar) header is never read.
     req.extensions_mut().insert(claims);
 
     // 5. Continue to the next handler/middleware
@@ -192,9 +185,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::claims::JwtClaims;
-use crate::auth::middleware::RequestId;
-use crate::config::AppConfig;
-use crate::error::AppError;
+use crate::error::{current_request_id, AppError, RequestId};
 
 /// Extracts authenticated user information from request extensions.
 /// Requires `jwt_auth_middleware` to run before this extractor.
@@ -225,15 +216,13 @@ impl AuthUser {
         self.roles.iter().any(|r| r == role)
     }
 
-    /// Require a specific role or return Forbidden.
+    /// Require a specific role or return 403 FORBIDDEN.
     pub fn require_role(&self, role: &str) -> Result<(), AppError> {
         if self.has_role(role) {
             Ok(())
         } else {
-            Err(AppError::Forbidden {
-                action: "access".into(),
-                resource: "endpoint".into(),
-            })
+            tracing::warn!(user_id = %self.user_id, required = role, "insufficient permissions");
+            Err(AppError::Forbidden)
         }
     }
 }
@@ -254,15 +243,17 @@ where
             .get::<JwtClaims>()
             .ok_or_else(|| {
                 tracing::error!("JwtClaims not found in extensions — is jwt_auth_middleware applied?");
-                AppError::Unauthorized("missing auth context".into())
+                AppError::Unauthenticated
             })?;
 
+        // Set by request_id_middleware (error-handling-rust.md) — the same id error bodies carry
         let request_id = parts
             .extensions
             .get::<RequestId>()
             .map(|r| r.0.clone())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
+            .unwrap_or_else(current_request_id);
 
+        // tenant_id and user_id come from the verified token claims — never from a header, path or body
         Ok(AuthUser {
             tenant_id: claims.tenant_id,
             user_id: claims.sub,
@@ -279,17 +270,17 @@ where
 // src/auth/require_role.rs
 
 use axum::{
-    body::Body,
     extract::Request,
-    http::StatusCode,
     middleware::Next,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 
 use crate::auth::claims::JwtClaims;
 use crate::error::AppError;
 
 /// Middleware that requires a specific role to access the route.
+/// No claims → 401 UNAUTHENTICATED; wrong role → 403 FORBIDDEN (function-level).
+/// Another tenant's object is NOT a role problem: that is 404 NOT_FOUND from the data layer.
 ///
 /// Usage:
 /// ```rust
@@ -312,7 +303,7 @@ pub async fn require_any_role(
     let claims = req
         .extensions()
         .get::<JwtClaims>()
-        .ok_or_else(|| AppError::Unauthorized("missing auth context".into()))?;
+        .ok_or(AppError::Unauthenticated)?;
 
     if !claims.has_any_role(required_roles) {
         tracing::warn!(
@@ -321,10 +312,7 @@ pub async fn require_any_role(
             actual = ?claims.roles,
             "insufficient permissions"
         );
-        return Err(AppError::Forbidden {
-            action: "access".into(),
-            resource: "resource".into(),
-        });
+        return Err(AppError::Forbidden);
     }
 
     Ok(next.run(req).await)
@@ -369,14 +357,12 @@ pub fn editor_or_admin() -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std:
 
 use axum::{
     extract::Request,
-    http::header::HeaderValue,
     middleware::Next,
     response::Response,
 };
 use uuid::Uuid;
 
 use crate::auth::claims::JwtClaims;
-use crate::auth::middleware::RequestId;
 use crate::error::AppError;
 
 const API_KEY_HEADER: &str = "X-API-Key";
@@ -417,13 +403,18 @@ pub async fn api_key_or_jwt_middleware(
             .api_key_store
             .lookup(&key_hash)
             .await?
-            .ok_or_else(|| AppError::Unauthorized("invalid API key".into()))?;
+            .ok_or_else(|| {
+                tracing::warn!("unknown API key");
+                AppError::Unauthenticated
+            })?;
 
         if !record.is_active {
-            return Err(AppError::Unauthorized("API key deactivated".into()));
+            tracing::warn!(tenant_id = %record.tenant_id, "deactivated API key used");
+            return Err(AppError::Unauthenticated);
         }
 
-        // Inject equivalent JwtClaims so downstream extractors work uniformly
+        // Inject equivalent JwtClaims so downstream extractors work uniformly. The tenant comes
+        // from the server-side key record, never from a client header.
         let claims = JwtClaims {
             sub: record.user_id,
             tenant_id: record.tenant_id,
@@ -508,9 +499,8 @@ impl RateLimiter {
 
         if timestamps.len() as u64 >= self.max_requests {
             tracing::warn!(key = key, limit = self.max_requests, "rate limit exceeded");
-            return Err(AppError::TooManyRequests {
-                retry_after_secs: self.window.as_secs(),
-            });
+            // 429 RATE_LIMITED, retryable, with Retry-After
+            return Err(AppError::rate_limited(self.window.as_secs()));
         }
 
         timestamps.push(now);
@@ -518,7 +508,7 @@ impl RateLimiter {
     }
 }
 
-/// Rate limit middleware keyed by tenant_id (from JWT claims).
+/// Rate limit middleware keyed by tenant_id (from verified JWT claims — never a client header).
 /// Falls back to IP-based limiting for unauthenticated requests.
 pub async fn rate_limit_middleware(
     axum::extract::State(limiter): axum::extract::State<RateLimiter>,
@@ -608,49 +598,11 @@ pub fn cors_layer_production(allowed_origins: &[&str]) -> CorsLayer {
 
 ## Request ID Layer
 
-```rust
-// src/middleware/request_id.rs
-
-use axum::{
-    extract::Request,
-    middleware::Next,
-    response::Response,
-};
-use uuid::Uuid;
-
-use crate::auth::middleware::RequestId;
-
-/// Middleware: generate or propagate a request ID.
-///
-/// If the incoming request has an `X-Request-Id` header, use it.
-/// Otherwise, generate a new UUID v4.
-/// Injects `RequestId` into extensions and adds the header to the response.
-pub async fn request_id_middleware(
-    mut req: Request,
-    next: Next,
-) -> Response {
-    let request_id = req
-        .headers()
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-    req.extensions_mut().insert(RequestId(request_id.clone()));
-
-    // Add to tracing span
-    tracing::Span::current().record("request_id", &request_id);
-
-    let mut response = next.run(req).await;
-
-    // Echo request ID in response headers
-    if let Ok(val) = request_id.parse() {
-        response.headers_mut().insert("x-request-id", val);
-    }
-
-    response
-}
-```
+Use `request_id_middleware`, `RequestId` and `current_request_id()` from `error-handling-rust.md`
+(`crate::error`) — do not define a second one. That middleware keeps a well-formed incoming
+`X-Request-Id` (or mints a UUID), inserts the `RequestId` extension, puts the id in the task-local scope
+that `AppError`'s `IntoResponse` reads (so every error body's `request_id` matches the header), and
+echoes `X-Request-Id` on every response.
 
 ## Middleware Stack Assembly (Router)
 
@@ -663,9 +615,9 @@ use std::time::Duration;
 use tower_http::trace::TraceLayer;
 
 use crate::auth::middleware::jwt_auth_middleware;
+use crate::error::{recovery_middleware, request_id_middleware};
 use crate::middleware::cors::cors_layer;
 use crate::middleware::rate_limit::{rate_limit_middleware, RateLimiter};
-use crate::middleware::request_id::request_id_middleware;
 
 pub struct AppState {
     pub config: AppConfig,
@@ -718,98 +670,36 @@ pub async fn build_app(config: AppConfig, pool: sqlx::PgPool) -> Router {
     // --- Assemble full router ---
     //
     // Middleware execution order (top to bottom = first to last):
-    //   request_id -> cors -> trace -> rate_limit -> [route-specific auth]
+    //   request_id -> cors -> trace -> rate_limit -> recovery -> [route-specific auth]
     Router::new()
         .merge(public_routes)
         .merge(api_routes)
         .merge(admin_routes)
         .with_state(state)
         // Layer order: LAST added = FIRST to execute
+        .layer(middleware::from_fn(recovery_middleware)) // panics → 500 INTERNAL envelope
         .layer(middleware::from_fn_with_state(
             rate_limiter,
             rate_limit_middleware,
         ))
         .layer(TraceLayer::new_for_http())
         .layer(cors_layer())
-        .layer(middleware::from_fn(request_id_middleware))
+        .layer(middleware::from_fn(request_id_middleware)) // outermost: request_id in scope for all errors
 }
 ```
 
 ## AppError IntoResponse Implementation
 
-```rust
-// src/error.rs
+Defined once, in `error-handling-rust.md` — do not write a second `impl IntoResponse for AppError`
+here. What the auth layer relies on from it:
 
-use axum::{
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json,
-};
-use serde_json::json;
+| Returned by the auth layer | Status | `error.code` | Extra |
+|---|---|---|---|
+| `AppError::Unauthenticated` (missing/malformed/expired/invalid token, bad API key) | 401 | `UNAUTHENTICATED` | `WWW-Authenticate: Bearer`; one fixed message for every cause |
+| `AppError::Forbidden` (role guard) | 403 | `FORBIDDEN` | fixed message; required role only in the log |
+| `AppError::rate_limited(secs)` | 429 | `RATE_LIMITED` | `Retry-After`, `retryable: true` |
 
-impl IntoResponse for AppError {
-    fn into_response(self) -> Response {
-        let (status, code, message) = match &self {
-            AppError::Validation { message, details } => (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "VALIDATION_ERROR",
-                message.clone(),
-            ),
-            AppError::NotFound { resource, identifier } => (
-                StatusCode::NOT_FOUND,
-                "NOT_FOUND",
-                format!("{resource} not found"),
-            ),
-            AppError::Conflict { resource, reason } => (
-                StatusCode::CONFLICT,
-                "CONFLICT",
-                format!("{resource}: {reason}"),
-            ),
-            AppError::Unauthorized(msg) => (
-                StatusCode::UNAUTHORIZED,
-                "UNAUTHORIZED",
-                msg.clone(),
-            ),
-            AppError::Forbidden { action, resource } => (
-                StatusCode::FORBIDDEN,
-                "FORBIDDEN",
-                format!("insufficient permissions to {action} {resource}"),
-            ),
-            AppError::TooManyRequests { retry_after_secs } => (
-                StatusCode::TOO_MANY_REQUESTS,
-                "TOO_MANY_REQUESTS",
-                "rate limit exceeded".into(),
-            ),
-            AppError::Internal(e) => {
-                // CRITICAL: Never leak internal error details to the client
-                tracing::error!(error = %e, "internal server error");
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "INTERNAL_ERROR",
-                    "an unexpected error occurred".into(),
-                )
-            }
-        };
-
-        let body = json!({
-            "error": {
-                "code": code,
-                "message": message,
-            }
-        });
-
-        // Add rate limit headers for 429 responses
-        let mut response = (status, Json(body)).into_response();
-        if let AppError::TooManyRequests { retry_after_secs } = &self {
-            if let Ok(val) = retry_after_secs.to_string().parse() {
-                response.headers_mut().insert("retry-after", val);
-            }
-        }
-
-        response
-    }
-}
-```
+Every body is `{"error": {code, message, request_id, retryable}}` with `request_id` = `X-Request-Id`.
 
 ## Testing Auth Middleware
 
@@ -817,9 +707,33 @@ impl IntoResponse for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::Request, Router, routing::get};
+    use axum::{body::Body, http::{Request, StatusCode}, response::IntoResponse, Router, routing::get};
+    use std::sync::Arc;
     use tower::ServiceExt;
     use http_body_util::BodyExt;
+    use uuid::Uuid;
+
+    use crate::auth::claims::JwtClaims;
+    use crate::auth::middleware::jwt_auth_middleware;
+    use crate::config::AppConfig;
+    use crate::error::request_id_middleware;
+    use crate::extractors::auth_user::AuthUser;
+
+    /// Read the body and check it is the 401 error envelope (api/response-envelope.md).
+    async fn assert_unauthenticated(resp: axum::response::Response) {
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp.headers().get("www-authenticate").and_then(|v| v.to_str().ok()),
+            Some("Bearer")
+        );
+        let header_id = resp.headers().get("x-request-id").and_then(|v| v.to_str().ok()).map(str::to_owned);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(json.get("data").is_none(), "an error body has no 'data' key");
+        assert_eq!(json["error"]["code"], "UNAUTHENTICATED");
+        assert_eq!(json["error"]["retryable"], false);
+        assert_eq!(json["error"]["request_id"].as_str(), header_id.as_deref());
+    }
 
     async fn protected_handler(auth: AuthUser) -> impl IntoResponse {
         axum::Json(serde_json::json!({
@@ -867,7 +781,7 @@ mod tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_unauthenticated(resp).await;
     }
 
     #[tokio::test]
@@ -880,7 +794,53 @@ mod tests {
             .unwrap();
 
         let resp = app.oneshot(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        assert_unauthenticated(resp).await;
+    }
+
+    #[tokio::test]
+    async fn tenant_comes_from_token_not_from_client_header() {
+        let app = test_app();
+        let token_tenant = Uuid::new_v4();
+        let token = make_token(token_tenant, Uuid::new_v4(), vec!["viewer".into()]);
+
+        // A client trying to switch tenants with a header must be ignored
+        let req = Request::builder()
+            .uri("/protected")
+            .header("Authorization", format!("Bearer {token}"))
+            .header("X-Tenant-ID", Uuid::new_v4().to_string())
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["tenant_id"], token_tenant.to_string());
+    }
+
+    #[tokio::test]
+    async fn missing_role_returns_403_forbidden() {
+        let app = Router::new()
+            .route("/admin", get(|| async { "ok" }))
+            .layer(axum::middleware::from_fn(crate::auth::require_role::admin_only()))
+            .layer(axum::middleware::from_fn_with_state(
+                Arc::new(AppConfig::test_defaults()),
+                jwt_auth_middleware,
+            ))
+            .layer(axum::middleware::from_fn(request_id_middleware));
+        let token = make_token(Uuid::new_v4(), Uuid::new_v4(), vec!["viewer".into()]);
+
+        let req = Request::builder()
+            .uri("/admin")
+            .header("Authorization", format!("Bearer {token}"))
+            .body(Body::empty())
+            .unwrap();
+
+        let resp = app.oneshot(req).await.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(json["error"]["code"], "FORBIDDEN");
     }
 
     #[tokio::test]
@@ -926,14 +886,17 @@ mod tests {
 
 - JWT validation MUST happen in middleware, not in individual handlers — defense in depth
 - AuthUser extractor MUST only read from `request.extensions()` — never parse the token itself
-- Internal errors MUST NOT leak to clients — `AppError::Internal` returns "an unexpected error occurred"
+- `tenant_id` (and `user_id`) MUST come from the verified token claims, or from the server-side API-key record — never from `X-Tenant-ID` or any other client header, path or body
+- Auth failures return the error envelope from `error-handling-rust.md`: 401 `UNAUTHENTICATED` (with `WWW-Authenticate: Bearer`, one fixed message whatever the cause), 403 `FORBIDDEN` for a missing role, 429 `RATE_LIMITED` with `Retry-After`
+- The failure reason (expired, bad signature, unknown key, missing role) goes to the `warn` log, never into the response
+- Internal errors MUST NOT leak to clients — `AppError::Internal` returns "Something went wrong."
 - Wrong tenant MUST return 404 Not Found, not 403 Forbidden — prevents entity enumeration
 - Rate limiting MUST run BEFORE auth to reject floods before expensive JWT validation
 - Request ID MUST be the first middleware (outermost layer) so all logs include it
 - CORS MUST be configured BEFORE route handlers — preflight OPTIONS requests exit early
 - API key authentication MUST hash keys with SHA-256 — never store or compare raw keys
 - Role guards MUST use the `JwtClaims` from extensions, not re-parse the token
-- Middleware ordering: request_id -> cors -> trace -> rate_limit -> auth -> role_guard
+- Middleware ordering: request_id -> cors -> trace -> rate_limit -> recovery -> auth -> role_guard; use the single `request_id_middleware` from `error-handling-rust.md`
 - `allow_credentials(true)` and `AllowOrigin::any()` are mutually exclusive — pick one
 - Token expiration leeway MUST be small (30 seconds max) to limit replay window
 - Every auth failure MUST log at `warn` level with the failure reason (for security monitoring)

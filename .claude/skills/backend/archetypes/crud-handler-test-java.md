@@ -37,7 +37,7 @@ import com.example.app.exception.*;
 import com.example.app.model.dto.*;
 import com.example.app.model.entity.Widget;
 import com.example.app.model.entity.WidgetStatus;
-import com.example.app.security.SecurityConfig;
+import com.example.app.config.SecurityConfig;
 import com.example.app.security.SecurityErrorDelegate;
 import com.example.app.security.UserPrincipal;
 import com.example.app.service.WidgetService;

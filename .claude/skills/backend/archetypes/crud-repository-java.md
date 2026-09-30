@@ -1,6 +1,6 @@
 ---
 skill: crud-repository-java
-description: Spring Data JPA repository archetype — JpaRepository, custom queries, Specification API, pagination, soft delete, optimistic locking, multi-tenant filtering
+description: Spring Data JPA repository archetype — JpaRepository, custom queries, Specification API, keyset (cursor) scrolling with Window/ScrollPosition, soft delete, optimistic locking, multi-tenant filtering
 version: "1.0"
 tags:
   - java
@@ -100,7 +100,8 @@ import org.hibernate.annotations.SQLRestriction;
 @Table(name = "widgets", indexes = {
     @Index(name = "idx_widgets_tenant_id", columnList = "tenantId"),
     @Index(name = "idx_widgets_tenant_status", columnList = "tenantId, status"),
-    @Index(name = "idx_widgets_tenant_name", columnList = "tenantId, name", unique = true)
+    @Index(name = "idx_widgets_tenant_name", columnList = "tenantId, name", unique = true),
+    @Index(name = "idx_widgets_tenant_created_id", columnList = "tenantId, createdAt, id") // keyset scroll
 })
 @SQLDelete(sql = "UPDATE widgets SET deleted_at = NOW(), updated_at = NOW() WHERE id = ? AND version = ?")
 @SQLRestriction("deleted_at IS NULL")
@@ -137,8 +138,8 @@ package com.example.app.repository;
 
 import com.example.app.model.entity.Widget;
 import com.example.app.model.entity.WidgetStatus;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.ScrollPosition;
+import org.springframework.data.domain.Window;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Modifying;
@@ -157,34 +158,30 @@ public interface WidgetRepository extends JpaRepository<Widget, UUID>, JpaSpecif
 
     Optional<Widget> findByIdAndTenantId(UUID id, UUID tenantId);
 
-    Page<Widget> findByTenantId(UUID tenantId, Pageable pageable);
-
-    Page<Widget> findByTenantIdAndStatus(UUID tenantId, WidgetStatus status, Pageable pageable);
-
     boolean existsByTenantIdAndNameIgnoreCase(UUID tenantId, String name);
 
     long countByTenantId(UUID tenantId);
 
-    // --- JPQL queries (for joins and complex conditions) ---
+    // --- Lists: keyset (cursor) scrolling only — no Page, Pageable or OFFSET ---
+    //
+    // API list endpoints scroll through JpaSpecificationExecutor#findBy with a tenant Specification,
+    // so filters (status, name search, date range) compose at runtime (see "Pagination — keyset
+    // (cursor) only" below):
+    //   repository.findBy(WidgetSpecs.belongsToTenant(tenantId).and(WidgetSpecs.hasStatus(status)),
+    //       q -> q.sortBy(sort).limit(limit).scroll(position));          // → Window<Widget>
+    //
+    // A fixed list can also be a derived query with a static limit:
+    Window<Widget> findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(UUID tenantId, ScrollPosition position);
+
+    // --- JPQL queries (for joins and complex conditions) — always with the tenant predicate ---
 
     @Query("""
-        SELECT w FROM Widget w
-        WHERE w.tenantId = :tenantId
-        AND LOWER(w.name) LIKE LOWER(CONCAT('%', :search, '%'))
-        ORDER BY w.createdAt DESC
-        """)
-    Page<Widget> searchByName(@Param("tenantId") UUID tenantId,
-                              @Param("search") String search,
-                              Pageable pageable);
-
-    @Query("""
-        SELECT w FROM Widget w
+        SELECT COUNT(w) FROM Widget w
         WHERE w.tenantId = :tenantId
         AND w.status IN :statuses
         """)
-    Page<Widget> findByTenantIdAndStatusIn(@Param("tenantId") UUID tenantId,
-                                           @Param("statuses") List<WidgetStatus> statuses,
-                                           Pageable pageable);
+    long countByTenantIdAndStatusIn(@Param("tenantId") UUID tenantId,
+                                    @Param("statuses") List<WidgetStatus> statuses);
 
     // --- Native queries (when JPQL cannot express the query) ---
 
@@ -228,11 +225,11 @@ import java.util.UUID;
  * Reusable Specifications for dynamic query composition.
  * Compose with .and() and .or() to build complex filters at runtime.
  *
- * Usage in service:
+ * Usage in service (every chain starts with belongsToTenant):
  *   var spec = WidgetSpecs.belongsToTenant(tenantId)
  *       .and(WidgetSpecs.hasStatus(status))
  *       .and(WidgetSpecs.nameContains(search));
- *   repository.findAll(spec, pageable);
+ *   repository.findBy(spec, q -> q.sortBy(sort).limit(limit).scroll(position)); // → Window<Widget>
  */
 public final class WidgetSpecs {
     private WidgetSpecs() {}
@@ -250,6 +247,14 @@ public final class WidgetSpecs {
     public static Specification<Widget> hasStatus(WidgetStatus status) {
         if (status == null) return Specification.where(null);
         return (root, query, cb) -> cb.equal(root.get("status"), status);
+    }
+
+    /**
+     * Filter by any of several statuses.
+     */
+    public static Specification<Widget> hasStatusIn(java.util.Collection<WidgetStatus> statuses) {
+        if (statuses == null || statuses.isEmpty()) return Specification.where(null);
+        return (root, query, cb) -> root.get("status").in(statuses);
     }
 
     /**
@@ -293,7 +298,8 @@ public final class WidgetSpecs {
 
 ```java
 @Override
-public Page<Widget> search(UUID tenantId, WidgetSearchCriteria criteria, Pageable pageable) {
+public Window<Widget> search(UUID tenantId, WidgetSearchCriteria criteria,
+                             ScrollPosition position, Sort sort, int limit) {
     var requestId = MDC.get("requestId");
     log.debug("Searching widgets, tenant={}, criteria={}, requestId={}", tenantId, criteria, requestId);
 
@@ -302,7 +308,8 @@ public Page<Widget> search(UUID tenantId, WidgetSearchCriteria criteria, Pageabl
         .and(WidgetSpecs.nameContains(criteria.search()))
         .and(WidgetSpecs.createdBetween(criteria.createdFrom(), criteria.createdTo()));
 
-    return repository.findAll(spec, pageable);
+    // Keyset scroll: at most `limit` rows after `position` — no OFFSET, no COUNT query
+    return repository.findBy(spec, q -> q.sortBy(sort).limit(limit).scroll(position));
 }
 
 public record WidgetSearchCriteria(
@@ -313,24 +320,36 @@ public record WidgetSearchCriteria(
 ) {}
 ```
 
-## Pagination with Pageable
+## Pagination — keyset (cursor) only
+
+List endpoints take `?cursor=<next_cursor>&limit=<n>` and return `meta.pagination`
+(`~/.claude/skills/api/response-envelope.md`). There is no offset or page-number variant: offset pages
+skip or repeat rows under concurrent writes, and `OFFSET 10000` still scans 10,000 rows. For "jump to
+page N" admin tables, filter instead (date range, search, status). A spec that truly needs numbered
+pages records it in `docs/DECISIONS.md` and still uses the envelope.
 
 ```java
-// Controller creates Pageable from query params (see crud-handler-java.md):
-var pageable = PageRequest.of(page, size, Sort.by(direction, sortBy));
+// Controller builds the Sort and decodes the cursor (crud-handler-java.md):
+var sort = Sort.by(direction, sortBy).and(Sort.by(direction, "id")); // id makes every position unique
+var position = CursorCodec.decode(cursor, sort);                      // ScrollPosition.keyset() on page 1
 
-// Repository returns Page<Widget> which includes:
-// - getContent()           → List<Widget> items on this page
-// - getTotalElements()     → total row count across all pages
-// - getTotalPages()        → total number of pages
-// - getNumber()            → current page number (zero-based)
-// - getSize()              → requested page size
-// - hasNext()              → true if there is a next page
-// - hasPrevious()          → true if there is a previous page
+// Service scrolls one window (crud-service-java.md):
+Window<Widget> window = repository.findBy(
+    WidgetSpecs.belongsToTenant(tenantId).and(WidgetSpecs.hasStatus(status)),
+    q -> q.sortBy(sort).limit(limit).scroll(position));
 
-// Spring Data automatically generates:
-//   SELECT w.* FROM widgets w WHERE ... ORDER BY ... LIMIT ? OFFSET ?
-//   SELECT COUNT(w.id) FROM widgets w WHERE ...
+// Window<Widget> gives:
+// - getContent()                → List<Widget> in this window ([] when empty)
+// - hasNext()                   → meta.pagination.has_more
+// - positionAt(size() - 1)      → the next position; CursorCodec.encode(...) → meta.pagination.next_cursor
+//
+// Spring Data generates a keyset predicate instead of OFFSET, and no COUNT query:
+//   SELECT w.* FROM widgets w
+//   WHERE w.tenant_id = ? AND w.deleted_at IS NULL
+//     AND (w.created_at < ? OR (w.created_at = ? AND w.id < ?))
+//   ORDER BY w.created_at DESC, w.id DESC LIMIT ?
+//
+// Keyset rules: sort keys must be NOT NULL, and an index should match (tenant_id, sort key, id).
 ```
 
 ## Soft Delete Setup
@@ -345,9 +364,9 @@ public class Widget extends AuditableEntity { ... }
 // @SQLRestriction — appends "AND deleted_at IS NULL" to every SELECT generated by Hibernate.
 //
 // Combined effect:
-//   repository.delete(widget)       → UPDATE widgets SET deleted_at = NOW() WHERE id = ? AND version = ?
-//   repository.findById(id)         → SELECT ... FROM widgets WHERE id = ? AND deleted_at IS NULL
-//   repository.findAll(pageable)    → SELECT ... FROM widgets WHERE deleted_at IS NULL ORDER BY ... LIMIT ...
+//   repository.delete(widget)              → UPDATE widgets SET deleted_at = NOW() WHERE id = ? AND version = ?
+//   repository.findByIdAndTenantId(id, t)  → SELECT ... WHERE id = ? AND tenant_id = ? AND deleted_at IS NULL
+//   repository.findBy(spec, q -> ...scroll)→ SELECT ... WHERE tenant_id = ? AND deleted_at IS NULL AND <keyset> ORDER BY ... LIMIT ...
 //
 // To query deleted records (admin/audit), use native queries that bypass @SQLRestriction.
 ```
@@ -365,14 +384,12 @@ private Integer version;
 //
 // If version mismatch → ObjectOptimisticLockingFailureException (Spring wraps JPA's OptimisticLockException)
 //
-// Handle in @ControllerAdvice:
-@ExceptionHandler(ObjectOptimisticLockingFailureException.class)
-public ResponseEntity<ProblemDetail> handleOptimisticLock(ObjectOptimisticLockingFailureException ex) {
-    var problem = ProblemDetail.forStatusAndDetail(HttpStatus.CONFLICT,
-        "Resource was modified by another request. Reload and retry.");
-    problem.setTitle("Conflict");
-    return ResponseEntity.status(HttpStatus.CONFLICT).body(problem);
-}
+// Do NOT handle it here or in a controller. GlobalExceptionHandler (error-handling-java.md), the only
+// error writer, maps it to 409 CONFLICT in the error envelope:
+//   {"error": {"code": "CONFLICT", "message": "This item was changed by someone else. Reload and try again.",
+//              "request_id": "…", "retryable": false}}
+// Likewise DataIntegrityViolationException: SQLSTATE 23505 → 409 CONFLICT, 23503/23514 → 422
+// BUSINESS_RULE_VIOLATION — constraint names stay in the log.
 ```
 
 ## Multi-Tenant Filtering
@@ -383,7 +400,8 @@ public ResponseEntity<ProblemDetail> handleOptimisticLock(ObjectOptimisticLockin
 // The service layer extracts tenantId from the authenticated principal.
 
 Optional<Widget> findByIdAndTenantId(UUID id, UUID tenantId);
-Page<Widget> findByTenantId(UUID tenantId, Pageable pageable);
+Window<Widget> findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(UUID tenantId, ScrollPosition position);
+// ...and every Specification chain starts with WidgetSpecs.belongsToTenant(tenantId).
 
 // Option 2: Hibernate @Filter for automatic tenant scoping
 // Useful when you want tenant filtering applied globally without passing it to every method.
@@ -420,10 +438,11 @@ public interface WidgetSummary {
     Instant getCreatedAt();
 }
 
-// In repository:
-Page<WidgetSummary> findSummaryByTenantId(UUID tenantId, Pageable pageable);
+// In repository — keyset-scrolled like every list; the projection must expose the sort keys
+// (createdAt, id) so the next ScrollPosition can be built from the last row:
+Window<WidgetSummary> findFirst20SummaryByTenantIdOrderByCreatedAtDescIdDesc(UUID tenantId, ScrollPosition position);
 
-// Generates: SELECT w.id, w.name, w.status, w.created_at FROM widgets w WHERE ...
+// Generates: SELECT w.id, w.name, w.status, w.created_at FROM widgets w WHERE w.tenant_id = ? AND <keyset> ...
 // Avoids loading description, updatedBy, etc. — faster for list views.
 
 // Record-based projection (DTO projection):
@@ -461,6 +480,7 @@ CREATE TABLE widgets (
 CREATE INDEX idx_widgets_tenant_id ON widgets (tenant_id) WHERE deleted_at IS NULL;
 CREATE INDEX idx_widgets_tenant_status ON widgets (tenant_id, status) WHERE deleted_at IS NULL;
 CREATE UNIQUE INDEX idx_widgets_tenant_name ON widgets (tenant_id, LOWER(name)) WHERE deleted_at IS NULL;
+CREATE INDEX idx_widgets_tenant_created_id ON widgets (tenant_id, created_at DESC, id DESC) WHERE deleted_at IS NULL; -- keyset scroll
 
 -- Partial indexes with WHERE deleted_at IS NULL reduce index size and speed up queries
 -- that use @SQLRestriction("deleted_at IS NULL").
@@ -475,7 +495,8 @@ CREATE UNIQUE INDEX idx_widgets_tenant_name ON widgets (tenant_id, LOWER(name)) 
 - Use `@Query` with JPQL for joins and complex conditions; native queries only when JPQL cannot express it.
 - Use Specification API for dynamic filtering at runtime — never build query strings manually.
 - Use projections (`WidgetSummary` interfaces, DTO projections) for read-heavy list endpoints — avoid loading full entities.
-- Pagination is MANDATORY for all list operations — never return unbounded `List<Widget>`.
+- Lists are keyset-scrolled `Window`s (`ScrollPosition` + limit, sort ending in `id`) — never `Page`/`Pageable`/`OFFSET`, never an unbounded `List<Widget>`.
+- Error mapping (optimistic lock, integrity violations, timeouts) lives only in `GlobalExceptionHandler` (`error-handling-java.md`) — repositories and controllers never build error bodies.
 - Schema changes go through Flyway/Liquibase — `ddl-auto: validate` in production.
 - Use partial indexes (`WHERE deleted_at IS NULL`) in Postgres for soft-deleted tables.
 - Bulk operations (`@Modifying` + `@Query`) MUST include `tenantId` in the WHERE clause.
