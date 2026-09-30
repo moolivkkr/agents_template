@@ -1,10 +1,13 @@
 ---
 command: optimize
-description: "Standalone code optimization — dead code removal, code reduction, performance improvements. Runs tests + review before AND after, shows comparison. Works on backend + UI in parallel."
+description: "Standalone code optimization — dead code removal proven by static analysis, plus safe, behaviour-preserving optimizations. Runs tests + review before AND after and shows the comparison. Works on backend + UI in parallel. The only entry point for code_optimizer and ui_code_optimizer; not part of /develop."
 arguments:
   - name: phase
     required: false
-    description: "Target phase (default: auto-detect latest completed phase). Scopes optimization to files changed in that phase."
+    description: "Target phase (default: the latest phase with a gate). Scopes optimization to files changed in that phase."
+  - name: since
+    required: false
+    description: "Explicit base commit for the scope (overrides the phase's recorded base_sha). Required for phases that predate base_sha recording and have no phase-N-complete tag."
   - name: backend_only
     required: false
     default: false
@@ -17,70 +20,92 @@ arguments:
     required: false
     default: false
     description: "Report what WOULD be optimized without making changes"
-  - name: aggressive
-    required: false
-    default: false
-    description: "Include MEDIUM-confidence dead code removal and suggested optimizations (default: only CERTAIN/HIGH)"
 ---
 
 # /optimize — Standalone Code Optimization
 
-Clean code, no dead code, optimized code, effective code. Runs the full optimization pipeline outside of `/develop` — with before/after comparison of tests, review findings, and code metrics.
+Clean code, no dead code, effective code — without changing behaviour. Runs the optimization agents
+outside of `/develop`, with a before/after comparison of tests, review findings and code metrics.
 
-**Can run at any time** — not limited to phase boundaries. Use after a hotfix, after manual refactoring, or periodically for codebase hygiene.
+**Where it fits.** `/optimize` is the **only** entry point for `code_optimizer` and `ui_code_optimizer`.
+The canonical `/develop` pipeline (`develop-orchestrator`) does not run them, and a phase gate does not
+require their reports. Run it after a phase gates, after a hotfix, or periodically for hygiene.
+
+**The three rules every step below enforces:**
+1. Tests, test expectations, mocks, fixtures and snapshots are **never edited** by an optimization. A
+   failing test after a change means the change altered behaviour: revert the change.
+2. Dead code is proven by **static reachability** (Go `deadcode`/`staticcheck -checks U1000`, knip,
+   vulture) plus a registration search — never by "the tests still pass after removal".
+3. Error handling and security controls are never removed.
 
 ---
 
 ## How it works
 
 ```
-Step 0  Scope & Snapshot      Determine files, tag pre-optimize state
-Step 1  BEFORE baseline       Run tests + review + capture metrics
-Step 2  Optimize              Dead code removal + code optimization (backend ∥ UI)
-Step 3  AFTER measurement     Re-run tests + review + capture metrics
-Step 4  Compare               Show before/after delta — tests, review findings, metrics
-Step 5  Verdict               CLEAN / PARTIAL / REVERTED + commit or rollback
+Step 0  Scope & rollback point   Base commit → file lists; record pre_sha
+Step 1  BEFORE baseline          Run tests + review + capture metrics (must be green)
+Step 2  Optimize                 code_optimizer ∥ ui_code_optimizer on disjoint file lists
+Step 3  AFTER measurement        Re-run tests + review + metrics; check no test file changed
+Step 4  Compare                  Before/after deltas
+Step 5  Verdict                  CLEAN / PARTIAL / REVERTED
 ```
 
 ---
 
-## Step 0 — Scope & Snapshot
+## Step 0 — Scope & rollback point
 
-### Determine scope
+### Determine the base commit (never HEAD~N)
 ```bash
 if [ -n "$ARG_PHASE" ]; then
   PHASE=$ARG_PHASE
-  SCOPE_FILES=$(git diff --name-only agent_state/phases/$((PHASE-1))/gate.passed..agent_state/phases/${PHASE}/gate.passed 2>/dev/null)
 else
-  # Auto-detect: latest completed phase, or all tracked files if no phases
-  LAST_PHASE=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n | tail -1)
-  if [ -n "$LAST_PHASE" ]; then
-    PHASE=$LAST_PHASE
-    SCOPE_FILES=$(git diff --name-only agent_state/phases/$((PHASE-1))/gate.passed..HEAD 2>/dev/null)
-  else
-    SCOPE_FILES=$(git ls-files 'src/' 'internal/' 'pkg/' 'web/src/' 'tests/')
-  fi
+  # Latest phase that has a gate record (portable: no grep -P)
+  PHASE=$(ls -d agent_state/phases/*/ 2>/dev/null | sed -E 's#.*/phases/([0-9]+)/#\1#' | sort -n \
+          | while read -r p; do [ -f "agent_state/phases/$p/gate.passed" ] && echo "$p"; done | tail -1)
 fi
-
-# Split into backend and UI scope
-BACKEND_FILES=$(echo "$SCOPE_FILES" | grep -E '^(src/|internal/|pkg/|tests/)' | grep -v '^(src/ui/|web/)')
-UI_FILES=$(echo "$SCOPE_FILES" | grep -E '^(web/src/|src/ui/|src/components/|src/hooks/|src/pages/)')
-
-echo "Scope: Phase ${PHASE:-all}"
-echo "  Backend files: $(echo "$BACKEND_FILES" | wc -l | tr -d ' ')"
-echo "  UI files: $(echo "$UI_FILES" | wc -l | tr -d ' ')"
+if [ -n "$ARG_SINCE" ]; then
+  BASE="$ARG_SINCE"
+elif [ -n "$PHASE" ] && [ -f "agent_state/phases/$PHASE/base_sha" ]; then
+  BASE="$(cat "agent_state/phases/$PHASE/base_sha")"          # written by develop-orchestrator Wave 0c
+elif [ -n "$PHASE" ] && git rev-parse -q --verify "refs/tags/phase-$((PHASE-1))-complete" >/dev/null; then
+  BASE="$(git rev-list -n1 "phase-$((PHASE-1))-complete")"     # older phases: the previous gate's tag
+else
+  echo "⛔ BLOCKED: no base commit for phase ${PHASE:-?}. Pass --since=<sha> (the commit the work started from)."; exit 1
+fi
+git merge-base --is-ancestor "$BASE" HEAD || { echo "⛔ BLOCKED: base $BASE is not an ancestor of HEAD"; exit 1; }
+# End of the phase: the next phase's base if it exists, else HEAD
+END="$(cat "agent_state/phases/$((PHASE+1))/base_sha" 2>/dev/null || git rev-parse HEAD)"
+SCOPE_FILES=$(git diff --name-only "$BASE".."$END")
 ```
 
-### Pre-optimization snapshot
+### Split the scope
+Derive the backend and UI directories from IMPLEMENTATION_GUIDELINES §1 Project Structure and
+`agent_state/agent_registry.json` (for example Go `internal/ cmd/ pkg/`, `services/api/`, a web app in
+`web/` or `apps/web/`). Never hard-code `src/`. Then remove everything an optimizer must not edit:
 ```bash
-git tag "optimize-before-$(date +%Y%m%d-%H%M%S)" HEAD
-PRE_TAG=$(git describe --tags --abbrev=0)
+NOT_EDITABLE='(_test\.go$|\.test\.[jt]sx?$|\.spec\.[jt]sx?$|(^|/)test_[^/]*\.py$|(^|/)(tests?|__tests__|__mocks__|__snapshots__|mocks|fixtures|testdata|e2e)/|\.stories\.|(^|/)migrations/|(^|/)agent_state/|(^|/)docs/)'
+BACKEND_FILES=$(printf '%s\n' "$SCOPE_FILES" | grep -E "^(${BACKEND_DIRS})" | grep -vE "$NOT_EDITABLE")
+UI_FILES=$(printf '%s\n' "$SCOPE_FILES" | grep -E "^(${UI_DIRS})" | grep -vE "$NOT_EDITABLE")
+echo "Scope: phase ${PHASE} ${BASE}..${END}"
+echo "  Backend files: $(printf '%s\n' "$BACKEND_FILES" | grep -c .)"
+echo "  UI files:      $(printf '%s\n' "$UI_FILES" | grep -c .)"
 ```
+
+### Rollback point
+```bash
+mkdir -p agent_state/optimize
+git rev-parse HEAD > agent_state/optimize/pre_sha      # the agents verify this before changing anything
+PRE_SHA="$(cat agent_state/optimize/pre_sha)"
+```
+Every optimization is its own commit, so each can be reverted with `git revert`. Nothing in this
+command uses `git reset --hard`.
 
 ### Load context
-- `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, test commands
-- `agent_state/agent_registry.json` — active skill packs
-- `docs/design/phases/${PHASE}/specs/api-contracts.md` — for UI data-fetching safety check
+- `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, §Commands and versions
+- `agent_state/config/verify-commands.json` — the commands every step runs (regenerate with
+  `python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json` if missing)
+- `docs/design/phases/${PHASE}/specs/api-contracts.md` and `agent_state/phases/${PHASE}/ui_developer/manifest.json` — UI safety checks
 
 ---
 
@@ -88,263 +113,130 @@ PRE_TAG=$(git describe --tags --abbrev=0)
 
 Capture the current state **before** any optimization. This is the baseline for comparison.
 
-### 1a — Run full test suite
-```bash
-# Backend tests
-${BACKEND_TEST_CMD}  # from IMPLEMENTATION_GUIDELINES (e.g., go test ./... -count=1)
-# UI tests (if not --backend_only)
-${UI_TEST_CMD}       # from IMPLEMENTATION_GUIDELINES (e.g., cd web && npm test)
-```
-
-Capture results:
+### 1a — Run the test suites
+Use the commands in `agent_state/config/verify-commands.json` (`commands["test:unit"]`,
+`commands["test:integration"]`, `commands["test:ui"]` when present), run with `bash -o pipefail` so
+the exit code is the test runner's. Record each command, exit code and counts:
 ```yaml
 before:
   tests:
-    backend_unit: { total: N, passed: N, failed: N }
-    backend_integration: { total: N, passed: N, failed: N }
-    ui_component: { total: N, passed: N, failed: N }
-    ui_e2e: { total: N, passed: N, failed: N }
+    backend_unit: { command: "...", exit: 0, total: N, passed: N, failed: 0 }
+    backend_integration: { command: "...", exit: 0, total: N, passed: N, failed: 0 }
+    ui_component: { command: "...", exit: 0, total: N, passed: N, failed: 0 }
+```
+**The baseline must be green.** If any suite fails, stop: `⛔ BLOCKED — optimize needs a green
+baseline; fix the failures first (/diagnose)`.
+
+### 1b — Code review (style pass only)
+```
+Agent prompt (subagent_type: code_reviewer_I): "[GROUND TRUTH] Style/idioms/dead-code pass only (skip architecture and security) over these files: ${BACKEND_FILES} ${UI_FILES}. Write agent_state/optimize/review_before.md ending with BLOCKING:N WARNING:N INFO:N, and list dead-code findings separately."
 ```
 
-### 1b — Run code review (style pass only — quick)
-**Agent:** `code_reviewer_I` (style/idioms only — skip architecture and security for speed)
-
-Capture findings count:
-```yaml
-before:
-  review:
-    dead_code_findings: N
-    complexity_findings: N
-    style_findings: N
-    total_findings: N
-```
-
-### 1c — Capture code metrics
-```bash
-# Lines of code
-BEFORE_BACKEND_LINES=$(find ${BACKEND_DIRS} -name "*.${EXT}" | xargs wc -l | tail -1)
-BEFORE_UI_LINES=$(find ${UI_DIRS} -name "*.${UI_EXT}" | xargs wc -l | tail -1)
-
-# Function count
-BEFORE_FUNCTIONS=$(grep -r "${FUNC_PATTERN}" ${BACKEND_DIRS} | wc -l)
-BEFORE_COMPONENTS=$(grep -r "export.*function\|export default" ${UI_DIRS} | wc -l)
-
-# Test coverage
-BEFORE_COVERAGE=$(${COVERAGE_CMD})
-
-# Bundle size (UI only)
-BEFORE_BUNDLE=$(${BUILD_CMD} 2>&1 | grep -E 'size|chunk|bundle' || du -sh ${BUILD_DIR})
-```
-
-Write baseline: `agent_state/optimize/before.yaml`
-
-Print:
-```
-📊 BEFORE baseline captured
-   Backend: X lines, Y functions, Z% coverage
-   UI: X lines, Y components, Z KB bundle
-   Review: N dead code findings, N complexity findings
-   Tests: all passing (X backend + Y UI)
-```
+### 1c — Code metrics
+Lines and files in scope, function/component counts, coverage (the project's coverage command), and
+the bundle size from `commands.build` for the UI. Write `agent_state/optimize/before.yaml`.
 
 ---
 
-## Step 2 — Optimize + Test + Fix Loop
-
-Optimization runs as an iterative loop: **optimize → test → if broken, diagnose and fix → re-test → only revert as last resort.** This is more effective than blind revert because most optimization-induced failures have simple fixes (missing import, updated caller, adjusted type).
+## Step 2 — Optimize
 
 ### Dry run mode
-If `--dry_run`: both agents report what they WOULD change but make zero modifications. Skip to Step 4 with projected metrics.
+If `--dry_run`: both agents report what they WOULD change and make zero modifications. Skip to Step 4
+with projected numbers.
 
-### 2a — Backend Optimization (parallel with 2b)
-**Agent:** `code_optimizer`
-**Skip if:** `--ui_only` flag
-**Scope:** `$BACKEND_FILES` only
-
-### 2b — UI Optimization (parallel with 2a)
-**Agent:** `ui_code_optimizer`
-**Skip if:** `--backend_only` flag or `frontend.enabled = false`
-**Scope:** `$UI_FILES` only
-
-### Per-optimization iteration cycle
-
-Each optimization (dead code removal or code change) follows this cycle:
-
+### 2a — Backend (parallel with 2b) — skip if `--ui_only`
 ```
-FOR each optimization candidate:
-  1. APPLY      → make the change, commit with descriptive message
-  2. TEST       → run relevant test suite (unit for backend, component for UI)
-  3. If PASS    → move to next optimization ✅
-  4. If FAIL    → enter fix cycle ↓
-
-  FIX CYCLE (max 3 attempts):
-    Attempt 1: DIAGNOSE → FIX → RE-TEST
-      - Read the test failure output
-      - Identify root cause (missing import? caller not updated? type mismatch?)
-      - Apply targeted fix → commit as "fix: resolve <issue> after <optimization>"
-      - Re-run the failing test
-      - If PASS → continue to next optimization ✅
-
-    Attempt 2: BROADER FIX → RE-TEST
-      - If attempt 1 fix didn't work, look at broader impact
-      - Check all callers/consumers of the changed code
-      - Fix all affected call sites → commit
-      - Re-run full test suite (not just failing test)
-      - If PASS → continue ✅
-
-    Attempt 3: ALTERNATIVE APPROACH → RE-TEST
-      - Revert the original optimization commit AND fix attempts
-      - Try a different optimization approach for the same candidate
-      - If no alternative exists → skip this candidate, log as "skipped"
-      - Re-run tests to confirm clean state
-      - If PASS → continue ✅
-
-    If ALL 3 ATTEMPTS FAIL:
-      - Revert all commits related to this optimization (original + fix attempts)
-      - Log in report: "Optimization X skipped — could not resolve test failure after 3 fix attempts"
-      - Continue to next optimization candidate (don't stop the pipeline)
+Agent prompt (subagent_type: code_optimizer): "[GROUND TRUTH] Optimize phase ${PHASE}. OPTIMIZE_BASE=${BASE}. Rollback point: agent_state/optimize/pre_sha (${PRE_SHA}). Edit ONLY these files: ${BACKEND_FILES}. Tests, mocks, fixtures and snapshots are read-only; a failing test means git revert that change. Dead code only by static reachability + registration search. Never remove error handling or security controls. One commit per change; stage only the files you changed. Write your reports under agent_state/phases/${PHASE}/reports/."
 ```
 
-### What the fix cycle handles
+### 2b — UI (parallel with 2a) — skip if `--backend_only` or `frontend.enabled = false`
+```
+Agent prompt (subagent_type: ui_code_optimizer): "[GROUND TRUTH] Optimize phase ${PHASE}. OPTIMIZE_BASE=${BASE}. Rollback point: agent_state/optimize/pre_sha (${PRE_SHA}). Edit ONLY these files: ${UI_FILES}. Tests, MSW mocks, fixtures, snapshots and stories are read-only; a failing test or snapshot mismatch means git revert that change. Never delete anything listed in agent_state/phases/${PHASE}/ui_developer/manifest.json or named in a wireframe. One commit per change; stage only the files you changed. Write your reports under agent_state/phases/${PHASE}/reports/."
+```
 
-| Failure Type | Typical Fix | Example |
-|-------------|------------|---------|
-| Missing import | Add the import back or redirect to new location | Removed unused file that was imported transitively |
-| Broken caller | Update the caller to use new function signature | Extracted shared function with different params |
-| Type mismatch | Adjust type annotation or cast | Simplified return type doesn't match interface |
-| Missing nil check | Add nil guard at call site | Removed defensive code that a caller depended on |
-| Test assertion wrong | Update test to match new (correct) behavior | Dead code removal changed error message |
-| Broken re-export | Update the barrel export or direct import | Removed file that was re-exported from index |
-| CSS/styling change | Restore specific class or adjust new utility | Removed "unused" class that was applied dynamically |
-| API shape change | Verify against api-contracts.md, restore if needed | Optimization accidentally changed response field |
+### Per-change cycle (what both agents do)
+```
+FOR each candidate:
+  1. APPLY one change → commit it alone
+  2. RUN build + typecheck + the tests of the touched packages/components
+  3. PASS → next candidate
+  4. Build/typecheck error in production code caused by the change (a leftover import, a caller of
+     removed dead code) → complete the change in production code once, re-run
+  5. ANY test failure or snapshot mismatch → git revert --no-edit <commit>; log "reverted: <test>"
+```
 
-### What triggers immediate revert (no fix attempt)
-
-These failures indicate the optimization was fundamentally wrong — fixing would mean reimplementing what was removed:
-
-- **Test coverage drops below threshold** — means removed code was actually tested and needed
-- **API contract violation** — optimization changed a response shape that `api-contracts.md` defines
-- **Compilation/build fails across multiple files** — change has cascading impact too broad to fix
-- **Security test fails** — optimization weakened a security control
+| Failure | What happens |
+|---|---|
+| Missing import after a dead-code removal | Finish the removal in production code (same change), re-run |
+| Caller still references removed code | The code wasn't dead: revert |
+| Any test assertion fails | Revert. The test is the behaviour contract; it is never edited |
+| Snapshot or MSW mock mismatch | Revert. Snapshots and mocks are never updated by an optimizer |
+| Coverage drops | Revert the batch: something tested was removed, so it wasn't dead |
+| API contract shape changed | Revert immediately |
+| Security test fails | Revert immediately |
 
 ---
 
 ## Step 3 — AFTER Measurement
 
-### 3a — Re-run FULL test suite
-Run the complete test suite (same as Step 1a) across everything — not just tests near optimized code. This catches distant regressions the per-optimization tests might miss.
+### 3a — Re-run the full suites
+The same commands as Step 1a, across everything. If a suite fails:
+1. Find the optimization commit that caused it (`git log --format='%h %s' ${PRE_SHA}..HEAD`, then bisect by reverting candidates).
+2. `git revert --no-edit <commit>`; re-run the suite.
+3. After 5 reverts in this step, stop and revert every optimization commit
+   (`git revert --no-edit ${PRE_SHA}..HEAD`), then report REVERTED and recommend `--dry_run`.
 
-If failures found at this stage:
-1. Identify which optimization commit caused it (check git log since pre-tag)
-2. Enter the same fix cycle as Step 2 (diagnose → fix → re-test, max 3 attempts)
-3. If unfixable: revert that specific optimization + its fix attempts
-4. Re-run full suite to confirm clean
-5. Max 5 total reverts at this stage → if exceeded, pause and surface to user:
-   ```
-   ⚠ 5+ optimizations causing cross-cutting failures.
-   Recommend: revert all to pre-optimize tag and run with --dry_run to assess scope.
-   Continue? [y/n]
-   ```
+### 3b — No test file changed
+```bash
+CHANGED_TESTS=$(git diff --name-only "${PRE_SHA}"..HEAD | grep -E "$NOT_EDITABLE")
+[ -z "$CHANGED_TESTS" ] || echo "⛔ BLOCKER: optimizers changed test/mock/fixture/migration files: $CHANGED_TESTS — revert those commits"
+```
+The test counts in 3a must equal the baseline counts.
 
-### 3b — Re-run code review (style pass)
-Same `code_reviewer_I` as Step 1b. Capture new findings count.
+### 3c — Re-run the style review
+Same `code_reviewer_I` spawn as Step 1b, writing `agent_state/optimize/review_after.md`.
 
-### 3c — Capture code metrics (same measurements as Step 1c)
-
-Write results: `agent_state/optimize/after.yaml`
+### 3d — Code metrics (same measurements as Step 1c)
+Write `agent_state/optimize/after.yaml`.
 
 ---
 
 ## Step 4 — Compare (Before vs After)
 
-Read `before.yaml` and `after.yaml`. Compute deltas.
+Read `before.yaml` and `after.yaml`. Compute deltas and write `agent_state/optimize/comparison.md`:
 
 ```
-╔══════════════════════════════════════════════════════════════════╗
-║                    OPTIMIZATION RESULTS                         ║
-╠══════════════════════════════════════════════════════════════════╣
-║                                                                  ║
-║  CODE METRICS                Before      After       Delta       ║
-║  ─────────────────────────────────────────────────────────────── ║
-║  Backend lines               4,230       3,980       -250 ✅     ║
-║  Backend functions           186         178         -8   ✅     ║
-║  UI lines                    3,100       2,850       -250 ✅     ║
-║  UI components               28          25          -3   ✅     ║
-║  Bundle size                 420 KB      395 KB      -25 KB ✅   ║
-║                                                                  ║
-║  TEST RESULTS                Before      After       Delta       ║
-║  ─────────────────────────────────────────────────────────────── ║
-║  Backend unit tests          124/124     124/124     0    ✅     ║
-║  Backend integration         48/48       48/48       0    ✅     ║
-║  UI component tests          36/36       36/36       0    ✅     ║
-║  Test coverage               82%         84%         +2%  ✅     ║
-║                                                                  ║
-║  REVIEW FINDINGS             Before      After       Delta       ║
-║  ─────────────────────────────────────────────────────────────── ║
-║  Dead code findings          12          0           -12  ✅     ║
-║  Complexity findings         5           3           -2   ✅     ║
-║  Style findings              8           6           -2   ✅     ║
-║  Total review findings       25          9           -16  ✅     ║
-║                                                                  ║
-║  OPTIMIZATION ACTIONS                                            ║
-║  ─────────────────────────────────────────────────────────────── ║
-║  Dead code removed           15 items                            ║
-║  Code optimizations applied  8 items                             ║
-║  Optimizations reverted      0                                   ║
-║  Items flagged for review    3                                   ║
-║                                                                  ║
-║  VERDICT: CLEAN ✅                                               ║
-║  All tests pass. Zero regressions. 500 lines removed.            ║
-╚══════════════════════════════════════════════════════════════════╝
-```
+CODE METRICS                Before      After       Delta
+Backend lines               4,230       3,980       -250 ✅
+UI lines                    3,100       2,850       -250 ✅
+Bundle size                 420 KB      395 KB      -25 KB ✅
 
-**Delta indicators:**
-- ✅ = improved or unchanged (lines decreased, coverage increased, findings decreased, tests stable)
-- ⚠ = unchanged (no improvement but no regression)
-- ❌ = regressed (tests failed, coverage dropped, lines increased)
+TEST RESULTS                Before      After       Delta
+Backend unit tests          124/124     124/124     0    ✅   (count must not change)
+UI component tests          36/36       36/36       0    ✅
+Coverage                    82%         83%         +1%  ✅
+Test files changed          —           0                ✅   (must be 0)
+
+REVIEW FINDINGS             Before      After       Delta
+Dead code findings          12          2           -10  ✅
+
+OPTIMIZATION ACTIONS
+Dead code removed           10 items (static-tool evidence cited)
+Optimizations applied       8 · reverted 1 · suggested (not applied) 6
+```
+- ✅ improved or unchanged · ❌ regressed (a test failed, coverage dropped, a test count changed, a
+  test file changed, the bundle grew).
 
 ---
 
-## Step 5 — Verdict & Commit
+## Step 5 — Verdict
 
-### CLEAN (all ✅)
-All tests pass, no regressions, metrics improved or stable.
-```
-✅ Optimization complete — CLEAN
-   Lines removed: 500 (backend: 250, UI: 250)
-   Dead code eliminated: 15 items
-   Review findings reduced: 25 → 9
-   Bundle size: -25 KB
-   All N tests still passing
-   Commits: 23 (one per optimization — individually revertible)
-```
-
-### PARTIAL (some optimizations reverted)
-Some optimizations caused test failures and were reverted. Remaining optimizations kept.
-```
-⚠ Optimization complete — PARTIAL
-   Applied: 18 optimizations
-   Reverted: 5 optimizations (caused test regressions)
-   See agent_state/optimize/reverted.md for details
-```
-
-### REVERTED (all rolled back)
-All optimizations caused cascading failures. Full rollback to pre-tag.
-```
-❌ Optimization rolled back — all changes reverted
-   Pre-optimization tag: ${PRE_TAG}
-   Reason: N test failures after optimization, unrecoverable after 3 revert cycles
-   No code changes persisted
-```
-
-### PROJECTED (dry run only)
-```
-📋 Dry run — projected optimization impact:
-   Dead code candidates: 15 (CERTAIN: 8, HIGH: 5, MEDIUM: 2)
-   Optimization opportunities: 12
-   Estimated lines removable: ~400-600
-   Run without --dry_run to apply
-```
+| Verdict | When |
+|---|---|
+| **CLEAN** | All suites green, test counts unchanged, no test file changed, metrics improved or stable |
+| **PARTIAL** | Some changes were reverted; the remaining ones pass everything above. See `agent_state/optimize/reverted.md` |
+| **REVERTED** | Cross-cutting failures: every optimization commit was reverted with `git revert` |
+| **PROJECTED** | Dry run: candidates and suggestions only |
 
 ---
 
@@ -352,43 +244,41 @@ All optimizations caused cascading failures. Full rollback to pre-tag.
 
 | File | Contents |
 |------|----------|
-| `agent_state/optimize/before.yaml` | Pre-optimization metrics (tests, review, code metrics) |
-| `agent_state/optimize/after.yaml` | Post-optimization metrics |
+| `agent_state/optimize/pre_sha` | The rollback point |
+| `agent_state/optimize/before.yaml` / `after.yaml` | Metrics, test commands, exit codes, counts |
 | `agent_state/optimize/comparison.md` | Side-by-side comparison table |
-| `agent_state/optimize/backend_report.md` | Backend optimization details (from `code_optimizer`) |
-| `agent_state/optimize/ui_report.md` | UI optimization details (from `ui_code_optimizer`) |
-| `agent_state/optimize/reverted.md` | Reverted optimizations with reasons (if any) |
+| `agent_state/optimize/review_before.md` / `review_after.md` | Style review before/after |
+| `agent_state/phases/${PHASE}/reports/code_optimization.md` (+ `dead_code.md`, `optimizations.md`) | `code_optimizer`'s reports |
+| `agent_state/phases/${PHASE}/reports/ui_code_optimization.md` (+ `ui_dead_code.md`, `ui_optimizations.md`) | `ui_code_optimizer`'s reports |
+| `agent_state/optimize/reverted.md` | Reverted optimizations with the failing test or error |
 
 ---
 
 ## Safety Guarantees
 
-1. **Pre-optimize git tag** — full rollback always possible
-2. **One commit per change** — granular revert without losing other optimizations
-3. **Full test suite before AND after** — no silent regressions
-4. **Code review before AND after** — proves review findings decreased
-5. **Auto-revert on test failure** — max 3 cycles, then full rollback
-6. **Dry run mode** — see projected impact before committing to changes
-7. **API contract integrity** — UI optimizer cross-checks data-fetching code against `api-contracts.md`
-8. **Scope lock** — only touches files in the specified phase (or detected scope)
+1. **Recorded rollback point** (`pre_sha`) and one commit per change — every change reverts on its own with `git revert`.
+2. **Green baseline required**, and the full suites re-run afterwards with unchanged test counts.
+3. **Tests are the referee, never edited** — Step 3b fails the run if any test, mock, fixture or snapshot file changed.
+4. **Static-reachability evidence** for every removal; error handling and security controls are never removed.
+5. **Code review before AND after**.
+6. **Dry run mode** to see projected impact first.
+7. **API contract integrity** — the UI optimizer checks data-fetching code against `api-contracts.md`.
+8. **Scope lock** — only the files changed since the phase's recorded base commit, minus test and migration files.
 
 ---
 
 ## Examples
 
 ```bash
-# Optimize everything in the latest completed phase
+# Optimize the latest gated phase
 /startup/optimize
 
-# Optimize only backend code in Phase 2
+# Backend only, phase 2
 /startup/optimize --phase=2 --backend_only
 
-# See what WOULD be optimized without making changes
+# What WOULD change, without changing anything
 /startup/optimize --dry_run
 
-# Include medium-confidence removals (more aggressive)
-/startup/optimize --aggressive
-
-# Optimize only UI code
-/startup/optimize --ui_only
+# A phase recorded before base_sha existed
+/startup/optimize --phase=1 --since=3f2a9c1
 ```
