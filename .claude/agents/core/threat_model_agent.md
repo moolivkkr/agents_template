@@ -22,6 +22,7 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/threat_model.md
   artifacts:
     - agent_state/phases/{{PHASE}}/reports/threat_model.json
+    - docs/design/phases/{{PHASE}}/threat_model.md   # mitigations + the TC-SEC-* inventory table the gate counts
 dependencies:
   upstream: [spec_writer, architecture_orchestrator]
   downstream: [security_reviewer]  # derived by _sync-deps.py — do not hand-edit
@@ -125,6 +126,58 @@ INFO: TC-SEC-* newly proposed (needs `spec_writer` to formalize the test case).
 
 ---
 
+## Check 4b — Publish the TC-SEC-* inventory where the gate counts it (SEC-06 / TEST-13)
+
+A TC-SEC ID that lives only in `agent_state/…/threat_model.md` reaches no coder, tester or gate: the
+inventory tool (`.claude/hooks/tc-inventory.py`) reads only markdown tables under
+`docs/design/phases/{{PHASE}}/`. So also write **`docs/design/phases/{{PHASE}}/threat_model.md`**, the
+phase's security spec that coders implement, test agents cover and the gate enforces:
+
+````markdown
+# Threat model — Phase N (security requirements)
+
+## Mitigations to implement
+Each mitigation names its owning FR-/NFR-SEC- ID and the test that proves it. Refer to tests in prose here
+("proved by TC-SEC-021"), never in a table cell.
+- **T-N-01 — cross-tenant IDOR on GET /orders/{id}** (NFR-SEC-3): scope every order query by the caller's
+  tenant; a foreign ID returns 404. Proved by TC-SEC-021.
+
+## Test Inventory — TC-SEC
+
+| TC ID | Category | Description | Priority | Tier |
+|-------|----------|-------------|----------|------|
+| TC-SEC-021 | AUTHZ-TENANT | Tenant B's token on GET /orders/{A's id} returns 404 and no body data | HIGH | integration |
+| TC-SEC-022 | AUTHZ-OBJ | User B (same tenant) PATCH /notes/{user A's note} returns 404 | HIGH | integration |
+| TC-SEC-023 | XSS-RENDER | A stored `<img src=x onerror>` in note.title renders as text on /notes/{id} | HIGH | e2e |
+````
+
+Rules for the table, which the parser depends on:
+- **Exactly these five columns, in this order:** `| TC ID | Category | Description | Priority | Tier |`.
+- **One ID per row.** Each ID cell holds exactly `TC-SEC-<n>`. No ranges ("TC-SEC-1 to 5"), and no other
+  TC ID anywhere in the row.
+- **TC IDs appear in no other table in this file.** The parser keeps the first table row it sees for an
+  ID, so a STRIDE table listing `TC-SEC-021` would steal its priority. Reference tests in prose instead.
+- **IDs are project-unique.** The gate fails an ID defined by two phases. Before allocating, find the
+  highest existing number:
+  `grep -rhoE 'TC-SEC-[0-9]+' docs/design/phases/ | sort -t- -k3 -n | tail -1`. That covers every phase,
+  including this phase's specs, where `spec_writer` may already allocate TC-SEC rows. Continue from the
+  next number.
+- **Category** is the abuse-matrix row from `security/secure-coding.md`: `AUTHZ-OBJ`, `AUTHZ-TENANT`,
+  `AUTHZ-FN`, `MASS-ASSIGN`, `INJ`, `SSRF`, `UPLOAD`, `TOKEN-TAMPER`, `TOKEN-EXPIRED`, `RATE-LIMIT`,
+  `SESSION-STORAGE`, `XSS-RENDER`, `CORS`, `ERR-LEAK` or `SECRET-FAILCLOSED`. Use a new UPPER-KEBAB name
+  only when none fits.
+- **Priority** follows the threat's severity: HIGH for a HIGH threat (anything that crosses a tenant or
+  owner, escalates privilege, leaks data or bypasses auth). Use MEDIUM or LOW otherwise. HIGH and MEDIUM
+  **block the gate** until a test named with the ID runs and passes.
+- **Tier** is where the test lives: `integration` (API-level abuse, the default), `e2e` or `ui`
+  (XSS-RENDER, SESSION-STORAGE), or `unit` (pure logic such as a token-validation function).
+- The Description states the attack and the expected outcome (status code, body shape, "renders as text"),
+  so a test writer needs nothing else.
+
+A testable mitigation without a row here is still the Check 4 BLOCKING finding.
+
+---
+
 ## Check 5 — Residual Risk & Assumptions Ledger
 
 **Property to verify:** Everything not mitigated is explicitly named as residual risk or an assumption — nothing is silently dropped.
@@ -176,7 +229,14 @@ PASS | N BLOCKING / N WARNING / N INFO   ·   Elements: N · Trust boundaries: N
 ## Findings
 | Severity | Check | Element / Threat id | Gap | Action Required |
 |----------|-------|---------------------|-----|-----------------|
+
+## Published
+docs/design/phases/N/threat_model.md — N TC-SEC rows (N HIGH, N MEDIUM, N LOW), IDs TC-SEC-<first>..<last>
+
+BLOCKING:N WARNING:N INFO:N
 ```
+
+The last line of the report is exactly `BLOCKING:N WARNING:N INFO:N`.
 
 Also write machine-readable evidence to `agent_state/phases/{{PHASE}}/reports/threat_model.json` so the gate can check findings with `jq` instead of grepping prose:
 
@@ -232,6 +292,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every feature/data-flow this phase is decomposed and every trust boundary enumerated — the flow table is populated, not summarized.
 - [ ] STRIDE was walked for every element; every applicable threat has a mitigation OR a recorded accepted-risk decision. No category silently skipped.
 - [ ] Every testable mitigation carries a TC-SEC-* id and every required mitigation traces to an owning FR-*/NFR-SEC-*; gaps are flagged for `spec_writer`.
+- [ ] `docs/design/phases/{{PHASE}}/threat_model.md` is written: the mitigations list, plus ONE `| TC ID | Category | Description | Priority | Tier |` table holding every TC-SEC row. The IDs continue after the highest existing TC-SEC number in `docs/design/phases/`, and no TC ID appears in any other table in that file.
 - [ ] The count line (`BLOCKING:N WARNING:N INFO:N`) is REAL — derived from `findings` and equal to the JSON sidecar counts. A `PASS` with zero threats enumerated on a security-relevant phase is a FAIL to investigate, never a silent PASS.
 - [ ] If the phase is not security-relevant (no boundary-crossing flows), I say so explicitly with the reason rather than emitting an empty PASS.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.

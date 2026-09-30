@@ -114,6 +114,9 @@ import com.example.app.model.dto.*;
 import com.example.app.model.entity.Widget;
 import com.example.app.model.entity.WidgetStatus;
 import com.example.app.repository.WidgetRepository;
+import jakarta.persistence.criteria.CriteriaBuilder;
+import jakarta.persistence.criteria.CriteriaQuery;
+import jakarta.persistence.criteria.Root;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -121,6 +124,7 @@ import org.junit.jupiter.params.provider.*;
 import org.mockito.*;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.*;
+import org.springframework.data.jpa.domain.Specification;
 
 import java.time.Instant;
 import java.util.*;
@@ -148,6 +152,31 @@ class WidgetServiceImplTest {
     // Captor for verifying the entity passed to repository.save()
     @Captor
     private ArgumentCaptor<Widget> widgetCaptor;
+
+    // Captor for the Specification the list scroll runs with (tenant + filters)
+    @Captor
+    private ArgumentCaptor<Specification<Widget>> specCaptor;
+
+    // The list sort the controller builds: newest first, id as the unique tiebreaker
+    private static final Sort NEWEST_FIRST =
+        Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
+
+    /**
+     * Run a captured Specification against mocked Criteria API objects and return the builder,
+     * so a test can see which predicates it adds (e.g. cb.equal(tenantId path, TENANT_ID)).
+     * The real SQL is covered by the repository integration tests.
+     */
+    @SuppressWarnings("unchecked")
+    private CriteriaBuilder predicatesOf(Specification<Widget> spec) {
+        var cb = mock(CriteriaBuilder.class);
+        spec.toPredicate(mock(Root.class), mock(CriteriaQuery.class), cb);
+        return cb;
+    }
+
+    /** Stub the keyset scroll to return `window` (the fluent query itself runs in repository tests). */
+    private void givenScrollReturns(Window<Widget> window) {
+        given(repository.findBy(any(Specification.class), any())).willReturn(window);
+    }
 }
 ```
 
@@ -201,25 +230,31 @@ class CreateTests {
         given(repository.existsByTenantIdAndNameIgnoreCase(TENANT_ID, "Existing Widget"))
             .willReturn(true);
 
+        // → 409 CONFLICT envelope; the user message is written for users
         assertThatThrownBy(() -> widgetService.create(request, TENANT_ID, USER_ID))
-            .isInstanceOf(ConflictException.class)
-            .hasMessageContaining("already exists");
+            .isInstanceOfSatisfying(ConflictException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("CONFLICT");
+                assertThat(e.getStatus().value()).isEqualTo(409);
+                assertThat(e.getUserMessage()).contains("already exists");
+            });
 
         verify(repository, never()).save(any());
     }
 
     @Test
-    @DisplayName("repository failure — propagates exception")
+    @DisplayName("repository failure — propagates unchanged (the advice turns it into 500 INTERNAL)")
     void create_RepoError_PropagatesException() {
         var request = createRequest();
+        var failure = new RuntimeException("connection refused");
         given(repository.existsByTenantIdAndNameIgnoreCase(any(), any()))
             .willReturn(false);
         given(repository.save(any()))
-            .willThrow(new RuntimeException("connection refused"));
+            .willThrow(failure);
 
+        // The service must not wrap or re-word it: GlobalExceptionHandler logs the cause and
+        // returns a generic 500 INTERNAL body
         assertThatThrownBy(() -> widgetService.create(request, TENANT_ID, USER_ID))
-            .isInstanceOf(RuntimeException.class)
-            .hasMessageContaining("connection refused");
+            .isSameAs(failure);
     }
 
     @Test
@@ -296,10 +331,13 @@ class FindByIdTests {
         given(repository.findByIdAndTenantId(id, TENANT_ID))
             .willReturn(Optional.empty());
 
+        // → 404 NOT_FOUND envelope; the id is log context and is not echoed to the client
         assertThatThrownBy(() -> widgetService.findById(id, TENANT_ID))
-            .isInstanceOf(ResourceNotFoundException.class)
-            .hasMessageContaining("not found")
-            .hasMessageContaining(id.toString());
+            .isInstanceOfSatisfying(ResourceNotFoundException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("NOT_FOUND");
+                assertThat(e.getUserMessage()).isEqualTo("Widget not found.");
+                assertThat(e.getIdentifier()).isEqualTo(id.toString());
+            });
     }
 
     @Test
@@ -313,7 +351,8 @@ class FindByIdTests {
 
         // CRITICAL: wrong tenant sees NotFound, NOT Forbidden — prevents entity enumeration
         assertThatThrownBy(() -> widgetService.findById(id, otherTenantId))
-            .isInstanceOf(ResourceNotFoundException.class);
+            .isInstanceOf(ResourceNotFoundException.class)
+            .extracting("errorCode").isEqualTo("NOT_FOUND");
     }
 
     @Test
@@ -375,8 +414,10 @@ class UpdateTests {
 
         assertThatThrownBy(() ->
             widgetService.update(existing.getId(), request, TENANT_ID, USER_ID))
-            .isInstanceOf(ConflictException.class)
-            .hasMessageContaining("Version mismatch");
+            .isInstanceOfSatisfying(ConflictException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("CONFLICT");
+                assertThat(e.getUserMessage()).contains("Version mismatch");
+            });
 
         verify(repository, never()).save(any());
     }
@@ -529,90 +570,76 @@ class DeleteTests {
 }
 ```
 
-## FindAll (List with Pagination) Tests
+## FindAll (Cursor / Keyset Window) Tests
 
 ```java
 @Nested
-@DisplayName("findAll()")
+@DisplayName("findAll() — keyset window")
 class FindAllTests {
 
     @Test
-    @DisplayName("happy path — returns paginated results")
-    void findAll_WithResults_ReturnsPage() {
+    @DisplayName("happy path — returns the repository's window unchanged")
+    void findAll_WithResults_ReturnsWindow() {
         var widgets = List.of(widget(), widget(), widget());
-        var pageable = PageRequest.of(0, 20, Sort.by(Sort.Direction.DESC, "createdAt"));
-        var page = new PageImpl<>(widgets, pageable, 25);
+        var window = Window.from(widgets, ScrollPosition::offset, true);
+        givenScrollReturns(window);
 
-        given(repository.findByTenantId(TENANT_ID, pageable)).willReturn(page);
+        var result = widgetService.findAll(TENANT_ID, null, ScrollPosition.keyset(), NEWEST_FIRST, 3);
 
-        var result = widgetService.findAll(TENANT_ID, null, pageable);
-
-        assertThat(result).isNotNull();
         assertThat(result.getContent()).hasSize(3);
-        assertThat(result.getTotalElements()).isEqualTo(25);
-        assertThat(result.getTotalPages()).isEqualTo(2);
-        assertThat(result.getNumber()).isZero();
+        assertThat(result.hasNext()).isTrue(); // → meta.pagination.has_more
+        verify(repository).findBy(any(Specification.class), any());
     }
 
     @Test
-    @DisplayName("empty result — returns empty page, not null")
-    void findAll_Empty_ReturnsEmptyPage() {
-        var pageable = PageRequest.of(0, 20);
-        var page = new PageImpl<Widget>(List.of(), pageable, 0);
+    @DisplayName("empty result — empty window, not null, no next")
+    void findAll_Empty_ReturnsEmptyWindow() {
+        givenScrollReturns(Window.from(List.of(), ScrollPosition::offset));
 
-        given(repository.findByTenantId(TENANT_ID, pageable)).willReturn(page);
-
-        var result = widgetService.findAll(TENANT_ID, null, pageable);
+        var result = widgetService.findAll(TENANT_ID, null, ScrollPosition.keyset(), NEWEST_FIRST, 20);
 
         assertThat(result).isNotNull();
-        assertThat(result.getContent()).isEmpty();
-        assertThat(result.getTotalElements()).isZero();
+        assertThat(result.getContent()).isEmpty(); // → data: []
+        assertThat(result.hasNext()).isFalse();    // → next_cursor: null
     }
 
     @Test
-    @DisplayName("filters by status when provided")
+    @DisplayName("filters by status when provided — and stays tenant-scoped")
     void findAll_WithStatusFilter_FiltersResults() {
-        var pageable = PageRequest.of(0, 20);
-        var activeWidget = widget(withStatus(WidgetStatus.ACTIVE));
-        var page = new PageImpl<>(List.of(activeWidget), pageable, 1);
+        givenScrollReturns(Window.from(List.of(widget(withStatus(WidgetStatus.ACTIVE))), ScrollPosition::offset));
 
-        given(repository.findByTenantIdAndStatus(TENANT_ID, WidgetStatus.ACTIVE, pageable))
-            .willReturn(page);
-
-        var result = widgetService.findAll(TENANT_ID, WidgetStatus.ACTIVE, pageable);
+        var result = widgetService.findAll(TENANT_ID, WidgetStatus.ACTIVE, ScrollPosition.keyset(), NEWEST_FIRST, 20);
 
         assertThat(result.getContent()).hasSize(1);
-        verify(repository).findByTenantIdAndStatus(TENANT_ID, WidgetStatus.ACTIVE, pageable);
-        verify(repository, never()).findByTenantId(any(), any());
+        verify(repository).findBy(specCaptor.capture(), any());
+        var cb = predicatesOf(specCaptor.getValue());
+        verify(cb).equal(any(), eq(TENANT_ID));
+        verify(cb).equal(any(), eq(WidgetStatus.ACTIVE));
     }
 
     @Test
-    @DisplayName("null status — calls unfiltered findByTenantId")
+    @DisplayName("null status — tenant predicate only, no status predicate")
     void findAll_NullStatus_NoFilter() {
-        var pageable = PageRequest.of(0, 20);
-        var page = new PageImpl<Widget>(List.of(), pageable, 0);
+        givenScrollReturns(Window.from(List.of(), ScrollPosition::offset));
 
-        given(repository.findByTenantId(TENANT_ID, pageable)).willReturn(page);
+        widgetService.findAll(TENANT_ID, null, ScrollPosition.keyset(), NEWEST_FIRST, 20);
 
-        widgetService.findAll(TENANT_ID, null, pageable);
-
-        verify(repository).findByTenantId(TENANT_ID, pageable);
-        verify(repository, never()).findByTenantIdAndStatus(any(), any(), any());
+        verify(repository).findBy(specCaptor.capture(), any());
+        var cb = predicatesOf(specCaptor.getValue());
+        verify(cb).equal(any(), eq(TENANT_ID));
+        verify(cb, never()).equal(any(), isA(WidgetStatus.class));
     }
 
     @ParameterizedTest(name = "status filter: {0}")
     @EnumSource(WidgetStatus.class)
-    @DisplayName("each status value routes to filtered query")
+    @DisplayName("each status value is applied to the scroll's Specification")
     void findAll_EachStatus_FiltersCorrectly(WidgetStatus status) {
-        var pageable = PageRequest.of(0, 20);
-        var page = new PageImpl<Widget>(List.of(), pageable, 0);
+        givenScrollReturns(Window.from(List.of(), ScrollPosition::offset));
 
-        given(repository.findByTenantIdAndStatus(TENANT_ID, status, pageable))
-            .willReturn(page);
+        widgetService.findAll(TENANT_ID, status, ScrollPosition.keyset(), NEWEST_FIRST, 20);
 
-        widgetService.findAll(TENANT_ID, status, pageable);
-
-        verify(repository).findByTenantIdAndStatus(TENANT_ID, status, pageable);
+        verify(repository).findBy(specCaptor.capture(), any());
+        verify(predicatesOf(specCaptor.getValue())).equal(any(), eq(status));
     }
 }
 ```
@@ -699,8 +726,10 @@ class EdgeCaseTests {
 
         assertThatThrownBy(() ->
             widgetService.update(widget.getId(), request2, TENANT_ID, USER_ID))
-            .isInstanceOf(ConflictException.class)
-            .hasMessageContaining("Version mismatch");
+            .isInstanceOfSatisfying(ConflictException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("CONFLICT");
+                assertThat(e.getUserMessage()).contains("Version mismatch");
+            });
     }
 
     @Test
@@ -714,12 +743,11 @@ class EdgeCaseTests {
         widgetService.findById(widget.getId(), TENANT_ID);
         verify(repository).findByIdAndTenantId(widget.getId(), TENANT_ID);
 
-        // findAll passes tenant
-        var pageable = PageRequest.of(0, 20);
-        given(repository.findByTenantId(TENANT_ID, pageable))
-            .willReturn(new PageImpl<>(List.of()));
-        widgetService.findAll(TENANT_ID, null, pageable);
-        verify(repository).findByTenantId(TENANT_ID, pageable);
+        // findAll scrolls with a Specification that pins tenant_id
+        givenScrollReturns(Window.from(List.of(), ScrollPosition::offset));
+        widgetService.findAll(TENANT_ID, null, ScrollPosition.keyset(), NEWEST_FIRST, 20);
+        verify(repository).findBy(specCaptor.capture(), any());
+        verify(predicatesOf(specCaptor.getValue())).equal(any(), eq(TENANT_ID));
     }
 
     @Test
@@ -808,14 +836,15 @@ class InteractionVerificationTests {
 - `@Mock` for repository, audit, and any other dependency — `@InjectMocks` for the service under test.
 - Mocks are fresh per test (Mockito resets automatically with `MockitoExtension`).
 - Use AssertJ (`assertThat`) for all assertions — more readable than JUnit's `assertEquals`.
-- Use `assertThatThrownBy` for exception assertions — verify type AND message content.
+- Use `assertThatThrownBy` for exception assertions — verify the type, `getErrorCode()` (the envelope's `error.code`: `NOT_FOUND`, `CONFLICT`, …) and `getUserMessage()`; never assert on text that would echo an id or a cause.
+- List tests work with the keyset `Window` (`findAll(tenantId, status, ScrollPosition, Sort, limit)`) — no `Page`/`Pageable`. Stub `repository.findBy(any(Specification.class), any())` and check the captured Specification's predicates (tenant first); the real scroll is covered by the repository tests.
 - Use `@Captor` + `ArgumentCaptor` to inspect the exact entity passed to `repository.save()`.
 - Use `BDDMockito` (`given/willReturn/willThrow`) for behavior-driven test style.
 - Verify correct call ordering with `inOrder()` for multi-step operations (find -> save -> audit).
 - Test cache behavior annotations (`@Cacheable`, `@CacheEvict`) in integration tests with real cache.
 - In unit tests, verify the repository and audit interactions — cache proxy is not active.
 - Version conflict test: set `existing.version = 3`, `request.version = 1` — assert `ConflictException`.
-- Tenant isolation: every repository call MUST include `tenantId` — verify with `eq(TENANT_ID)`.
+- Tenant isolation: every repository call MUST include `tenantId` — verify with `eq(TENANT_ID)`, and for list scrolls verify the Specification adds `cb.equal(…, TENANT_ID)`.
 - Audit tests MUST verify: action string, entity ID, tenant ID, actor ID, and payload.
 - Use `@ParameterizedTest` with `@MethodSource`, `@CsvSource`, or `@EnumSource` for table-driven tests.
 - Use `@Nested` to group tests by method for clear test output.

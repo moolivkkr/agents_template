@@ -254,7 +254,7 @@ func (r *widgetRepo) Update(ctx context.Context, w *widget.Widget) error {
         return r.mapError(err, "update")
     }
     if result.RowsAffected() == 0 {
-        return apperr.NewConflictError("widget", "version mismatch or not found — reload and retry")
+        return apperr.NewConflictError("This widget was changed or removed. Reload and try again.")
     }
 
     // Invalidate cache on write
@@ -284,7 +284,7 @@ func (r *widgetRepo) SoftDelete(ctx context.Context, tenantID, id uuid.UUID) err
         return r.mapError(err, "soft_delete")
     }
     if result.RowsAffected() == 0 {
-        return apperr.NewNotFoundError("widget", id.String())
+        return apperr.NewNotFoundError("Widget")
     }
 
     r.InvalidateCache(ctx, tenantID, id)
@@ -326,7 +326,7 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
     if filters.Cursor != "" {
         ts, cursorID, err := decodeCursor(filters.Cursor)
         if err != nil {
-            return nil, apperr.NewValidationError("cursor", err)
+            return nil, apperr.NewValidationError("cursor", "invalid_cursor", "The page cursor is invalid or expired.").WithError(err)
         }
         if filters.SortDir == "desc" {
             qb.WriteString(fmt.Sprintf(` AND (%s, id) < (`, sanitizeColumn(filters.SortBy)))
@@ -511,7 +511,7 @@ func (r *widgetRepo) BatchUpdate(ctx context.Context, widgets []*widget.Widget) 
             return fmt.Errorf("batch_update item %d: %w", i, r.mapError(err, "batch_update"))
         }
         if result.RowsAffected() == 0 {
-            return apperr.NewConflictError("widget", fmt.Sprintf("version mismatch on item %d", i))
+            return apperr.NewConflictError(fmt.Sprintf("Item %d was changed by someone else. Reload and try again.", i))
         }
     }
     return nil
@@ -561,103 +561,6 @@ func sanitizeColumn(col string) string {
 }
 ```
 
-## List with Offset-Based Pagination (Admin/Reporting)
-
-Use offset pagination for admin dashboards, reporting UIs, and data export previews where users need "jump to page N" functionality. See the handler archetype's "Pagination Strategy" section for when to use cursor vs. offset.
-
-```go
-// OffsetListFilters defines offset-based pagination parameters.
-// Add this to the domain package alongside ListFilters.
-type OffsetListFilters struct {
-    Page    int               `json:"page"`
-    PerPage int               `json:"per_page"`
-    SortBy  string            `json:"sort_by"`
-    SortDir string            `json:"sort_dir"`
-    Fields  map[string]string `json:"fields,omitempty"`
-}
-
-// OffsetListResult wraps offset-paginated results.
-type OffsetListResult[T any] struct {
-    Items []T `json:"items"`
-    Total int `json:"total"`
-}
-
-func (r *widgetRepo) ListOffset(ctx context.Context, tenantID uuid.UUID, filters domain.OffsetListFilters) (*domain.OffsetListResult[widget.Widget], error) {
-    ctx, span := r.tracer.Start(ctx, "repo.widget.list_offset")
-    defer span.End()
-
-    reqID := RequestIDFromContext(ctx)
-    logger := r.logger.With("request_id", reqID, "method", "ListOffset")
-
-    ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-    defer cancel()
-
-    // Calculate offset from page number
-    offset := (filters.Page - 1) * filters.PerPage
-
-    // Build query with dynamic filters
-    qb := newQueryBuilder()
-    qb.WriteString(`
-        SELECT id, tenant_id, name, description, status,
-               created_at, updated_at, created_by, updated_by, version
-        FROM widgets
-        WHERE tenant_id = `)
-    qb.AddParam(tenantID)
-    qb.WriteString(` AND deleted_at IS NULL`)
-
-    // Apply dynamic field filters (allow-listed in handler)
-    for field, value := range filters.Fields {
-        qb.WriteString(fmt.Sprintf(` AND %s = `, sanitizeColumn(field)))
-        qb.AddParam(value)
-    }
-
-    // Order, limit, and offset
-    qb.WriteString(fmt.Sprintf(` ORDER BY %s %s, id %s`,
-        sanitizeColumn(filters.SortBy), filters.SortDir, filters.SortDir))
-    qb.WriteString(` LIMIT `)
-    qb.AddParam(filters.PerPage)
-    qb.WriteString(` OFFSET `)
-    qb.AddParam(offset)
-
-    rows, err := r.pool.Query(ctx, qb.String(), qb.Params()...)
-    if err != nil {
-        logger.ErrorContext(ctx, "list_offset query failed", "error", err)
-        return nil, r.mapError(err, "list_offset")
-    }
-    defer rows.Close()
-
-    var items []widget.Widget
-    for rows.Next() {
-        var w widget.Widget
-        if err := rows.Scan(
-            &w.ID, &w.TenantID, &w.Name, &w.Description, &w.Status,
-            &w.CreatedAt, &w.UpdatedAt, &w.CreatedBy, &w.UpdatedBy, &w.Version,
-        ); err != nil {
-            return nil, fmt.Errorf("widget list_offset scan: %w", err)
-        }
-        items = append(items, w)
-    }
-    if err := rows.Err(); err != nil {
-        return nil, r.mapError(err, "list_offset")
-    }
-
-    // Count total (required for offset pagination to calculate total_pages)
-    total := r.countTotal(ctx, tenantID, domain.ListFilters{Fields: filters.Fields})
-
-    logger.InfoContext(ctx, "list_offset completed",
-        "page", filters.Page,
-        "per_page", filters.PerPage,
-        "result_count", len(items),
-        "total", total,
-    )
-
-    return &domain.OffsetListResult[widget.Widget]{
-        Items: items,
-        Total: total,
-    }, nil
-}
-```
-
 ## Error Mapping
 
 ```go
@@ -669,7 +572,7 @@ func (r *widgetRepo) mapError(err error, operation string) error {
 
     // No rows found → NotFound
     if errors.Is(err, pgx.ErrNoRows) {
-        return apperr.NewNotFoundError("widget", "")
+        return apperr.NewNotFoundError("Widget")
     }
 
     // PostgreSQL-specific error codes
@@ -677,16 +580,15 @@ func (r *widgetRepo) mapError(err error, operation string) error {
     if errors.As(err, &pgErr) {
         switch pgErr.Code {
         case "23505": // unique_violation
-            return apperr.NewConflictError("widget",
-                fmt.Sprintf("duplicate value on %s", pgErr.ConstraintName))
+            // The constraint name goes to the log (WithError), never to the client: it discloses the
+            // schema and turns "email already used" into an enumeration oracle.
+            return apperr.NewConflictError("A widget with these details already exists.").WithError(err)
         case "23503": // foreign_key_violation
-            return apperr.NewValidationError(pgErr.ConstraintName,
-                fmt.Errorf("referenced resource does not exist"))
+            return apperr.NewBusinessRuleError("A referenced item does not exist.").WithError(err)
         case "23514": // check_violation
-            return apperr.NewValidationError(pgErr.ConstraintName,
-                fmt.Errorf("value violates constraint %s", pgErr.ConstraintName))
-        case "57014": // query_canceled (context timeout)
-            return apperr.NewInternalError(fmt.Errorf("query timeout: %w", err))
+            return apperr.NewBusinessRuleError("A value is outside the allowed range.").WithError(err)
+        case "57014": // query_canceled (statement/context timeout) — a dependency problem, retryable
+            return apperr.NewUnavailableError("postgres", err)
         }
     }
 

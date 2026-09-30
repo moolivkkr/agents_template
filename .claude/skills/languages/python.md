@@ -88,7 +88,8 @@ log.info("user_created", user_id=user.id, email=user.email)
 ## Type Safety
 
 ```python
-from typing import TypedDict, Protocol, Literal, TypeVar, overload, Generic
+from typing import NotRequired, TypedDict, Protocol, Literal, TypeVar, overload, Generic
+# pydantic/FastAPI need typing_extensions.TypedDict on Python < 3.12
 
 # TypedDict for dictionaries with known shapes (API responses, configs)
 class UserResponse(TypedDict):
@@ -96,10 +97,26 @@ class UserResponse(TypedDict):
     email: str
     is_active: bool
 
-class PaginatedResponse(TypedDict, Generic[T]):
-    data: list[T]
-    total: int
+# The API envelope (api/response-envelope.md): success = {data, meta}; lists add meta.pagination
+class Pagination(TypedDict):
+    next_cursor: str | None          # None when has_more is False
     has_more: bool
+    limit: int
+    total_count: NotRequired[int]    # only when cheap and the UI shows it
+
+class Meta(TypedDict):
+    request_id: str                  # = the X-Request-Id response header
+
+class ListMeta(Meta):
+    pagination: Pagination
+
+class ApiResponse(TypedDict, Generic[T]):
+    data: T
+    meta: Meta
+
+class PaginatedResponse(TypedDict, Generic[T]):
+    data: list[T]                    # always a list — [] when empty, never None
+    meta: ListMeta
 
 # Protocol for structural typing — no inheritance required
 class Repository(Protocol):
@@ -306,28 +323,48 @@ class ExperimentConfig:
 
 ### FastAPI Tenant Dependency
 ```python
-from fastapi import Depends, Header, HTTPException, Request
+from fastapi import Depends, Header, Query, Request
+from pydantic import BaseModel
 from uuid import UUID
 
+class TokenClaims(BaseModel):
+    """Claims of a JWT whose signature, expiry and audience get_verified_claims has already checked."""
+    sub: str
+    tenant_id: str                  # the token's tenant
+    tenant_ids: list[str] = []      # multi-tenant users only: tenants X-Tenant-ID may select from
+
+def resolve_tenant(claims: TokenClaims, requested: str | None) -> UUID | None:
+    """The token's tenant, or one the X-Tenant-ID header SELECTS from the token's own list.
+    A client header never grants a tenant on its own: anyone can send one."""
+    chosen = requested or claims.tenant_id
+    return UUID(chosen) if chosen in {claims.tenant_id, *claims.tenant_ids} else None
+
 async def get_current_tenant(
-    request: Request,
-    x_tenant_id: str = Header(..., alias="X-Tenant-ID"),
+    claims: TokenClaims = Depends(get_verified_claims),             # the auth dependency: 401 if missing/invalid
+    x_tenant_id: str | None = Header(None, alias="X-Tenant-ID"),   # optional selector, checked below
 ) -> UUID:
-    """Extract and validate tenant from request headers/JWT."""
-    try:
-        tenant_id = UUID(x_tenant_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid tenant ID")
-    # Optionally validate tenant exists and is active
+    tenant_id = resolve_tenant(claims, x_tenant_id)
+    if tenant_id is None:
+        raise ForbiddenError()  # AppError → 403 envelope via the exception handler
     return tenant_id
 
-# Use as dependency in every route
+# Use as dependency in every route. Lists: ?cursor=<opaque>&limit=<n> — cursor pagination only
 @router.get("/orders")
 async def list_orders(
+    cursor: str | None = None,                      # meta.pagination.next_cursor from the previous page
+    limit: int = Query(20, ge=1, le=100),           # out of range → 400 VALIDATION_FAILED (handler below)
     tenant_id: UUID = Depends(get_current_tenant),
     service: OrderService = Depends(get_order_service),
+    request_id: str = Depends(get_request_id),
 ) -> PaginatedResponse[OrderResponse]:
-    return await service.list_orders(tenant_id)
+    rows, next_cursor = await service.list_orders(tenant_id, cursor=cursor, limit=limit)
+    return {
+        "data": [OrderResponse.model_validate(r) for r in rows],
+        "meta": {
+            "request_id": request_id,
+            "pagination": {"next_cursor": next_cursor, "has_more": next_cursor is not None, "limit": limit},
+        },
+    }
 ```
 
 ### SQLAlchemy Scoped Session Per Tenant
@@ -359,12 +396,18 @@ import structlog
 
 class TenantMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        tenant_id = request.headers.get("X-Tenant-ID")
-        if not tenant_id:
-            return JSONResponse(status_code=401, content={"error": "Missing tenant"})
+        # request.state.claims: set by the auth middleware after verifying the JWT. It must run first,
+        # so add it AFTER this one (the last add_middleware call is the outermost).
+        claims: TokenClaims | None = getattr(request.state, "claims", None)
+        # Middleware runs outside FastAPI's AppError handler — build the envelope directly
+        if claims is None:
+            return error_response(request, UnauthenticatedError())
+        tenant_id = resolve_tenant(claims, request.headers.get("X-Tenant-ID"))  # header can only select
+        if tenant_id is None:
+            return error_response(request, ForbiddenError())
 
-        token = current_tenant.set(UUID(tenant_id))
-        structlog.contextvars.bind_contextvars(tenant_id=tenant_id)
+        token = current_tenant.set(tenant_id)
+        structlog.contextvars.bind_contextvars(tenant_id=str(tenant_id))
         try:
             response = await call_next(request)
             return response
@@ -379,73 +422,154 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
 ### Exception Hierarchy
 ```python
+class FieldError(TypedDict):
+    field: str
+    code: str      # stable lower_snake: required, invalid_format, too_long, …
+    message: str   # fixed catalog text — never the validator's own message
+
 class AppError(Exception):
-    """Base for all domain errors."""
-    def __init__(self, message: str, code: str, status_code: int = 500) -> None:
+    """Base for all domain errors — serialized as the error envelope (api/response-envelope.md)."""
+    def __init__(
+        self, message: str, code: str, status_code: int = 500, *,
+        details: list[FieldError] | None = None, retryable: bool = False,
+    ) -> None:
         super().__init__(message)
-        self.code = code
+        self.message = message          # user-safe catalog text: the only text a client sees
+        self.code = code                # UPPER_SNAKE, stable
         self.status_code = status_code
+        self.details = details or []
+        self.retryable = retryable
+        self.retry_after: int | None = None
 
-class ValidationError(AppError):
-    def __init__(self, fields: list[dict[str, str]]) -> None:
-        super().__init__("Validation failed", "VALIDATION_ERROR", 400)
-        self.fields = fields
+class MalformedRequestError(AppError):   # 400: unparseable JSON, wrong content type
+    def __init__(self) -> None:
+        super().__init__("The request could not be read.", "MALFORMED_REQUEST", 400)
 
-class NotFoundError(AppError):
-    def __init__(self, resource: str, resource_id: str) -> None:
-        super().__init__(f"{resource} {resource_id} not found", "NOT_FOUND", 404)
+class ValidationError(AppError):         # 400: details[] lists the fields
+    def __init__(self, details: list[FieldError]) -> None:
+        super().__init__("Some fields are invalid.", "VALIDATION_FAILED", 400, details=details)
 
-class ConflictError(AppError):
-    def __init__(self, message: str = "Resource conflict") -> None:
+class UnauthenticatedError(AppError):    # 401: missing, invalid or expired credentials
+    def __init__(self) -> None:
+        super().__init__("Sign in to continue.", "UNAUTHENTICATED", 401)
+
+class ForbiddenError(AppError):          # 403: authenticated, not allowed
+    def __init__(self) -> None:
+        super().__init__("You don't have permission to do this.", "FORBIDDEN", 403)
+
+class NotFoundError(AppError):           # 404: missing OR another tenant's object (never 403)
+    def __init__(self, resource: str) -> None:
+        super().__init__(f"{resource} not found.", "NOT_FOUND", 404)
+
+class ConflictError(AppError):           # 409: duplicate, version mismatch, state conflict
+    def __init__(self, message: str = "This was changed by someone else. Reload and try again.") -> None:
         super().__init__(message, "CONFLICT", 409)
 
-class UnauthorizedError(AppError):
-    def __init__(self) -> None:
-        super().__init__("Authentication required", "UNAUTHORIZED", 401)
+class BusinessRuleError(AppError):       # 422: valid shape, rejected by a domain rule
+    def __init__(self, message: str) -> None:
+        super().__init__(message, "BUSINESS_RULE_VIOLATION", 422)
 
-class ForbiddenError(AppError):
-    def __init__(self, action: str = "this action") -> None:
-        super().__init__(f"Not allowed to perform {action}", "FORBIDDEN", 403)
-
-class RateLimitError(AppError):
+class RateLimitError(AppError):          # 429: Retry-After header, retryable
     def __init__(self, retry_after: int = 60) -> None:
-        super().__init__("Rate limit exceeded", "RATE_LIMITED", 429)
+        super().__init__("Too many requests. Try again shortly.", "RATE_LIMITED", 429, retryable=True)
         self.retry_after = retry_after
 
-class UpstreamError(AppError):
-    def __init__(self, service: str, detail: str = "") -> None:
-        super().__init__(f"Upstream service {service} failed: {detail}", "UPSTREAM_ERROR", 502)
+class UnavailableError(AppError):        # 503: a dependency failed or timed out
+    # raise UnavailableError("billing") from exc — service name and cause reach the log, not the client
+    def __init__(self, service: str) -> None:
+        super().__init__("The service is temporarily unavailable.", "UNAVAILABLE", 503, retryable=True)
+        self.service = service
+        self.retry_after = 5
 
-class InternalError(AppError):
-    def __init__(self, detail: str = "Internal server error") -> None:
-        super().__init__(detail, "INTERNAL_ERROR", 500)
+class InternalError(AppError):           # 500: generic message; the cause goes to the log
+    def __init__(self) -> None:
+        super().__init__("Something went wrong.", "INTERNAL", 500)
 ```
 
 ### FastAPI Exception Handlers
+FastAPI's defaults are not the envelope: `HTTPException` and unknown routes answer `{"detail": ...}`, and request
+validation answers 422 with pydantic's error list. Replace all of them — every error body goes through
+`error_response()`.
 ```python
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 app = FastAPI()
 
+def get_request_id(request: Request) -> str:
+    # Set by the request-id middleware (added last = outermost), which also sets the X-Request-Id header
+    return getattr(request.state, "request_id", "")
+
+def error_response(request: Request, exc: AppError, headers: dict[str, str] | None = None) -> JSONResponse:
+    """The only function that writes an error body."""
+    error: dict = {"code": exc.code, "message": exc.message}
+    if exc.details:
+        error["details"] = exc.details
+    error["request_id"] = get_request_id(request)
+    error["retryable"] = exc.retryable
+    headers = dict(headers or {})
+    if exc.retry_after:
+        headers.setdefault("Retry-After", str(exc.retry_after))
+    if exc.status_code == 401:
+        headers["WWW-Authenticate"] = "Bearer"
+    return JSONResponse(status_code=exc.status_code, content={"error": error}, headers=headers)
+
 @app.exception_handler(AppError)
 async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-    log.error("app_error", code=exc.code, message=str(exc), path=request.url.path)
-    body: dict = {"error": {"code": exc.code, "message": str(exc)}}
-    if isinstance(exc, ValidationError):
-        body["error"]["details"] = exc.fields
-    headers = {}
-    if isinstance(exc, RateLimitError):
-        headers["Retry-After"] = str(exc.retry_after)
-    return JSONResponse(status_code=exc.status_code, content=body, headers=headers)
+    log.warning("app_error", code=exc.code, request_id=get_request_id(request), path=request.url.path,
+                exc_info=exc if exc.status_code >= 500 else None)  # cause chain: logs only
+    return error_response(request, exc)
+
+# pydantic error type → stable lower_snake code + catalog message. pydantic's "msg" (and "input", which
+# echoes the submitted value) never reaches the client.
+PYDANTIC_FIELD_ERRORS: dict[str, tuple[str, str]] = {
+    "missing": ("required", "This field is required."),
+    "string_too_short": ("too_short", "This value is too short."),
+    "string_too_long": ("too_long", "This value is too long."),
+    "greater_than_equal": ("too_small", "This value is too small."),
+    "less_than_equal": ("too_large", "This value is too large."),
+    "string_pattern_mismatch": ("invalid_format", "This value has the wrong format."),
+    "uuid_parsing": ("invalid_format", "This value has the wrong format."),
+    "enum": ("invalid_choice", "Choose one of the allowed values."),
+    "literal_error": ("invalid_choice", "Choose one of the allowed values."),
+}
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    errors = exc.errors()
+    if any(e["type"] == "json_invalid" for e in errors):   # unparseable body → MALFORMED_REQUEST
+        return error_response(request, MalformedRequestError())
+    details: list[FieldError] = []
+    for e in errors:
+        code, message = PYDANTIC_FIELD_ERRORS.get(e["type"], ("invalid", "This value is invalid."))
+        details.append({"field": ".".join(str(p) for p in e["loc"][1:]),  # drop "body"/"query"/"header"
+                        "code": code, "message": message})
+    return error_response(request, ValidationError(details))  # 400, not FastAPI's default 422
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException) -> JSONResponse:
+    # Unknown route (404), wrong method (405), any HTTPException: pick the code by status; exc.detail is not copied
+    err: AppError
+    if exc.status_code == 404:
+        err = NotFoundError("Resource")
+    elif exc.status_code == 401:
+        err = UnauthenticatedError()
+    elif exc.status_code == 403:
+        err = ForbiddenError()
+    elif exc.status_code == 429:
+        err = RateLimitError()
+    elif exc.status_code < 500:
+        err = AppError("The request could not be read.", "MALFORMED_REQUEST", exc.status_code)
+    else:
+        err = InternalError()
+    return error_response(request, err, headers=exc.headers)  # keeps e.g. Allow on a 405
 
 @app.exception_handler(Exception)
 async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-    log.exception("unhandled_error", path=request.url.path)
-    return JSONResponse(
-        status_code=500,
-        content={"error": {"code": "INTERNAL_ERROR", "message": "Something went wrong"}},
-    )
+    log.exception("unhandled_error", request_id=get_request_id(request), path=request.url.path)
+    return error_response(request, InternalError())  # generic 500; the cause stays in the log
 ```
 
 ---
@@ -579,15 +703,16 @@ def get_user_service(
 ) -> UserService:
     return UserService(repo, cache, events)
 
-# Handler — thin, no business logic
+# Handler — thin, no business logic; returns the success envelope {data, meta}
 @router.post("/users", status_code=201)
 async def create_user(
     request: CreateUserRequest,
     tenant_id: UUID = Depends(get_current_tenant),
     service: UserService = Depends(get_user_service),
-) -> UserResponse:
+    request_id: str = Depends(get_request_id),
+) -> ApiResponse[UserResponse]:
     user = await service.create_user(tenant_id, request)
-    return UserResponse.model_validate(user)
+    return {"data": UserResponse.model_validate(user), "meta": {"request_id": request_id}}
 ```
 
 ### Transaction Management
@@ -804,12 +929,12 @@ class TenantManager(models.Manager):
 
     def get_queryset(self):
         qs = super().get_queryset().filter(deleted_at__isnull=True)
-        # Tenant filtering is applied via middleware-set thread-local
+        # Tenant filtering is applied via middleware-set thread-local (from the verified credential)
         from .middleware import get_current_tenant
         tenant_id = get_current_tenant()
-        if tenant_id:
-            qs = qs.filter(tenant_id=tenant_id)
-        return qs
+        if not tenant_id:
+            return qs.none()  # fail closed: no verified tenant → no rows (admin code uses all_objects)
+        return qs.filter(tenant_id=tenant_id)
 
 class Order(models.Model):
     tenant_id = models.UUIDField(db_index=True)
@@ -839,7 +964,9 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: dict) -> dict:
         if attrs.get("total", 0) < 0:
-            raise serializers.ValidationError({"total": "Must be non-negative"})
+            # code= becomes details[].code; the EXCEPTION_HANDLER sends a catalog message for it,
+            # as 400 VALIDATION_FAILED (see frameworks/drf.md)
+            raise serializers.ValidationError({"total": "Must be non-negative"}, code="min_value")
         return attrs
 
     def create(self, validated_data: dict) -> Order:
@@ -852,9 +979,14 @@ class OrderSerializer(serializers.ModelSerializer):
 ```python
 import threading
 
+from rest_framework.exceptions import AuthenticationFailed
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 _thread_local = threading.local()
 
 class TenantMiddleware:
+    """Place after django.contrib.auth.middleware.AuthenticationMiddleware."""
+
     def __init__(self, get_response):
         self.get_response = get_response
 
@@ -867,9 +999,18 @@ class TenantMiddleware:
         finally:
             _thread_local.tenant_id = None
 
-    def _extract_tenant(self, request) -> str:
-        # From JWT, header, or subdomain
-        return request.headers.get("X-Tenant-ID", "")
+    def _extract_tenant(self, request) -> str | None:
+        # Only from a VERIFIED credential. A client header or subdomain alone is never trusted:
+        # anyone can send X-Tenant-ID. (Multi-tenant users: a header may only select a tenant the
+        # token lists — see resolve_tenant under Multi-Tenancy.)
+        user = getattr(request, "user", None)  # session auth, set by AuthenticationMiddleware
+        if user is not None and user.is_authenticated:
+            return str(user.tenant_id)
+        try:
+            result = JWTAuthentication().authenticate(request)  # checks the signature and expiry
+        except AuthenticationFailed:
+            return None  # the DRF view then answers 401 with the envelope
+        return result[1].get("tenant_id") if result else None
 
 def get_current_tenant() -> str | None:
     return getattr(_thread_local, "tenant_id", None)

@@ -61,23 +61,31 @@ type ListUsersResponse = paths["/api/v1/users"]["get"]["responses"]["200"]["cont
 // Validate requests against spec at runtime (middleware)
 import "github.com/getkin/kin-openapi/openapi3filter"
 
-func ValidateRequest(spec *openapi3.T) func(http.Handler) http.Handler {
-    router, _ := gorillamux.NewRouter(spec)
+func ValidateRequest(spec *openapi3.T) (func(http.Handler) http.Handler, error) {
+    router, err := gorillamux.NewRouter(spec)
+    if err != nil {
+        return nil, fmt.Errorf("openapi router: %w", err) // fail at startup, not per request
+    }
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            route, pathParams, _ := router.FindRoute(r)
+            route, pathParams, err := router.FindRoute(r)
+            if err != nil { // not in the spec: deny by default
+                writeError(w, r, http.StatusNotFound, "NOT_FOUND", "Not found.", false)
+                return
+            }
             input := &openapi3filter.RequestValidationInput{
                 Request:    r,
                 PathParams: pathParams,
                 Route:      route,
             }
             if err := openapi3filter.ValidateRequest(r.Context(), input); err != nil {
-                writeError(w, http.StatusBadRequest, "VALIDATION_ERROR", err.Error())
+                // details[] comes from the validator's field errors mapped to stable codes, never err.Error()
+                writeError(w, r, http.StatusBadRequest, "VALIDATION_FAILED", "Some fields are invalid.", false)
                 return
             }
             next.ServeHTTP(w, r)
         })
-    }
+    }, nil
 }
 ```
 
@@ -88,92 +96,99 @@ func ValidateRequest(spec *openapi3.T) func(http.Handler) http.Handler {
 
 ## Response Envelope
 
-Consistent structure across all endpoints. Clients parse one shape.
+**The shape is defined once, in `~/.claude/skills/api/response-envelope.md`; that file wins over
+anything here.** Summary: success is `{data, meta}` and error is `{error}`, never both; list metadata
+lives in `meta.pagination`.
 
 ```typescript
-// Single resource
-interface SingleResponse<T> {
-  data: T;
-}
+// Success — single resource (200/201)
+type ApiSuccess<T> = { data: T; meta: { request_id: string; pagination?: Pagination } };
 
-// Collection with cursor pagination
-interface ListResponse<T> {
-  data: T[];
-  meta: {
-    cursor?: string;     // opaque cursor for next page
-    has_more: boolean;   // whether more results exist
-    total_count: number; // total matching records (when affordable to compute)
-  };
-}
+// Success — collection (cursor pagination; data is always an array, [] when empty)
+type Pagination = {
+  next_cursor: string | null; // opaque; null when has_more is false
+  has_more: boolean;
+  limit: number;
+  total_count?: number;       // only when cheap to compute AND the UI shows it
+};
 
-// Error response
-interface ErrorResponse {
+// Error — no `data` key; the HTTP status carries the class
+type ApiErrorBody = {
   error: {
-    code: string;         // machine-readable: "NOT_FOUND", "VALIDATION_ERROR"
-    message: string;      // human-readable explanation
-    details?: object;     // optional structured details (validation errors, etc.)
-    request_id: string;   // for support/debugging correlation
+    code: string;             // UPPER_SNAKE, stable, documented: "VALIDATION_FAILED", "NOT_FOUND"
+    message: string;          // safe to show a user
+    details?: { field: string; code: string; message: string }[];
+    request_id: string;       // equals the X-Request-Id header
+    retryable: boolean;
   };
-}
+};
 ```
 
 ```go
-// Go implementation
-type ListResponse[T any] struct {
-    Data []T          `json:"data"`
-    Meta ListMeta     `json:"meta"`
+// Go implementation — the types from api/response-envelope.md
+type Meta struct {
+    RequestID  string      `json:"request_id"`
+    Pagination *Pagination `json:"pagination,omitempty"`
 }
-
-type ListMeta struct {
-    Cursor     *string `json:"cursor,omitempty"`
+type Pagination struct {
+    NextCursor *string `json:"next_cursor"`
     HasMore    bool    `json:"has_more"`
-    TotalCount int     `json:"total_count"`
+    Limit      int     `json:"limit"`
+    TotalCount *int    `json:"total_count,omitempty"`
 }
-
-type SingleResponse[T any] struct {
-    Data T `json:"data"`
+type Success[T any] struct {
+    Data T    `json:"data"`
+    Meta Meta `json:"meta"`
 }
-
+type APIError struct {
+    Code      string       `json:"code"`
+    Message   string       `json:"message"`
+    Details   []FieldError `json:"details,omitempty"`
+    RequestID string       `json:"request_id"`
+    Retryable bool         `json:"retryable"`
+}
 type ErrorBody struct {
-    Code      string `json:"code"`
-    Message   string `json:"message"`
-    Details   any    `json:"details,omitempty"`
-    RequestID string `json:"request_id"`
+    Error APIError `json:"error"`
 }
 
-type ErrorResponse struct {
-    Error ErrorBody `json:"error"`
-}
-
-// Helper to write consistent responses
 func writeJSON[T any](w http.ResponseWriter, status int, payload T) {
     w.Header().Set("Content-Type", "application/json")
     w.WriteHeader(status)
-    json.NewEncoder(w).Encode(payload)
+    _ = json.NewEncoder(w).Encode(payload)
 }
 
-func writeList[T any](w http.ResponseWriter, data []T, cursor *string, hasMore bool, total int) {
-    writeJSON(w, http.StatusOK, ListResponse[T]{
-        Data: data,
-        Meta: ListMeta{Cursor: cursor, HasMore: hasMore, TotalCount: total},
-    })
+func writeOne[T any](w http.ResponseWriter, r *http.Request, status int, v T) {
+    writeJSON(w, status, Success[T]{Data: v, Meta: Meta{RequestID: middleware.RequestID(r.Context())}})
 }
 
-func writeError(w http.ResponseWriter, status int, code, message string) {
-    writeJSON(w, status, ErrorResponse{
-        Error: ErrorBody{Code: code, Message: message, RequestID: middleware.RequestID(w)},
-    })
+func writeList[T any](w http.ResponseWriter, r *http.Request, items []T, next *string, hasMore bool, limit int) {
+    if items == nil {
+        items = []T{} // never null
+    }
+    writeJSON(w, http.StatusOK, Success[[]T]{Data: items, Meta: Meta{
+        RequestID:  middleware.RequestID(r.Context()),
+        Pagination: &Pagination{NextCursor: next, HasMore: hasMore, Limit: limit},
+    }})
+}
+
+func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool) {
+    writeJSON(w, status, ErrorBody{Error: APIError{
+        Code: code, Message: message, RequestID: middleware.RequestID(r.Context()), Retryable: retryable,
+    }})
 }
 ```
 
-- Every success response wraps in `{ data: ... }`
-- Every list wraps in `{ data: [...], meta: { cursor, has_more, total_count } }`
-- Every error wraps in `{ error: { code, message, details?, request_id } }`
+- Every success response is `{ data, meta: { request_id } }`; lists add `meta.pagination`
+  `{ next_cursor, has_more, limit, total_count? }`
+- Every error is `{ error: { code, message, details[], request_id, retryable } }` with no `data`
+- Clients branch on the HTTP status (or `"error" in body`), never on `error === null`
 - Clients never guess the shape — one parser for success, one for error
 
 ## Cursor Pagination
 
-Never use offset/limit for user-facing APIs. Cursors are stable under concurrent writes.
+Never use offset/limit for user-facing APIs. Cursors are stable under concurrent writes. The request is
+`?cursor=<next_cursor>&limit=<n>`; the repository below returns what `writeList` puts in
+`meta.pagination`.
 
 ```go
 // Cursor: base64-encoded "id:timestamp" for stable ordering
@@ -262,34 +277,40 @@ Machine-readable codes that clients switch on. Human-readable messages for displ
 
 ```go
 // Domain error codes — clients switch on these, not HTTP status codes
+// (the table in api/response-envelope.md is canonical)
 const (
-    CodeValidationError = "VALIDATION_ERROR"  // 400/422 — invalid input
-    CodeNotFound        = "NOT_FOUND"         // 404 — resource doesn't exist
-    CodeConflict        = "CONFLICT"          // 409 — duplicate, version mismatch
-    CodeRateLimited     = "RATE_LIMITED"      // 429 — too many requests
-    CodeUpstreamError   = "UPSTREAM_ERROR"    // 502 — dependency failed
-    CodeUnauthorized    = "UNAUTHORIZED"      // 401 — missing/invalid auth
-    CodeForbidden       = "FORBIDDEN"         // 403 — authenticated but not allowed
-    CodeInternalError   = "INTERNAL_ERROR"    // 500 — unexpected server error
+    CodeValidationFailed = "VALIDATION_FAILED"       // 400 — input fails schema; details[] lists fields
+    CodeUnauthenticated  = "UNAUTHENTICATED"         // 401 — missing/invalid/expired credentials
+    CodeForbidden        = "FORBIDDEN"               // 403 — authenticated but not allowed
+    CodeNotFound         = "NOT_FOUND"               // 404 — missing OR another tenant's/owner's object
+    CodeConflict         = "CONFLICT"                // 409 — state conflict, duplicate, version mismatch
+    CodeIdempotencyReuse = "IDEMPOTENCY_KEY_REUSED"  // 409 — same key, different request body
+    CodeBusinessRule     = "BUSINESS_RULE_VIOLATION" // 422 — valid shape, rejected by a domain rule
+    CodeRateLimited      = "RATE_LIMITED"            // 429 — with Retry-After; retryable
+    CodeInternal         = "INTERNAL"                // 500 — generic message; cause in logs
+    CodeUnavailable      = "UNAVAILABLE"             // 503 — dependency down; retryable
 )
 
-// Map domain codes to HTTP status
+// Map domain codes to HTTP status (and whether a client may retry)
 var codeToStatus = map[string]int{
-    CodeValidationError: http.StatusUnprocessableEntity,
-    CodeNotFound:        http.StatusNotFound,
-    CodeConflict:        http.StatusConflict,
-    CodeRateLimited:     http.StatusTooManyRequests,
-    CodeUpstreamError:   http.StatusBadGateway,
-    CodeUnauthorized:    http.StatusUnauthorized,
-    CodeForbidden:       http.StatusForbidden,
-    CodeInternalError:   http.StatusInternalServerError,
+    CodeValidationFailed: http.StatusBadRequest,
+    CodeUnauthenticated:  http.StatusUnauthorized,
+    CodeForbidden:        http.StatusForbidden,
+    CodeNotFound:         http.StatusNotFound,
+    CodeConflict:         http.StatusConflict,
+    CodeIdempotencyReuse: http.StatusConflict,
+    CodeBusinessRule:     http.StatusUnprocessableEntity,
+    CodeRateLimited:      http.StatusTooManyRequests,
+    CodeInternal:         http.StatusInternalServerError,
+    CodeUnavailable:      http.StatusServiceUnavailable,
 }
+var retryableCodes = map[string]bool{CodeRateLimited: true, CodeUnavailable: true}
 
 // Domain error type
 type DomainError struct {
     Code    string
-    Message string
-    Details any
+    Message string       // user-safe; never err.Error() from a driver or upstream
+    Details []FieldError // field-level problems for VALIDATION_FAILED
 }
 
 func (e *DomainError) Error() string { return e.Message }
@@ -299,7 +320,8 @@ func ErrorHandler(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         defer func() {
             if err := recover(); err != nil {
-                writeError(w, http.StatusInternalServerError, CodeInternalError, "internal error")
+                slog.ErrorContext(r.Context(), "panic", "panic", err, "request_id", middleware.RequestID(r.Context()))
+                writeError(w, r, http.StatusInternalServerError, CodeInternal, "Something went wrong.", false)
             }
         }()
         next.ServeHTTP(w, r)
@@ -345,96 +367,92 @@ func DeprecationMiddleware(sunset time.Time) func(http.Handler) http.Handler {
 
 ## Idempotency
 
-POST operations must support idempotency keys for safe retries.
+POST operations must support idempotency keys so a client (or an upstream service) can retry safely.
+This is the **inbound** half. The outbound half — never retrying a non-idempotent call that timed out
+unless it carries a key — is in `core/resiliency-patterns.md` §Retry.
 
 ```go
 // Client sends: POST /api/v1/orders  Idempotency-Key: <uuid>
 func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            if r.Method != http.MethodPost {
+            key := r.Header.Get("Idempotency-Key")
+            if r.Method != http.MethodPost || key == "" {
                 next.ServeHTTP(w, r)
                 return
             }
-            key := r.Header.Get("Idempotency-Key")
-            if key == "" {
-                next.ServeHTTP(w, r) // no key = no idempotency
+            // Scope the key to the caller: one tenant's key must never replay another's response.
+            body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+            if err != nil {
+                writeError(w, r, http.StatusBadRequest, CodeValidationFailed, "Request body too large.", false)
                 return
             }
+            r.Body = io.NopCloser(bytes.NewReader(body))
+            scoped := auth.TenantID(r.Context()) + ":" + auth.UserID(r.Context()) + ":" + key
+            hash := sha256.Sum256(append([]byte(r.Method+" "+r.URL.Path+"\n"), body...))
 
-            // Check for cached response
-            if cached, found := store.Get(r.Context(), key); found {
+            // Claim the key atomically (SET NX with a short lock TTL): a concurrent duplicate waits or gets 409.
+            rec, state, err := store.Claim(r.Context(), scoped, hash[:], 30*time.Second)
+            switch {
+            case err != nil:
+                writeError(w, r, http.StatusServiceUnavailable, CodeUnavailable, "Try again shortly.", true)
+                return
+            case state == ClaimReplay && !bytes.Equal(rec.RequestHash, hash[:]):
+                writeError(w, r, http.StatusConflict, CodeIdempotencyReuse, "This Idempotency-Key was used for a different request.", false)
+                return
+            case state == ClaimReplay:
                 w.Header().Set("Idempotent-Replayed", "true")
-                w.WriteHeader(cached.StatusCode)
-                w.Write(cached.Body)
+                w.WriteHeader(rec.StatusCode)
+                _, _ = w.Write(rec.Body)
+                return
+            case state == ClaimInFlight:
+                writeError(w, r, http.StatusConflict, CodeConflict, "The same request is still being processed.", true)
                 return
             }
 
-            // Capture response
-            rec := httptest.NewRecorder()
-            next.ServeHTTP(rec, r)
-
-            // Cache for 24h
-            store.Set(r.Context(), key, CachedResponse{
-                StatusCode: rec.Code,
-                Body:       rec.Body.Bytes(),
-                Headers:    rec.Header(),
-            }, 24*time.Hour)
-
-            // Write actual response
-            for k, v := range rec.Header() {
-                w.Header()[k] = v
+            cw := newCaptureWriter(w) // tees status + body to the real writer
+            next.ServeHTTP(cw, r)
+            if cw.status >= 500 {
+                store.Release(r.Context(), scoped) // a failed attempt must stay retryable
+                return
             }
-            w.WriteHeader(rec.Code)
-            w.Write(rec.Body.Bytes())
+            store.Complete(r.Context(), scoped, CachedResponse{RequestHash: hash[:], StatusCode: cw.status, Body: cw.body.Bytes()}, 24*time.Hour)
         })
     }
 }
-
-// Redis-backed idempotency store
-type RedisIdempotencyStore struct {
-    client *redis.Client
-}
-
-func (s *RedisIdempotencyStore) Get(ctx context.Context, key string) (CachedResponse, bool) {
-    val, err := s.client.Get(ctx, "idempotency:"+key).Bytes()
-    if err != nil {
-        return CachedResponse{}, false
-    }
-    var cached CachedResponse
-    json.Unmarshal(val, &cached)
-    return cached, true
-}
-
-func (s *RedisIdempotencyStore) Set(ctx context.Context, key string, resp CachedResponse, ttl time.Duration) {
-    data, _ := json.Marshal(resp)
-    s.client.Set(ctx, "idempotency:"+key, data, ttl)
-}
 ```
 
-- POST operations accept `Idempotency-Key` header (client-generated UUID)
-- Cache and return the same response for duplicate keys within 24h TTL
-- Set `Idempotent-Replayed: true` header when returning cached response
+- POST operations accept an `Idempotency-Key` header (client-generated UUID)
+- The key is scoped to tenant + user; the stored record carries a hash of method, path and body
+- Same key + same request within 24h → the stored response, with `Idempotent-Replayed: true`
+- Same key + a different body → `409 IDEMPOTENCY_KEY_REUSED`
+- A duplicate while the first is still running → `409 CONFLICT` with `retryable: true`, never a second execution
+- 5xx outcomes are not stored, so the client's retry runs again
+- A store error fails closed (503), never "process without idempotency"
 - PUT and DELETE are idempotent by HTTP semantics — no key needed
-- Store idempotency records in Redis: `idempotency:{key}` -> response
+- Store records in Redis (`idempotency:{tenant}:{user}:{key}`) or a table with a unique constraint
 
 ## HATEOAS Links
 
 Include action links in responses to reduce client-side URL construction.
+
+Links live **inside the resource** (`data.links`), so the envelope keeps exactly `data` and `meta` at
+the top level.
 
 ```json
 {
   "data": {
     "id": "order_123",
     "status": "pending",
-    "total": 99.99
+    "total_cents": 9999,
+    "links": {
+      "self": "/api/v1/orders/order_123",
+      "cancel": "/api/v1/orders/order_123/cancel",
+      "payment": "/api/v1/orders/order_123/payment",
+      "items": "/api/v1/orders/order_123/items"
+    }
   },
-  "links": {
-    "self": "/api/v1/orders/order_123",
-    "cancel": "/api/v1/orders/order_123/cancel",
-    "payment": "/api/v1/orders/order_123/payment",
-    "items": "/api/v1/orders/order_123/items"
-  }
+  "meta": { "request_id": "b7e1c2…" }
 }
 ```
 
@@ -490,16 +508,16 @@ code maps to. See `backend/archetypes/error-handling-go.md` for the canonical er
 | GET / PATCH success | 200 |
 | POST created | 201 + `Location` header |
 | DELETE / async accepted | 202 or 204 |
-| Bad request / invalid body | 400 |
-| Unauthenticated | 401 |
-| Authenticated but forbidden | 403 |
-| Resource not found | 404 |
+| Invalid body / validation failed (`VALIDATION_FAILED`) | 400 |
+| Unauthenticated (`UNAUTHENTICATED`) | 401 |
+| Authenticated but forbidden (`FORBIDDEN`) | 403 |
+| Not found, or another tenant's/owner's object (`NOT_FOUND`) | 404 |
 | Method not allowed | 405 |
-| Conflict (duplicate) | 409 |
-| Validation error | 422 |
-| Rate limited | 429 |
-| Server error | 500 |
-| Downstream unavailable | 502 / 503 |
+| Conflict / duplicate / idempotency key reused | 409 |
+| Business rule rejected a valid request (`BUSINESS_RULE_VIOLATION`) | 422 |
+| Rate limited (`RATE_LIMITED`, `Retry-After`) | 429 |
+| Server error (`INTERNAL`) | 500 |
+| Downstream unavailable (`UNAVAILABLE`) | 503 |
 
 ## Rate Limiting
 
@@ -538,7 +556,7 @@ code maps to. See `backend/archetypes/error-handling-go.md` for the canonical er
 ## Critical Rules
 
 - Spec first, code second — OpenAPI is the contract, not an afterthought
-- Every response uses the standard envelope — no ad-hoc shapes
+- Every response uses the envelope in `api/response-envelope.md` — no ad-hoc shapes
 - Cursor pagination for all user-facing lists — never offset/limit
 - Machine-readable error codes in every error response — clients switch on codes, not messages
 - Idempotency keys on all POST endpoints — safe retries are mandatory

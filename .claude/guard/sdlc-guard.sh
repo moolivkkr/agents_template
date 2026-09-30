@@ -49,9 +49,19 @@ ARTIFACT_DIRS = set((POLICY or {}).get("artifact_dirs", [
 PROTECTED_WRITE = [os.path.realpath(os.path.expanduser(p)) for p in (POLICY or {}).get("protected_paths", [
     "~/.claude/settings.json", "~/.claude/settings.local.json", "~/.claude/hooks",
     "/Library/Application Support/ClaudeCode", "~/.config/sdlc-guard", "~/.kube", "~/.lima/_config"])]
-SECRET_PATHS = [os.path.realpath(os.path.expanduser(p)) for p in (POLICY or {}).get("secret_paths", [
-    "~/.kube/sdlc-lab-admin.yaml", "~/.kube/config", "~/.ssh", "~/.aws", "~/.config/gcloud", "~/.azure",
-    "~/.docker/config.json"])]
+# Credentials agents never read or copy. The policy's list is UNIONED with this baseline, so a policy
+# written by an older make-policy.py still covers the credential files added later (board review SEC-03).
+BASELINE_SECRETS = ["~/.kube/sdlc-lab-admin.yaml", "~/.kube/config", "~/.ssh", "~/.aws", "~/.config/gcloud",
+    "~/.azure", "~/.docker/config.json", "~/.config/gh", "~/.netrc", "~/.npmrc", "~/.pypirc",
+    "~/.git-credentials", "~/.gnupg", "~/Library/Keychains"]
+_SECRET_SRC = list(dict.fromkeys(list((POLICY or {}).get("secret_paths", [])) + BASELINE_SECRETS))
+SECRET_PATHS = list(dict.fromkeys(os.path.realpath(os.path.expanduser(p)) for p in _SECRET_SRC))
+# glob matching can't realpath a pattern, so also keep the un-resolved spelling of every root
+SECRET_ROOTS_RAW = list(dict.fromkeys(SECRET_PATHS + [os.path.normpath(os.path.expanduser(p)) for p in _SECRET_SRC]))
+# Tier-0/0.5 ledgers injected into every session with override priority (SEC-04): agents never edit an
+# existing one directly. Facts go through .claude/hooks/remember.sh (the /remember command).
+LEDGERS = ("docs/PROJECT_FACTS.md", "docs/DECISIONS.md")
+CWD = os.getcwd()
 LIMA = (POLICY or {}).get("lima", {})
 LIMA_INSTANCES = LIMA.get("instances") or [LIMA.get("instance", "sdlc")]
 # never writable, whatever the patterns say: system namespaces and anything prod-looking
@@ -122,8 +132,10 @@ def nested_bodies(tok):
 
 # Heredoc bodies are DATA (file contents, python source, notes), not shell commands — except when a
 # shell reads them (`bash <<EOF`), and except for $(...) / backticks in an UNQUOTED heredoc, which run.
+# A body an interpreter reads (`python3 - <<EOF`) is a program: it is scanned for network I/O.
 HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)(-?)[ \t]*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 SHELLS = {"bash", "sh", "zsh", "dash", "ksh"}
+INTERP_BODIES = []
 def split_heredocs(cmd):
     """Return (cmd without heredoc bodies, bodies a shell executes, unquoted bodies to scan for $(...))."""
     lines, out, shell_bodies, subst_bodies, i = cmd.split("\n"), [], [], [], 0
@@ -142,8 +154,11 @@ def split_heredocs(cmd):
             consumer = os.path.basename(words[0]) if words else ""
             if consumer in SHELLS and not any(w == "-c" for w in words):
                 shell_bodies.append(text)
-            elif not quote:
-                subst_bodies.append(text)
+            else:
+                if interpreter_name(consumer):
+                    INTERP_BODIES.append((consumer, text))
+                if not quote:
+                    subst_bodies.append(text)
     return "\n".join(out), shell_bodies, subst_bodies
 
 WRAPPERS = {"timeout", "time", "nice", "nohup", "stdbuf", "command", "builtin", "noglob", "exec", "caffeinate"}
@@ -192,22 +207,70 @@ def under(path, root):
 
 def check_write_target(path):
     if not path or path.startswith("/dev/"): return
-    p = os.path.realpath(os.path.expanduser(path))
+    p = os.path.realpath(os.path.join(CWD, os.path.expanduser(path)))
     for root in PROTECTED_WRITE:
         if under(p, root):
             deny(f"write to protected path {path} (guard/settings/kubeconfig are human-owned)")
+    check_ledger(p, path)
+
+def check_ledger(p, shown):
+    """Existing Tier-0/0.5 ledgers are not edited directly (creating one from the template is fine)."""
+    for led in LEDGERS:
+        if (p.endswith("/" + led) or p == led) and os.path.exists(p):
+            how = ("record facts with .claude/hooks/remember.sh (the /remember command)" if led.endswith("FACTS.md")
+                   else "return the proposed D-NNN entry in your final message; the ledger is written by its "
+                        "writer script or the human, never edited in place by an agent")
+            deny(f"{shown} is a ground-truth ledger injected into every session; agents never edit it directly — {how}")
+
+GLOB_CHARS = "*?["
+def brace_expand(s, limit=64):
+    """Bash-style {a,b} expansion (enough to see through `~/.{ssh,aws}/…`). Past the cap, the brace
+    groups are also tried as `*`, so padding a group with many alternatives can't hide `ssh`."""
+    m = re.search(r"\{([^{}]*,[^{}]*)\}", s)
+    if not m: return [s]
+    out = []
+    for alt in m.group(1).split(","):
+        out += brace_expand(s[:m.start()] + alt + s[m.end():], limit)
+        if len(out) >= limit:
+            return out[:limit] + [re.sub(r"\{[^{}]*\}", "*", s)]
+    return out
+
+def glob_hits_root(pattern, root):
+    """True if a shell glob could match `root` or anything beneath it (segment-wise; a `*` never crosses
+    `/`, and like the shell a pattern segment only matches a leading '.' if it spells it)."""
+    ps = [s for s in os.path.normpath(pattern).split("/") if s]
+    rs = [s for s in root.split("/") if s]
+    if len(ps) < len(rs):
+        return any(s == "**" for s in ps) and all(fnmatch.fnmatchcase(r, s) or s == "**" for s, r in zip(ps, rs))
+    for s, r in zip(ps, rs):
+        if s == "**": return True
+        if r.startswith(".") and not s.startswith("."): return False
+        if not fnmatch.fnmatchcase(r, s): return False
+    return True
+
+def secret_hit(v, cwd):
+    """Return the secret root a (possibly globbed / brace-expanded) path argument reaches, else None."""
+    for cand in brace_expand(v):
+        p = os.path.join(cwd, os.path.expanduser(cand))
+        if any(c in cand for c in GLOB_CHARS):
+            for root in SECRET_ROOTS_RAW:
+                if glob_hits_root(os.path.normpath(p), root): return root
+            continue
+        rp = os.path.realpath(p)
+        for root in SECRET_PATHS:
+            if under(rp, root): return root
+    return None
 
 def check_secret_args(argv, env, cwd):
-    """Any command naming a secret path (admin kubeconfig, ~/.ssh, cloud creds) is denied — read or write."""
+    """Any command naming a secret path (admin kubeconfig, ~/.ssh, cloud creds, gh/npm/pypi/netrc
+    tokens, the keychain files) is denied — read or write, spelled literally or as a glob."""
     for t in argv[1:]:
         for part in [t.split("=", 1)[1]] if t.startswith("-") and "=" in t else [t]:
             v = expand(part, env)
             if "/" not in v and not v.startswith("~"):
                 continue
-            p = os.path.realpath(os.path.join(cwd, os.path.expanduser(v)))
-            for root in SECRET_PATHS:
-                if under(p, root):
-                    deny(f"{part} is a secret path (admin kubeconfig / ssh / cloud credentials); agents never read or copy it")
+            if secret_hit(v, cwd):
+                deny(f"{part} is a secret path (admin kubeconfig / ssh / cloud or registry credentials); agents never read or copy it")
 
 DEST_WRITERS = {"cp", "mv", "ln", "install", "rsync", "ditto"}          # last positional is written
 ALL_WRITERS = {"rm", "rmdir", "unlink", "shred", "touch", "mkdir", "chmod", "chown", "chflags", "truncate", "tee"}
@@ -443,14 +506,40 @@ def check_docker(argv, env):
         reg = ref.split("/")[0] if "/" in ref else "docker.io"
         if reg.split(":")[0] not in LOCAL_HOSTS: ask(f"docker push to {reg} leaves this machine")
 
+# Where a push really goes can be redirected by config: remote URLs and URL rewrites.
+GIT_URL_CONFIG = re.compile(r"^(remote\..+\.(url|pushurl)|url\..+\.(insteadof|pushinsteadof))(=|$)", re.I)
+PUSH_VALUE_FLAGS = {"-o", "--push-option", "--receive-pack", "--exec", "--repo"}
+def push_destination(rest):
+    """The <repository> a `git push` names (None = the configured default)."""
+    i = 0
+    while i < len(rest):
+        r = rest[i]
+        if r.startswith("--repo="): return r.split("=", 1)[1]
+        if r == "--repo" and i + 1 < len(rest): return rest[i + 1]
+        if r in PUSH_VALUE_FLAGS: i += 2; continue
+        if r == "--": return rest[i + 1] if i + 1 < len(rest) else None
+        if r.startswith("-"): i += 1; continue
+        return r
+    return None
+
 def check_git(argv, env):
     args = argv[1:]
     while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
+        if args[0] == "-c" and len(args) > 1 and GIT_URL_CONFIG.match(args[1]):
+            ask(f"git -c {args[1]} redirects where git talks to (user rule: non-local network needs approval)")
         args = args[2:]
     while args and args[0].startswith(("--git-dir=", "--work-tree=", "--no-pager", "-P", "--bare")): args = args[1:]
     if not args: return
     sub, rest = args[0], args[1:]
+    if sub == "remote" and rest[:1] and rest[0] in ("add", "set-url", "rename"):
+        ask(f"git remote {rest[0]} changes where pushes go (exfiltration path; user rule: ask first)")
+    if sub == "config" and any(GIT_URL_CONFIG.match(r) for r in rest if not r.startswith("-")) and not any(
+            r in ("--get", "--get-all", "--get-regexp", "-l", "--list") for r in rest):
+        ask("git config of a remote URL or URL rewrite changes where pushes go (user rule: ask first)")
     if sub == "push":
+        dest = push_destination(rest)
+        if dest is not None and dest != "origin":
+            ask(f"git push to '{dest}', not origin (a new or URL remote is an exfiltration path; user rule: ask first)")
         if any(r in ("--force", "-f", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d", "--prune") or r.startswith(("--force-with-lease=", "+", ":")) for r in rest):
             ask("git push rewriting/deleting remote refs (user rule: ask first)")
     elif sub == "reset" and "--hard" in rest: ask("git reset --hard discards work (user rule)")
@@ -527,6 +616,50 @@ def check_network(argv, env):
         if h2 in LOCAL_HOSTS or h2.endswith(".localhost") or h2.startswith("127."): continue
         ask(f"{a0} to {h} leaves this machine (user rule: ask first; use WebFetch for docs)")
 
+# Interpreter one-liners (`node -e`, `python3 -c`, …) and interpreter-fed heredocs are programs the
+# CLI-name checks above can't see into. Code that talks to the network is asked about (SEC-03).
+INTERP_CODE_FLAGS = {  # interpreter -> (long flags taking code, short-flag letters that take code)
+    "node": ({"--eval", "--print"}, "ep"), "nodejs": ({"--eval", "--print"}, "ep"), "bun": ({"--eval", "--print"}, "ep"),
+    "python": (set(), "c"), "ruby": (set(), "e"), "perl": (set(), "eE"), "php": (set(), "r"),
+}
+def interpreter_name(a0):
+    a0 = os.path.basename(a0)
+    if re.match(r"^python[0-9.]*$", a0): return "python"
+    if a0 in INTERP_CODE_FLAGS or a0 == "deno": return a0
+    return None
+URL_LIT_RE = re.compile(r"\b(?:https?|wss?|ftp)://(\[[^\]]+\]|[^/:?#\s'\"`)\\]+)", re.I)
+NET_CODE_RE = re.compile(r"\bhttps?\b|\bsocket|stream_socket|\bfetch\b|\brequests\b|\burllib|\bhttpx\b|aiohttp"
+    r"|\bnet::|net/http|\bcurl\b|\baxios\b|\bdgram\b|websocket|xmlhttprequest|\bnet\.(?:connect|createConnection|Socket)\b"
+    r"|require\(\s*['\"](?:node:)?(?:net|tls|dgram)['\"]|\bLWP\b|open-uri|fsockopen|\bsmtplib\b|\bftplib\b|\bparamiko\b", re.I)
+def is_local_host(h):
+    h = h.strip("[]").lower()
+    return h in LOCAL_HOSTS or h.endswith(".localhost") or h.startswith("127.")
+def network_in_code(code):
+    """Why this code does network I/O (a remote URL literal or a network API), or None."""
+    remote = [h for h in URL_LIT_RE.findall(code) if not is_local_host(h)]
+    if remote: return f"a URL to {remote[0]}"
+    m = NET_CODE_RE.search(URL_LIT_RE.sub(" ", code))
+    return f"'{m.group(0)}'" if m else None
+def check_interpreter(argv):
+    kind = interpreter_name(argv[0])
+    if not kind: return
+    if kind == "deno":
+        code_given = argv[1:2] == ["eval"]
+    else:
+        longs, letters = INTERP_CODE_FLAGS[kind]
+        code_given = any(a in longs or a.split("=", 1)[0] in longs or
+                         (re.match(r"^-[A-Za-z]+$", a) and a[-1] in letters) for a in argv[1:])
+    if not code_given: return
+    why = network_in_code(" ".join(argv[1:]))
+    if why:
+        ask(f"{os.path.basename(argv[0])} one-liner does network I/O ({why}); network egress from inline code "
+            "needs approval (use curl for localhost checks)")
+
+KEYCHAIN_READ = {"find-generic-password", "find-internet-password", "dump-keychain", "export"}
+def check_keychain(argv):
+    if os.path.basename(argv[0]) == "security" and argv[1:2] and argv[1] in KEYCHAIN_READ:
+        deny(f"security {argv[1]} reads the macOS Keychain (stored passwords, tokens, keys); agents never read it")
+
 CLOUD_DENY = {"gcloud", "az", "doctl", "flyctl", "fly", "heroku", "vercel", "netlify", "railway", "eksctl", "kops", "oci", "ibmcloud"}
 def check_cloud(argv, env):
     a0 = os.path.basename(argv[0])
@@ -563,7 +696,12 @@ KUBE_TOOLS = {"kubectl", "kubecolor", "oc", "stern"}
 def check_command(cmd, cwd, scratch, depth=0, env=None):
     if depth > 4: ask("command nesting too deep to analyse")
     env = dict(env or {})
+    seen = len(INTERP_BODIES)
     cmd, shell_bodies, subst_bodies = split_heredocs(cmd)
+    for consumer, body in INTERP_BODIES[seen:]:
+        why = network_in_code(body)
+        if why:
+            ask(f"{consumer} script from a heredoc does network I/O ({why}); network egress from inline code needs approval")
     for b in shell_bodies:
         check_command(b, cwd, scratch, depth + 1, env)
     for b in subst_bodies:
@@ -586,6 +724,8 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
             check_command(" ".join(argv[1:]), cwd, scratch, depth + 1, env); continue
         check_protected_args(a0, argv, env)
         check_secret_args(argv, env, cwd)
+        check_keychain(argv)
+        check_interpreter(argv)
         if a0 in KUBE_TOOLS: check_kubectl(argv, env)
         elif a0 == "helm": check_helm(argv, env)
         elif a0 in ("kubectx", "kubens", "k9s"): deny(f"{a0} changes/uses ambient kube context; use kubectl with the pinned KUBECONFIG and an explicit -n")
@@ -606,30 +746,33 @@ def check_skill(ti):
         deny(f"/{name} {args}: staging/prod deploys are human-only")
 
 def check_write(tool, ti):
-    fp = ti.get("file_path", "")
+    fp = ti.get("file_path", "") or ti.get("notebook_path", "")
     check_write_target(fp)
     body = str(ti.get("content", "")) + str(ti.get("new_string", ""))
     if fp.endswith((".claude/settings.json", ".claude/settings.local.json")) and "disableAllHooks" in body:
         deny("disableAllHooks would switch off the guard")
 
-def check_read(ti):
+def check_read(ti, tool=""):
     for k in ("file_path", "path", "notebook_path"):
         v = ti.get(k)
         if not v: continue
-        p = os.path.realpath(os.path.expanduser(str(v)))
-        for root in SECRET_PATHS:
-            if under(p, root):
-                deny(f"{v} is a secret path (admin kubeconfig / ssh / cloud credentials); agents never read it")
+        if secret_hit(expand(str(v), {}), CWD):
+            deny(f"{v} is a secret path (admin kubeconfig / ssh / cloud or registry credentials); agents never read it")
+    pat = str(ti.get("pattern", "") or "")
+    if tool == "Glob" and pat.startswith(("/", "~", "$HOME")) and secret_hit(expand(pat, {}), CWD):   # absolute Glob pattern
+        deny(f"glob {pat} reaches a secret path; agents never read it")
 
 def main():
+    global CWD
     data = json.load(sys.stdin)
     tool = data.get("tool_name", ""); ti = data.get("tool_input", {}) or {}
     cwd = data.get("cwd") or os.getcwd(); scratch = data.get("scratchpad_dir")
+    CWD = cwd
     try:
         if tool in ("Bash", "Monitor"): check_command(ti.get("command", ""), cwd, scratch)
         elif tool == "Skill": check_skill(ti)
         elif tool in ("Write", "Edit", "MultiEdit", "NotebookEdit"): check_write(tool, ti); check_read(ti)
-        elif tool in ("Read", "Grep", "Glob"): check_read(ti)
+        elif tool in ("Read", "Grep", "Glob"): check_read(ti, tool)
     except Deny as e:
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                           "permissionDecisionReason": "sdlc-guard: " + str(e)}}))

@@ -1,6 +1,6 @@
 ---
 skill: crud-handler-java
-description: Spring Boot REST controller archetype — @RestController, request/response DTOs, pagination, error mapping, auth, OpenAPI annotations, structured logging
+description: Spring Boot REST controller archetype — @RestController, request/response DTOs, response envelope, cursor pagination, error mapping, auth, OpenAPI annotations, structured logging
 version: "1.0"
 tags:
   - java
@@ -126,42 +126,122 @@ public record WidgetResponse(
 
 ## Response Envelope Types
 
+The shape is `~/.claude/skills/api/response-envelope.md` — success `{data, meta}`, error `{error}`, never
+both; list metadata in `meta.pagination`. Error bodies are written only by `GlobalExceptionHandler`
+(`error-handling-java.md`). Envelope keys are snake_case (`request_id`, `next_cursor`, …) via
+`@JsonProperty`; never serialize a Spring Data `Page<T>` (`content`, `totalPages`, `pageable`).
+
 ```java
 package com.example.app.common;
 
-import java.time.Instant;
+import com.fasterxml.jackson.annotation.JsonInclude;
+import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
-// Single resource envelope
+// Success envelope: a single resource or a list
 public record ApiResponse<T>(
     T data,
     ResponseMeta meta
 ) {
     public static <T> ApiResponse<T> of(T data, String requestId) {
-        return new ApiResponse<>(data, new ResponseMeta(requestId, Instant.now()));
+        return new ApiResponse<>(data, new ResponseMeta(requestId, null));
+    }
+
+    /** List response: data is always an array ([] when empty, never null). */
+    public static <T> ApiResponse<List<T>> list(List<T> items, Pagination pagination, String requestId) {
+        return new ApiResponse<>(items == null ? List.of() : items, new ResponseMeta(requestId, pagination));
     }
 }
 
-// Paginated list envelope
-public record PagedResponse<T>(
-    List<T> data,
-    PageMeta meta
-) {
-    public static <T> PagedResponse<T> of(List<T> data, PageMeta meta) {
-        return new PagedResponse<>(data, meta);
-    }
-}
-
-public record ResponseMeta(String requestId, Instant timestamp) {}
-
-public record PageMeta(
-    int page,
-    int size,
-    long totalElements,
-    int totalPages,
-    String requestId,
-    Instant timestamp
+public record ResponseMeta(
+    @JsonProperty("request_id") String requestId,
+    @JsonInclude(JsonInclude.Include.NON_NULL) Pagination pagination // lists only
 ) {}
+
+public record Pagination(
+    @JsonProperty("next_cursor") String nextCursor, // serialized as null when has_more is false
+    @JsonProperty("has_more") boolean hasMore,
+    int limit,
+    @JsonProperty("total_count") @JsonInclude(JsonInclude.Include.NON_NULL) Long totalCount // only if cheap AND documented
+) {}
+```
+
+## Pagination — cursor only
+
+List endpoints take `?cursor=<next_cursor>&limit=<n>` and return `meta.pagination`. There is no offset or
+page-number variant: offset pages skip or repeat rows under concurrent writes, and `OFFSET 10000` still
+scans 10,000 rows. For "jump to page N" admin tables, filter instead (date range, search, status). A spec
+that truly needs numbered pages records it in `docs/DECISIONS.md` and still uses the envelope.
+
+The service returns a Spring Data keyset `Window<T>` (`crud-service-java.md`); the cursor is that
+window's last position, made opaque:
+
+```java
+package com.example.app.common;
+
+import com.example.app.exception.ValidationException;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.data.domain.KeysetScrollPosition;
+import org.springframework.data.domain.ScrollPosition;
+import org.springframework.data.domain.Sort;
+
+import java.io.IOException;
+import java.time.Instant;
+import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+
+/**
+ * Opaque list cursor: base64url(JSON) of a keyset position — the last row's sort key and id.
+ * Clients pass it back verbatim as ?cursor=; they never build or parse it.
+ */
+public final class CursorCodec {
+
+    private static final ObjectMapper JSON = new ObjectMapper();
+
+    // Sortable attributes and how to restore their type (JPA compares typed values)
+    private static final Map<String, Function<String, Object>> TYPES = Map.of(
+        "id", UUID::fromString,
+        "createdAt", Instant::parse,
+        "updatedAt", Instant::parse,
+        "name", s -> s);
+
+    private CursorCodec() {}
+
+    public static String encode(ScrollPosition position) {
+        var flat = new LinkedHashMap<String, String>();
+        ((KeysetScrollPosition) position).getKeys().forEach((k, v) -> flat.put(k, String.valueOf(v)));
+        try {
+            return Base64.getUrlEncoder().withoutPadding().encodeToString(JSON.writeValueAsBytes(flat));
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("cursor encoding failed", e); // a Map<String, String> always serializes
+        }
+    }
+
+    /** First page when absent; 400 VALIDATION_FAILED (field "cursor") when tampered with or from another sort. */
+    public static ScrollPosition decode(String cursor, Sort sort) {
+        if (cursor == null || cursor.isBlank()) {
+            return ScrollPosition.keyset();
+        }
+        try {
+            Map<String, String> flat = JSON.readValue(Base64.getUrlDecoder().decode(cursor), new TypeReference<>() {});
+            var expected = sort.stream().map(Sort.Order::getProperty).collect(Collectors.toSet());
+            if (!flat.keySet().equals(expected)) {
+                throw new IllegalArgumentException("cursor keys do not match the sort");
+            }
+            var keys = new LinkedHashMap<String, Object>();
+            flat.forEach((k, v) -> keys.put(k, TYPES.get(k).apply(v)));
+            return ScrollPosition.forward(keys);
+        } catch (RuntimeException | IOException e) {
+            throw new ValidationException("cursor", "invalid_cursor", "This cursor is not valid. Start from the first page.");
+        }
+    }
+}
 ```
 
 ## Controller
@@ -180,15 +260,14 @@ import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Window;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
@@ -211,7 +290,7 @@ public class WidgetController {
     @PostMapping
     @Operation(summary = "Create a widget", description = "Creates a new widget for the authenticated tenant")
     @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "201", description = "Widget created")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "422", description = "Validation error")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "MALFORMED_REQUEST or VALIDATION_FAILED")
     public ResponseEntity<ApiResponse<WidgetResponse>> create(
             @Valid @RequestBody CreateWidgetRequest request,
             @AuthenticationPrincipal UserPrincipal principal) {
@@ -279,11 +358,11 @@ public class WidgetController {
     }
 
     @GetMapping
-    @Operation(summary = "List widgets with pagination and filtering")
-    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "Paginated widget list")
-    public ResponseEntity<PagedResponse<WidgetResponse>> list(
-            @Parameter(description = "Zero-based page number") @RequestParam(defaultValue = "0") int page,
-            @Parameter(description = "Page size (max 100)") @RequestParam(defaultValue = "20") int size,
+    @Operation(summary = "List widgets (cursor pagination) with filtering")
+    @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "One page of widgets")
+    public ResponseEntity<ApiResponse<List<WidgetResponse>>> list(
+            @Parameter(description = "Opaque cursor from meta.pagination.next_cursor") @RequestParam(required = false) String cursor,
+            @Parameter(description = "Page size (default 20, max 100)") @RequestParam(defaultValue = "20") int limit,
             @Parameter(description = "Sort field") @RequestParam(defaultValue = "createdAt") String sortBy,
             @Parameter(description = "Sort direction") @RequestParam(defaultValue = "desc") String sortDir,
             @Parameter(description = "Filter by status") @RequestParam(required = false) WidgetStatus status,
@@ -291,33 +370,31 @@ public class WidgetController {
 
         var requestId = MDC.get("requestId");
 
-        // Enforce pagination bounds
-        size = Math.max(1, Math.min(size, MAX_PAGE_SIZE));
+        // Enforce bounds: default 20 when zero/negative, cap at 100
+        limit = limit <= 0 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
         if (!ALLOWED_SORT_FIELDS.contains(sortBy)) {
             sortBy = "createdAt";
         }
         var direction = "asc".equalsIgnoreCase(sortDir) ? Sort.Direction.ASC : Sort.Direction.DESC;
-        var pageable = PageRequest.of(page, size, Sort.by(direction, sortBy));
+        var sort = Sort.by(direction, sortBy).and(Sort.by(direction, "id")); // id breaks ties: a unique keyset
+        var position = CursorCodec.decode(cursor, sort); // bad cursor → 400 VALIDATION_FAILED
 
-        Page<Widget> result = widgetService.findAll(principal.getTenantId(), status, pageable);
+        Window<Widget> window = widgetService.findAll(principal.getTenantId(), status, position, sort, limit);
 
-        var items = result.getContent().stream()
+        var items = window.getContent().stream()
             .map(WidgetResponse::from)
             .toList();
 
-        var meta = new PageMeta(
-            result.getNumber(),
-            result.getSize(),
-            result.getTotalElements(),
-            result.getTotalPages(),
-            requestId,
-            Instant.now()
-        );
+        // next_cursor is null unless there is a next page
+        String nextCursor = window.hasNext()
+            ? CursorCodec.encode(window.positionAt(window.size() - 1))
+            : null;
 
-        log.info("Listed widgets, tenant={}, page={}, resultCount={}, total={}",
-            principal.getTenantId(), page, items.size(), result.getTotalElements());
+        log.info("Listed widgets, tenant={}, resultCount={}, hasMore={}",
+            principal.getTenantId(), items.size(), window.hasNext());
 
-        return ResponseEntity.ok(PagedResponse.of(items, meta));
+        return ResponseEntity.ok(ApiResponse.list(
+            items, new Pagination(nextCursor, window.hasNext(), limit, null), requestId));
     }
 }
 ```
@@ -453,11 +530,11 @@ public class OpenApiConfig {
 - NEVER expose JPA entities in responses — always map to response DTOs (records).
 - ALWAYS use `@Valid` on `@RequestBody` — let Spring's validator reject invalid input before the service layer.
 - ALWAYS use `@AuthenticationPrincipal` to extract tenant/user — NEVER accept tenant ID from path params or body.
-- ALWAYS use `MDC.get("requestId")` for request tracing — set by the `RequestIdFilter`.
-- Pagination MUST enforce max page size (100) — never return unbounded lists.
+- ALWAYS use `MDC.get("requestId")` for request tracing — set by the `RequestIdFilter`, which also sets `X-Request-Id` on every response.
+- List endpoints are cursor-only: `?cursor=&limit=` (`limit` defaults to 20, max 100), a keyset `Window` from the service, `meta.pagination` `{next_cursor, has_more, limit}` in the response — never `page`/`size` params or `Page<T>` JSON, never unbounded lists.
 - Sort fields MUST be allow-listed — never allow sorting by arbitrary columns.
 - DELETE returns 204 No Content — no response body.
 - POST create returns 201 Created with the created resource.
-- Error responses use RFC 7807 ProblemDetail — handled by `@RestControllerAdvice`, not controllers.
-- Every response uses the envelope format: `{"data": T, "meta": {...}}`.
+- Error responses are the `{"error": {code, message, details?, request_id, retryable}}` envelope, written only by `GlobalExceptionHandler` (`error-handling-java.md`) — never by controllers.
+- Every success response follows `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}`; list `data` is `[]` when empty.
 - Log at INFO for mutations (create, update, delete), DEBUG for reads — include tenant and entity ID.

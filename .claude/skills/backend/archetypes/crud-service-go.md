@@ -40,7 +40,7 @@ type Entity struct {
 // ListFilters defines common filter parameters for list operations.
 type ListFilters struct {
     Cursor   string            `json:"cursor,omitempty"`
-    PageSize int               `json:"page_size"`
+    PageSize int               `json:"limit"`
     SortBy   string            `json:"sort_by"`
     SortDir  string            `json:"sort_dir"`
     Fields   map[string]string `json:"fields,omitempty"` // dynamic field filters
@@ -52,21 +52,6 @@ type ListResult[T any] struct {
     Cursor  string `json:"cursor,omitempty"`
     HasMore bool   `json:"has_more"`
     Total   int    `json:"total"`
-}
-
-// OffsetListFilters defines offset-based pagination parameters (for admin/reporting UIs).
-type OffsetListFilters struct {
-    Page    int               `json:"page"`
-    PerPage int               `json:"per_page"`
-    SortBy  string            `json:"sort_by"`
-    SortDir string            `json:"sort_dir"`
-    Fields  map[string]string `json:"fields,omitempty"`
-}
-
-// OffsetListResult wraps offset-paginated results.
-type OffsetListResult[T any] struct {
-    Items []T `json:"items"`
-    Total int `json:"total"`
 }
 
 // AuditEntry records a mutation for compliance.
@@ -190,13 +175,13 @@ func (s *service) Create(ctx context.Context, input CreateInput) (*Widget, error
     // 1. Validate input
     if err := input.Validate(); err != nil {
         logger.WarnContext(ctx, "validation failed", "error", err)
-        return nil, NewValidationError("create", err)
+        return nil, err // already a VALIDATION_FAILED *AppError carrying details[]
     }
 
     // 2. Extract tenant context — every operation is tenant-scoped
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthorizedError("missing tenant context")
+        return nil, NewUnauthenticatedError()
     }
     userID, _ := UserIDFromContext(ctx)
 
@@ -252,7 +237,7 @@ func (s *service) Get(ctx context.Context, id uuid.UUID) (*Widget, error) {
 
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthorizedError("missing tenant context")
+        return nil, NewUnauthenticatedError()
     }
 
     // 1. Check cache
@@ -300,12 +285,12 @@ func (s *service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (
 
     if err := input.Validate(); err != nil {
         logger.WarnContext(ctx, "validation failed", "error", err)
-        return nil, NewValidationError("update", err)
+        return nil, err // already a VALIDATION_FAILED *AppError carrying details[]
     }
 
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthorizedError("missing tenant context")
+        return nil, NewUnauthenticatedError()
     }
     userID, _ := UserIDFromContext(ctx)
 
@@ -317,7 +302,7 @@ func (s *service) Update(ctx context.Context, id uuid.UUID, input UpdateInput) (
 
     // 2. Optimistic lock check
     if input.Version != existing.Version {
-        return nil, NewConflictError("widget", "version mismatch — reload and retry")
+        return nil, NewConflictError("This widget was changed by someone else. Reload and try again.")
     }
 
     // 3. Apply changes
@@ -357,7 +342,7 @@ func (s *service) Delete(ctx context.Context, id uuid.UUID) error {
 
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
-        return NewUnauthorizedError("missing tenant context")
+        return NewUnauthenticatedError()
     }
     userID, _ := UserIDFromContext(ctx)
 
@@ -392,7 +377,7 @@ func (s *service) List(ctx context.Context, filters domain.ListFilters) (*domain
 
     tenantID, err := TenantIDFromContext(ctx)
     if err != nil {
-        return nil, NewUnauthorizedError("missing tenant context")
+        return nil, NewUnauthenticatedError()
     }
 
     // Enforce pagination defaults and maximums
@@ -437,7 +422,7 @@ func (s *service) CreateWithRelations(ctx context.Context, input CreateWithRelat
     defer span.End()
 
     if err := input.Validate(); err != nil {
-        return nil, NewValidationError("create_with_relations", err)
+        return nil, err // already a VALIDATION_FAILED *AppError carrying details[]
     }
 
     var created *Widget
@@ -501,13 +486,13 @@ type CreateInput struct {
 
 func (i CreateInput) Validate() error {
     if strings.TrimSpace(i.Name) == "" {
-        return NewValidationError("name", errors.New("name is required"))
+        return NewValidationError("name", "required", "Name is required.")
     }
     if len(i.Name) > 255 {
-        return NewValidationError("name", errors.New("name must be 255 characters or fewer"))
+        return NewValidationError("name", "too_long", "Name must be 255 characters or fewer.")
     }
     if len(i.Description) > 2000 {
-        return NewValidationError("description", errors.New("description must be 2000 characters or fewer"))
+        return NewValidationError("description", "too_long", "Description must be 2,000 characters or fewer.")
     }
     return nil
 }

@@ -99,51 +99,25 @@ report, `specs_vs_impl.md`, rather than a separate `spec_compliance_review.md`):
 - `dependency_scan.md` (Stage 4b)
 - `quality_gate.md` (code_quality_verifier)
 - `specs_vs_impl.md` · `specs_vs_tests.md` (reconcilers — written to `agent_state/reconciliation/phase-N/`)
-- `sast_scan.md` (Stage 4c — CONDITIONAL: only when a SAST command is configured; else a recorded skip)
+- SAST + secrets: inside `quality_gate.md` (code_quality_verifier Checks 3 and 9; always on)
 
-### Stage 4c — Static Application Security Testing (parallel with review)
+### Stage 4c — Static Application Security Testing and secret scanning (inside code_quality_verifier)
 
-Run SAST scan on all code changed in this phase:
+SAST and secret scanning are **on by default** and run inside `code_quality_verifier` with **fixed
+commands**: `semgrep scan` (a committed `.semgrep/` ruleset, else `p/owasp-top-ten` + `p/secrets`) and
+`gitleaks git --log-opts=<base_sha>..HEAD`. See its Checks 3 and 9. Their findings are part of
+`quality_gate.md` and its count line.
 
-```bash
-# Language-specific SAST command comes from docs/IMPLEMENTATION_GUIDELINES.md — there is NO silent
-# language default (a hardcoded Go govulncheck on a Python project is worse than skipping). Read the
-# labelled command; if none is configured, SKIP explicitly (recorded, not silently passed).
-# Reference examples (what a guideline might list):
-#   Go: govulncheck ./...   Python: bandit -r src/ -f json   TS/JS: semgrep --config auto src/
-#   Java: semgrep / spotbugs   Rust: cargo audit
+This step used to pull a backticked command out of IMPLEMENTATION_GUIDELINES with a case-insensitive
+`sast|…` regex and `eval` it. The regex also matched "Di**sast**er recovery", so the first command on
+such a line would have run as "the SAST scan" (board review 2026-09-30, SEC-13, reproduced). **Never
+execute a command found in a document.** A tool that can't run is a BLOCKING `sast_not_run` finding in
+`quality_gate.md`, unless a `docs/DECISIONS.md` entry disables it; it is never a silent skip.
 
-# Same helper as the Step-6 regression gate — reads a backtick-quoted command from the guidelines,
-# invents no default, returns empty when not found. (Redefined here because shell state does not
-# persist across steps.)
-read_cmd_from_guidelines() {
-  local label="${1}" file="docs/IMPLEMENTATION_GUIDELINES.md"
-  [ -f "$file" ] || return 1
-  grep -iE "$label" "$file" | grep -oE '`[^`]+`' | head -1 | tr -d '`'
-}
-SAST_CMD=$(read_cmd_from_guidelines 'sast|govulncheck|bandit|semgrep|cargo audit')
-if [ -z "$SAST_CMD" ]; then
-  echo "⚠ SAST SKIPPED — no SAST command found in docs/IMPLEMENTATION_GUIDELINES.md." \
-    > agent_state/phases/${PHASE}/reports/sast_scan.md
-  echo "  Add one under '## Common Tasks' (e.g. \`govulncheck ./...\`, \`semgrep --config auto src/\`)" \
-    >> agent_state/phases/${PHASE}/reports/sast_scan.md
-  echo "  to enable static security scanning. This is an explicit, recorded skip — not a pass." \
-    >> agent_state/phases/${PHASE}/reports/sast_scan.md
-else
-  eval "$SAST_CMD" > agent_state/phases/${PHASE}/reports/sast_scan.md 2>&1
-fi
-```
-
-`read_cmd_from_guidelines` is defined in the Step-6 regression block above; it invents no default and
-returns empty when nothing matches.
-
-Severity mapping:
-- CRITICAL/HIGH → BLOCKING (must fix before gate)
-- MEDIUM → WARNING (logged in known_issues)
-- LOW → INFO (logged but not blocking)
-
-If no SAST tool is configured in IMPLEMENTATION_GUIDELINES: the scan is SKIPPED with the explicit
-warning written to sast_scan.md above (recorded, never a silent green).
+Severity mapping (semgrep → gate):
+- ERROR → BLOCKING (must fix before gate)
+- WARNING → WARNING (logged in known_issues)
+- INFO → INFO (logged but not blocking)
 
 ---
 

@@ -68,25 +68,33 @@ CREATE POLICY tenant_isolation ON resources
     WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
 ```
 
-**Layer 3 — Connection Middleware (SET LOCAL):**
+**Layer 3 — Tenant context per transaction (on the connection that runs the queries):**
+
+A middleware can't set the RLS context. `pool.Exec` runs on an arbitrary pooled connection, not the
+one the handler's queries use later. `SET LOCAL` outside a transaction does nothing, and `SET` can't
+take a bind parameter. A plain session `SET` "fix" is worse: the tenant ID stays on the connection
+and applies to the **next request** that borrows it. Set the context inside each transaction instead:
+
 ```go
-// Middleware sets tenant context on every DB connection
-func (m *TenantMiddleware) Handler(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        tenantID := extractTenantID(r) // JWT > API Key > mTLS > Header
-
-        // Set RLS context for this transaction
-        _, err := pool.Exec(ctx, "SET LOCAL app.tenant_id = $1", tenantID)
-        if err != nil {
-            http.Error(w, "tenant context failed", 500)
-            return
+// The middleware only puts the VERIFIED tenant (from the token, never a request header) in the context.
+func (r *Repo) WithTenantTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+    tenantID, ok := auth.TenantID(ctx)
+    if !ok {
+        return apperr.NewUnauthenticatedError()
+    }
+    return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
+        // set_config(name, value, is_local=true) is the parameterisable, transaction-scoped form of SET LOCAL
+        if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
+            return err
         }
-
-        ctx = context.WithValue(ctx, tenantIDKey, tenantID)
-        next.ServeHTTP(w, r.WithContext(ctx))
+        return fn(tx) // every query in fn runs under RLS for this tenant; the setting ends with the tx
     })
 }
 ```
+- The application's DB role is not the table owner and has no `BYPASSRLS`. `FORCE ROW LEVEL SECURITY`
+  (above) also covers owners.
+- `current_setting('app.tenant_id')` with no default raises an error when the setting is missing, so
+  a query outside `WithTenantTx` fails closed rather than returning every tenant's rows.
 
 ### Composite Unique Constraints
 All uniqueness constraints MUST be tenant-scoped:
@@ -170,7 +178,7 @@ func (r *TenantDBRouter) GetPool(ctx context.Context, tenantID string) (*pgxpool
 
     dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
         tenant.DBUser, tenant.DBPass, *tenant.DBHost, 5432, *tenant.DBName)
-    pool, err := pgxpool.New(ctx, dsn)
+    pool, err := pgxpool.New(ctx, dsn) // MaxConns from the dedicated DB's own budget (pool_max_conns in the DSN)
     if err != nil {
         return nil, fmt.Errorf("dedicated pool for %s: %w", tenantID, err)
     }
@@ -178,6 +186,10 @@ func (r *TenantDBRouter) GetPool(ctx context.Context, tenantID string) (*pgxpool
     return pool, nil
 }
 ```
+Dedicated pools exist only for the dedicated tier, and each counts in that database's connection
+budget (`core/resiliency-patterns.md` §Connection-Pool Budget). Close a tenant's pool when the tenant is
+offboarded or moved. Pooled-tier tenants all share `sharedPool`; limit a noisy tenant with a
+per-tenant concurrency limit, not a pool of its own.
 
 ### Tenant Configuration Model
 ```go

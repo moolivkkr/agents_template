@@ -103,33 +103,46 @@ spring:
 
 ## Exception Handling
 
+Every error response is the envelope from `~/.claude/skills/api/response-envelope.md`, written by ONE
+`@RestControllerAdvice`. The full, canonical version (exception hierarchy, every handler, Spring
+Security 401/403, database errors) is `backend/archetypes/error-handling-java.md`; this is its shape:
+
 ```java
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    @ExceptionHandler(ResourceNotFoundException.class)
-    public ResponseEntity<ProblemDetail> handleNotFound(ResourceNotFoundException ex) {
-        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.NOT_FOUND, ex.getMessage());
-        problem.setTitle("Resource Not Found");
-        problem.setProperty("resource", ex.getResource());
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(problem);
+    @ExceptionHandler(DomainException.class)          // NOT_FOUND, CONFLICT, BUSINESS_RULE_VIOLATION, ...
+    public ResponseEntity<ErrorBody> handleDomain(DomainException ex) {
+        return write(ex);
     }
 
-    @ExceptionHandler(MethodArgumentNotValidException.class)
-    public ResponseEntity<ProblemDetail> handleValidation(MethodArgumentNotValidException ex) {
-        var errors = ex.getBindingResult().getFieldErrors().stream()
-            .collect(Collectors.toMap(FieldError::getField, FieldError::getDefaultMessage));
-        var problem = ProblemDetail.forStatusAndDetail(HttpStatus.UNPROCESSABLE_ENTITY, "Validation failed");
-        problem.setTitle("Validation Error");
-        problem.setProperty("fieldErrors", errors);
-        return ResponseEntity.status(HttpStatus.UNPROCESSABLE_ENTITY).body(problem);
+    @ExceptionHandler(MethodArgumentNotValidException.class)   // 400 VALIDATION_FAILED + details[]
+    public ResponseEntity<ErrorBody> handleValidation(MethodArgumentNotValidException ex) {
+        var details = ex.getBindingResult().getFieldErrors().stream()
+            .map(fe -> FieldError.fromConstraint(fe.getField(), fe.getCode())) // stable code + catalog message
+            .toList();
+        return write(new ValidationException(details));
     }
+
+    @ExceptionHandler(Exception.class)                // anything else: 500 INTERNAL, generic message
+    public ResponseEntity<ErrorBody> handleUnexpected(Exception ex) {
+        return write(new InternalException(ex));
+    }
+
+    // write(): logs the cause with requestId, sets Retry-After / WWW-Authenticate, returns
+    // {"error": {"code", "message", "details"?, "request_id", "retryable"}} — see error-handling-java.md
 }
 ```
 
-- Use `ProblemDetail` (RFC 7807) — Spring 6+ has native support.
-- Single `@RestControllerAdvice` handles ALL exception types in one place.
-- NEVER catch `Exception` in controllers — let the advice handle it.
+```json
+{"error": {"code": "NOT_FOUND", "message": "Widget not found.", "request_id": "b7e1c2…", "retryable": false}}
+```
+
+- One `@RestControllerAdvice` is the only code that writes an error body — controllers never catch exceptions or build error JSON.
+- Do not return Spring's RFC 7807 `ProblemDetail` (`type`/`title`/`detail`); it is a different error shape from the envelope.
+- The HTTP status carries the class: 400 `MALFORMED_REQUEST`/`VALIDATION_FAILED`, 401 `UNAUTHENTICATED`, 403 `FORBIDDEN`, 404 `NOT_FOUND`, 409 `CONFLICT`, 422 `BUSINESS_RULE_VIOLATION`, 429 `RATE_LIMITED`, 500 `INTERNAL`, 503 `UNAVAILABLE`.
+- No client-visible field contains an exception's message or cause, SQL, a constraint name or a stack trace; the cause goes to the log under `request_id`.
+- Spring Security's 401/403 are routed into the same advice by `SecurityErrorDelegate` (wire it in the `SecurityFilterChain` below).
 
 ## Validation
 
@@ -157,7 +170,8 @@ public ResponseEntity<WidgetResponse> create(@Valid @RequestBody CreateWidgetReq
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter) throws Exception {
+    public SecurityFilterChain filterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter,
+                                           SecurityErrorDelegate errors) throws Exception {
         return http
             .csrf(AbstractHttpConfigurer::disable)
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
@@ -166,6 +180,8 @@ public class SecurityConfig {
                 .requestMatchers("/api/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )
+            // 401/403 go through GlobalExceptionHandler → error envelope (error-handling-java.md)
+            .exceptionHandling(e -> e.authenticationEntryPoint(errors).accessDeniedHandler(errors))
             .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
             .build();
     }
@@ -216,6 +232,6 @@ class WidgetRepositoryTest {
 - `spring.jpa.open-in-view: false` in every project.
 - `ddl-auto: validate` — Flyway/Liquibase for migrations.
 - DTOs are Java records — never expose JPA entities in API responses.
-- `@RestControllerAdvice` for all error mapping — no try-catch in controllers.
+- `@RestControllerAdvice` for all error mapping, writing the envelope from `api/response-envelope.md` (`backend/archetypes/error-handling-java.md`) — no try-catch in controllers, no `ProblemDetail`.
 - `@Transactional` on service methods, never on controllers or repositories.
 - Test slices (`@WebMvcTest`, `@DataJpaTest`) over full `@SpringBootTest` when possible.

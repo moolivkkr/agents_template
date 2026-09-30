@@ -44,29 +44,12 @@ pub struct ListFilters {
     pub fields: std::collections::HashMap<String, String>,
 }
 
-/// Cursor-paginated result set.
+/// Cursor-paginated result set. The handler maps it to `meta.pagination` (crud-handler-rust.md).
 #[derive(Debug, Serialize)]
 pub struct ListResult<T: Serialize> {
     pub items: Vec<T>,
-    pub cursor: Option<String>,
+    pub cursor: Option<String>, // → next_cursor
     pub has_more: bool,
-    pub total: i64,
-}
-
-/// Offset-paginated list filters.
-#[derive(Debug, Clone)]
-pub struct OffsetListFilters {
-    pub page: i64,
-    pub per_page: i64,
-    pub sort_by: String,
-    pub sort_dir: String,
-    pub fields: std::collections::HashMap<String, String>,
-}
-
-/// Offset-paginated result set.
-#[derive(Debug, Serialize)]
-pub struct OffsetListResult<T: Serialize> {
-    pub items: Vec<T>,
     pub total: i64,
 }
 
@@ -240,12 +223,11 @@ impl WidgetService {
         // 2. Fetch current (ensures tenant-scoping)
         let mut existing = self.repo.get_by_id(tenant_id, id).await?;
 
-        // 3. Optimistic lock check
+        // 3. Optimistic lock check (→ 409 CONFLICT; the message is shown to the user)
         if input.version != existing.version {
-            return Err(AppError::Conflict {
-                resource: "widget".into(),
-                reason: "version mismatch -- reload and retry".into(),
-            });
+            return Err(AppError::conflict(
+                "This widget was changed by someone else. Reload and try again.",
+            ));
         }
 
         // 4. Apply changes
@@ -353,9 +335,10 @@ where
         Box<dyn std::future::Future<Output = Result<T, AppError>> + Send + 'c>,
     >,
 {
-    let mut tx = pool.begin().await.map_err(|e| AppError::Internal(e.into()))?;
+    // sqlx errors convert via From (error-handling-rust.md): unique → 409, FK/check → 422, timeout → 503
+    let mut tx = pool.begin().await?;
     let result = f(&mut tx).await?;
-    tx.commit().await.map_err(|e| AppError::Internal(e.into()))?;
+    tx.commit().await?;
     Ok(result)
 }
 
@@ -381,8 +364,7 @@ impl WidgetService {
                     widget.created_at, widget.updated_at, widget.created_by, widget.updated_by, widget.version,
                 )
                 .execute(&mut **tx)
-                .await
-                .map_err(|e| AppError::Internal(e.into()))?;
+                .await?;
 
                 // Step 2: Create child components (all within same transaction)
                 for comp in &input.components {
@@ -391,8 +373,7 @@ impl WidgetService {
                         Uuid::new_v4(), widget.id, tenant_id, comp.name,
                     )
                     .execute(&mut **tx)
-                    .await
-                    .map_err(|e| AppError::Internal(e.into()))?;
+                    .await?;
                 }
 
                 Ok(widget)
@@ -483,31 +464,21 @@ impl WidgetService {
 
 ## Error Taxonomy (enum with thiserror)
 
+`AppError` is defined once, in `error-handling-rust.md` (`crate::error`); it writes the error envelope
+from `api/response-envelope.md`. The service layer uses these constructors:
+
 ```rust
-use thiserror::Error;
+use crate::error::AppError;
 
-/// See `error-handling-rust.md` for the full error system.
-/// This is the minimal subset needed by the service layer.
-#[derive(Debug, Error)]
-pub enum AppError {
-    #[error("validation error: {message}")]
-    Validation { message: String, details: Option<serde_json::Value> },
-
-    #[error("{resource} not found")]
-    NotFound { resource: String, identifier: String },
-
-    #[error("{resource} conflict: {reason}")]
-    Conflict { resource: String, reason: String },
-
-    #[error("unauthorized: {0}")]
-    Unauthorized(String),
-
-    #[error("forbidden: insufficient permissions to {action} {resource}")]
-    Forbidden { action: String, resource: String },
-
-    #[error("internal error")]
-    Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
-}
+// input.validate()?                        → 400 VALIDATION_FAILED, details[] per field
+// AppError::not_found("Widget")            → 404 NOT_FOUND (also another tenant's widget)
+// AppError::conflict("…")                  → 409 CONFLICT (stale version, duplicate)
+// AppError::business_rule("…")             → 422 BUSINESS_RULE_VIOLATION
+// AppError::unavailable("postgres", err)   → 503 UNAVAILABLE (retryable, Retry-After)
+// AppError::internal(err)                  → 500 INTERNAL (generic message; the cause is logged)
+//
+// Text passed to conflict/business_rule is shown to users as-is: write it for users,
+// never pass an error's Display, SQL or a constraint name.
 ```
 
 ## Critical Rules

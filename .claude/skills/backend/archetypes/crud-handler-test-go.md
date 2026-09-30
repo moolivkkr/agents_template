@@ -192,8 +192,13 @@ func assertErrorResponse(t *testing.T, resp *httptest.ResponseRecorder, wantStat
 
     errObj, ok := result["error"].(map[string]any)
     require.True(t, ok, "expected 'error' key in response")
+    assert.NotContains(t, result, "data", "success and error are exclusive")
     assert.Equal(t, wantCode, errObj["code"])
     assert.NotEmpty(t, errObj["message"])
+    assert.NotEmpty(t, errObj["request_id"])
+    assert.Equal(t, resp.Header().Get("X-Request-Id"), errObj["request_id"])
+    assert.Contains(t, errObj, "retryable")
+    assert.NotContains(t, errObj, "detail", "no technical detail field")
 }
 ```
 
@@ -228,7 +233,7 @@ func TestCreateHandler_HappyPath(t *testing.T) {
     meta, ok := result["meta"].(map[string]any)
     require.True(t, ok, "expected 'meta' key")
     assert.NotEmpty(t, meta["request_id"])
-    assert.NotEmpty(t, meta["timestamp"])
+    assert.NotContains(t, result, "error", "success and error are exclusive")
 
     svc.AssertExpectations(t)
 }
@@ -246,7 +251,7 @@ func TestCreateHandler_InvalidJSON(t *testing.T) {
     resp := executeRequest(t, router, req)
 
     // Malformed JSON -> 400 Bad Request (not 422)
-    assertErrorResponse(t, resp, http.StatusBadRequest, "BAD_REQUEST")
+    assertErrorResponse(t, resp, http.StatusBadRequest, "MALFORMED_REQUEST")
     svc.AssertNotCalled(t, "Create")
 }
 
@@ -273,13 +278,13 @@ func TestCreateHandler_ValidationError(t *testing.T) {
 
     // Valid JSON but fails service-level validation
     svc.On("Create", mock.Anything, mock.Anything).
-        Return(nil, apperr.NewValidationError("name", fmt.Errorf("name is required")))
+        Return(nil, apperr.NewValidationError("name", "required", "Name is required."))
 
     body := map[string]any{"name": "", "description": "desc"}
     req := makeRequest(t, http.MethodPost, "/api/v1/widgets", body, nil)
     resp := executeRequest(t, router, req)
 
-    assertErrorResponse(t, resp, http.StatusUnprocessableEntity, "VALIDATION_ERROR")
+    assertErrorResponse(t, resp, http.StatusBadRequest, "VALIDATION_FAILED")
 }
 ```
 
@@ -312,7 +317,7 @@ func TestGetHandler_InvalidUUID(t *testing.T) {
     req := makeRequest(t, http.MethodGet, "/api/v1/widgets/not-a-uuid", nil, nil)
     resp := executeRequest(t, router, req)
 
-    assertErrorResponse(t, resp, http.StatusUnprocessableEntity, "VALIDATION_ERROR")
+    assertErrorResponse(t, resp, http.StatusBadRequest, "VALIDATION_FAILED")
     svc.AssertNotCalled(t, "Get")
 }
 
@@ -324,7 +329,7 @@ func TestGetHandler_NotFound(t *testing.T) {
 
     id := uuid.New()
     svc.On("Get", mock.Anything, id).
-        Return(nil, apperr.NewNotFoundError("widget", id.String()))
+        Return(nil, apperr.NewNotFoundError("Widget"))
 
     req := makeRequest(t, http.MethodGet, "/api/v1/widgets/"+id.String(), nil, nil)
     resp := executeRequest(t, router, req)
@@ -367,7 +372,7 @@ func TestUpdateHandler_VersionConflict(t *testing.T) {
 
     id := uuid.New()
     svc.On("Update", mock.Anything, id, mock.Anything).
-        Return(nil, apperr.NewConflictError("widget", "version mismatch"))
+        Return(nil, apperr.NewConflictError("This widget was changed by someone else. Reload and try again."))
 
     body := map[string]any{
         "name":    "Updated",
@@ -391,7 +396,7 @@ func TestUpdateHandler_InvalidJSON(t *testing.T) {
     req.Header.Set("Content-Type", "application/json")
     resp := executeRequest(t, router, req)
 
-    assertErrorResponse(t, resp, http.StatusBadRequest, "BAD_REQUEST")
+    assertErrorResponse(t, resp, http.StatusBadRequest, "MALFORMED_REQUEST")
     svc.AssertNotCalled(t, "Update")
 }
 ```
@@ -424,7 +429,7 @@ func TestDeleteHandler_NotFound(t *testing.T) {
 
     id := uuid.New()
     svc.On("Delete", mock.Anything, id).
-        Return(apperr.NewNotFoundError("widget", id.String()))
+        Return(apperr.NewNotFoundError("Widget"))
 
     req := makeRequest(t, http.MethodDelete, "/api/v1/widgets/"+id.String(), nil, nil)
     resp := executeRequest(t, router, req)
@@ -441,7 +446,7 @@ func TestDeleteHandler_InvalidUUID(t *testing.T) {
     req := makeRequest(t, http.MethodDelete, "/api/v1/widgets/xyz", nil, nil)
     resp := executeRequest(t, router, req)
 
-    assertErrorResponse(t, resp, http.StatusUnprocessableEntity, "VALIDATION_ERROR")
+    assertErrorResponse(t, resp, http.StatusBadRequest, "VALIDATION_FAILED")
     svc.AssertNotCalled(t, "Delete")
 }
 ```
@@ -464,7 +469,7 @@ func TestListHandler_HappyPath(t *testing.T) {
             Total:   25,
         }, nil)
 
-    req := makeRequest(t, http.MethodGet, "/api/v1/widgets?page_size=3&sort_by=created_at&sort_dir=desc", nil, nil)
+    req := makeRequest(t, http.MethodGet, "/api/v1/widgets?limit=3&sort_by=created_at&sort_dir=desc", nil, nil)
     resp := executeRequest(t, router, req)
 
     result := assertJSONResponse(t, resp, http.StatusOK)
@@ -474,14 +479,15 @@ func TestListHandler_HappyPath(t *testing.T) {
     require.True(t, ok)
     assert.Len(t, data, 3)
 
-    // Assert pagination meta
+    // Assert pagination meta: meta.pagination {next_cursor, has_more, limit}
     meta, ok := result["meta"].(map[string]any)
     require.True(t, ok)
-    assert.Equal(t, "next-cursor-token", meta["cursor"])
-    assert.Equal(t, true, meta["has_more"])
-    assert.Equal(t, float64(25), meta["total"])
     assert.NotEmpty(t, meta["request_id"])
-    assert.NotEmpty(t, meta["timestamp"])
+    pg, ok := meta["pagination"].(map[string]any)
+    require.True(t, ok, "list responses carry meta.pagination")
+    assert.Equal(t, "next-cursor-token", pg["next_cursor"])
+    assert.Equal(t, true, pg["has_more"])
+    assert.Equal(t, float64(3), pg["limit"])
 }
 
 func TestListHandler_EmptyResults(t *testing.T) {
@@ -502,12 +508,13 @@ func TestListHandler_EmptyResults(t *testing.T) {
 
     result := assertJSONResponse(t, resp, http.StatusOK)
 
-    data := result["data"].([]any)
+    data, ok := result["data"].([]any)
+    require.True(t, ok, "empty list is [] — never null")
     assert.Len(t, data, 0)
 
-    meta := result["meta"].(map[string]any)
-    assert.Equal(t, false, meta["has_more"])
-    assert.Equal(t, float64(0), meta["total"])
+    pg := result["meta"].(map[string]any)["pagination"].(map[string]any)
+    assert.Equal(t, false, pg["has_more"])
+    assert.Nil(t, pg["next_cursor"], "next_cursor is null when has_more is false")
 }
 
 func TestListHandler_NextPageWithCursor(t *testing.T) {
@@ -524,12 +531,12 @@ func TestListHandler_NextPageWithCursor(t *testing.T) {
         Total:   25,
     }, nil)
 
-    req := makeRequest(t, http.MethodGet, "/api/v1/widgets?cursor=some-cursor-token&page_size=10", nil, nil)
+    req := makeRequest(t, http.MethodGet, "/api/v1/widgets?cursor=some-cursor-token&limit=10", nil, nil)
     resp := executeRequest(t, router, req)
 
     result := assertJSONResponse(t, resp, http.StatusOK)
-    meta := result["meta"].(map[string]any)
-    assert.Equal(t, false, meta["has_more"])
+    pg := result["meta"].(map[string]any)["pagination"].(map[string]any)
+    assert.Equal(t, false, pg["has_more"])
 }
 
 func TestListHandler_PageSizeLimits(t *testing.T) {
@@ -541,10 +548,10 @@ func TestListHandler_PageSizeLimits(t *testing.T) {
         wantPageSize int
     }{
         {"default when missing", "/api/v1/widgets", 20},
-        {"default when zero", "/api/v1/widgets?page_size=0", 20},
-        {"default when negative", "/api/v1/widgets?page_size=-5", 20},
-        {"clamped to max 100", "/api/v1/widgets?page_size=500", 100},
-        {"respects valid size", "/api/v1/widgets?page_size=50", 50},
+        {"default when zero", "/api/v1/widgets?limit=0", 20},
+        {"default when negative", "/api/v1/widgets?limit=-5", 20},
+        {"clamped to max 100", "/api/v1/widgets?limit=500", 100},
+        {"respects valid size", "/api/v1/widgets?limit=50", 50},
     }
 
     for _, tt := range tests {
@@ -640,33 +647,45 @@ func TestErrorMapping_ServiceErrors(t *testing.T) {
     }{
         {
             name:       "NotFound maps to 404",
-            serviceErr: apperr.NewNotFoundError("widget", "123"),
+            serviceErr: apperr.NewNotFoundError("Widget"),
             wantStatus: http.StatusNotFound,
             wantCode:   "NOT_FOUND",
         },
         {
             name:       "Conflict maps to 409",
-            serviceErr: apperr.NewConflictError("widget", "version mismatch"),
+            serviceErr: apperr.NewConflictError("This widget was changed by someone else. Reload and try again."),
             wantStatus: http.StatusConflict,
             wantCode:   "CONFLICT",
         },
         {
-            name:       "ValidationError maps to 422",
-            serviceErr: apperr.NewValidationError("name", fmt.Errorf("required")),
-            wantStatus: http.StatusUnprocessableEntity,
-            wantCode:   "VALIDATION_ERROR",
+            name:       "ValidationError maps to 400 VALIDATION_FAILED",
+            serviceErr: apperr.NewValidationError("name", "required", "Name is required."),
+            wantStatus: http.StatusBadRequest,
+            wantCode:   "VALIDATION_FAILED",
         },
         {
-            name:       "Unauthorized maps to 401",
-            serviceErr: apperr.NewUnauthorizedError("missing token"),
+            name:       "BusinessRuleError maps to 422",
+            serviceErr: apperr.NewBusinessRuleError("Archived widgets can't be edited."),
+            wantStatus: http.StatusUnprocessableEntity,
+            wantCode:   "BUSINESS_RULE_VIOLATION",
+        },
+        {
+            name:       "Unauthenticated maps to 401",
+            serviceErr: apperr.NewUnauthenticatedError(),
             wantStatus: http.StatusUnauthorized,
-            wantCode:   "UNAUTHORIZED",
+            wantCode:   "UNAUTHENTICATED",
+        },
+        {
+            name:       "Unavailable dependency maps to 503, retryable",
+            serviceErr: apperr.NewUnavailableError("postgres", fmt.Errorf("timeout")),
+            wantStatus: http.StatusServiceUnavailable,
+            wantCode:   "UNAVAILABLE",
         },
         {
             name:       "Internal error maps to 500 with generic message",
             serviceErr: fmt.Errorf("unexpected: database connection pool exhausted"),
             wantStatus: http.StatusInternalServerError,
-            wantCode:   "INTERNAL_ERROR",
+            wantCode:   "INTERNAL",
         },
     }
 
@@ -712,14 +731,14 @@ func TestAuth_MissingTenantContext(t *testing.T) {
     r.Mount("/api/v1/widgets", h.Routes())
 
     svc.On("Get", mock.Anything, mock.Anything).
-        Return(nil, apperr.NewUnauthorizedError("missing tenant context"))
+        Return(nil, apperr.NewUnauthenticatedError())
 
     id := uuid.New()
     req := makeRequest(t, http.MethodGet, "/api/v1/widgets/"+id.String(), nil, nil)
     resp := executeRequest(t, r, req)
 
     // Without tenant context, service returns Unauthorized
-    assertErrorResponse(t, resp, http.StatusUnauthorized, "UNAUTHORIZED")
+    assertErrorResponse(t, resp, http.StatusUnauthorized, "UNAUTHENTICATED")
 }
 
 func TestAuth_WrongTenant_ReturnsNotFound_NotForbidden(t *testing.T) {
@@ -731,7 +750,7 @@ func TestAuth_WrongTenant_ReturnsNotFound_NotForbidden(t *testing.T) {
     id := uuid.New()
     // Service returns NotFound (not Forbidden) to prevent existence leaking
     svc.On("Get", mock.Anything, id).
-        Return(nil, apperr.NewNotFoundError("widget", id.String()))
+        Return(nil, apperr.NewNotFoundError("Widget"))
 
     req := makeRequest(t, http.MethodGet, "/api/v1/widgets/"+id.String(), nil, nil)
     resp := executeRequest(t, router, req)
@@ -775,7 +794,7 @@ func TestResponseShape_SingleResource(t *testing.T) {
     // meta must contain request tracking fields
     meta := result["meta"].(map[string]any)
     assert.Contains(t, meta, "request_id")
-    assert.Contains(t, meta, "timestamp")
+    assert.NotContains(t, meta, "pagination", "a single resource has no pagination")
 }
 
 func TestResponseShape_ListResource(t *testing.T) {
@@ -802,12 +821,14 @@ func TestResponseShape_ListResource(t *testing.T) {
     require.True(t, ok, "'data' must be an array")
     assert.Len(t, data, 1)
 
+    assert.Len(t, result, 2, "only 'data' and 'meta' at the top level")
     meta := result["meta"].(map[string]any)
-    assert.Contains(t, meta, "cursor")
-    assert.Contains(t, meta, "has_more")
-    assert.Contains(t, meta, "total")
     assert.Contains(t, meta, "request_id")
-    assert.Contains(t, meta, "timestamp")
+    pg, ok := meta["pagination"].(map[string]any)
+    require.True(t, ok, "list responses carry meta.pagination")
+    assert.Contains(t, pg, "next_cursor")
+    assert.Contains(t, pg, "has_more")
+    assert.Contains(t, pg, "limit")
 }
 
 func TestResponseShape_ErrorResource(t *testing.T) {
@@ -818,18 +839,20 @@ func TestResponseShape_ErrorResource(t *testing.T) {
 
     id := uuid.New()
     svc.On("Get", mock.Anything, id).
-        Return(nil, apperr.NewNotFoundError("widget", id.String()))
+        Return(nil, apperr.NewNotFoundError("Widget"))
 
     req := makeRequest(t, http.MethodGet, "/api/v1/widgets/"+id.String(), nil, nil)
     resp := executeRequest(t, router, req)
 
     result := assertJSONResponse(t, resp, http.StatusNotFound)
 
-    // Error envelope: {"error": {"code": "...", "message": "..."}}
+    // Error envelope: {"error": {"code", "message", "details"?, "request_id", "retryable"}} — no "data"
+    assert.Len(t, result, 1, "an error body has only the 'error' key")
     errObj, ok := result["error"].(map[string]any)
     require.True(t, ok)
-    assert.Contains(t, errObj, "code")
-    assert.Contains(t, errObj, "message")
+    for _, k := range []string{"code", "message", "request_id", "retryable"} {
+        assert.Contains(t, errObj, k)
+    }
 }
 ```
 
@@ -837,14 +860,14 @@ func TestResponseShape_ErrorResource(t *testing.T) {
 
 - Every handler test MUST use `httptest.NewRecorder` and chi router — no real HTTP server needed for unit tests
 - Test middleware MUST inject tenant_id, user_id, request_id into context (mirrors production auth middleware)
-- Malformed JSON MUST return 400 Bad Request, not 422 Validation Error
+- Malformed JSON MUST return 400 `MALFORMED_REQUEST`; failed field validation 400 `VALIDATION_FAILED`; a domain rule 422 `BUSINESS_RULE_VIOLATION`
 - Wrong tenant MUST return 404 Not Found, not 403 Forbidden — prevents entity enumeration
 - Internal errors MUST NOT leak error details to the client — assert generic message in 500 responses
-- Every response MUST follow the envelope format: `{"data": T, "meta": {...}}` for success, `{"error": {...}}` for failure
+- Every response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}` for success, `{"error": {code, message, details?, request_id, retryable}}` for failure, never both
 - DELETE MUST return 204 with empty body
 - POST create MUST return 201 Created
-- List responses MUST include `cursor`, `has_more`, `total` in meta
-- Page size MUST be clamped: default to 20 when missing/zero, cap at 100
+- List responses MUST include `meta.pagination` `{next_cursor, has_more, limit}`; `data` is `[]` when empty
+- `limit` MUST be clamped: default to 20 when missing/zero, cap at 100
 - Sort and filter fields MUST be allow-listed — disallowed values default to safe values
 - Use `t.Parallel()` on every test function for speed
 - Use `mock.MatchedBy(func)` to assert specific filter/input values reach the service

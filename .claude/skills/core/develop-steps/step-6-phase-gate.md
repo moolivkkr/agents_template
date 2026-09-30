@@ -43,7 +43,7 @@ determined from the phase's own code/specs, not guessed:
 ```
 Gate Item (CONDITIONAL)      Source File                                          Required WHEN … / else
 ─────────────────────────────────────────────────────────────────────────────────────────────────
-Security SAST scan           agent_state/phases/${PHASE}/reports/sast_scan.md        WHEN phase has security-relevant code AND a SAST command is configured in IMPLEMENTATION_GUIDELINES → No CRITICAL/HIGH. Else: recorded skip (see Stage 4c).
+SAST + secret scanning       agent_state/phases/${PHASE}/reports/quality_gate.md     ALWAYS (code_quality_verifier Checks 3 + 9, fixed semgrep/gitleaks commands) → BLOCKING:0; a scan that did not run is itself BLOCKING (Stage 4c).
 Migration safety             agent_state/phases/${PHASE}/reports/migration_safety.md   WHEN phase adds/changes DB migrations → Zero CRITICAL findings, DOWN coverage ≥ 90%. Else: not_applicable.
 Visual validation            agent_state/phases/${PHASE}/reports/visual_validation.md  WHEN *.wireframe.html files exist for this phase → Mismatch < 10%. Else: not_applicable.
 Tenant isolation             agent_state/phases/${PHASE}/reports/tenant_isolation.md   WHEN project is multi-tenant (roster marks tenant_isolation_verifier required) → No cross-tenant leak. Else: not_applicable.
@@ -218,11 +218,21 @@ passed):
      "forced_at": "<ISO 8601>",
      "blockers": [
        { "gate_item": "unit_tests", "details": "TestAuthFlow FAILED — flaky", "severity": "gate_override" },
-       { "gate_item": "security_review", "details": "HIGH: IDOR in GET /users/:id", "severity": "gate_override" }
+       { "gate_item": "security_review", "details": "SR-3-2 HIGH: IDOR in GET /users/:id", "severity": "gate_override" }
+     ],
+     "security_acknowledged": [
+       { "finding": "SR-3-2 HIGH: IDOR in GET /users/:id", "approved_by": "<the human's name>",
+         "reason": "<why shipping it is acceptable, and the fix date>" }
      ],
      "user_rationale": "<user's reason for forcing>"
    }
    ```
+   **Security findings are never forced by a blanket approval** (board review 2026-09-30, SEC-01). Every
+   failure from `security_reviewer`, `tenant_isolation_verifier` or `dependency_scanner` needs its own
+   `security_acknowledged` entry. The entry is written from the answer of **the human who was shown that
+   finding** (its ID, file:line and exploit description), never by an agent or a fix loop.
+   `verify-gate.sh` refuses the override when acknowledgements are missing. Under `/autonomous` this
+   means PAUSE and ask; see its "Gate failures" rules.
 3. Add overridden failures to manifest `known_issues[]` with `"severity": "gate_override"`
 4. Print warning: `⚠ Gate forced with N unresolved blockers — review before release`
 
@@ -242,7 +252,7 @@ When the NEXT phase starts (Phase N+1 Step 0):
    ```
    Forced gate resolution    agent_state/phases/$((PHASE-1))/gate.forced    All blockers resolved OR explicitly re-deferred
    ```
-5. If a blocker survives **2 consecutive forced gates**: it becomes **PERMANENTLY BLOCKING** — cannot be force-gated again. Must fix or remove from scope via BRD change request.
+5. If a blocker survives **2 consecutive forced gates**: it becomes **PERMANENTLY BLOCKING** — cannot be force-gated again. Must fix or remove from scope via BRD change request. (Today this rule is prose: `verify-gate.sh` does not yet compare consecutive `gate.forced` files, so the orchestrator must check it before writing a new override.)
 
 **Anti-pattern:** Forcing gates across 3+ phases creates a project where nothing actually works. The 2-force limit prevents this.
 

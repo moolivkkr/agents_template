@@ -12,7 +12,9 @@ tags:
 
 # Error Handling Archetype
 
-> **CANONICAL REFERENCE**: This file is the single source of truth for backend error handling patterns. All other skill packs that mention error handling should defer to this file for definitive guidance. For the TypeScript equivalent, see `backend/archetypes/error-handling-typescript.md`.
+> **CANONICAL REFERENCE**: This file is the single source of truth for backend error handling patterns.
+> The wire shape it produces is the error envelope in `~/.claude/skills/api/response-envelope.md`
+> (`{"error": {code, message, details[], request_id, retryable}}`); if the two ever disagree, the envelope wins. All other skill packs that mention error handling should defer to this file for definitive guidance. For the TypeScript equivalent, see `backend/archetypes/error-handling-typescript.md`.
 
 Complete error handling system for Go backend services. Every generated service MUST follow this pattern.
 
@@ -22,24 +24,36 @@ Complete error handling system for Go backend services. Every generated service 
 package apperr
 
 import (
+    "encoding/json"
     "errors"
     "fmt"
     "log/slog"
     "net/http"
     "runtime"
+    "strconv"
 )
+
+// FieldError is one entry of error.details[] — field-level problems for VALIDATION_FAILED.
+// Code is a stable lower_snake identifier; Message comes from a fixed catalog, never err.Error().
+type FieldError struct {
+    Field   string `json:"field"`
+    Code    string `json:"code"`
+    Message string `json:"message"`
+}
 
 // AppError is the standard application error type.
 // All domain errors MUST use this type so the error middleware can map them to HTTP responses.
 type AppError struct {
-    Code       string         `json:"code"`        // machine-readable: VALIDATION_ERROR, NOT_FOUND, etc.
-    Message    string         `json:"message"`      // human-readable message safe for clients
-    HTTPStatus int            `json:"-"`            // HTTP status code (not serialized to client)
-    Details    map[string]any `json:"details,omitempty"` // optional structured details
-    Err        error          `json:"-"`            // wrapped underlying error (not serialized)
+    Code       string       // UPPER_SNAKE, stable: VALIDATION_FAILED, NOT_FOUND, ...
+    Message    string       // user-safe; shown by the UI as-is
+    HTTPStatus int          // not serialized
+    Details    []FieldError // serialized as error.details
+    Retryable  bool         // serialized as error.retryable
+    RetryAfter int          // seconds; sets the Retry-After header (429/503)
+    Err        error        // wrapped cause, logged server-side, never serialized
 }
 
-// Error implements the error interface.
+// Error implements the error interface (server-side text: includes the cause for logs).
 func (e *AppError) Error() string {
     if e.Err != nil {
         return fmt.Sprintf("%s: %s: %v", e.Code, e.Message, e.Err)
@@ -48,9 +62,7 @@ func (e *AppError) Error() string {
 }
 
 // Unwrap supports errors.Is and errors.As for wrapped errors.
-func (e *AppError) Unwrap() error {
-    return e.Err
-}
+func (e *AppError) Unwrap() error { return e.Err }
 
 // Is supports errors.Is comparison by error code.
 func (e *AppError) Is(target error) bool {
@@ -61,12 +73,9 @@ func (e *AppError) Is(target error) bool {
     return false
 }
 
-// WithDetails adds structured context to the error.
-func (e *AppError) WithDetails(key string, value any) *AppError {
-    if e.Details == nil {
-        e.Details = make(map[string]any)
-    }
-    e.Details[key] = value
+// WithField appends a field-level problem (VALIDATION_FAILED).
+func (e *AppError) WithField(field, code, message string) *AppError {
+    e.Details = append(e.Details, FieldError{Field: field, Code: code, Message: message})
     return e
 }
 
@@ -79,120 +88,83 @@ func (e *AppError) WithError(err error) *AppError {
 
 ## Error Taxonomy — Constructor Functions
 
+The codes and statuses are the table in `api/response-envelope.md`. Messages are user-safe and fixed;
+nothing from a parser, driver or upstream error reaches the client.
+
 ```go
-// --- 400 Bad Request: Malformed Request (JSON parse errors, wrong content type) ---
+// --- 400 MALFORMED_REQUEST: JSON parse errors, wrong content type, body too large ---
 
-func NewBadRequestError(reason string, err error) *AppError {
-    return &AppError{
-        Code:       "BAD_REQUEST",
-        Message:    reason,
-        HTTPStatus: http.StatusBadRequest,
-        Err:        err,
-    }
+func NewMalformedRequestError(err error) *AppError {
+    return &AppError{Code: "MALFORMED_REQUEST", Message: "The request could not be read.",
+        HTTPStatus: http.StatusBadRequest, Err: err}
 }
 
-// --- 422 Unprocessable Entity: Business Validation Errors ---
-// Use 422 for well-formed requests that fail domain/business validation rules.
-// Use 400 (above) for malformed JSON, wrong content type, or request parsing errors.
+// --- 400 VALIDATION_FAILED: the input fails schema/validation; details[] lists the fields ---
 
-func NewValidationError(field string, err error) *AppError {
-    return &AppError{
-        Code:       "VALIDATION_ERROR",
-        Message:    fmt.Sprintf("invalid value for field '%s'", field),
-        HTTPStatus: http.StatusUnprocessableEntity,
-        Details:    map[string]any{"field": field, "reason": err.Error()},
-        Err:        err,
-    }
+func NewValidationError(field, code, message string) *AppError {
+    return (&AppError{Code: "VALIDATION_FAILED", Message: "Some fields are invalid.",
+        HTTPStatus: http.StatusBadRequest}).WithField(field, code, message)
 }
 
-func NewMultiValidationError(fieldErrors map[string]string) *AppError {
-    return &AppError{
-        Code:       "VALIDATION_ERROR",
-        Message:    "one or more fields failed validation",
-        HTTPStatus: http.StatusUnprocessableEntity,
-        Details:    map[string]any{"fields": fieldErrors},
-    }
+func NewMultiValidationError(fields []FieldError) *AppError {
+    return &AppError{Code: "VALIDATION_FAILED", Message: "Some fields are invalid.",
+        HTTPStatus: http.StatusBadRequest, Details: fields}
 }
 
-// --- 401 Unauthorized: Authentication Errors ---
+// Map validator output (e.g. go-playground/validator) to stable codes + catalog messages:
+//   for _, fe := range verrs { fields = append(fields, FieldError{Field: jsonName(fe), Code: fe.Tag(), Message: catalog(fe)}) }
+// Never put fe.Error() / err.Error() in Message — it can carry internals and isn't written for users.
 
-func NewUnauthorizedError(reason string) *AppError {
-    return &AppError{
-        Code:       "UNAUTHORIZED",
-        Message:    reason,
-        HTTPStatus: http.StatusUnauthorized,
-    }
+// --- 422 BUSINESS_RULE_VIOLATION: a valid request rejected by a domain rule ---
+
+func NewBusinessRuleError(message string) *AppError {
+    return &AppError{Code: "BUSINESS_RULE_VIOLATION", Message: message, HTTPStatus: http.StatusUnprocessableEntity}
 }
 
-// --- 403 Forbidden: Authorization Errors ---
+// --- 401 UNAUTHENTICATED ---
 
-func NewForbiddenError(action, resource string) *AppError {
-    return &AppError{
-        Code:       "FORBIDDEN",
-        Message:    fmt.Sprintf("insufficient permissions to %s %s", action, resource),
-        HTTPStatus: http.StatusForbidden,
-        Details:    map[string]any{"action": action, "resource": resource},
-    }
+func NewUnauthenticatedError() *AppError {
+    return &AppError{Code: "UNAUTHENTICATED", Message: "Sign in to continue.", HTTPStatus: http.StatusUnauthorized}
 }
 
-// --- 404 Not Found ---
+// --- 403 FORBIDDEN: authenticated, not allowed (function-level) ---
 
-func NewNotFoundError(resource, identifier string) *AppError {
-    msg := fmt.Sprintf("%s not found", resource)
-    if identifier != "" {
-        msg = fmt.Sprintf("%s '%s' not found", resource, identifier)
-    }
-    return &AppError{
-        Code:       "NOT_FOUND",
-        Message:    msg,
-        HTTPStatus: http.StatusNotFound,
-        Details:    map[string]any{"resource": resource, "identifier": identifier},
-    }
+func NewForbiddenError() *AppError {
+    return &AppError{Code: "FORBIDDEN", Message: "You don't have permission to do this.", HTTPStatus: http.StatusForbidden}
 }
 
-// --- 409 Conflict: Duplicate / Version Mismatch ---
+// --- 404 NOT_FOUND: missing OR another tenant's/owner's object (never 403 for those) ---
 
-func NewConflictError(resource, reason string) *AppError {
-    return &AppError{
-        Code:       "CONFLICT",
-        Message:    fmt.Sprintf("%s conflict: %s", resource, reason),
-        HTTPStatus: http.StatusConflict,
-        Details:    map[string]any{"resource": resource, "reason": reason},
-    }
+func NewNotFoundError(resource string) *AppError {
+    return &AppError{Code: "NOT_FOUND", Message: resource + " not found.", HTTPStatus: http.StatusNotFound}
 }
 
-// --- 429 Too Many Requests ---
+// --- 409 CONFLICT: duplicate / version mismatch / state conflict ---
+
+func NewConflictError(message string) *AppError {
+    return &AppError{Code: "CONFLICT", Message: message, HTTPStatus: http.StatusConflict}
+}
+
+// --- 429 RATE_LIMITED ---
 
 func NewRateLimitError(retryAfterSecs int) *AppError {
-    return &AppError{
-        Code:       "RATE_LIMITED",
-        Message:    "too many requests — please retry later",
-        HTTPStatus: http.StatusTooManyRequests,
-        Details:    map[string]any{"retry_after_seconds": retryAfterSecs},
-    }
+    return &AppError{Code: "RATE_LIMITED", Message: "Too many requests. Try again shortly.",
+        HTTPStatus: http.StatusTooManyRequests, Retryable: true, RetryAfter: retryAfterSecs}
 }
 
-// --- 500 Internal Server Error ---
+// --- 500 INTERNAL ---
 
 func NewInternalError(err error) *AppError {
-    return &AppError{
-        Code:       "INTERNAL_ERROR",
-        Message:    "an unexpected error occurred",
-        HTTPStatus: http.StatusInternalServerError,
-        Err:        err,
-    }
+    return &AppError{Code: "INTERNAL", Message: "Something went wrong.", HTTPStatus: http.StatusInternalServerError, Err: err}
 }
 
-// --- 502 Bad Gateway: Upstream Failure ---
+// --- 503 UNAVAILABLE: a dependency (DB, upstream API) failed or timed out ---
+// The service name goes to the log, not the client.
 
-func NewUpstreamError(service string, err error) *AppError {
-    return &AppError{
-        Code:       "UPSTREAM_ERROR",
-        Message:    fmt.Sprintf("upstream service '%s' is unavailable", service),
-        HTTPStatus: http.StatusBadGateway,
-        Details:    map[string]any{"service": service},
-        Err:        err,
-    }
+func NewUnavailableError(service string, err error) *AppError {
+    return &AppError{Code: "UNAVAILABLE", Message: "The service is temporarily unavailable.",
+        HTTPStatus: http.StatusServiceUnavailable, Retryable: true, RetryAfter: 5,
+        Err: fmt.Errorf("upstream %s: %w", service, err)}
 }
 ```
 
@@ -204,12 +176,13 @@ func NewUpstreamError(service string, err error) *AppError {
 // without constructing a full AppError.
 
 var (
-    ErrNotFound     = &AppError{Code: "NOT_FOUND", HTTPStatus: http.StatusNotFound}
-    ErrUnauthorized = &AppError{Code: "UNAUTHORIZED", HTTPStatus: http.StatusUnauthorized}
-    ErrForbidden    = &AppError{Code: "FORBIDDEN", HTTPStatus: http.StatusForbidden}
-    ErrConflict     = &AppError{Code: "CONFLICT", HTTPStatus: http.StatusConflict}
-    ErrRateLimited  = &AppError{Code: "RATE_LIMITED", HTTPStatus: http.StatusTooManyRequests}
-    ErrInternal     = &AppError{Code: "INTERNAL_ERROR", HTTPStatus: http.StatusInternalServerError}
+    ErrNotFound        = &AppError{Code: "NOT_FOUND", HTTPStatus: http.StatusNotFound}
+    ErrUnauthenticated = &AppError{Code: "UNAUTHENTICATED", HTTPStatus: http.StatusUnauthorized}
+    ErrForbidden       = &AppError{Code: "FORBIDDEN", HTTPStatus: http.StatusForbidden}
+    ErrConflict        = &AppError{Code: "CONFLICT", HTTPStatus: http.StatusConflict}
+    ErrRateLimited     = &AppError{Code: "RATE_LIMITED", HTTPStatus: http.StatusTooManyRequests}
+    ErrUnavailable     = &AppError{Code: "UNAVAILABLE", HTTPStatus: http.StatusServiceUnavailable}
+    ErrInternal        = &AppError{Code: "INTERNAL", HTTPStatus: http.StatusInternalServerError}
 )
 
 // Usage:
@@ -221,67 +194,56 @@ var (
 ## HTTP Error Response Format
 
 ```go
-// ErrorResponse is the standard JSON error response body.
-// Every error response MUST use this format for client consistency.
-type ErrorResponse struct {
-    Error ErrorDetail `json:"error"`
+// ErrorBody is the error envelope (api/response-envelope.md). Every error response uses it.
+type ErrorBody struct {
+    Error APIError `json:"error"`
 }
 
-type ErrorDetail struct {
-    Code    string         `json:"code"`              // machine-readable error code
-    Message string         `json:"message"`           // human-readable description
-    Details map[string]any `json:"details,omitempty"`  // optional structured context
+type APIError struct {
+    Code      string       `json:"code"`
+    Message   string       `json:"message"`
+    Details   []FieldError `json:"details,omitempty"`
+    RequestID string       `json:"request_id"`
+    Retryable bool         `json:"retryable"`
 }
 
-// Example error responses:
+// Example error responses (the HTTP status carries the class; X-Request-Id header = request_id):
 //
-// 400 Bad Request (malformed input):
-// {
-//   "error": {
-//     "code": "BAD_REQUEST",
-//     "message": "invalid JSON in request body"
-//   }
-// }
+// 400 VALIDATION_FAILED:
+// {"error": {"code": "VALIDATION_FAILED", "message": "Some fields are invalid.",
+//            "details": [{"field": "email", "code": "invalid_format", "message": "Enter a valid email address."}],
+//            "request_id": "b7e1c2…", "retryable": false}}
 //
-// 422 Validation Error (business rule violation):
-// {
-//   "error": {
-//     "code": "VALIDATION_ERROR",
-//     "message": "invalid value for field 'email'",
-//     "details": { "field": "email", "reason": "invalid format" }
-//   }
-// }
+// 404 NOT_FOUND (also for another tenant's or owner's widget — don't confirm it exists):
+// {"error": {"code": "NOT_FOUND", "message": "Widget not found.", "request_id": "b7e1c2…", "retryable": false}}
 //
-// 404 Not Found:
-// {
-//   "error": {
-//     "code": "NOT_FOUND",
-//     "message": "widget 'abc-123' not found",
-//     "details": { "resource": "widget", "identifier": "abc-123" }
-//   }
-// }
+// 409 CONFLICT:
+// {"error": {"code": "CONFLICT", "message": "This widget was changed by someone else. Reload and try again.",
+//            "request_id": "b7e1c2…", "retryable": false}}
 //
-// 409 Conflict:
-// {
-//   "error": {
-//     "code": "CONFLICT",
-//     "message": "widget conflict: version mismatch — reload and retry",
-//     "details": { "resource": "widget", "reason": "version mismatch" }
-//   }
-// }
-//
-// 500 Internal Error:
-// {
-//   "error": {
-//     "code": "INTERNAL_ERROR",
-//     "message": "an unexpected error occurred"
-//   }
-// }
+// 500 INTERNAL (the cause is in the log line with the same request_id):
+// {"error": {"code": "INTERNAL", "message": "Something went wrong.", "request_id": "b7e1c2…", "retryable": false}}
 ```
 
 ## Error Mapping Middleware
 
 ```go
+// writeErrorBody is the only function that writes an error response.
+func writeErrorBody(w http.ResponseWriter, r *http.Request, e *AppError) {
+    w.Header().Set("Content-Type", "application/json; charset=utf-8")
+    if e.RetryAfter > 0 {
+        w.Header().Set("Retry-After", strconv.Itoa(e.RetryAfter))
+    }
+    if e.HTTPStatus == http.StatusUnauthorized {
+        w.Header().Set("WWW-Authenticate", "Bearer")
+    }
+    w.WriteHeader(e.HTTPStatus)
+    _ = json.NewEncoder(w).Encode(ErrorBody{Error: APIError{
+        Code: e.Code, Message: e.Message, Details: e.Details,
+        RequestID: RequestIDFromContext(r.Context()), Retryable: e.Retryable,
+    }})
+}
+
 // RecoveryMiddleware catches panics, logs the stack trace, and returns a 500 response.
 // This MUST be in the middleware stack to prevent the server from crashing.
 func RecoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
@@ -289,72 +251,38 @@ func RecoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
             defer func() {
                 if rec := recover(); rec != nil {
-                    // Capture stack trace
                     buf := make([]byte, 4096)
                     n := runtime.Stack(buf, false)
-                    stack := string(buf[:n])
-
-                    reqID := RequestIDFromContext(r.Context())
-
-                    logger.Error("panic recovered",
+                    logger.ErrorContext(r.Context(), "panic recovered",
                         "panic", rec,
-                        "stack", stack,
-                        "request_id", reqID,
+                        "stack", string(buf[:n]),
+                        "request_id", RequestIDFromContext(r.Context()),
                         "method", r.Method,
-                        "path", r.URL.Path,
+                        "route", r.Pattern, // the route template, not the raw path
                     )
-
                     // Return a clean 500 — never expose panic details to clients
-                    w.Header().Set("Content-Type", "application/json; charset=utf-8")
-                    w.WriteHeader(http.StatusInternalServerError)
-                    fmt.Fprintf(w, `{"error":{"code":"INTERNAL_ERROR","message":"an unexpected error occurred"}}`)
+                    writeErrorBody(w, r, NewInternalError(nil))
                 }
             }()
-
             next.ServeHTTP(w, r)
         })
     }
 }
 
-// ErrorMapper is a helper that maps AppError types to HTTP responses.
-// Use this in handlers instead of duplicating mapping logic.
-func ErrorMapper(w http.ResponseWriter, err error) {
+// ErrorMapper maps any error to the envelope. Use it in handlers instead of duplicating mapping logic.
+func ErrorMapper(w http.ResponseWriter, r *http.Request, err error) {
     var appErr *AppError
-    if errors.As(err, &appErr) {
-        // Log internal errors with full detail; client gets sanitized message
-        if appErr.HTTPStatus >= 500 {
-            slog.Error("internal error",
-                "code", appErr.Code,
-                "message", appErr.Message,
-                "error", appErr.Err,
-            )
-        }
-
-        w.Header().Set("Content-Type", "application/json; charset=utf-8")
-
-        // Add Retry-After header for rate limit errors
-        if appErr.HTTPStatus == http.StatusTooManyRequests {
-            if retryAfter, ok := appErr.Details["retry_after_seconds"]; ok {
-                w.Header().Set("Retry-After", fmt.Sprintf("%v", retryAfter))
-            }
-        }
-
-        w.WriteHeader(appErr.HTTPStatus)
-        json.NewEncoder(w).Encode(ErrorResponse{
-            Error: ErrorDetail{
-                Code:    appErr.Code,
-                Message: appErr.Message,
-                Details: appErr.Details,
-            },
-        })
-        return
+    if !errors.As(err, &appErr) {
+        appErr = NewInternalError(err) // unknown error type: 500, message never exposed
     }
-
-    // Unknown error type — treat as 500, never expose message
-    slog.Error("unmapped error", "error", err)
-    w.Header().Set("Content-Type", "application/json; charset=utf-8")
-    w.WriteHeader(http.StatusInternalServerError)
-    fmt.Fprintf(w, `{"error":{"code":"INTERNAL_ERROR","message":"an unexpected error occurred"}}`)
+    if appErr.HTTPStatus >= 500 {
+        slog.ErrorContext(r.Context(), "request failed",
+            "code", appErr.Code,
+            "error", err, // the full chain, server-side only
+            "request_id", RequestIDFromContext(r.Context()),
+        )
+    }
+    writeErrorBody(w, r, appErr)
 }
 ```
 
@@ -393,7 +321,7 @@ func ErrorMapper(w http.ResponseWriter, err error) {
 //    result, err := h.svc.Create(ctx, input)
 //    if err != nil {
 //        logger.Error("create failed", "error", err) // full chain visible
-//        ErrorMapper(w, err)
+//        ErrorMapper(w, r, err)
 //        return
 //    }
 //
@@ -412,7 +340,7 @@ func ErrorMapper(w http.ResponseWriter, err error) {
 // Testing helpers — use in unit tests to assert specific error types.
 
 func TestServiceReturnsNotFound(t *testing.T) {
-    svc := NewService(mockRepo{getErr: apperr.NewNotFoundError("widget", "abc")}, ...)
+    svc := NewService(mockRepo{getErr: apperr.NewNotFoundError("Widget")}, ...)
     _, err := svc.Get(ctx, uuid.MustParse("abc"))
 
     // Assert using errors.Is with sentinel
@@ -426,7 +354,7 @@ func TestServiceReturnsNotFound(t *testing.T) {
 }
 
 func TestServiceReturnsConflict(t *testing.T) {
-    svc := NewService(mockRepo{updateErr: apperr.NewConflictError("widget", "version mismatch")}, ...)
+    svc := NewService(mockRepo{updateErr: apperr.NewConflictError("This widget was changed by someone else.")}, ...)
     _, err := svc.Update(ctx, id, input)
 
     var appErr *apperr.AppError
@@ -440,22 +368,25 @@ func TestServiceReturnsConflict(t *testing.T) {
 
 | Error Type | HTTP Status | Code | When to Use |
 |---|---|---|---|
-| `BadRequestError` | 400 | `BAD_REQUEST` | Malformed JSON, wrong content type, request parsing failure |
-| `ValidationError` | 422 | `VALIDATION_ERROR` | Well-formed request that fails business/domain validation rules |
-| `UnauthorizedError` | 401 | `UNAUTHORIZED` | Missing or invalid credentials (JWT, API key) |
-| `ForbiddenError` | 403 | `FORBIDDEN` | Valid credentials but insufficient permissions |
-| `NotFoundError` | 404 | `NOT_FOUND` | Resource does not exist or was soft-deleted |
+| `MalformedRequestError` | 400 | `MALFORMED_REQUEST` | Malformed JSON, wrong content type, body too large |
+| `ValidationError` | 400 | `VALIDATION_FAILED` | Input fails schema/validation — `details[]` lists `{field, code, message}` |
+| `UnauthenticatedError` | 401 | `UNAUTHENTICATED` | Missing, invalid or expired credentials |
+| `ForbiddenError` | 403 | `FORBIDDEN` | Authenticated but not allowed (function-level) |
+| `NotFoundError` | 404 | `NOT_FOUND` | Doesn't exist, soft-deleted, **or belongs to another tenant/owner** |
 | `ConflictError` | 409 | `CONFLICT` | Duplicate entry, version mismatch, state conflict |
-| `RateLimitError` | 429 | `RATE_LIMITED` | Too many requests from tenant/user |
-| `InternalError` | 500 | `INTERNAL_ERROR` | Unexpected server error — never expose details |
-| `UpstreamError` | 502 | `UPSTREAM_ERROR` | External service (CA, email, webhook) failure |
+| `BusinessRuleError` | 422 | `BUSINESS_RULE_VIOLATION` | Valid shape, rejected by a domain rule |
+| `RateLimitError` | 429 | `RATE_LIMITED` | Too many requests (`Retry-After`, `retryable: true`) |
+| `InternalError` | 500 | `INTERNAL` | Unexpected server error — never expose details |
+| `UnavailableError` | 503 | `UNAVAILABLE` | A dependency failed or timed out (`retryable: true`) |
 
 ## Critical Rules
 
 - Every error returned from service/repo layers MUST be an `*AppError` or wrapped with `fmt.Errorf("context: %w", err)`
-- Internal error messages (500, 502) MUST NOT leak to clients — always return generic message
-- Validation errors (422) SHOULD include the field name and reason in `details`
-- Bad request errors (400) are for malformed JSON/request parsing — NOT business validation
+- Internal error messages (500, 503) MUST NOT leak to clients — always return generic message
+- No client-visible field ever contains `err.Error()`, SQL, a driver/upstream message, a path or a stack trace
+- Validation errors (400 `VALIDATION_FAILED`) carry `details[]` of `{field, code, message}` from a fixed catalog
+- Business-rule rejections are 422 `BUSINESS_RULE_VIOLATION`; malformed bodies are 400 `MALFORMED_REQUEST`
+- Every error body carries `request_id` (= the `X-Request-Id` header) and `retryable`
 - `errors.Is` and `errors.As` MUST work — implement `Unwrap()` on all custom error types
 - Log errors ONCE at the top of the call stack — never log at every layer
 - Create domain errors at the BOUNDARY where you know the error type (repo maps pgx errors, service maps business rule violations)

@@ -1,6 +1,6 @@
 ---
 skill: crud-repository-test-java
-description: Spring Data JPA repository integration test archetype — @DataJpaTest, Testcontainers PostgreSQL, real DB queries, Specification filtering, soft delete, optimistic locking, pagination
+description: Spring Data JPA repository integration test archetype — @DataJpaTest, Testcontainers PostgreSQL, real DB queries, Specification filtering, soft delete, optimistic locking, keyset (cursor) scrolling
 version: "1.0"
 tags:
   - java
@@ -94,14 +94,20 @@ import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
 import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
 import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.ScrollPosition;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Window;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 
+import java.sql.SQLException;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
 
@@ -182,6 +188,30 @@ private Widget persistWidget(Widget widget) {
     var saved = entityManager.persistAndFlush(widget);
     entityManager.clear(); // Detach to force fresh reads from DB
     return saved;
+}
+
+// The list sort the controller builds: newest first, id as the unique tiebreaker
+private static final Sort NEWEST_FIRST =
+    Sort.by(Sort.Direction.DESC, "createdAt").and(Sort.by(Sort.Direction.DESC, "id"));
+
+/** One keyset window — exactly how WidgetServiceImpl.findAll scrolls. */
+private Window<Widget> scroll(Specification<Widget> spec, ScrollPosition position, int limit) {
+    return repository.findBy(spec, q -> q.sortBy(NEWEST_FIRST).limit(limit).scroll(position));
+}
+
+/** First window (up to 100 rows) of a tenant-scoped Specification. */
+private Window<Widget> firstWindow(Specification<Widget> spec) {
+    return scroll(spec, ScrollPosition.keyset(), 100);
+}
+
+/** SQLSTATE of the driver exception under a Spring DataAccessException (what GlobalExceptionHandler maps). */
+private static String sqlState(Throwable ex) {
+    for (var t = ex; t != null; t = t.getCause()) {
+        if (t instanceof SQLException sql) {
+            return sql.getSQLState();
+        }
+    }
+    return null;
 }
 ```
 
@@ -275,16 +305,16 @@ class CrudTests {
 }
 ```
 
-## Pagination Tests
+## Keyset (Cursor) Scrolling Tests
 
 ```java
 @Nested
-@DisplayName("Pagination")
-class PaginationTests {
+@DisplayName("Keyset scrolling (Window / ScrollPosition)")
+class ScrollTests {
 
     @Test
-    @DisplayName("findByTenantId — returns paginated results with correct counts")
-    void findByTenantId_Paginated_ReturnsCorrectPage() {
+    @DisplayName("first window — returns `limit` rows and hasNext")
+    void firstWindow_ReturnsLimitAndHasNext() {
         var now = Instant.now();
         for (int i = 0; i < 25; i++) {
             persistWidget(makeWidget(
@@ -293,45 +323,47 @@ class PaginationTests {
             ));
         }
 
-        var pageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "createdAt"));
-        var page = repository.findByTenantId(TENANT_A, pageable);
+        var window = scroll(WidgetSpecs.belongsToTenant(TENANT_A), ScrollPosition.keyset(), 10);
 
-        assertThat(page.getContent()).hasSize(10);
-        assertThat(page.getTotalElements()).isEqualTo(25);
-        assertThat(page.getTotalPages()).isEqualTo(3);
-        assertThat(page.getNumber()).isZero();
-        assertThat(page.hasNext()).isTrue();
+        assertThat(window.getContent()).hasSize(10);
+        assertThat(window.hasNext()).isTrue();
+        assertThat(window.getContent().get(0).getName()).isEqualTo("widget-024"); // newest first
     }
 
     @Test
-    @DisplayName("second page — returns remaining items")
-    void findByTenantId_SecondPage_ReturnsRemaining() {
+    @DisplayName("following positionAt(last) visits every row exactly once")
+    void followingPositions_VisitsEveryRowOnce() {
         for (int i = 0; i < 25; i++) {
             persistWidget(makeWidget(withName("widget-" + String.format("%03d", i))));
         }
 
-        var pageable = PageRequest.of(2, 10, Sort.by("createdAt"));
-        var page = repository.findByTenantId(TENANT_A, pageable);
+        var seen = new ArrayList<UUID>();
+        var windows = 0;
+        var window = scroll(WidgetSpecs.belongsToTenant(TENANT_A), ScrollPosition.keyset(), 10);
+        while (true) {
+            windows++;
+            window.getContent().forEach(w -> seen.add(w.getId()));
+            if (!window.hasNext()) break;
+            window = scroll(WidgetSpecs.belongsToTenant(TENANT_A), window.positionAt(window.size() - 1), 10);
+        }
 
-        assertThat(page.getContent()).hasSize(5);
-        assertThat(page.hasNext()).isFalse();
-        assertThat(page.hasPrevious()).isTrue();
+        assertThat(windows).isEqualTo(3);
+        assertThat(window.getContent()).hasSize(5); // last window
+        assertThat(seen).hasSize(25).doesNotHaveDuplicates();
     }
 
     @Test
-    @DisplayName("empty result — returns empty page, not null")
-    void findByTenantId_Empty_ReturnsEmptyPage() {
-        var pageable = PageRequest.of(0, 20);
-        var page = repository.findByTenantId(TENANT_A, pageable);
+    @DisplayName("empty result — empty window, not null, no next")
+    void emptyTenant_ReturnsEmptyWindow() {
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A));
 
-        assertThat(page.getContent()).isEmpty();
-        assertThat(page.getTotalElements()).isZero();
-        assertThat(page.getTotalPages()).isZero();
+        assertThat(window.getContent()).isEmpty();
+        assertThat(window.hasNext()).isFalse();
     }
 
     @Test
     @DisplayName("sort order — DESC by createdAt returns newest first")
-    void findByTenantId_SortDesc_NewestFirst() {
+    void scroll_SortDesc_NewestFirst() {
         var oldest = persistWidget(makeWidget(
             withName("oldest"),
             withCreatedAt(Instant.now().minus(2, ChronoUnit.HOURS))
@@ -345,30 +377,37 @@ class PaginationTests {
             withCreatedAt(Instant.now())
         ));
 
-        var pageable = PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "createdAt"));
-        var page = repository.findByTenantId(TENANT_A, pageable);
+        var window = scroll(WidgetSpecs.belongsToTenant(TENANT_A), ScrollPosition.keyset(), 10);
 
-        assertThat(page.getContent()).hasSize(3);
-        assertThat(page.getContent().get(0).getName()).isEqualTo("newest");
-        assertThat(page.getContent().get(2).getName()).isEqualTo("oldest");
+        assertThat(window.getContent()).hasSize(3);
+        assertThat(window.getContent().get(0).getName()).isEqualTo("newest");
+        assertThat(window.getContent().get(2).getName()).isEqualTo("oldest");
     }
 
     @Test
-    @DisplayName("no duplicates across pages")
-    void findByTenantId_NoDuplicatesAcrossPages() {
-        for (int i = 0; i < 30; i++) {
-            persistWidget(makeWidget(withName("widget-" + String.format("%03d", i))));
+    @DisplayName("insert between windows — no duplicates and no gaps (where OFFSET would repeat a row)")
+    void insertBetweenWindows_NoDuplicatesNoGaps() {
+        var base = Instant.now().minus(1, ChronoUnit.HOURS);
+        var original = new HashSet<UUID>();
+        for (int i = 0; i < 20; i++) {
+            original.add(persistWidget(makeWidget(
+                withName("widget-" + String.format("%03d", i)),
+                withCreatedAt(base.plus(i, ChronoUnit.SECONDS))
+            )).getId());
         }
 
-        var page1 = repository.findByTenantId(TENANT_A, PageRequest.of(0, 10));
-        var page2 = repository.findByTenantId(TENANT_A, PageRequest.of(1, 10));
-        var page3 = repository.findByTenantId(TENANT_A, PageRequest.of(2, 10));
+        var first = scroll(WidgetSpecs.belongsToTenant(TENANT_A), ScrollPosition.keyset(), 10);
 
-        var allIds = new java.util.HashSet<UUID>();
-        page1.getContent().forEach(w -> assertThat(allIds.add(w.getId())).isTrue());
-        page2.getContent().forEach(w -> assertThat(allIds.add(w.getId())).isTrue());
-        page3.getContent().forEach(w -> assertThat(allIds.add(w.getId())).isTrue());
-        assertThat(allIds).hasSize(30);
+        // A concurrent insert lands at the top of the list between the two requests
+        persistWidget(makeWidget(withName("inserted-meanwhile"), withCreatedAt(Instant.now())));
+
+        var second = scroll(WidgetSpecs.belongsToTenant(TENANT_A), first.positionAt(first.size() - 1), 10);
+
+        var seen = new HashSet<UUID>();
+        first.getContent().forEach(w -> assertThat(seen.add(w.getId())).isTrue());
+        second.getContent().forEach(w -> assertThat(seen.add(w.getId())).isTrue()); // no duplicates
+        assertThat(seen).isEqualTo(original);                                        // no gaps
+        assertThat(second.hasNext()).isFalse();
     }
 }
 ```
@@ -391,8 +430,8 @@ class TenantIsolationTests {
     }
 
     @Test
-    @DisplayName("findByTenantId — only returns widgets for requested tenant")
-    void findByTenantId_IsolatesByTenant() {
+    @DisplayName("scroll with belongsToTenant — only returns widgets for requested tenant")
+    void scroll_IsolatesByTenant() {
         // Seed 3 for tenant A, 2 for tenant B
         for (int i = 0; i < 3; i++) {
             persistWidget(makeWidget(withTenantId(TENANT_A), withName("a-" + i)));
@@ -401,14 +440,40 @@ class TenantIsolationTests {
             persistWidget(makeWidget(withTenantId(TENANT_B), withName("b-" + i)));
         }
 
-        var pageA = repository.findByTenantId(TENANT_A, PageRequest.of(0, 20));
-        var pageB = repository.findByTenantId(TENANT_B, PageRequest.of(0, 20));
+        var windowA = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A));
+        var windowB = firstWindow(WidgetSpecs.belongsToTenant(TENANT_B));
 
-        assertThat(pageA.getContent()).hasSize(3);
-        assertThat(pageA.getContent()).allMatch(w -> w.getTenantId().equals(TENANT_A));
+        assertThat(windowA.getContent()).hasSize(3);
+        assertThat(windowA.getContent()).allMatch(w -> w.getTenantId().equals(TENANT_A));
 
-        assertThat(pageB.getContent()).hasSize(2);
-        assertThat(pageB.getContent()).allMatch(w -> w.getTenantId().equals(TENANT_B));
+        assertThat(windowB.getContent()).hasSize(2);
+        assertThat(windowB.getContent()).allMatch(w -> w.getTenantId().equals(TENANT_B));
+    }
+
+    @Test
+    @DisplayName("a cursor from tenant A's list does not reveal tenant B's rows")
+    void scroll_PositionFromOtherTenant_StillScopedToTenant() {
+        for (int i = 0; i < 3; i++) {
+            persistWidget(makeWidget(withTenantId(TENANT_A), withName("a-" + i)));
+            persistWidget(makeWidget(withTenantId(TENANT_B), withName("b-" + i)));
+        }
+        var windowA = scroll(WidgetSpecs.belongsToTenant(TENANT_A), ScrollPosition.keyset(), 1);
+
+        // Replaying A's position under tenant B's scope returns only B's rows
+        var windowB = scroll(WidgetSpecs.belongsToTenant(TENANT_B), windowA.positionAt(0), 10);
+
+        assertThat(windowB.getContent()).allMatch(w -> w.getTenantId().equals(TENANT_B));
+    }
+
+    @Test
+    @DisplayName("derived findFirst20ByTenantId… — scoped to tenant")
+    void derivedScroll_IsolatesByTenant() {
+        persistWidget(makeWidget(withTenantId(TENANT_A), withName("a-only")));
+        persistWidget(makeWidget(withTenantId(TENANT_B), withName("b-only")));
+
+        var window = repository.findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(TENANT_A, ScrollPosition.keyset());
+
+        assertThat(window.getContent()).extracting(Widget::getName).containsExactly("a-only");
     }
 
     @Test
@@ -492,7 +557,7 @@ class OptimisticLockingTests {
 class SoftDeleteTests {
 
     @Test
-    @DisplayName("soft-deleted widgets are excluded from findByTenantId")
+    @DisplayName("soft-deleted widgets are excluded from the list scroll")
     void softDeleted_ExcludedFromList() {
         var visible = persistWidget(makeWidget(withName("Visible")));
         var toDelete = persistWidget(makeWidget(withName("To Delete")));
@@ -502,9 +567,9 @@ class SoftDeleteTests {
         entityManager.flush();
         entityManager.clear();
 
-        var page = repository.findByTenantId(TENANT_A, PageRequest.of(0, 20));
-        assertThat(page.getContent()).hasSize(1);
-        assertThat(page.getContent().get(0).getId()).isEqualTo(visible.getId());
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A));
+        assertThat(window.getContent()).hasSize(1);
+        assertThat(window.getContent().get(0).getId()).isEqualTo(visible.getId());
     }
 
     @Test
@@ -560,59 +625,74 @@ class SoftDeleteTests {
 
 ```java
 @Nested
-@DisplayName("Custom @Query methods")
+@DisplayName("Status and name filters, @Query methods")
 class CustomQueryTests {
 
     @Test
-    @DisplayName("findByTenantIdAndStatus — filters by status")
-    void findByTenantIdAndStatus_FiltersCorrectly() {
+    @DisplayName("hasStatus — filters by status")
+    void hasStatus_FiltersCorrectly() {
         persistWidget(makeWidget(withName("active-1"), withStatus(WidgetStatus.ACTIVE)));
         persistWidget(makeWidget(withName("active-2"), withStatus(WidgetStatus.ACTIVE)));
         persistWidget(makeWidget(withName("archived-1"), withStatus(WidgetStatus.ARCHIVED)));
 
-        var page = repository.findByTenantIdAndStatus(
-            TENANT_A, WidgetStatus.ACTIVE, PageRequest.of(0, 20));
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.hasStatus(WidgetStatus.ACTIVE)));
 
-        assertThat(page.getContent()).hasSize(2);
-        assertThat(page.getContent()).allMatch(w -> w.getStatus() == WidgetStatus.ACTIVE);
+        assertThat(window.getContent()).hasSize(2);
+        assertThat(window.getContent()).allMatch(w -> w.getStatus() == WidgetStatus.ACTIVE);
     }
 
     @ParameterizedTest(name = "status filter: {0}")
     @EnumSource(WidgetStatus.class)
-    @DisplayName("findByTenantIdAndStatus — works for all status values")
-    void findByTenantIdAndStatus_AllValues(WidgetStatus status) {
+    @DisplayName("hasStatus — works for all status values")
+    void hasStatus_AllValues(WidgetStatus status) {
         persistWidget(makeWidget(withName("status-test"), withStatus(status)));
 
-        var page = repository.findByTenantIdAndStatus(
-            TENANT_A, status, PageRequest.of(0, 20));
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.hasStatus(status)));
 
-        assertThat(page.getContent()).hasSize(1);
-        assertThat(page.getContent().get(0).getStatus()).isEqualTo(status);
+        assertThat(window.getContent()).hasSize(1);
+        assertThat(window.getContent().get(0).getStatus()).isEqualTo(status);
     }
 
     @Test
-    @DisplayName("searchByName — case-insensitive LIKE search")
-    void searchByName_CaseInsensitive() {
+    @DisplayName("nameContains — case-insensitive LIKE search")
+    void nameContains_CaseInsensitive() {
         persistWidget(makeWidget(withName("Alpha Widget")));
         persistWidget(makeWidget(withName("Beta Widget")));
         persistWidget(makeWidget(withName("Something Else")));
 
-        var page = repository.searchByName(TENANT_A, "widget", PageRequest.of(0, 20));
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.nameContains("widget")));
 
-        assertThat(page.getContent()).hasSize(2);
-        assertThat(page.getContent())
+        assertThat(window.getContent()).hasSize(2);
+        assertThat(window.getContent())
             .allMatch(w -> w.getName().toLowerCase().contains("widget"));
     }
 
     @Test
-    @DisplayName("searchByName — empty search returns all")
-    void searchByName_EmptySearch() {
+    @DisplayName("nameContains — empty search returns all")
+    void nameContains_EmptySearch() {
         persistWidget(makeWidget(withName("Widget A")));
         persistWidget(makeWidget(withName("Widget B")));
 
-        var page = repository.searchByName(TENANT_A, "", PageRequest.of(0, 20));
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.nameContains("")));
 
-        assertThat(page.getContent()).hasSize(2);
+        assertThat(window.getContent()).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("countByTenantIdAndStatusIn — JPQL count scoped to tenant")
+    void countByTenantIdAndStatusIn_ScopedToTenant() {
+        persistWidget(makeWidget(withTenantId(TENANT_A), withName("a-active"), withStatus(WidgetStatus.ACTIVE)));
+        persistWidget(makeWidget(withTenantId(TENANT_A), withName("a-inactive"), withStatus(WidgetStatus.INACTIVE)));
+        persistWidget(makeWidget(withTenantId(TENANT_B), withName("b-active"), withStatus(WidgetStatus.ACTIVE)));
+
+        var count = repository.countByTenantIdAndStatusIn(
+            TENANT_A, List.of(WidgetStatus.ACTIVE, WidgetStatus.INACTIVE));
+
+        assertThat(count).isEqualTo(2);
     }
 }
 ```
@@ -634,10 +714,26 @@ class SpecificationTests {
         var spec = WidgetSpecs.belongsToTenant(TENANT_A)
             .and(WidgetSpecs.hasStatus(WidgetStatus.ACTIVE));
 
-        var page = repository.findAll(spec, PageRequest.of(0, 20));
+        var window = firstWindow(spec);
 
-        assertThat(page.getContent()).hasSize(1);
-        assertThat(page.getContent().get(0).getName()).isEqualTo("active-a");
+        assertThat(window.getContent()).hasSize(1);
+        assertThat(window.getContent().get(0).getName()).isEqualTo("active-a");
+    }
+
+    @Test
+    @DisplayName("hasStatusIn — any of several statuses, still tenant-scoped")
+    void hasStatusIn_FiltersCorrectly() {
+        persistWidget(makeWidget(withTenantId(TENANT_A), withName("active-a"), withStatus(WidgetStatus.ACTIVE)));
+        persistWidget(makeWidget(withTenantId(TENANT_A), withName("inactive-a"), withStatus(WidgetStatus.INACTIVE)));
+        persistWidget(makeWidget(withTenantId(TENANT_A), withName("archived-a"), withStatus(WidgetStatus.ARCHIVED)));
+        persistWidget(makeWidget(withTenantId(TENANT_B), withName("active-b"), withStatus(WidgetStatus.ACTIVE)));
+
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.hasStatusIn(List.of(WidgetStatus.ACTIVE, WidgetStatus.INACTIVE))));
+
+        assertThat(window.getContent())
+            .extracting(Widget::getName)
+            .containsExactlyInAnyOrder("active-a", "inactive-a");
     }
 
     @Test
@@ -649,10 +745,10 @@ class SpecificationTests {
         var spec = WidgetSpecs.belongsToTenant(TENANT_A)
             .and(WidgetSpecs.nameContains("cool"));
 
-        var page = repository.findAll(spec, PageRequest.of(0, 20));
+        var window = firstWindow(spec);
 
-        assertThat(page.getContent()).hasSize(1);
-        assertThat(page.getContent().get(0).getName()).isEqualTo("My Cool Widget");
+        assertThat(window.getContent()).hasSize(1);
+        assertThat(window.getContent().get(0).getName()).isEqualTo("My Cool Widget");
     }
 
     @Test
@@ -669,10 +765,10 @@ class SpecificationTests {
                 now.plus(1, ChronoUnit.DAYS)
             ));
 
-        var page = repository.findAll(spec, PageRequest.of(0, 20));
+        var window = firstWindow(spec);
 
-        assertThat(page.getContent()).hasSize(2);
-        assertThat(page.getContent())
+        assertThat(window.getContent()).hasSize(2);
+        assertThat(window.getContent())
             .extracting(Widget::getName)
             .containsExactlyInAnyOrder("recent", "today");
     }
@@ -687,9 +783,9 @@ class SpecificationTests {
             .and(WidgetSpecs.hasStatus(null))       // null status = no filter
             .and(WidgetSpecs.nameContains(null));    // null name = no filter
 
-        var page = repository.findAll(spec, PageRequest.of(0, 20));
+        var window = firstWindow(spec);
 
-        assertThat(page.getContent()).hasSize(2);
+        assertThat(window.getContent()).hasSize(2);
     }
 }
 ```
@@ -702,16 +798,19 @@ class SpecificationTests {
 class ConstraintTests {
 
     @Test
-    @DisplayName("unique constraint — duplicate tenant + name throws DataIntegrityViolation")
+    @DisplayName("unique constraint — duplicate tenant + name throws DataIntegrityViolation with SQLSTATE 23505")
     void uniqueName_PerTenant_ThrowsOnDuplicate() {
         persistWidget(makeWidget(withName("Unique Widget")));
 
         var duplicate = makeWidget(withName("Unique Widget"));
 
+        // GlobalExceptionHandler maps 23505 to 409 CONFLICT with a generic message — this proves
+        // the real driver reports that SQLSTATE through Spring's exception translation.
         assertThatThrownBy(() -> {
             repository.save(duplicate);
             entityManager.flush();
-        }).isInstanceOf(DataIntegrityViolationException.class);
+        }).isInstanceOf(DataIntegrityViolationException.class)
+          .satisfies(ex -> assertThat(sqlState(ex)).isEqualTo("23505"));
     }
 
     @Test
@@ -762,13 +861,13 @@ class BulkOperationTests {
 
         assertThat(updatedCount).isEqualTo(2);
 
-        var activePage = repository.findByTenantIdAndStatus(
-            TENANT_A, WidgetStatus.ACTIVE, PageRequest.of(0, 20));
-        assertThat(activePage.getContent()).isEmpty();
+        var active = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.hasStatus(WidgetStatus.ACTIVE)));
+        assertThat(active.getContent()).isEmpty();
 
-        var inactivePage = repository.findByTenantIdAndStatus(
-            TENANT_A, WidgetStatus.INACTIVE, PageRequest.of(0, 20));
-        assertThat(inactivePage.getContent()).hasSize(2);
+        var inactive = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A)
+            .and(WidgetSpecs.hasStatus(WidgetStatus.INACTIVE)));
+        assertThat(inactive.getContent()).hasSize(2);
     }
 
     @Test
@@ -785,7 +884,7 @@ class BulkOperationTests {
 
         assertThat(deletedCount).isEqualTo(2);
 
-        var remaining = repository.findByTenantId(TENANT_A, PageRequest.of(0, 20));
+        var remaining = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A));
         assertThat(remaining.getContent()).hasSize(1);
         assertThat(remaining.getContent().get(0).getId()).isEqualTo(w1.getId());
     }
@@ -804,9 +903,9 @@ class SqlDataSetupTests {
     @DisplayName("@Sql — loads test data from SQL file")
     void sqlSetup_LoadsTestData() {
         // widgets.sql inserts known test data
-        var page = repository.findByTenantId(TENANT_A, PageRequest.of(0, 100));
+        var window = firstWindow(WidgetSpecs.belongsToTenant(TENANT_A));
 
-        assertThat(page.getContent()).isNotEmpty();
+        assertThat(window.getContent()).isNotEmpty();
     }
 }
 ```
@@ -821,8 +920,10 @@ class SqlDataSetupTests {
 - Use `@AfterEach` cleanup to ensure test isolation — `repository.deleteAll()` + flush + clear.
 - Time values: Postgres TIMESTAMPTZ has microsecond precision — use `Instant.now()` without truncation (JPA handles it).
 - Test factories MUST generate unique names with `UUID.randomUUID()` to prevent constraint violations.
-- Pagination tests MUST verify: content size, total elements, total pages, has next/previous, no duplicates.
-- Tenant isolation tests MUST verify: findById returns empty, findAll returns only tenant's data, exists scoped to tenant.
+- Lists are keyset-scrolled (`findBy(spec, q -> q.sortBy(sort).limit(n).scroll(position))`) — there is no `Page`/`Pageable`/offset API to test.
+- Scroll tests MUST verify: window size, `hasNext`, following `positionAt(size - 1)` visits every row exactly once, and no duplicates or gaps when a row is inserted between windows.
+- Tenant isolation tests MUST verify: findById returns empty, every scroll starts from `belongsToTenant` and returns only that tenant's data, a replayed position never crosses tenants, exists/count scoped to tenant.
+- Constraint tests MUST check the SQLSTATE (23505 unique) that `GlobalExceptionHandler` maps to 409 `CONFLICT`.
 - Optimistic locking tests MUST simulate two concurrent reads and verify second save throws `ObjectOptimisticLockingFailureException`.
 - Soft delete tests MUST verify: row exists with `deleted_at` set, excluded from all queries, name reuse allowed.
 - Constraint tests MUST verify: unique violations for same tenant, allowed for different tenants.

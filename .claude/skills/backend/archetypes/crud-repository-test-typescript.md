@@ -45,10 +45,9 @@ import { randomUUID } from "node:crypto";
 import { PrismaWidgetRepository } from "./prisma-widget.repository";
 import type { Widget } from "../domain/entity";
 import type { ListFilters } from "../types/pagination";
-import {
-  NotFoundError,
-  ConflictError,
-} from "../errors/domain-errors";
+
+// Repository errors are AppErrors (error-handling-typescript.md) — assert on the stable code:
+//   await expect(p).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
 
 /**
  * Test database setup.
@@ -263,10 +262,10 @@ describe("PrismaWidgetRepository — CRUD", () => {
     expect(raw!.deletedAt).not.toBeNull();
   });
 
-  it("softDelete throws NotFoundError for non-existent widget", async () => {
+  it("softDelete throws NOT_FOUND for non-existent widget", async () => {
     await expect(
       repo.softDelete(randomUUID(), randomUUID()),
-    ).rejects.toThrow(NotFoundError);
+    ).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
   });
 });
 ```
@@ -376,26 +375,6 @@ describe("PrismaWidgetRepository — Pagination", () => {
     expect(desc.items[0].id).toBe(w3.id);
     expect(desc.items[2].id).toBe(w1.id);
   });
-
-  it("offset pagination returns correct page with total", async () => {
-    const tenantId = randomUUID();
-    for (let i = 0; i < 15; i++) {
-      await repo.create(
-        makeWidget({ tenantId, name: `widget-${String(i).padStart(3, "0")}` }),
-      );
-    }
-
-    const result = await repo.listOffset(tenantId, {
-      page: 2,
-      perPage: 5,
-      sortBy: "created_at",
-      sortDir: "desc",
-      fields: {},
-    });
-
-    expect(result.items).toHaveLength(5);
-    expect(result.total).toBe(15);
-  });
 });
 ```
 
@@ -475,8 +454,8 @@ describe("PrismaWidgetRepository — Tenant Isolation", () => {
     const w = makeWidget({ tenantId: tenantA });
     await seedWidgets(w);
 
-    // Tenant B cannot delete
-    await expect(repo.softDelete(tenantB, w.id)).rejects.toThrow(NotFoundError);
+    // Tenant B cannot delete — and sees NOT_FOUND, never FORBIDDEN
+    await expect(repo.softDelete(tenantB, w.id)).rejects.toMatchObject({ code: "NOT_FOUND" });
 
     // Widget still exists for tenant A
     const found = await repo.findById(tenantA, w.id);
@@ -489,7 +468,7 @@ describe("PrismaWidgetRepository — Tenant Isolation", () => {
 
 ```typescript
 describe("PrismaWidgetRepository — Optimistic Locking", () => {
-  it("concurrent update — second write fails with ConflictError", async () => {
+  it("concurrent update — second write fails with CONFLICT", async () => {
     const w = makeWidget();
     await seedWidgets(w);
 
@@ -513,7 +492,7 @@ describe("PrismaWidgetRepository — Optimistic Locking", () => {
       version: 2, // expects version 1, but it's now 2
       updatedAt: new Date(),
     };
-    await expect(repo.update(update2)).rejects.toThrow(ConflictError);
+    await expect(repo.update(update2)).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
 
     // Verify first update persisted
     const final = await repo.findById(w.tenantId, w.id);
@@ -531,7 +510,7 @@ describe("PrismaWidgetRepository — Optimistic Locking", () => {
       version: 3, // far behind actual version 5
       updatedAt: new Date(),
     };
-    await expect(repo.update(stale)).rejects.toThrow(ConflictError);
+    await expect(repo.update(stale)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });
 ```
@@ -604,26 +583,30 @@ describe("PrismaWidgetRepository — Filters", () => {
 
 ```typescript
 describe("PrismaWidgetRepository — Error Mapping", () => {
-  it("duplicate name within tenant returns ConflictError", async () => {
+  it("duplicate name within tenant returns CONFLICT with a generic message", async () => {
     const tenantId = randomUUID();
     const w1 = makeWidget({ tenantId, name: "unique-name" });
     await seedWidgets(w1);
 
     const w2 = makeWidget({ tenantId, name: "unique-name" });
-    await expect(repo.create(w2)).rejects.toThrow(ConflictError);
+    const err = await repo.create(w2).catch((e: unknown) => e);
+
+    expect(err).toMatchObject({ code: "CONFLICT", status: 409 });
+    // The constraint name stays in the log (cause) — never in the client-visible message
+    expect(err).not.toMatchObject({ message: expect.stringContaining("widgets_tenant_name_unique") });
   });
 
-  it("duplicate primary key returns ConflictError", async () => {
+  it("duplicate primary key returns CONFLICT", async () => {
     const w = makeWidget();
     await seedWidgets(w);
 
     const dup = makeWidget({ id: w.id, tenantId: w.tenantId, name: "different" });
-    await expect(repo.create(dup)).rejects.toThrow(ConflictError);
+    await expect(repo.create(dup)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
-  it("update non-existent widget returns ConflictError (zero rows)", async () => {
+  it("update non-existent widget returns CONFLICT (zero rows)", async () => {
     const w = makeWidget({ version: 2 });
-    await expect(repo.update(w)).rejects.toThrow(ConflictError);
+    await expect(repo.update(w)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });
 ```
@@ -655,10 +638,6 @@ import * as schema from "../db/schema";
 import { DrizzleWidgetRepository } from "./drizzle-widget.repository";
 import type { Widget } from "../domain/entity";
 import type { ListFilters } from "../types/pagination";
-import {
-  NotFoundError,
-  ConflictError,
-} from "../errors/domain-errors";
 
 let client: ReturnType<typeof postgres>;
 let db: PostgresJsDatabase;
@@ -919,16 +898,16 @@ describe("DrizzleWidgetRepository — Tenant Isolation", () => {
 
 ```typescript
 describe("DrizzleWidgetRepository — Error Mapping", () => {
-  it("unique constraint violation returns ConflictError", async () => {
+  it("unique constraint violation returns CONFLICT", async () => {
     const tenantId = randomUUID();
     const w1 = makeWidget({ tenantId, name: "dup-name" });
     await seedWidgets(w1);
 
     const w2 = makeWidget({ tenantId, name: "dup-name" });
-    await expect(repo.create(w2)).rejects.toThrow(ConflictError);
+    await expect(repo.create(w2)).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
   });
 
-  it("optimistic lock conflict returns ConflictError", async () => {
+  it("optimistic lock conflict returns CONFLICT", async () => {
     const w = makeWidget();
     await seedWidgets(w);
 
@@ -938,7 +917,7 @@ describe("DrizzleWidgetRepository — Error Mapping", () => {
       version: 99, // wrong version
       updatedAt: new Date(),
     };
-    await expect(repo.update(stale)).rejects.toThrow(ConflictError);
+    await expect(repo.update(stale)).rejects.toMatchObject({ code: "CONFLICT" });
   });
 });
 ```
@@ -978,9 +957,9 @@ services:
 - Test factories MUST generate unique names/IDs with `randomUUID()` to prevent constraint collisions
 - Pagination tests MUST verify: item count, hasMore flag, cursor presence, no duplicates between pages
 - Tenant isolation tests MUST verify: findById returns null, list returns empty, update fails, delete fails for wrong tenant
-- Optimistic locking tests MUST simulate two concurrent reads and verify second update fails with ConflictError
+- Optimistic locking tests MUST simulate two concurrent reads and verify second update fails with `code: "CONFLICT"`
 - Soft delete tests MUST verify: record excluded from queries but raw row exists with deletedAt set
-- Error mapping tests MUST verify: unique violation -> ConflictError, zero rows -> ConflictError/NotFoundError
+- Error mapping tests MUST verify: unique violation -> 409 `CONFLICT` with a generic message (no constraint name), zero rows -> `CONFLICT`/`NOT_FOUND` — asserted by `code`, e.g. `rejects.toMatchObject({ code: "CONFLICT" })`
 - Never use `test.concurrent` for integration tests sharing the same database — sequential execution prevents flakes
 - Test database MUST be disposable — never run integration tests against production or staging databases
 - Prisma tests use `deleteMany({})` for cleanup; Drizzle tests use `db.delete(schema.widgets)`

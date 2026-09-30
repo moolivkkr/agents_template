@@ -778,7 +778,11 @@ class TestErrorMapping:
 
         # If the repo properly maps the error, it should be ConflictError
         if isinstance(exc_info.value, ConflictError):
-            assert exc_info.value.http_status == 409
+            assert exc_info.value.status == 409
+            assert exc_info.value.code == "CONFLICT"
+            # The client message is generic — the constraint name and driver text stay in the chain/log
+            assert "constraint" not in exc_info.value.message.lower()
+            assert "idx_" not in exc_info.value.message
 
     @pytest.mark.asyncio
     async def test_update_nonexistent_returns_false(self, repo: WidgetRepository) -> None:
@@ -798,7 +802,7 @@ class TestErrorMapping:
 - Optimistic locking tests MUST simulate two concurrent reads and verify second update fails
 - Soft delete tests MUST verify: GetByID returns None, List excludes deleted, total count excludes deleted
 - Unique constraint tests MUST verify: same name across tenants allowed, deleted names can be reused
-- Error mapping tests MUST verify: unique violation -> ConflictError, no rows -> False/NotFoundError
+- Error mapping tests MUST verify: unique violation -> ConflictError (409 `CONFLICT`, generic message with no constraint name), no rows -> False/NotFoundError
 - Batch operations MUST be tested with meaningful data volumes (10+ rows)
 - Never use `@pytest.mark.asyncio` with `t.Parallel()` equivalent — sequential execution within each class for shared DB
 - Container cleanup happens automatically via `testcontainers` context manager

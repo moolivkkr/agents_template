@@ -1,6 +1,6 @@
 ---
 skill: crud-handler-typescript
-description: TypeScript HTTP handler archetype — Express and NestJS patterns, Zod validation, typed request/response, cursor + offset pagination, async error handling, middleware chain
+description: TypeScript HTTP handler archetype — Express and NestJS patterns, Zod validation, typed request/response, cursor pagination, async error handling, middleware chain
 version: "1.0"
 tags:
   - typescript
@@ -14,7 +14,7 @@ tags:
 
 # CRUD Handler Archetype — TypeScript
 
-> **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-handler.md` (Go). Both produce identical response envelopes so frontend clients can use a single parsing strategy.
+> **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-handler.md` (Go). Both produce the envelope in `~/.claude/skills/api/response-envelope.md` — success `{data, meta}`, error `{error}`, never both; list metadata in `meta.pagination` — so frontend clients can use a single parsing strategy. Error bodies are written only by the error middleware in `error-handling-typescript.md`.
 
 Complete HTTP handler set for Express and NestJS. Every generated TypeScript handler MUST follow this pattern.
 
@@ -25,59 +25,49 @@ Complete HTTP handler set for Express and NestJS. Every generated TypeScript han
 ```typescript
 // src/types/response.ts
 
-/** Wraps a single resource response — matches Go archetype exactly. */
+/** Wraps a single resource response — matches the Go archetype exactly. */
 export interface Envelope<T> {
   data: T;
   meta: Meta;
 }
 
-/** Wraps a paginated list response (cursor-based). */
+/** Wraps a list response (cursor pagination). `data` is always an array — [] when empty, never null. */
 export interface ListEnvelope<T> {
   data: T[];
   meta: ListMeta;
 }
 
-/** Wraps an offset-paginated list response (admin/reporting UIs). */
-export interface OffsetListEnvelope<T> {
-  data: T[];
-  meta: OffsetListMeta;
-  links: PageLinks;
-}
-
 export interface Meta {
   request_id: string;
-  timestamp: string;
 }
 
-export interface ListMeta {
-  cursor: string;
+export interface ListMeta extends Meta {
+  pagination: Pagination;
+}
+
+export interface Pagination {
+  next_cursor: string | null; // null when has_more is false
   has_more: boolean;
-  total: number;
-  request_id: string;
-  timestamp: string;
-}
-
-export interface OffsetListMeta {
-  page: number;
-  per_page: number;
-  total: number;
-  total_pages: number;
-  request_id: string;
-  timestamp: string;
-}
-
-export interface PageLinks {
-  self: string;
-  next?: string;
-  prev?: string;
-  first: string;
-  last: string;
+  limit: number;
+  total_count?: number;       // only if cheap AND the UI shows it
 }
 
 export function newMeta(requestId: string): Meta {
+  return { request_id: requestId };
+}
+
+export function newListMeta(
+  requestId: string,
+  page: { cursor: string; hasMore: boolean },
+  limit: number,
+): ListMeta {
   return {
     request_id: requestId,
-    timestamp: new Date().toISOString(),
+    pagination: {
+      next_cursor: page.hasMore && page.cursor ? page.cursor : null,
+      has_more: page.hasMore,
+      limit,
+    },
   };
 }
 ```
@@ -97,24 +87,11 @@ export interface ListFilters {
   fields: Record<string, string>;
 }
 
-export interface OffsetListFilters {
-  page: number;
-  perPage: number;
-  sortBy: string;
-  sortDir: "asc" | "desc";
-  fields: Record<string, string>;
-}
-
 export interface ListResult<T> {
   items: T[];
-  cursor: string;
+  cursor: string;  // opaque next-page cursor; "" when hasMore is false
   hasMore: boolean;
-  total: number;
-}
-
-export interface OffsetListResult<T> {
-  items: T[];
-  total: number;
+  total: number;   // internal — becomes meta.pagination.total_count only if cheap AND the UI shows it
 }
 ```
 
@@ -158,16 +135,10 @@ export const idParamSchema = z.object({
   id: z.string().uuid("invalid UUID format"),
 });
 
+// ?cursor=<next_cursor>&limit=<n> — cursor pagination only (see "Pagination — cursor only" below)
 export const cursorPaginationSchema = z.object({
   cursor: z.string().optional().default(""),
-  page_size: z.coerce.number().int().min(1).max(100).optional().default(20),
-  sort_by: z.enum(["created_at", "updated_at", "name"]).optional().default("created_at"),
-  sort_dir: z.enum(["asc", "desc"]).optional().default("desc"),
-});
-
-export const offsetPaginationSchema = z.object({
-  page: z.coerce.number().int().min(1).optional().default(1),
-  per_page: z.coerce.number().int().min(1).max(100).optional().default(20),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
   sort_by: z.enum(["created_at", "updated_at", "name"]).optional().default("created_at"),
   sort_dir: z.enum(["asc", "desc"]).optional().default("desc"),
 });
@@ -194,7 +165,7 @@ import type { Request, Response, NextFunction } from "express";
  * Usage:
  *   router.get("/widgets/:id", asyncHandler(async (req, res) => {
  *     const widget = await widgetService.get(req.params.id);
- *     res.json({ data: widget });
+ *     res.json({ data: widget, meta: newMeta(requestId) });
  *   }));
  */
 export function asyncHandler(
@@ -228,15 +199,16 @@ export interface AuthenticatedRequest extends Request {
 // src/middleware/validate.ts
 
 import type { Request, Response, NextFunction } from "express";
-import type { ZodSchema, ZodError } from "zod";
-import { MultiValidationError } from "../errors/domain-errors";
+import type { ZodSchema, ZodError, ZodIssue } from "zod";
+import type { FieldError } from "../errors/app-error";
+import { FIELD_MESSAGES, multiValidationError } from "../errors/domain-errors";
 
 type ValidationTarget = "body" | "params" | "query";
 
 /**
  * Express middleware that validates the specified request target against a Zod schema.
  * On success, replaces the target with the parsed (and sanitized) value.
- * On failure, throws a MultiValidationError caught by error middleware.
+ * On failure, throws 400 VALIDATION_FAILED (details[] per field), caught by the error middleware.
  *
  * Usage:
  *   router.post("/widgets", validate("body", createWidgetSchema), createHandler);
@@ -247,8 +219,7 @@ export function validate(target: ValidationTarget, schema: ZodSchema) {
     const result = schema.safeParse(req[target]);
 
     if (!result.success) {
-      const fieldErrors = formatZodErrors(result.error);
-      throw new MultiValidationError(fieldErrors);
+      throw multiValidationError(toFieldErrors(result.error));
     }
 
     // Replace target with parsed value (trimmed, defaulted, coerced)
@@ -257,13 +228,30 @@ export function validate(target: ValidationTarget, schema: ZodSchema) {
   };
 }
 
-function formatZodErrors(error: ZodError): Record<string, string> {
-  const fieldErrors: Record<string, string> = {};
-  for (const issue of error.issues) {
-    const path = issue.path.join(".");
-    fieldErrors[path] = issue.message;
+/**
+ * Zod issues → details[]: a stable lower_snake code plus the catalog message for that code.
+ * issue.message is never sent — default Zod text isn't written for users.
+ */
+function toFieldErrors(error: ZodError): FieldError[] {
+  return error.issues.map((issue) => {
+    const code = fieldCode(issue);
+    return { field: issue.path.join("."), code, message: FIELD_MESSAGES[code] };
+  });
+}
+
+function fieldCode(issue: ZodIssue): string {
+  switch (issue.code) {
+    case "invalid_type":
+      return issue.received === "undefined" ? "required" : "invalid_type";
+    case "too_small":
+      return issue.type === "string" && issue.minimum === 1 ? "required" : "too_small";
+    case "too_big":
+      return issue.type === "string" ? "too_long" : "too_big";
+    case "invalid_string": // uuid, email, url, regex …
+      return "invalid_format";
+    default: // invalid_enum_value, custom, …
+      return "invalid_value";
   }
-  return fieldErrors;
 }
 ```
 
@@ -280,17 +268,11 @@ import {
   updateWidgetSchema,
   idParamSchema,
   cursorPaginationSchema,
-  offsetPaginationSchema,
 } from "../schemas/widget.schema";
 import type { WidgetService } from "../services/widget.service";
 import type { AuthenticatedRequest } from "../types/express";
-import { newMeta } from "../types/response";
-import type {
-  Envelope,
-  ListEnvelope,
-  OffsetListEnvelope,
-  PageLinks,
-} from "../types/response";
+import { newMeta, newListMeta } from "../types/response";
+import type { Envelope, ListEnvelope } from "../types/response";
 import type { Widget } from "../domain/widget";
 
 /**
@@ -316,7 +298,7 @@ export function createWidgetRouter(svc: WidgetService): Router {
     }),
   );
 
-  // --- List (cursor pagination — default for public APIs) ---
+  // --- List (cursor pagination: ?cursor=<next_cursor>&limit=<n>) ---
   router.get(
     "/",
     validate("query", cursorPaginationSchema),
@@ -324,7 +306,7 @@ export function createWidgetRouter(svc: WidgetService): Router {
       const authReq = req as AuthenticatedRequest;
       const query = req.query as unknown as {
         cursor: string;
-        page_size: number;
+        limit: number;
         sort_by: string;
         sort_dir: "asc" | "desc";
       };
@@ -334,77 +316,16 @@ export function createWidgetRouter(svc: WidgetService): Router {
 
       const result = await svc.list(authReq.tenantId, {
         cursor: query.cursor,
-        pageSize: query.page_size,
+        pageSize: query.limit,
         sortBy: query.sort_by,
         sortDir: query.sort_dir,
         fields,
       });
 
+      // data is [] (never null) when empty; next_cursor is null when has_more is false
       const response: ListEnvelope<Widget> = {
-        data: result.items,
-        meta: {
-          cursor: result.cursor,
-          has_more: result.hasMore,
-          total: result.total,
-          request_id: authReq.requestId,
-          timestamp: new Date().toISOString(),
-        },
-      };
-      res.json(response);
-    }),
-  );
-
-  // --- List Admin (offset pagination — for admin/reporting UIs) ---
-  router.get(
-    "/admin",
-    validate("query", offsetPaginationSchema),
-    asyncHandler(async (req, res) => {
-      const authReq = req as AuthenticatedRequest;
-      const query = req.query as unknown as {
-        page: number;
-        per_page: number;
-        sort_by: string;
-        sort_dir: "asc" | "desc";
-      };
-
-      const fields = parseFieldFilters(req);
-
-      const result = await svc.listOffset(authReq.tenantId, {
-        page: query.page,
-        perPage: query.per_page,
-        sortBy: query.sort_by,
-        sortDir: query.sort_dir,
-        fields,
-      });
-
-      const totalPages = query.per_page > 0
-        ? Math.ceil(result.total / query.per_page)
-        : 0;
-
-      const basePath = req.baseUrl + req.path;
-      const links: PageLinks = {
-        self: `${basePath}?page=${query.page}&per_page=${query.per_page}`,
-        first: `${basePath}?page=1&per_page=${query.per_page}`,
-        last: `${basePath}?page=${totalPages}&per_page=${query.per_page}`,
-        ...(query.page < totalPages
-          ? { next: `${basePath}?page=${query.page + 1}&per_page=${query.per_page}` }
-          : {}),
-        ...(query.page > 1
-          ? { prev: `${basePath}?page=${query.page - 1}&per_page=${query.per_page}` }
-          : {}),
-      };
-
-      const response: OffsetListEnvelope<Widget> = {
-        data: result.items,
-        meta: {
-          page: query.page,
-          per_page: query.per_page,
-          total: result.total,
-          total_pages: totalPages,
-          request_id: authReq.requestId,
-          timestamp: new Date().toISOString(),
-        },
-        links,
+        data: result.items ?? [],
+        meta: newListMeta(authReq.requestId, result, query.limit),
       };
       res.json(response);
     }),
@@ -497,10 +418,11 @@ export function createApp(deps: AppDependencies): express.Application {
   // 1. CORS — outermost, handles preflight before auth
   app.use(corsMiddleware(deps.config.cors));
 
-  // 2. Request ID — generate/extract before anything else
+  // 2. Request ID — generate/extract before anything else; sets req.requestId and the
+  //    X-Request-Id response header (= meta.request_id / error.request_id)
   app.use(requestId);
 
-  // 3. Body parser with size limit — prevent abuse
+  // 3. Body parser with size limit — prevent abuse (bad JSON / too large → 400 MALFORMED_REQUEST)
   app.use(express.json({ limit: "1mb" }));
 
   // 4. Auth — sets req.userId, req.tenantId, req.roles
@@ -543,17 +465,26 @@ import {
 } from "@nestjs/common";
 import { WidgetService } from "./widget.service";
 import { CreateWidgetDto, UpdateWidgetDto } from "./dto/widget.dto";
-import { CursorPaginationDto, OffsetPaginationDto } from "./dto/pagination.dto";
+import { CursorPaginationDto } from "./dto/pagination.dto";
 import { JwtAuthGuard } from "../../guards/jwt-auth.guard";
 import { CurrentUser } from "../../decorators/current-user.decorator";
 import { RequestId } from "../../decorators/request-id.decorator";
+import { validationExceptionFactory } from "../../filters/app-error.filter";
+import { validationError } from "../../errors/domain-errors";
 import type { AuthUser } from "../../types/auth";
+import { newMeta, newListMeta } from "../../types/response";
 import type { Envelope, ListEnvelope } from "../../types/response";
 import type { Widget } from "../../domain/widget";
 
+/** Invalid :id → 400 VALIDATION_FAILED (details[0].field = "id"), not Nest's default body. */
+const uuidPipe = new ParseUUIDPipe({
+  version: "4",
+  exceptionFactory: () => validationError("id", "invalid_format", "Must be a valid ID."),
+});
+
 @Controller("api/v1/widgets")
 @UseGuards(JwtAuthGuard)
-@UsePipes(new ValidationPipe({ whitelist: true, transform: true }))
+@UsePipes(new ValidationPipe({ whitelist: true, transform: true, exceptionFactory: validationExceptionFactory }))
 export class WidgetController {
   constructor(private readonly widgetService: WidgetService) {}
 
@@ -567,7 +498,7 @@ export class WidgetController {
     const result = await this.widgetService.create(user.tenantId, user.id, dto);
     return {
       data: result,
-      meta: { request_id: requestId, timestamp: new Date().toISOString() },
+      meta: newMeta(requestId),
     };
   }
 
@@ -577,22 +508,17 @@ export class WidgetController {
     @RequestId() requestId: string,
     @Query() query: CursorPaginationDto,
   ): Promise<ListEnvelope<Widget>> {
+    const limit = query.limit ?? 20;
     const result = await this.widgetService.list(user.tenantId, {
       cursor: query.cursor ?? "",
-      pageSize: query.page_size ?? 20,
+      pageSize: limit,
       sortBy: query.sort_by ?? "created_at",
       sortDir: query.sort_dir ?? "desc",
       fields: {},
     });
     return {
-      data: result.items,
-      meta: {
-        cursor: result.cursor,
-        has_more: result.hasMore,
-        total: result.total,
-        request_id: requestId,
-        timestamp: new Date().toISOString(),
-      },
+      data: result.items ?? [],
+      meta: newListMeta(requestId, result, limit),
     };
   }
 
@@ -600,12 +526,12 @@ export class WidgetController {
   async get(
     @CurrentUser() user: AuthUser,
     @RequestId() requestId: string,
-    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Param("id", uuidPipe) id: string,
   ): Promise<Envelope<Widget>> {
     const result = await this.widgetService.get(user.tenantId, id);
     return {
       data: result,
-      meta: { request_id: requestId, timestamp: new Date().toISOString() },
+      meta: newMeta(requestId),
     };
   }
 
@@ -613,13 +539,13 @@ export class WidgetController {
   async update(
     @CurrentUser() user: AuthUser,
     @RequestId() requestId: string,
-    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Param("id", uuidPipe) id: string,
     @Body() dto: UpdateWidgetDto,
   ): Promise<Envelope<Widget>> {
     const result = await this.widgetService.update(user.tenantId, id, dto);
     return {
       data: result,
-      meta: { request_id: requestId, timestamp: new Date().toISOString() },
+      meta: newMeta(requestId),
     };
   }
 
@@ -627,7 +553,7 @@ export class WidgetController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async delete(
     @CurrentUser() user: AuthUser,
-    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Param("id", uuidPipe) id: string,
   ): Promise<void> {
     await this.widgetService.delete(user.tenantId, id);
   }
@@ -690,6 +616,7 @@ export class UpdateWidgetDto {
 import { IsOptional, IsString, IsEnum, IsInt, Min, Max } from "class-validator";
 import { Transform, Type } from "class-transformer";
 
+/** ?cursor=<next_cursor>&limit=<n> — cursor pagination only. */
 export class CursorPaginationDto {
   @IsOptional()
   @IsString()
@@ -700,30 +627,7 @@ export class CursorPaginationDto {
   @IsInt()
   @Min(1)
   @Max(100)
-  page_size?: number = 20;
-
-  @IsOptional()
-  @IsEnum(["created_at", "updated_at", "name"] as const)
-  sort_by?: "created_at" | "updated_at" | "name" = "created_at";
-
-  @IsOptional()
-  @IsEnum(["asc", "desc"] as const)
-  sort_dir?: "asc" | "desc" = "desc";
-}
-
-export class OffsetPaginationDto {
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  page?: number = 1;
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  @Max(100)
-  per_page?: number = 20;
+  limit?: number = 20;
 
   @IsOptional()
   @IsEnum(["created_at", "updated_at", "name"] as const)
@@ -759,16 +663,17 @@ export const CurrentUser = createParamDecorator(
 // src/decorators/request-id.decorator.ts
 
 import { createParamDecorator, ExecutionContext } from "@nestjs/common";
+import { requestIdOf } from "../middleware/error-handler";
 
 /**
- * Extracts the request ID from headers or generates one.
+ * The request ID set by the request-id middleware (or generated once per request) — the same value
+ * the error filter puts in error.request_id and X-Request-Id.
  *
  * Usage: @RequestId() requestId: string
  */
 export const RequestId = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): string => {
-    const request = ctx.switchToHttp().getRequest();
-    return request.headers["x-request-id"] ?? request.requestId ?? "";
+    return requestIdOf(ctx.switchToHttp().getRequest());
   },
 );
 ```
@@ -793,14 +698,12 @@ export class WidgetModule {}
 
 ---
 
-## Pagination Strategy — When to Use Which
+## Pagination — cursor only
 
-| Strategy | Use When | Query Params | Example |
-|----------|----------|--------------|---------|
-| **Cursor** (default) | Public APIs, real-time feeds, large datasets, infinite scroll | `?cursor=abc&page_size=20` | User-facing list endpoints |
-| **Offset** | Admin/reporting UIs, dashboards, "jump to page N", data export previews | `?page=3&per_page=20` | Back-office tables, audit logs |
-
-**Default to cursor pagination.** Use offset only for admin/reporting UIs where users need to jump to arbitrary pages. Offset pagination degrades at high page numbers (OFFSET 10000 still scans 10000 rows).
+List endpoints take `?cursor=<next_cursor>&limit=<n>` and return `meta.pagination`. There is no offset
+or page-number variant: offset pages skip or repeat rows under concurrent writes, and `OFFSET 10000`
+still scans 10,000 rows. For "jump to page N" admin tables, filter instead (date range, search, status).
+A spec that truly needs numbered pages records it in `docs/DECISIONS.md` and still uses the envelope.
 
 ---
 
@@ -810,12 +713,13 @@ export class WidgetModule {}
 - Every handler MUST extract `requestId` from the request and include it in response metadata
 - Tenant ID comes from auth context (set by auth middleware) — NEVER from path params or body
 - Request body size MUST be limited (`express.json({ limit: "1mb" })`) to prevent abuse
-- Error responses MUST map domain errors to correct HTTP status codes via error middleware/filter
+- Error responses MUST map domain errors to correct HTTP status codes via error middleware/filter — handlers never write error bodies themselves
 - Internal error messages MUST NOT leak to clients — return generic message for 500s
-- Pagination MUST enforce max page size (100) — never return unbounded lists
+- Validation failures (Zod / class-validator / invalid `:id`) are 400 `VALIDATION_FAILED` with `details[]` of `{field, code, message}` — never the validator's raw text
+- Pagination is cursor-only (`cursor` + `limit`); `limit` MUST be capped at 100 — never return unbounded lists
 - Filter fields MUST be allow-listed — never pass arbitrary query params to the DB
 - Sort fields MUST be allow-listed — never allow sorting by arbitrary columns
-- Every response MUST use the envelope format: `{"data": T, "meta": {...}}`
+- Every response MUST use the envelope in `api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}`; lists add `meta.pagination` `{next_cursor, has_more, limit}` and `data` is `[]` when empty
 - DELETE returns 204 No Content — no body
 - POST create returns 201 Created with the created resource in the body
 - Zod schemas MUST use `.trim()` on string fields to sanitize whitespace

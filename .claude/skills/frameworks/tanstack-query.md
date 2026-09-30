@@ -98,7 +98,9 @@ export function useResourcesInfinite(filters: Filters) {
     queryKey: resourceKeys.list(filters),
     queryFn: ({ pageParam }) => api.listResources({ ...filters, cursor: pageParam }),
     initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.next_cursor : undefined,
+    // Each page is the envelope (api/response-envelope.md): { data: T[], meta: { request_id, pagination } }
+    getNextPageParam: (lastPage) =>
+      lastPage.meta.pagination?.has_more ? lastPage.meta.pagination.next_cursor ?? undefined : undefined,
   });
 }
 ```

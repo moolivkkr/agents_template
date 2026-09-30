@@ -66,25 +66,6 @@ class ListResult(Generic[T]):
 
 
 @dataclass
-class OffsetListFilters:
-    """Offset-based pagination parameters (for admin/reporting UIs)."""
-
-    page: int = 1
-    per_page: int = 20
-    sort_by: str = "created_at"
-    sort_dir: str = "desc"
-    fields: dict[str, str] = field(default_factory=dict)
-
-
-@dataclass
-class OffsetListResult(Generic[T]):
-    """Wraps offset-paginated results."""
-
-    items: list[T]
-    total: int = 0
-
-
-@dataclass
 class AuditEntry:
     """Records a mutation for compliance."""
 
@@ -130,7 +111,7 @@ class Widget(Entity):
 from typing import Any, Protocol, runtime_checkable
 from uuid import UUID
 
-from app.domain.base import ListFilters, ListResult, OffsetListFilters, OffsetListResult
+from app.domain.base import ListFilters, ListResult
 from app.domain.widget import Widget
 
 
@@ -143,7 +124,6 @@ class WidgetRepository(Protocol):
     async def update(self, widget: Widget) -> bool: ...
     async def soft_delete(self, tenant_id: UUID, widget_id: UUID) -> bool: ...
     async def list(self, tenant_id: UUID, filters: ListFilters) -> ListResult[Widget]: ...
-    async def list_offset(self, tenant_id: UUID, filters: OffsetListFilters) -> OffsetListResult[Widget]: ...
 
 
 @runtime_checkable
@@ -180,9 +160,9 @@ import logging
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from app.domain.base import AuditEntry, ListFilters, ListResult, OffsetListFilters, OffsetListResult
+from app.domain.base import AuditEntry, ListFilters, ListResult
 from app.domain.widget import Widget, WidgetStatus
-from app.errors import ConflictError, NotFoundError, UnauthorizedError, ValidationError
+from app.errors import ConflictError, NotFoundError, ValidationFailedError
 from app.middleware.request_id import get_request_id
 from app.services.protocols import AuditWriter, Cache, TxManager, WidgetRepository
 
@@ -284,7 +264,7 @@ class WidgetService:
         # 2. Query DB
         widget = await self._repo.get_by_id(tenant_id, widget_id)
         if widget is None:
-            raise NotFoundError(resource="widget", identifier=str(widget_id))
+            raise NotFoundError("Widget")  # also for another tenant's widget — never 403
 
         # 3. Populate cache
         await self._cache_set(cache_key, widget)
@@ -315,14 +295,11 @@ class WidgetService:
         # 2. Fetch current (ensures tenant-scoping)
         existing = await self._repo.get_by_id(tenant_id, widget_id)
         if existing is None:
-            raise NotFoundError(resource="widget", identifier=str(widget_id))
+            raise NotFoundError("Widget")
 
         # 3. Optimistic lock check
         if version != existing.version:
-            raise ConflictError(
-                resource="widget",
-                reason="version mismatch — reload and retry",
-            )
+            raise ConflictError("This widget was changed by someone else. Reload and try again.")
 
         # 4. Apply changes
         existing.name = name
@@ -334,7 +311,7 @@ class WidgetService:
         # 5. Persist
         success = await self._repo.update(existing)
         if not success:
-            raise ConflictError(resource="widget", reason="concurrent modification detected")
+            raise ConflictError("This widget was changed by someone else. Reload and try again.")
 
         # 6. Invalidate cache
         cache_key = f"widget:{tenant_id}:{widget_id}"
@@ -366,7 +343,7 @@ class WidgetService:
         # 1. Soft delete (sets deleted_at, does not remove row)
         deleted = await self._repo.soft_delete(tenant_id, widget_id)
         if not deleted:
-            raise NotFoundError(resource="widget", identifier=str(widget_id))
+            raise NotFoundError("Widget")
 
         # 2. Invalidate cache
         cache_key = f"widget:{tenant_id}:{widget_id}"
@@ -395,7 +372,7 @@ class WidgetService:
         *,
         tenant_id: UUID,
         cursor: str | None = None,
-        page_size: int = 20,
+        limit: int = 20,
         sort_by: str = "created_at",
         sort_dir: str = "desc",
         field_filters: dict[str, str] | None = None,
@@ -403,8 +380,8 @@ class WidgetService:
         req_id = get_request_id()
         log = self._logger.getChild("list")
 
-        # Enforce pagination defaults and maximums
-        page_size = max(1, min(page_size, 100))
+        # Enforce pagination defaults and maximums (cursor pagination only — no offset variant)
+        limit = max(1, min(limit, 100))
         if sort_by not in {"created_at", "updated_at", "name"}:
             sort_by = "created_at"
         if sort_dir not in {"asc", "desc"}:
@@ -412,7 +389,7 @@ class WidgetService:
 
         filters = ListFilters(
             cursor=cursor,
-            page_size=page_size,
+            page_size=limit,
             sort_by=sort_by,
             sort_dir=sort_dir,
             fields=field_filters or {},
@@ -427,44 +404,6 @@ class WidgetService:
                 "result_count": len(result.items),
                 "has_more": result.has_more,
                 "tenant_id": str(tenant_id),
-            },
-        )
-        return result
-
-    async def list_offset(
-        self,
-        *,
-        tenant_id: UUID,
-        page: int = 1,
-        per_page: int = 20,
-        sort_by: str = "created_at",
-        sort_dir: str = "desc",
-        field_filters: dict[str, str] | None = None,
-    ) -> OffsetListResult[Widget]:
-        req_id = get_request_id()
-        log = self._logger.getChild("list_offset")
-
-        per_page = max(1, min(per_page, 100))
-        page = max(1, page)
-
-        filters = OffsetListFilters(
-            page=page,
-            per_page=per_page,
-            sort_by=sort_by,
-            sort_dir=sort_dir,
-            fields=field_filters or {},
-        )
-
-        result = await self._repo.list_offset(tenant_id, filters)
-
-        log.info(
-            "list_offset completed",
-            extra={
-                "request_id": req_id,
-                "page": page,
-                "per_page": per_page,
-                "result_count": len(result.items),
-                "total": result.total,
             },
         )
         return result
@@ -536,19 +475,20 @@ class WidgetService:
 ```python
     @staticmethod
     def _validate_name(name: str) -> None:
-        """Validate widget name. Raises ValidationError on failure."""
+        """Validate widget name. Raises ValidationFailedError (400 VALIDATION_FAILED) on failure."""
         if not name or not name.strip():
-            raise ValidationError(field="name", reason="name is required")
+            raise ValidationFailedError("name", "required", "Name is required.")
         if len(name) > 255:
-            raise ValidationError(field="name", reason="name must be 255 characters or fewer")
+            raise ValidationFailedError("name", "too_long", "Name must be 255 characters or fewer.")
 
     @staticmethod
     def _validate_description(description: str) -> None:
-        """Validate widget description. Raises ValidationError on failure."""
+        """Validate widget description. Raises ValidationFailedError (400 VALIDATION_FAILED) on failure."""
         if len(description) > 2000:
-            raise ValidationError(
-                field="description",
-                reason="description must be 2000 characters or fewer",
+            raise ValidationFailedError(
+                "description",
+                "too_long",
+                "Description must be 2000 characters or fewer.",
             )
 ```
 
@@ -642,7 +582,7 @@ class WidgetService:
 - Errors MUST use the domain error types from `app/errors` — never raise bare `Exception`
 - Max 40 lines of logic per method — extract helpers for complex steps
 - Accept protocols (interfaces), inject concrete implementations — constructor takes protocols
-- Never return unbounded lists — always enforce `page_size` max (100)
+- Never return unbounded lists — always enforce `limit` max (100); lists are cursor-paginated only (no offset/page variant)
 - Transaction support uses `async with` context managers — rollback is automatic on exception
 - Cache failures are logged, never raised — cache is a performance optimization, not a correctness requirement
 - Use `logging.getLogger(__name__)` for structured logging — never print to stdout

@@ -1,6 +1,6 @@
 ---
 skill: crud-handler-python
-description: Python FastAPI handler archetype — route decorators, Pydantic v2 request/response models, dependency injection, cursor + offset pagination, error mapping, auth dependencies, structured logging
+description: Python FastAPI handler archetype — route decorators, Pydantic v2 request/response models, dependency injection, cursor pagination, error mapping, auth dependencies, structured logging
 version: "1.0"
 tags:
   - python
@@ -13,7 +13,7 @@ tags:
 
 # CRUD Handler Archetype — Python (FastAPI)
 
-> **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-handler.md` (Go/chi). Both produce identical response envelopes so frontend clients can use a single parsing strategy.
+> **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-handler-go.md` (Go/chi). Both produce the one response envelope in `~/.claude/skills/api/response-envelope.md` — success `{data, meta}`, error `{error}`, never both; list metadata in `meta.pagination`. If this file and the envelope ever disagree, the envelope wins.
 
 Complete FastAPI handler set for CRUD endpoints. Every generated Python handler MUST follow this pattern.
 
@@ -21,86 +21,73 @@ Complete FastAPI handler set for CRUD endpoints. Every generated Python handler 
 
 ```python
 # app/schemas/base.py
+# The shape is ~/.claude/skills/api/response-envelope.md. Error bodies are written by
+# app/errors/handlers.py (error-handling-python.md); the error models here document them in OpenAPI.
 
-from datetime import datetime
-from typing import Any, Generic, TypeVar
-from uuid import UUID
+from typing import Generic, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 T = TypeVar("T")
 
 
 class Meta(BaseModel):
-    """Standard response metadata."""
+    """Success metadata. request_id equals the X-Request-Id response header."""
 
     request_id: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(tz=None))
+
+
+class Pagination(BaseModel):
+    """Cursor pagination — the only kind. Next page: ?cursor=<next_cursor>&limit=<n>."""
+
+    next_cursor: str | None  # null when has_more is false
+    has_more: bool
+    limit: int
+    # total_count: int — add only if the count is cheap AND documented; omit the key rather than send null
 
 
 class ListMeta(Meta):
-    """Metadata for cursor-paginated list responses."""
+    """Metadata for list responses."""
 
-    cursor: str | None = None
-    has_more: bool
-    total: int
-
-
-class OffsetListMeta(Meta):
-    """Metadata for offset-paginated list responses."""
-
-    page: int
-    per_page: int
-    total: int
-    total_pages: int
+    pagination: Pagination
 
 
 class Envelope(BaseModel, Generic[T]):
-    """Wraps a single resource response."""
+    """Wraps a single resource response: {"data": T, "meta": {"request_id"}}."""
 
     data: T
     meta: Meta
 
 
 class ListEnvelope(BaseModel, Generic[T]):
-    """Wraps a cursor-paginated list response."""
+    """Wraps a list response. data is [] when empty, never null."""
 
     data: list[T]
     meta: ListMeta
 
 
-class PageLinks(BaseModel):
-    """HATEOAS navigation links for offset pagination."""
+class FieldErrorBody(BaseModel):
+    """One entry of error.details[] — a field-level problem."""
 
-    self_link: str = Field(alias="self")
-    next: str | None = None
-    prev: str | None = None
-    first: str
-    last: str
-
-    model_config = ConfigDict(populate_by_name=True)
-
-
-class OffsetListEnvelope(BaseModel, Generic[T]):
-    """Wraps an offset-paginated list response."""
-
-    data: list[T]
-    meta: OffsetListMeta
-    links: PageLinks
-
-
-class ErrorDetail(BaseModel):
-    """Standard error response detail."""
-
-    code: str
+    field: str
+    code: str  # lower_snake, stable
     message: str
-    details: dict[str, Any] | None = None
+
+
+class APIError(BaseModel):
+    """The error object. No data key, no detail field."""
+
+    code: str  # UPPER_SNAKE, stable: VALIDATION_FAILED, NOT_FOUND, ...
+    message: str
+    details: list[FieldErrorBody] | None = None  # VALIDATION_FAILED only; omitted otherwise
+    request_id: str
+    retryable: bool
 
 
 class ErrorBody(BaseModel):
-    """Standard error response envelope."""
+    """Error envelope — use in `responses={404: {"model": ErrorBody}}` for OpenAPI."""
 
-    error: ErrorDetail
+    error: APIError
 ```
 
 ## Widget Schemas — Request / Response Models
@@ -177,9 +164,11 @@ from uuid import UUID
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.errors import UnauthorizedError
+from app.errors import ForbiddenError, UnauthenticatedError
 
-bearer_scheme = HTTPBearer()
+# auto_error=False: a missing header reaches get_current_user, which raises UnauthenticatedError
+# (401 UNAUTHENTICATED in the envelope) instead of FastAPI's own {"detail": "Not authenticated"}.
+bearer_scheme = HTTPBearer(auto_error=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -193,7 +182,7 @@ class CurrentUser:
 
 async def get_current_user(
     request: Request,
-    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ) -> CurrentUser:
     """
     Dependency that extracts and validates the JWT bearer token.
@@ -201,6 +190,8 @@ async def get_current_user(
 
     Replace the token decode logic with your JWT library (python-jose, PyJWT, etc.).
     """
+    if credentials is None:
+        raise UnauthenticatedError()
     token = credentials.credentials
     try:
         # Replace with real JWT decode
@@ -213,7 +204,7 @@ async def get_current_user(
         request.state.current_user = user
         return user
     except Exception as exc:
-        raise UnauthorizedError("invalid or expired token") from exc
+        raise UnauthenticatedError() from exc  # the decode error stays in the chain, never in the body
 
 
 def require_role(*roles: str):
@@ -226,9 +217,7 @@ def require_role(*roles: str):
 
     async def _check(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         if not any(r in user.roles for r in roles):
-            from app.errors import ForbiddenError
-
-            raise ForbiddenError(action="access", resource="this endpoint")
+            raise ForbiddenError()
         return user
 
     return _check
@@ -281,16 +270,13 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.dependencies.auth import CurrentUser, get_current_user
-from app.errors import AppError, BadRequestError, ValidationError
 from app.middleware.request_id import get_request_id
 from app.schemas.base import (
     Envelope,
     ListEnvelope,
     ListMeta,
     Meta,
-    OffsetListEnvelope,
-    OffsetListMeta,
-    PageLinks,
+    Pagination,
 )
 from app.schemas.widget import CreateWidgetRequest, UpdateWidgetRequest, WidgetResponse
 from app.services.widget import WidgetService
@@ -422,14 +408,13 @@ async def delete_widget(
     # FastAPI returns 204 No Content automatically when return is None
 ```
 
-## Pagination Strategy — When to Use Which
+## Pagination — cursor only
 
-| Strategy | Use When | Query Params | Example |
-|----------|----------|--------------|---------|
-| **Cursor** (default) | Public APIs, real-time feeds, large datasets, infinite scroll | `?cursor=abc&page_size=20` | User-facing list endpoints |
-| **Offset** | Admin/reporting UIs, dashboards, "jump to page N", data export previews | `?page=3&per_page=20` | Back-office tables, audit logs |
-
-**Default to cursor pagination.** Use offset only for admin/reporting UIs where users need to jump to arbitrary pages. Offset pagination degrades at high page numbers (OFFSET 10000 still scans 10000 rows).
+List endpoints take `?cursor=<next_cursor>&limit=<n>` and return `meta.pagination`. There is no offset
+or page-number variant: offset pages skip or repeat rows under concurrent writes, and `OFFSET 10000`
+still scans 10,000 rows. For "jump to page N" admin tables, filter instead (date range, search, status).
+If a spec truly needs numbered pages, record it in `docs/DECISIONS.md`; the response still uses the
+envelope.
 
 ## List Handler with Cursor Pagination and Filters
 
@@ -448,8 +433,8 @@ async def list_widgets(
     request: Request,
     user: CurrentUser = Depends(get_current_user),
     svc: WidgetService = Depends(get_widget_service),
-    cursor: str | None = Query(None, description="Opaque cursor from previous response"),
-    page_size: int = Query(20, ge=1, le=100, description="Items per page (max 100)"),
+    cursor: str | None = Query(None, description="Opaque next_cursor from the previous page"),
+    limit: int = Query(20, ge=1, le=100, description="Items per page (max 100)"),
     sort_by: str = Query("created_at", description="Sort field"),
     sort_dir: str = Query("desc", pattern="^(asc|desc)$", description="Sort direction"),
 ) -> ListEnvelope[WidgetResponse]:
@@ -470,182 +455,41 @@ async def list_widgets(
     result = await svc.list(
         tenant_id=user.tenant_id,
         cursor=cursor,
-        page_size=page_size,
+        limit=limit,
         sort_by=sort_by,
         sort_dir=sort_dir,
         field_filters=field_filters,
     )
 
+    # data is [] (never null) when empty; next_cursor is null when has_more is false
     return ListEnvelope(
         data=[WidgetResponse.model_validate(item) for item in result.items],
         meta=ListMeta(
             request_id=req_id,
-            cursor=result.cursor,
-            has_more=result.has_more,
-            total=result.total,
+            pagination=Pagination(
+                next_cursor=result.cursor if result.has_more else None,
+                has_more=result.has_more,
+                limit=limit,
+            ),
         ),
-    )
-```
-
-## List Handler with Offset Pagination (Admin/Reporting UIs)
-
-```python
-@router.get(
-    "/admin",
-    response_model=OffsetListEnvelope[WidgetResponse],
-    summary="List widgets (offset pagination, admin UI)",
-)
-async def list_widgets_admin(
-    request: Request,
-    user: CurrentUser = Depends(get_current_user),
-    svc: WidgetService = Depends(get_widget_service),
-    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
-    per_page: int = Query(20, ge=1, le=100, description="Items per page (max 100)"),
-    sort_by: str = Query("created_at"),
-    sort_dir: str = Query("desc", pattern="^(asc|desc)$"),
-) -> OffsetListEnvelope[WidgetResponse]:
-    req_id = get_request_id()
-
-    if sort_by not in ALLOWED_SORT_FIELDS:
-        sort_by = "created_at"
-
-    field_filters: dict[str, str] = {}
-    for key, value in request.query_params.items():
-        if key.startswith("filter[") and key.endswith("]"):
-            field = key[7:-1]
-            if field in ALLOWED_FILTER_FIELDS:
-                field_filters[field] = value
-
-    result = await svc.list_offset(
-        tenant_id=user.tenant_id,
-        page=page,
-        per_page=per_page,
-        sort_by=sort_by,
-        sort_dir=sort_dir,
-        field_filters=field_filters,
-    )
-
-    total_pages = (result.total + per_page - 1) // per_page if per_page > 0 else 0
-    base_path = request.url.path
-
-    links = PageLinks(
-        **{
-            "self": f"{base_path}?page={page}&per_page={per_page}",
-            "first": f"{base_path}?page=1&per_page={per_page}",
-            "last": f"{base_path}?page={total_pages}&per_page={per_page}",
-            "next": f"{base_path}?page={page + 1}&per_page={per_page}" if page < total_pages else None,
-            "prev": f"{base_path}?page={page - 1}&per_page={per_page}" if page > 1 else None,
-        }
-    )
-
-    return OffsetListEnvelope(
-        data=[WidgetResponse.model_validate(item) for item in result.items],
-        meta=OffsetListMeta(
-            request_id=req_id,
-            page=page,
-            per_page=per_page,
-            total=result.total,
-            total_pages=total_pages,
-        ),
-        links=links,
     )
 ```
 
 ## Error Mapping — FastAPI Exception Handlers
 
-```python
-# app/errors/handlers.py
+Error bodies are written by `app/errors/handlers.py` (`error-handling-python.md`), the only place the
+error envelope is built. Handlers never format errors themselves: they raise, or let the service's
+`AppError` propagate. `register_exception_handlers(app)` replaces FastAPI's defaults, which answer
+`{"detail": ...}` (and 422 for request validation):
 
-import logging
-import traceback
+- `AppError` subclasses → their own status and code (`NotFoundError` → 404 `NOT_FOUND`, ...)
+- `RequestValidationError` (pydantic body/query/path) → 400 `VALIDATION_FAILED` with `details[]`;
+  unparseable JSON or an empty body → 400 `MALFORMED_REQUEST`
+- `HTTPException` (unknown route, wrong method) → re-shaped by status; `exc.detail` is never sent
+- any other exception → 500 `INTERNAL` with a generic message; the cause is logged under `request_id`
 
-from fastapi import FastAPI, Request
-from fastapi.exceptions import RequestValidationError
-from starlette.responses import JSONResponse
-
-from app.errors import AppError
-
-logger = logging.getLogger(__name__)
-
-
-def register_exception_handlers(app: FastAPI) -> None:
-    """Mount all custom exception handlers on the FastAPI app."""
-
-    @app.exception_handler(AppError)
-    async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
-        req_id = getattr(request.state, "request_id", "")
-
-        if exc.http_status >= 500:
-            logger.error(
-                "internal error",
-                extra={
-                    "code": exc.code,
-                    "message": exc.message,
-                    "cause": str(exc.__cause__) if exc.__cause__ else None,
-                    "request_id": req_id,
-                    "method": request.method,
-                    "path": request.url.path,
-                },
-            )
-
-        headers: dict[str, str] = {}
-        if exc.http_status == 429 and "retry_after_seconds" in (exc.details or {}):
-            headers["Retry-After"] = str(exc.details["retry_after_seconds"])
-        if exc.http_status == 401:
-            headers["WWW-Authenticate"] = "Bearer"
-
-        return JSONResponse(
-            status_code=exc.http_status,
-            content={"error": exc.to_dict()},
-            headers=headers,
-        )
-
-    @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
-        """
-        Pydantic / FastAPI validation errors → 422 with field details.
-        Maps FastAPI's native validation to our standard error envelope.
-        """
-        field_errors: dict[str, str] = {}
-        for error in exc.errors():
-            loc = " → ".join(str(part) for part in error["loc"] if part != "body")
-            field_errors[loc] = error["msg"]
-
-        return JSONResponse(
-            status_code=422,
-            content={
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "one or more fields failed validation",
-                    "details": {"fields": field_errors},
-                }
-            },
-        )
-
-    @app.exception_handler(Exception)
-    async def unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        """Catch-all: never leak internal details to clients."""
-        req_id = getattr(request.state, "request_id", "")
-        logger.error(
-            "unhandled error",
-            extra={
-                "error": str(exc),
-                "traceback": traceback.format_exc(),
-                "request_id": req_id,
-                "method": request.method,
-                "path": request.url.path,
-            },
-        )
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": {
-                    "code": "INTERNAL_ERROR",
-                    "message": "an unexpected error occurred",
-                }
-            },
-        )
-```
+Every error response sets `X-Request-Id` (= `error.request_id`); 429/503 set `Retry-After`; 401 sets
+`WWW-Authenticate: Bearer`.
 
 ## Application Wiring
 
@@ -682,10 +526,10 @@ def create_app() -> FastAPI:
 - Request validation is automatic via Pydantic — leverage `Field` constraints and `field_validator`
 - Error responses MUST map domain errors (`AppError` subclasses) to correct HTTP status codes
 - Internal error messages MUST NOT leak to clients — return generic message for 500s
-- Pagination MUST enforce max page size (100) via `Query(le=100)` — never return unbounded lists
+- Pagination is cursor-only (`?cursor=&limit=`) and MUST bound `limit` via `Query(ge=1, le=100)` — out of range is 400 `VALIDATION_FAILED`; never return unbounded lists
 - Filter fields MUST be allow-listed — never pass arbitrary query params to the DB
 - Sort fields MUST be allow-listed — never allow sorting by arbitrary columns
-- Every response MUST use the envelope format: `{"data": T, "meta": {...}}`
+- Every response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}` for success (lists add `meta.pagination` `{next_cursor, has_more, limit}` and `data` is `[]` when empty), `{"error": {code, message, details?, request_id, retryable}}` for failure, never both
 - DELETE returns 204 No Content — `status_code=204` with `None` return
 - POST create returns 201 Created — `status_code=201`
 - Use `response_model` on every endpoint for OpenAPI schema generation and response validation

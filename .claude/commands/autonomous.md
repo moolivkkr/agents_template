@@ -69,7 +69,8 @@ and git state, so long steps with many turns are not mistaken for a stall. API e
 into `last_error` by a StopFailure hook (permanent errors set `paused`), and after compaction or
 resume a SessionStart hook restates the run's position. While `status` is `running`, `.claude/hooks/autonomous-continue.sh`
 blocks the turn from ending and tells you the next step. It yields only when `status` is one of:
-- `awaiting_human` — the Step 3 checkpoint, `--confirm_each_phase`, or a security PAUSE;
+- `awaiting_human` — the Step 3 checkpoint, `--confirm_each_phase`, a security escalation with no
+  hardened default, or a **security gate finding awaiting per-finding approval** (Step 4, Gate failures);
 - `paused` — with a `reason`: escalation limit exceeded, catastrophic failure, or the user said stop;
 - `failed` — unrecoverable;
 - `complete` — Step 7 done.
@@ -82,7 +83,8 @@ also treats an active `run.json` (status `running`) as `--auto`, even if the fla
 mode a sub-command never waits for the user. Its "surface to user" points become: auto-resolve with
 the recommended option, log to `agent_state/autonomous/auto-resolved.jsonl`, and carry forward to
 the next human checkpoint or the final report. The exceptions are security decisions with no
-hardened default, which set `awaiting_human`.
+hardened default, and security findings that block a gate. Both set `awaiting_human`. Nothing in auto
+mode approves, defers, skips or forces a security finding on the human's behalf.
 
 **Long runs and context.** A full run can exceed one context window. Claude Code compacts
 automatically; after compaction, re-read `run.json` + `checkpoint.json` and continue from
@@ -279,12 +281,21 @@ To stop: type "stop"
 ────────────────────────────────────────
 ```
 
-Before presenting it, set `run.json` `status` to `awaiting_human` (`next_step: "develop"`); this is
-the one place the run is supposed to stop. The review must also state the **gate policy** the user
-is approving: *"In autonomous mode, a phase gate that still fails after 3 fix cycles is
-force-gated with full logging, except a structurally incomplete roster (a required agent never ran),
-which pauses the run."* Approving the checkpoint is the explicit user approval that `/develop
---force_gate` requires; record it in `approved.json` as `"force_gate_policy": "approved"`.
+Before presenting it, set `run.json` `status` to `awaiting_human` (`next_step: "develop"`). This is
+the one place the run is planned to stop. The review must also state the **gate policy** the user is
+approving:
+
+*"In autonomous mode, a phase gate that still fails after 3 fix cycles is force-gated with full
+logging. There are two exceptions, and each one pauses the run instead:*
+- *a structurally incomplete roster (a required agent never ran);*
+- *any security finding, from `security_reviewer`, `tenant_isolation_verifier` or
+  `dependency_scanner`. The run shows you each finding and waits for your decision on that specific
+  finding."*
+
+Approving the checkpoint is the explicit user approval that `/develop --force_gate` requires **for
+non-security blockers only**. Record it in `approved.json` as `"force_gate_policy":
+"approved_non_security"`. It approves no security finding: none exists yet, and a blanket
+pre-approval can't stand in for a decision the human never saw (board review 2026-09-30, SEC-01).
 
 **Wait for explicit user approval.** Do NOT proceed without it.
 
@@ -311,20 +322,48 @@ Fully autonomous — no more human prompts.
 - **Escalations:** `continueWithDefault: true` for architecture/feature decisions — proceed with recommendation, log for review
 - **Security escalations:** never auto-resolve with permissive defaults. Use the **hardened default** (most restrictive option). If no clear hardened default exists → PAUSE and surface to user even in auto mode. Security domains: auth patterns, token storage/caching, IDOR mitigation, encryption, PII handling, CORS/CSRF, rate limiting.
 - **Gate failures:** Auto-fix loop (max 3 cycles per failing item)
-  - Cycle 1: Agent fixes → re-test specific failure
+  - Cycle 1: The owning role agent fixes → re-test the specific failure
   - Cycle 2: Re-run with fresh context → re-test
-  - Cycle 3: Simplify/skip problematic item → log as deferred
-  - After 3 cycles: force-gate with full logging → continue to next phase. Run `/develop`'s gate
-    with `--force_gate`, citing `approved.json` `force_gate_policy`, and write `gate.forced` with the
-    remaining blockers. `verify-gate.sh` still refuses to force past a roster whose required agent
-    never ran. That case is a real STOP: set `run.json` `paused` with the missing agent named.
+  - Cycle 3: Narrow the fix: the smallest change that resolves the finding → re-test. For a
+    **non-security** item only, an out-of-scope part may be deferred with a logged reason. A security
+    finding is never simplified away, skipped or deferred. No fix may remove or weaken auth,
+    authorization, tenant or owner scoping, validation, CSRF or rate limiting to make a check pass;
+    the Wave 5v security re-review treats that as HIGH.
+  - After 3 cycles, **non-security blockers**: force-gate with full logging → continue to the next
+    phase. Run `/develop`'s gate with `--force_gate`, citing `approved.json` `force_gate_policy`, and
+    write `gate.forced` with the remaining blockers. `verify-gate.sh` still refuses to force past a
+    roster whose required agent never ran. That case is a real STOP: set `run.json` `paused` with the
+    missing agent named.
+  - After 3 cycles, **any security blocker** (a BLOCKING count in `security_review.md`,
+    `tenant_isolation.md` or `dependency_scan.md`): **PAUSE. Never force it.**
+    1. Write `agent_state/autonomous/security_findings_phase-${PHASE}.md`. For each finding give its
+       stable ID (`SR-…`, `TI-…`, `DS-…`), severity, `file:line`, the exploit scenario, the three fix
+       attempts and why each failed.
+    2. Set `run.json` `status: awaiting_human`, `reason: "security_findings"`, `next_step: "develop"`,
+       and show the human the file's contents.
+    3. The human answers **per finding**, with one of:
+       - **fix**, with guidance: resume the fix loop for that finding;
+       - **accept**, with a reason;
+       - **stop**.
+       A reply that covers several findings at once is valid only for findings the human was shown in
+       that file.
+    4. Only then, and only for findings the human accepted, add one entry per finding to
+       `gate.forced.security_acknowledged[]`:
+       `{"finding": "<ID + one-line description>", "approved_by": "<the name the human gave>",
+       "reason": "<their reason, verbatim>"}`.
+       An agent never writes, pre-fills or copies these entries from earlier phases, and never cites
+       `approved.json` for them. `verify-gate.sh` refuses a forced gate whose security failures
+       outnumber the acknowledgements.
+    5. Accepted security findings are carried forward as CRITICAL items and listed in the Step 7
+       report. `/accept` treats an unfixed accepted security finding as a release blocker to confirm
+       again.
 - **Test failures:** Fix implementation, not tests (max 3 retries per test agent)
 
 ### Escalation Circuit Breaker
 
 Prevent runaway escalation loops in autonomous mode:
 
-- **Max escalations per step:** 3 — additional escalations auto-resolve with recommended defaults
+- **Max escalations per step:** 3 — additional escalations auto-resolve with recommended defaults (security escalations excepted: they follow the Security escalations rule above and never auto-resolve permissively)
 - **In --auto mode:** continue with defaults but flag all as `"⚠ AUTO-RESOLVED — may need review"` in decision log and manifest `known_issues[]`
 - **Max total escalations per phase:** 10 — if exceeded, EXIT auto mode entirely and surface to user:
   `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
@@ -491,6 +530,7 @@ Stop hook then lets the turn end.
 - Total FR-* implemented: N
 - Total tests: N passing
 - Forced gates: N (see details below)
+- Security findings accepted by a human: N (each listed below with finding, approved_by, reason)
 - Low-confidence decisions: N (user approved: N, still open: N)
 
 ## Per-Phase Results
@@ -536,6 +576,11 @@ Unresolved gaps: N (N critical, N high, N medium)
 Full report: agent_state/accept/pipeline_completeness_report.md
 Traceability matrix: agent_state/accept/traceability_matrix.md
 
+## Security Findings Accepted Without a Fix
+| Phase | Finding | Severity | Approved by | Reason |
+|-------|---------|----------|-------------|--------|
+[from each phase's gate.forced.security_acknowledged[]; "none" if empty]
+
 ## Known Issues
 [carried-forward items, forced gate items, deferred features]
 
@@ -571,7 +616,9 @@ tmp=$(mktemp); jq --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" '.active=true | .st
 `preflight` → `init` → `map` → `discuss` → `plan` → `design` → `checkpoint` → `develop` →
 (per phase N ≥ 2: `map` → `discuss` → `plan` → `design` → [`checkpoint`] → `develop` → `verify`) →
 `deploy` → `accept` → `report`. Resuming at `checkpoint` re-presents the review, and never assumes
-approval.
+approval. Resuming a run paused with `reason: "security_findings"` re-presents
+`security_findings_phase-N.md` and waits for the per-finding answers. Re-arming the run is not an
+approval of any finding.
 
 - Resume from exactly where it stopped
 - All previous state preserved in `agent_state/`
@@ -587,11 +634,16 @@ approval.
 # Run dependency installation BEFORE implementation agents start
 cd ${PROJECT_ROOT}
 
-# Detect and run package manager
-[ -f "package.json" ] && npm install
-[ -f "go.mod" ] && go mod tidy
-[ -f "requirements.txt" ] && pip install -r requirements.txt
-[ -f "Cargo.toml" ] && cargo build
+# Reproducible installs from the lockfile, with lifecycle scripts off (security/secure-coding.md §5).
+# Each NEW package was vetted with vet-package.py by the coding agent that added it.
+if [ -f package-lock.json ]; then npm ci --ignore-scripts
+elif [ -f pnpm-lock.yaml ]; then pnpm install --frozen-lockfile --ignore-scripts
+elif [ -f package.json ]; then npm install --ignore-scripts    # first install writes the lockfile: commit it
+fi
+# then run, explicitly, the build steps a skipped install script would have done (e.g. `npm rebuild esbuild`)
+[ -f "go.mod" ] && go mod download
+[ -f "requirements.txt" ] && python3 -m pip install -r requirements.txt
+[ -f "Cargo.toml" ] && cargo fetch
 
 # Verify
 echo "✅ Dependencies installed"
@@ -605,7 +657,7 @@ echo "✅ Dependencies installed"
 2. **Git branch per phase** — clean rollback to any phase boundary
 3. **Checkpoint after every step** — resume from crash without re-work
 4. **Auto-fix before revert** — tries to fix failures, doesn't blindly rollback
-5. **Force-gate with full logging** — never silently skips failures
+5. **Force-gate with full logging** — never silently skips failures, and never forces a security finding: those pause for a per-finding human decision
 6. **Environment pre-flight** — catches infra issues in seconds, not minutes
 7. **Decision audit trail** — every auto-decision documented with evidence + confidence
 8. **Structured auto-resolution log** — every auto-resolved escalation captured in `agent_state/autonomous/auto-resolved.jsonl` with full question, options, rationale, category, and security flags for post-run audit

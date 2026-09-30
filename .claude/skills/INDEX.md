@@ -7,7 +7,14 @@
 
 > Regenerate discipline: when you add or rename a skill, add its row here in the matching category.
 
-## Core (31)
+## API & Security (2)
+
+| File | Description | Tags |
+|------|-------------|------|
+| `api/response-envelope.md` | THE API response envelope — success {data, meta{request_id, pagination}}, error {error{code, message, details[], request_id, retryable}}, status/code table, what contract tests assert | api, envelope, pagination, errors, contract |
+| `security/secure-coding.md` | Secure-coding rules for every coding agent — access control, injection/SSRF/paths, tokens and sessions, XSS/headers/CORS, errors/logging/secrets/dependency vetting, timeouts — each with its abuse-matrix proof row | security, owasp, asvs, secure-coding |
+
+## Core (32)
 
 | File | Description | Tags |
 |------|-------------|------|
@@ -17,6 +24,7 @@
 | `core/api-excellence.md` | Production API patterns — OpenAPI-first, cursor pagination, domain error codes, idempotency, response envelopes, HATEOAS, versioning strategy | api, rest, pagination, errors, idempotency, openapi |
 | `core/auto-research.md` | Self-answering protocol — resolve open questions via research (web + code) instead of pausing for human input, with a confidence threshold | research, autonomy, decisions, web, core |
 | `core/change-impact-analysis.md` | Git-diff-based test selection — map changed files to the minimal set of tests/phases to re-run for per-phase regression | regression, test-selection, git, impact-analysis, core |
+| `core/commands-and-versions.md` | The project's single commands-and-versions table (build, test per tier, lint, migrate, seed; runtime and DB versions) that agents, test_runner and CI read | commands, versions, ci, core |
 | `core/code-quality.md` | Code quality enforcement — self-review, function size, naming, KISS, DRY, incremental development, early returns, nesting limits | quality, clean-code, naming, refactoring, best-practices |
 | `core/context-budget-protocol.md` | Context budget discipline — selective loading, summarization, and INDEX/frontmatter-driven skill retrieval to stay within the window | context, tokens, selective-loading, efficiency, core |
 | `core/debate-protocol.md` | Multi-specialist debate — research, debate, collaborate, decide; produces a durable verdict promoted to the decisions ledger | debate, decisions, multi-agent, consensus, core |
@@ -65,7 +73,7 @@
 | `testing/testify.md` | testify patterns for Go testing. | — |
 | `testing/vitest.md` | Vitest patterns for Vite-native unit and component testing. | — |
 
-## UI (16)
+## UI (17)
 
 | File | Description | Tags |
 |------|-------------|------|
@@ -74,6 +82,7 @@
 | `ui/advanced-state-patterns.md` | Complex UI state — optimistic updates, WebSocket integration, offline-first, URL state, cross-tab sync with TanStack Query + React | state, tanstack-query, websocket, optimistic, ui |
 | `ui/api-integration-patterns.md` | UI data-fetching layer — TanStack Query hooks, HTTP client setup, request/response typing; bans direct fetch in components | api, tanstack-query, http, data-fetching, ui |
 | `ui/component-composition.md` | Component composition patterns — building from shadcn/ui primitives, compound components, slots, and React composition over configuration | components, shadcn, composition, react, ui |
+| `ui/secure-rendering.md` | DOM-XSS rules for UI code — DOMPurify-only HTML sinks, URL-scheme allowlist, markdown without raw HTML, safe redirects, postMessage origins, CSP-compatible code, the XSS-RENDER test | security, xss, csp, rendering, ui |
 | `ui/error-handling-patterns.md` | UI error handling — HTTP-status-to-UI mapping, error boundaries, toast/inline patterns, retry, and user-facing messages | errors, error-boundary, ux, resilience, ui |
 | `ui/form-patterns.md` | Form patterns — React Hook Form + Zod + shadcn/ui, validation, field arrays, submission states, and accessible error display | forms, react-hook-form, zod, validation, ui |
 | `ui/form-validation-protocol.md` | Protocol — derive Zod validation schemas from data-contracts.md request types so client validation matches the API contract | forms, zod, validation, data-contracts, ui |

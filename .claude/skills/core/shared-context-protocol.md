@@ -44,6 +44,14 @@ right tier at the right time is what keeps agents both correct and context-effic
 > automatically by `adr_agent` and `debate_arbitrator`; `/health` 5.5f checks every verdict has a
 > ledger entry.
 >
+> **Both ledgers are protected (board review 2026-09-30, SEC-04).** They are injected into every session
+> with override priority, so text an agent was tricked by must not rewrite them. With the sdlc-guard
+> installed, a direct Write/Edit/redirect to an **existing** `PROJECT_FACTS.md` or `DECISIONS.md` is
+> denied. Facts go through `.claude/hooks/remember.sh` (`/remember`). An agent that needs a new or
+> reversing decision puts the proposed `D-NNN` entry in its final message for the parent or the human to
+> record. A decision never suppresses a security finding: reviewers still report it, tagged
+> `accepted-by D-NNN`.
+>
 > **Tier 1 path note.** Lessons are AUTHORED per-phase (`agent_state/phases/N/lessons.md`) and
 > AGGREGATED into the root `agent_state/lessons.md` at each phase gate (develop-orchestrator
 > Post-Gate). Retrieval recipes (`memory-as-tools.md`) read the root index first and fall back to the

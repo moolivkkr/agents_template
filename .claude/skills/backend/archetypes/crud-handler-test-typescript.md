@@ -18,7 +18,7 @@ tags:
 
 # CRUD Handler Test Archetype — TypeScript
 
-> **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-handler-test.md` (Go). Both validate identical response envelopes, error codes, and pagination behavior.
+> **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/crud-handler-test.md` (Go). Both validate the envelope in `~/.claude/skills/api/response-envelope.md`, the same error codes, and the same cursor pagination behavior.
 
 Complete HTTP handler test template for Express (vitest + supertest) and NestJS (jest + supertest). Every generated TypeScript handler test MUST follow this pattern.
 
@@ -44,7 +44,7 @@ Rule: Test file lives next to production code with `.test.ts` suffix.
 import { vi } from "vitest";
 import type { IWidgetService } from "../../services/widget.service.interface";
 import type { Widget } from "../../domain/entity";
-import type { ListResult, OffsetListResult } from "../../types/pagination";
+import type { ListResult } from "../../types/pagination";
 
 /**
  * Creates a fully typed mock of the widget service.
@@ -59,7 +59,6 @@ export function createMockWidgetService(): {
     update: vi.fn<IWidgetService["update"]>(),
     delete: vi.fn<IWidgetService["delete"]>(),
     list: vi.fn<IWidgetService["list"]>(),
-    listOffset: vi.fn<IWidgetService["listOffset"]>(),
   };
 }
 ```
@@ -75,6 +74,15 @@ import request from "supertest";
 import { createWidgetRouter } from "./widget.routes";
 import { createMockWidgetService } from "./__mocks__/widget.service.mock";
 import { errorHandler } from "../middleware/error-handler";
+import {
+  businessRule,
+  conflict,
+  forbidden,
+  notFound,
+  unauthenticated,
+  unavailable,
+  validationError,
+} from "../errors/domain-errors";
 import type { AuthenticatedRequest } from "../types/express";
 import type { Widget } from "../domain/entity";
 import type { ListResult } from "../types/pagination";
@@ -133,6 +141,21 @@ function createTestAppNoAuth(svc: ReturnType<typeof createMockWidgetService>) {
   app.use(errorHandler);
   return app;
 }
+
+/**
+ * Asserts the error envelope (api/response-envelope.md): only the `error` key (no `data`),
+ * the expected code, request_id equal to the X-Request-Id header, and `retryable` present.
+ * The status is asserted by supertest's `.expect(status)`.
+ */
+function expectErrorEnvelope(res: request.Response, wantCode: string): void {
+  expect(Object.keys(res.body)).toEqual(["error"]);
+  expect(res.body.error.code).toBe(wantCode);
+  expect(res.body.error.message).toEqual(expect.any(String));
+  expect(res.body.error.request_id).toBeTruthy();
+  expect(res.headers["x-request-id"]).toBe(res.body.error.request_id);
+  expect(typeof res.body.error.retryable).toBe("boolean");
+  expect(res.body.error).not.toHaveProperty("detail");
+}
 ```
 
 ## Create Handler Tests
@@ -157,12 +180,10 @@ describe("POST /api/v1/widgets", () => {
       .expect("Content-Type", /json/)
       .expect(201);
 
-    // Assert envelope structure: { data: {...}, meta: {...} }
-    expect(res.body).toHaveProperty("data");
-    expect(res.body).toHaveProperty("meta");
+    // Assert envelope structure: { data: {...}, meta: { request_id } } — no error key
+    expect(Object.keys(res.body).sort()).toEqual(["data", "meta"]);
     expect(res.body.data.name).toBe("New Widget");
-    expect(res.body.meta.request_id).toBe("test-request-id");
-    expect(res.body.meta.timestamp).toBeDefined();
+    expect(res.body.meta).toEqual({ request_id: "test-request-id" });
 
     // Verify service was called with correct tenant and input
     expect(svc.create).toHaveBeenCalledWith(
@@ -172,60 +193,61 @@ describe("POST /api/v1/widgets", () => {
     );
   });
 
-  it("returns 400 for malformed JSON", async () => {
+  it("returns 400 MALFORMED_REQUEST for malformed JSON (not 422)", async () => {
     const res = await request(app)
       .post("/api/v1/widgets")
       .set("Content-Type", "application/json")
       .send("{invalid json")
       .expect(400);
 
-    expect(res.body.error.code).toBe("BAD_REQUEST");
+    expectErrorEnvelope(res, "MALFORMED_REQUEST");
     expect(svc.create).not.toHaveBeenCalled();
   });
 
-  it("returns 400 for empty body", async () => {
+  it("returns 400 VALIDATION_FAILED for empty body", async () => {
     const res = await request(app)
       .post("/api/v1/widgets")
       .send({})
       .expect(400);
 
-    expect(res.body.error).toBeDefined();
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
     expect(svc.create).not.toHaveBeenCalled();
   });
 
-  it("returns 422 for Zod validation failure — missing name", async () => {
+  it("returns 400 VALIDATION_FAILED for Zod validation failure — missing name", async () => {
     const res = await request(app)
       .post("/api/v1/widgets")
       .send({ description: "no name provided" })
-      .expect(422);
+      .expect(400);
 
-    expect(res.body.error.code).toBe("VALIDATION_ERROR");
-    expect(res.body.error.message).toBeDefined();
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
+    // details[] is an array of { field, code, message } — never an object/map
+    expect(res.body.error.details).toEqual([
+      { field: "name", code: "required", message: expect.any(String) },
+    ]);
     expect(svc.create).not.toHaveBeenCalled();
   });
 
-  it("returns 422 for Zod validation failure — name too long", async () => {
+  it("returns 400 VALIDATION_FAILED for Zod validation failure — name too long", async () => {
     const res = await request(app)
       .post("/api/v1/widgets")
       .send({ name: "x".repeat(256), description: "ok" })
-      .expect(422);
+      .expect(400);
 
-    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
+    expect(res.body.error.details[0]).toMatchObject({ field: "name", code: "too_long" });
     expect(svc.create).not.toHaveBeenCalled();
   });
 
-  it("returns 409 when service throws ConflictError (duplicate name)", async () => {
-    const { ConflictError } = await import("../errors/domain-errors");
-    svc.create.mockRejectedValueOnce(
-      new ConflictError("widget", "name 'Existing' already exists"),
-    );
+  it("returns 409 CONFLICT when the service reports a duplicate name", async () => {
+    svc.create.mockRejectedValueOnce(conflict("A widget with this name already exists."));
 
     const res = await request(app)
       .post("/api/v1/widgets")
       .send({ name: "Existing", description: "dup" })
       .expect(409);
 
-    expect(res.body.error.code).toBe("CONFLICT");
+    expectErrorEnvelope(res, "CONFLICT");
   });
 });
 ```
@@ -252,37 +274,33 @@ describe("GET /api/v1/widgets/:id", () => {
       .expect(200);
 
     expect(res.body.data.id).toBe(widget.id);
-    expect(res.body.meta.request_id).toBe("test-request-id");
-    expect(res.body.meta.timestamp).toBeDefined();
+    expect(res.body.meta).toEqual({ request_id: "test-request-id" });
 
     // Verify only "data" and "meta" keys exist
     expect(Object.keys(res.body)).toEqual(["data", "meta"]);
   });
 
-  it("returns 422 for invalid UUID format", async () => {
+  it("returns 400 VALIDATION_FAILED for invalid UUID format", async () => {
     const res = await request(app)
       .get("/api/v1/widgets/not-a-uuid")
-      .expect(422);
+      .expect(400);
 
-    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
+    expect(res.body.error.details[0]).toMatchObject({ field: "id", code: "invalid_format" });
     expect(svc.get).not.toHaveBeenCalled();
   });
 
   it("returns 404 when widget not found", async () => {
-    const { NotFoundError } = await import("../errors/domain-errors");
-    svc.get.mockRejectedValueOnce(
-      new NotFoundError("widget", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"),
-    );
+    svc.get.mockRejectedValueOnce(notFound("Widget"));
 
     const res = await request(app)
       .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .expect(404);
 
-    expect(res.body.error.code).toBe("NOT_FOUND");
-    expect(res.body.error.message).toBeDefined();
+    expectErrorEnvelope(res, "NOT_FOUND");
   });
 
-  it("returns 500 with generic message for internal errors — no detail leak", async () => {
+  it("returns 500 INTERNAL with generic message for internal errors — no detail leak", async () => {
     svc.get.mockRejectedValueOnce(
       new Error("database connection pool exhausted"),
     );
@@ -291,10 +309,11 @@ describe("GET /api/v1/widgets/:id", () => {
       .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .expect(500);
 
-    expect(res.body.error.code).toBe("INTERNAL_ERROR");
-    // CRITICAL: must NOT leak internal error details
-    expect(res.body.error.message).not.toContain("database connection pool");
-    expect(res.body.error.message).not.toContain("exhausted");
+    expectErrorEnvelope(res, "INTERNAL");
+    // CRITICAL: no client-visible field carries the exception text
+    const body = JSON.stringify(res.body);
+    expect(body).not.toContain("database connection pool");
+    expect(body).not.toContain("exhausted");
   });
 });
 ```
@@ -326,9 +345,8 @@ describe("PUT /api/v1/widgets/:id", () => {
   });
 
   it("returns 409 on version conflict", async () => {
-    const { ConflictError } = await import("../errors/domain-errors");
     svc.update.mockRejectedValueOnce(
-      new ConflictError("widget", "version mismatch"),
+      conflict("This widget was changed by someone else. Reload and try again."),
     );
 
     const res = await request(app)
@@ -336,37 +354,38 @@ describe("PUT /api/v1/widgets/:id", () => {
       .send({ name: "Updated", description: "desc", version: 1 })
       .expect(409);
 
-    expect(res.body.error.code).toBe("CONFLICT");
+    expectErrorEnvelope(res, "CONFLICT");
   });
 
-  it("returns 400 for malformed JSON body", async () => {
+  it("returns 400 MALFORMED_REQUEST for malformed JSON body", async () => {
     const res = await request(app)
       .put("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .set("Content-Type", "application/json")
       .send("{bad")
       .expect(400);
 
-    expect(res.body.error.code).toBe("BAD_REQUEST");
+    expectErrorEnvelope(res, "MALFORMED_REQUEST");
     expect(svc.update).not.toHaveBeenCalled();
   });
 
-  it("returns 422 for missing version field", async () => {
+  it("returns 400 VALIDATION_FAILED for missing version field", async () => {
     const res = await request(app)
       .put("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .send({ name: "Updated", description: "desc" }) // missing version
-      .expect(422);
+      .expect(400);
 
-    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
+    expect(res.body.error.details[0]).toMatchObject({ field: "version", code: "required" });
     expect(svc.update).not.toHaveBeenCalled();
   });
 
-  it("returns 422 for invalid UUID in path", async () => {
+  it("returns 400 VALIDATION_FAILED for invalid UUID in path", async () => {
     const res = await request(app)
       .put("/api/v1/widgets/xyz")
       .send({ name: "Updated", description: "desc", version: 1 })
-      .expect(422);
+      .expect(400);
 
-    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
     expect(svc.update).not.toHaveBeenCalled();
   });
 });
@@ -402,24 +421,21 @@ describe("DELETE /api/v1/widgets/:id", () => {
   });
 
   it("returns 404 when widget not found", async () => {
-    const { NotFoundError } = await import("../errors/domain-errors");
-    svc.delete.mockRejectedValueOnce(
-      new NotFoundError("widget", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"),
-    );
+    svc.delete.mockRejectedValueOnce(notFound("Widget"));
 
     const res = await request(app)
       .delete("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .expect(404);
 
-    expect(res.body.error.code).toBe("NOT_FOUND");
+    expectErrorEnvelope(res, "NOT_FOUND");
   });
 
-  it("returns 422 for invalid UUID", async () => {
+  it("returns 400 VALIDATION_FAILED for invalid UUID", async () => {
     const res = await request(app)
       .delete("/api/v1/widgets/xyz")
-      .expect(422);
+      .expect(400);
 
-    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
     expect(svc.delete).not.toHaveBeenCalled();
   });
 });
@@ -447,18 +463,17 @@ describe("GET /api/v1/widgets (cursor pagination)", () => {
     } satisfies ListResult<Widget>);
 
     const res = await request(app)
-      .get("/api/v1/widgets?page_size=2&sort_by=created_at&sort_dir=desc")
+      .get("/api/v1/widgets?limit=2&sort_by=created_at&sort_dir=desc")
       .expect(200);
 
     // Assert data array
     expect(res.body.data).toHaveLength(2);
 
-    // Assert pagination meta
-    expect(res.body.meta.cursor).toBe("next-cursor-token");
-    expect(res.body.meta.has_more).toBe(true);
-    expect(res.body.meta.total).toBe(25);
-    expect(res.body.meta.request_id).toBe("test-request-id");
-    expect(res.body.meta.timestamp).toBeDefined();
+    // Assert pagination meta: meta.pagination { next_cursor, has_more, limit }
+    expect(res.body.meta).toEqual({
+      request_id: "test-request-id",
+      pagination: { next_cursor: "next-cursor-token", has_more: true, limit: 2 },
+    });
   });
 
   it("returns empty array for no results", async () => {
@@ -473,9 +488,9 @@ describe("GET /api/v1/widgets (cursor pagination)", () => {
       .get("/api/v1/widgets")
       .expect(200);
 
-    expect(res.body.data).toHaveLength(0);
-    expect(res.body.meta.has_more).toBe(false);
-    expect(res.body.meta.total).toBe(0);
+    expect(res.body.data).toEqual([]); // [] — never null
+    expect(res.body.meta.pagination.has_more).toBe(false);
+    expect(res.body.meta.pagination.next_cursor).toBeNull(); // null when has_more is false
   });
 
   it("passes cursor to service for next page", async () => {
@@ -487,7 +502,7 @@ describe("GET /api/v1/widgets (cursor pagination)", () => {
     });
 
     await request(app)
-      .get("/api/v1/widgets?cursor=some-cursor-token&page_size=10")
+      .get("/api/v1/widgets?cursor=some-cursor-token&limit=10")
       .expect(200);
 
     expect(svc.list).toHaveBeenCalledWith(
@@ -499,12 +514,11 @@ describe("GET /api/v1/widgets (cursor pagination)", () => {
     );
   });
 
-  it("clamps page_size to defaults and maximums", async () => {
+  it("defaults limit to 20 and passes valid values through", async () => {
     const testCases = [
-      { query: "", expectedPageSize: 20 },       // default when missing
-      { query: "page_size=0", expectedPageSize: 1 },  // min 1 from Zod
-      { query: "page_size=500", expectedPageSize: 100 }, // clamped to max
-      { query: "page_size=50", expectedPageSize: 50 },   // respected
+      { query: "", expectedPageSize: 20 },        // default when missing
+      { query: "limit=50", expectedPageSize: 50 }, // respected
+      { query: "limit=100", expectedPageSize: 100 }, // max
     ];
 
     for (const { query, expectedPageSize } of testCases) {
@@ -528,6 +542,16 @@ describe("GET /api/v1/widgets (cursor pagination)", () => {
 
       svc.list.mockClear();
     }
+  });
+
+  it("rejects out-of-range limit with 400 VALIDATION_FAILED", async () => {
+    for (const query of ["limit=0", "limit=-5", "limit=500"]) {
+      const res = await request(app).get(`/api/v1/widgets?${query}`).expect(400);
+
+      expectErrorEnvelope(res, "VALIDATION_FAILED");
+      expect(res.body.error.details[0].field).toBe("limit");
+    }
+    expect(svc.list).not.toHaveBeenCalled();
   });
 
   it("parses filter[field] query params — allowed fields only", async () => {
@@ -566,85 +590,28 @@ describe("GET /api/v1/widgets (cursor pagination)", () => {
     expect(callArgs?.fields).not.toHaveProperty("password");
   });
 
-  it("defaults sort params to safe values for invalid input", async () => {
-    svc.list.mockResolvedValueOnce({
-      items: [],
-      cursor: "",
-      hasMore: false,
-      total: 0,
-    });
-
-    await request(app)
+  it("rejects non-allow-listed sort params with 400 VALIDATION_FAILED", async () => {
+    const res = await request(app)
       .get("/api/v1/widgets?sort_by=drop_table&sort_dir=invalid")
-      .expect(200);
+      .expect(400);
 
-    expect(svc.list).toHaveBeenCalledWith(
-      expect.any(String),
-      expect.objectContaining({
-        sortBy: "created_at",
-        sortDir: "desc",
-      }),
-    );
+    expectErrorEnvelope(res, "VALIDATION_FAILED");
+    expect(res.body.error.details.map((d: { field: string }) => d.field).sort()).toEqual([
+      "sort_by",
+      "sort_dir",
+    ]);
+    expect(svc.list).not.toHaveBeenCalled();
   });
 });
 ```
 
-## Offset Pagination Tests
+## Pagination — cursor only
 
-```typescript
-describe("GET /api/v1/widgets/admin (offset pagination)", () => {
-  let svc: ReturnType<typeof createMockWidgetService>;
-  let app: express.Application;
-
-  beforeEach(() => {
-    svc = createMockWidgetService();
-    app = createTestApp(svc);
-  });
-
-  it("returns 200 with offset-paginated list and page links", async () => {
-    svc.listOffset.mockResolvedValueOnce({
-      items: [makeWidget()],
-      total: 50,
-    });
-
-    const res = await request(app)
-      .get("/api/v1/widgets/admin?page=2&per_page=10")
-      .expect(200);
-
-    expect(res.body.data).toHaveLength(1);
-    expect(res.body.meta.page).toBe(2);
-    expect(res.body.meta.per_page).toBe(10);
-    expect(res.body.meta.total).toBe(50);
-    expect(res.body.meta.total_pages).toBe(5);
-    expect(res.body.links).toBeDefined();
-    expect(res.body.links.self).toContain("page=2");
-    expect(res.body.links.first).toContain("page=1");
-    expect(res.body.links.last).toContain("page=5");
-    expect(res.body.links.next).toContain("page=3");
-    expect(res.body.links.prev).toContain("page=1");
-  });
-
-  it("omits next link on last page", async () => {
-    svc.listOffset.mockResolvedValueOnce({ items: [], total: 10 });
-
-    const res = await request(app)
-      .get("/api/v1/widgets/admin?page=1&per_page=20")
-      .expect(200);
-
-    expect(res.body.links.next).toBeUndefined();
-  });
-
-  it("omits prev link on first page", async () => {
-    svc.listOffset.mockResolvedValueOnce({ items: [], total: 10 });
-
-    const res = await request(app)
-      .get("/api/v1/widgets/admin?page=1&per_page=10")
-      .expect(200);
-
-    expect(res.body.links.prev).toBeUndefined();
-  });
-});
-```
+List endpoints take `?cursor=<next_cursor>&limit=<n>` and return `meta.pagination`; the cursor tests
+above cover them. There is no offset or page-number endpoint to test: offset pages skip or repeat rows
+under concurrent writes. For "jump to page N" admin tables, filter instead (date range, search,
+status); a spec that truly needs numbered pages records it in `docs/DECISIONS.md` and still uses the
+envelope.
 
 ## Error Mapping Tests (Table-Driven)
 
@@ -658,58 +625,78 @@ describe("Error mapping — service errors to HTTP status codes", () => {
     app = createTestApp(svc);
   });
 
-  const errorCases = [
+  const errorCases: Array<{
+    name: string;
+    error: unknown;
+    wantStatus: number;
+    wantCode: string;
+    wantRetryable?: boolean;
+    mustNotLeak?: string;
+  }> = [
     {
-      name: "NotFoundError maps to 404",
-      errorFactory: async () => {
-        const { NotFoundError } = await import("../errors/domain-errors");
-        return new NotFoundError("widget", "123");
-      },
+      name: "notFound maps to 404",
+      error: notFound("Widget"),
       wantStatus: 404,
       wantCode: "NOT_FOUND",
     },
     {
-      name: "ConflictError maps to 409",
-      errorFactory: async () => {
-        const { ConflictError } = await import("../errors/domain-errors");
-        return new ConflictError("widget", "version mismatch");
-      },
+      name: "conflict maps to 409",
+      error: conflict("This widget was changed by someone else. Reload and try again."),
       wantStatus: 409,
       wantCode: "CONFLICT",
     },
     {
-      name: "ValidationError maps to 422",
-      errorFactory: async () => {
-        const { ValidationError } = await import("../errors/domain-errors");
-        return new ValidationError("name", "required");
-      },
-      wantStatus: 422,
-      wantCode: "VALIDATION_ERROR",
+      name: "validationError maps to 400 VALIDATION_FAILED",
+      error: validationError("name", "required", "Name is required."),
+      wantStatus: 400,
+      wantCode: "VALIDATION_FAILED",
     },
     {
-      name: "Unknown error maps to 500 with generic message",
-      errorFactory: async () => new Error("unexpected: pool exhausted"),
+      name: "businessRule maps to 422",
+      error: businessRule("Archived widgets can't be edited."),
+      wantStatus: 422,
+      wantCode: "BUSINESS_RULE_VIOLATION",
+    },
+    {
+      name: "unauthenticated maps to 401",
+      error: unauthenticated(),
+      wantStatus: 401,
+      wantCode: "UNAUTHENTICATED",
+    },
+    {
+      name: "unavailable dependency maps to 503, retryable",
+      error: unavailable("postgres", new Error("connect ECONNREFUSED 10.0.0.5:5432")),
+      wantStatus: 503,
+      wantCode: "UNAVAILABLE",
+      wantRetryable: true,
+      mustNotLeak: "ECONNREFUSED",
+    },
+    {
+      name: "Unknown error maps to 500 INTERNAL with generic message",
+      error: new Error("unexpected: pool exhausted"),
       wantStatus: 500,
-      wantCode: "INTERNAL_ERROR",
+      wantCode: "INTERNAL",
+      mustNotLeak: "pool exhausted",
     },
   ];
 
   for (const tc of errorCases) {
     it(tc.name, async () => {
-      const err = await tc.errorFactory();
-      svc.get.mockRejectedValueOnce(err);
+      svc.get.mockRejectedValueOnce(tc.error);
 
       const res = await request(app)
         .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
         .expect(tc.wantStatus);
 
-      expect(res.body.error.code).toBe(tc.wantCode);
-      expect(res.body.error.message).toBeDefined();
+      expectErrorEnvelope(res, tc.wantCode);
+      expect(res.body.error.retryable).toBe(tc.wantRetryable ?? false);
+      if (tc.wantRetryable) {
+        expect(res.headers["retry-after"]).toBeDefined(); // 429/503 set Retry-After
+      }
 
-      // CRITICAL: 500 errors must NOT leak details
-      if (tc.wantStatus === 500) {
-        expect(res.body.error.message).not.toContain("pool exhausted");
-        expect(res.body.error.message).not.toContain("unexpected");
+      // CRITICAL: no client-visible field carries the exception/driver text
+      if (tc.mustNotLeak) {
+        expect(JSON.stringify(res.body)).not.toContain(tc.mustNotLeak);
       }
     });
   }
@@ -726,17 +713,14 @@ describe("Auth — Express middleware tests", () => {
 
     // Without auth middleware, tenantId is undefined
     // Service should receive undefined tenantId and reject
-    svc.get.mockRejectedValueOnce(
-      new (await import("../errors/domain-errors")).UnauthorizedError(
-        "missing authentication",
-      ),
-    );
+    svc.get.mockRejectedValueOnce(unauthenticated());
 
     const res = await request(app)
       .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .expect(401);
 
-    expect(res.body.error.code).toBe("UNAUTHORIZED");
+    // No request-id middleware here: the error handler generates one, so request_id is still set
+    expectErrorEnvelope(res, "UNAUTHENTICATED");
   });
 
   it("returns 401 for invalid JWT token", async () => {
@@ -749,10 +733,7 @@ describe("Auth — Express middleware tests", () => {
     app.use((req, _res, next) => {
       const token = req.headers.authorization?.replace("Bearer ", "");
       if (!token || token === "invalid-token") {
-        const err = new Error("invalid token");
-        (err as any).statusCode = 401;
-        (err as any).code = "UNAUTHORIZED";
-        return next(err);
+        return next(unauthenticated());
       }
       next();
     });
@@ -765,7 +746,8 @@ describe("Auth — Express middleware tests", () => {
       .set("Authorization", "Bearer invalid-token")
       .expect(401);
 
-    expect(res.body.error.code).toBe("UNAUTHORIZED");
+    expectErrorEnvelope(res, "UNAUTHENTICATED");
+    expect(res.headers["www-authenticate"]).toBe("Bearer");
     expect(svc.get).not.toHaveBeenCalled();
   });
 
@@ -774,17 +756,14 @@ describe("Auth — Express middleware tests", () => {
     const app = createTestApp(svc);
 
     // Service returns NotFound (not Forbidden) for wrong tenant
-    const { NotFoundError } = await import("../errors/domain-errors");
-    svc.get.mockRejectedValueOnce(
-      new NotFoundError("widget", "aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa"),
-    );
+    svc.get.mockRejectedValueOnce(notFound("Widget"));
 
     const res = await request(app)
       .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .expect(404);
 
     // CRITICAL: wrong tenant sees 404, not 403
-    expect(res.body.error.code).toBe("NOT_FOUND");
+    expectErrorEnvelope(res, "NOT_FOUND");
   });
 
   it("returns 403 for insufficient role", async () => {
@@ -806,10 +785,7 @@ describe("Auth — Express middleware tests", () => {
     app.use("/api/v1/widgets", (req, _res, next) => {
       const authReq = req as AuthenticatedRequest;
       if (req.method === "POST" && !authReq.roles.includes("user")) {
-        const err = new Error("insufficient permissions");
-        (err as any).statusCode = 403;
-        (err as any).code = "FORBIDDEN";
-        return next(err);
+        return next(forbidden());
       }
       next();
     });
@@ -822,7 +798,8 @@ describe("Auth — Express middleware tests", () => {
       .send({ name: "New Widget", description: "desc" })
       .expect(403);
 
-    expect(res.body.error.code).toBe("FORBIDDEN");
+    expectErrorEnvelope(res, "FORBIDDEN");
+    expect(res.body.error.request_id).toBe("test-req");
     expect(svc.create).not.toHaveBeenCalled();
   });
 });
@@ -857,12 +834,11 @@ describe("Response shape validation", () => {
     expect(res.body.data).toHaveProperty("created_at");
     expect(res.body.data).toHaveProperty("updated_at");
 
-    // meta must contain tracking fields
-    expect(res.body.meta).toHaveProperty("request_id");
-    expect(res.body.meta).toHaveProperty("timestamp");
+    // meta carries request_id only — a single resource has no pagination
+    expect(Object.keys(res.body.meta)).toEqual(["request_id"]);
   });
 
-  it("list response has data array + meta with pagination", async () => {
+  it("list response has data array + meta.pagination", async () => {
     svc.list.mockResolvedValueOnce({
       items: [makeWidget()],
       cursor: "abc",
@@ -874,25 +850,28 @@ describe("Response shape validation", () => {
       .get("/api/v1/widgets")
       .expect(200);
 
+    // Only data + meta at the top level — no top-level pagination/links/total
+    expect(Object.keys(res.body).sort()).toEqual(["data", "meta"]);
     expect(Array.isArray(res.body.data)).toBe(true);
-    expect(res.body.meta).toHaveProperty("cursor");
-    expect(res.body.meta).toHaveProperty("has_more");
-    expect(res.body.meta).toHaveProperty("total");
     expect(res.body.meta).toHaveProperty("request_id");
-    expect(res.body.meta).toHaveProperty("timestamp");
+    expect(res.body.meta.pagination).toHaveProperty("next_cursor");
+    expect(res.body.meta.pagination).toHaveProperty("has_more");
+    expect(res.body.meta.pagination).toHaveProperty("limit");
   });
 
-  it("error response has error object with code and message", async () => {
-    const { NotFoundError } = await import("../errors/domain-errors");
-    svc.get.mockRejectedValueOnce(new NotFoundError("widget", "123"));
+  it("error response has only the error object: code, message, request_id, retryable", async () => {
+    svc.get.mockRejectedValueOnce(notFound("Widget"));
 
     const res = await request(app)
       .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
       .expect(404);
 
-    expect(res.body).toHaveProperty("error");
-    expect(res.body.error).toHaveProperty("code");
-    expect(res.body.error).toHaveProperty("message");
+    // Error envelope: {"error": {"code", "message", "details"?, "request_id", "retryable"}} — no "data"
+    expect(Object.keys(res.body)).toEqual(["error"]);
+    for (const key of ["code", "message", "request_id", "retryable"]) {
+      expect(res.body.error).toHaveProperty(key);
+    }
+    expect(res.headers["x-request-id"]).toBe(res.body.error.request_id);
   });
 });
 ```
@@ -920,6 +899,7 @@ import * as request from "supertest";
 import { WidgetController } from "./widget.controller";
 import { WidgetService } from "./widget.service";
 import { JwtAuthGuard } from "../../guards/jwt-auth.guard";
+import { AppErrorFilter, validationExceptionFactory } from "../../filters/app-error.filter";
 import type { Widget } from "../../domain/widget";
 
 /** Factory: builds a test widget with defaults. */
@@ -952,7 +932,6 @@ describe("WidgetController (e2e)", () => {
       update: jest.fn(),
       delete: jest.fn(),
       list: jest.fn(),
-      listOffset: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({
@@ -971,7 +950,7 @@ describe("WidgetController (e2e)", () => {
             tenantId: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
             roles: ["user"],
           };
-          req.headers["x-request-id"] = "test-request-id";
+          req.requestId = "test-request-id"; // what the request-id middleware sets in production
           return true;
         },
       })
@@ -979,14 +958,16 @@ describe("WidgetController (e2e)", () => {
 
     app = module.createNestApplication();
 
-    // Apply the same ValidationPipe as production
+    // Apply the same ValidationPipe and error filter as production
     app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
         transform: true,
         forbidNonWhitelisted: true,
+        exceptionFactory: validationExceptionFactory,
       }),
     );
+    app.useGlobalFilters(new AppErrorFilter());
 
     await app.init();
   });
@@ -1011,21 +992,32 @@ describe("WidgetController (e2e)", () => {
       expect(res.body.meta.request_id).toBe("test-request-id");
     });
 
-    it("returns 400 for invalid body — empty name", async () => {
-      await request(app.getHttpServer())
+    it("returns 400 VALIDATION_FAILED for invalid body — empty name", async () => {
+      const res = await request(app.getHttpServer())
         .post("/api/v1/widgets")
         .send({ name: "", description: "desc" })
         .expect(HttpStatus.BAD_REQUEST);
 
+      expect(Object.keys(res.body)).toEqual(["error"]); // no data key
+      expect(res.body.error.code).toBe("VALIDATION_FAILED");
+      expect(res.body.error.details).toContainEqual(
+        expect.objectContaining({ field: "name", code: "required" }),
+      );
+      expect(res.body.error.request_id).toBe("test-request-id");
+      expect(res.headers["x-request-id"]).toBe("test-request-id");
       expect(widgetService.create).not.toHaveBeenCalled();
     });
 
-    it("returns 400 for extra fields when forbidNonWhitelisted", async () => {
-      await request(app.getHttpServer())
+    it("returns 400 VALIDATION_FAILED for extra fields when forbidNonWhitelisted", async () => {
+      const res = await request(app.getHttpServer())
         .post("/api/v1/widgets")
         .send({ name: "Valid", description: "desc", hackerField: "injected" })
         .expect(HttpStatus.BAD_REQUEST);
 
+      expect(res.body.error.code).toBe("VALIDATION_FAILED");
+      expect(res.body.error.details).toContainEqual(
+        expect.objectContaining({ field: "hackerField", code: "unknown_field" }),
+      );
       expect(widgetService.create).not.toHaveBeenCalled();
     });
   });
@@ -1044,11 +1036,13 @@ describe("WidgetController (e2e)", () => {
       expect(res.body.data.id).toBe(widget.id);
     });
 
-    it("returns 422 for non-UUID id — ParseUUIDPipe", async () => {
-      await request(app.getHttpServer())
+    it("returns 400 VALIDATION_FAILED for non-UUID id — ParseUUIDPipe", async () => {
+      const res = await request(app.getHttpServer())
         .get("/api/v1/widgets/not-a-uuid")
-        .expect(HttpStatus.UNPROCESSABLE_ENTITY);
+        .expect(HttpStatus.BAD_REQUEST);
 
+      expect(res.body.error.code).toBe("VALIDATION_FAILED");
+      expect(res.body.error.details[0]).toMatchObject({ field: "id", code: "invalid_format" });
       expect(widgetService.get).not.toHaveBeenCalled();
     });
   });
@@ -1068,12 +1062,13 @@ describe("WidgetController (e2e)", () => {
       expect(res.body.data.version).toBe(2);
     });
 
-    it("rejects missing version field", async () => {
-      await request(app.getHttpServer())
+    it("rejects missing version field with 400 VALIDATION_FAILED", async () => {
+      const res = await request(app.getHttpServer())
         .put("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
         .send({ name: "Updated", description: "desc" })
         .expect(HttpStatus.BAD_REQUEST);
 
+      expect(res.body.error.code).toBe("VALIDATION_FAILED");
       expect(widgetService.update).not.toHaveBeenCalled();
     });
   });
@@ -1091,11 +1086,12 @@ describe("WidgetController (e2e)", () => {
       expect(res.body).toEqual({});
     });
 
-    it("rejects non-UUID id", async () => {
-      await request(app.getHttpServer())
+    it("rejects non-UUID id with 400 VALIDATION_FAILED", async () => {
+      const res = await request(app.getHttpServer())
         .delete("/api/v1/widgets/xyz")
-        .expect(HttpStatus.UNPROCESSABLE_ENTITY);
+        .expect(HttpStatus.BAD_REQUEST);
 
+      expect(res.body.error.code).toBe("VALIDATION_FAILED");
       expect(widgetService.delete).not.toHaveBeenCalled();
     });
   });
@@ -1112,12 +1108,11 @@ describe("WidgetController (e2e)", () => {
       });
 
       const res = await request(app.getHttpServer())
-        .get("/api/v1/widgets?page_size=5")
+        .get("/api/v1/widgets?limit=5")
         .expect(HttpStatus.OK);
 
       expect(res.body.data).toHaveLength(1);
-      expect(res.body.meta.has_more).toBe(true);
-      expect(res.body.meta.cursor).toBe("abc");
+      expect(res.body.meta.pagination).toEqual({ next_cursor: "abc", has_more: true, limit: 5 });
     });
   });
 
@@ -1135,12 +1130,19 @@ describe("WidgetController (e2e)", () => {
         .compile();
 
       const restrictedApp = module.createNestApplication();
-      restrictedApp.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+      restrictedApp.useGlobalPipes(
+        new ValidationPipe({ whitelist: true, transform: true, exceptionFactory: validationExceptionFactory }),
+      );
+      restrictedApp.useGlobalFilters(new AppErrorFilter());
       await restrictedApp.init();
 
-      await request(restrictedApp.getHttpServer())
+      const res = await request(restrictedApp.getHttpServer())
         .get("/api/v1/widgets/aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa")
-        .expect(HttpStatus.FORBIDDEN); // NestJS returns 403 when guard returns false
+        .expect(HttpStatus.FORBIDDEN); // NestJS throws ForbiddenException when a guard returns false
+
+      // The filter maps Nest's exception to the envelope — its own message is not sent
+      expect(Object.keys(res.body)).toEqual(["error"]);
+      expect(res.body.error.code).toBe("FORBIDDEN");
 
       await restrictedApp.close();
     });
@@ -1155,17 +1157,18 @@ describe("WidgetController (e2e)", () => {
 - Every handler test MUST use `supertest` to exercise the full middleware chain (validation, auth, error handling)
 - Express tests MUST mount the `errorHandler` middleware last — without it, unhandled errors crash the test
 - Mock auth middleware MUST inject `tenantId`, `userId`, `requestId` into the request (mirrors production)
-- Malformed JSON MUST return 400 Bad Request, not 422 Validation Error
+- Malformed JSON MUST return 400 `MALFORMED_REQUEST`; failed field validation 400 `VALIDATION_FAILED` (with `details[]`); a domain rule 422 `BUSINESS_RULE_VIOLATION`
 - Wrong tenant MUST return 404 Not Found, not 403 Forbidden — prevents entity enumeration
-- Internal errors MUST NOT leak error details to the client — assert generic message in 500 responses
-- Every response MUST follow the envelope format: `{"data": T, "meta": {...}}` for success, `{"error": {...}}` for failure
+- Internal errors MUST NOT leak error details to the client — assert the exception text is absent from the whole body in 500/503 responses
+- Every response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}` for success, `{"error": {code, message, details?, request_id, retryable}}` for failure, never both
+- Error responses MUST carry `X-Request-Id` equal to `error.request_id`; 401 adds `WWW-Authenticate: Bearer`; 429/503 add `Retry-After`
 - DELETE MUST return 204 with empty body
 - POST create MUST return 201 Created with the created resource in the body
-- List responses MUST include `cursor`, `has_more`, `total` in meta
-- Page size MUST be clamped: default to 20 when missing, cap at 100
-- Sort and filter fields MUST be validated — invalid values default to safe values
+- List responses MUST include `meta.pagination` `{next_cursor, has_more, limit}`; `data` is `[]` when empty and `next_cursor` is `null` when `has_more` is false
+- `limit` MUST default to 20 and be capped at 100 — out-of-range values are rejected with 400 `VALIDATION_FAILED`
+- Sort fields MUST be allow-listed — values outside the list are rejected with 400 `VALIDATION_FAILED`; unknown filter fields are dropped
 - NestJS tests MUST use `Test.createTestingModule` with `overrideGuard` / `overrideProvider` for isolation
-- NestJS `ValidationPipe` MUST be configured with `whitelist: true` and `transform: true` in tests — matching production
+- NestJS `ValidationPipe` MUST be configured with `whitelist: true`, `transform: true` and `exceptionFactory: validationExceptionFactory`, and `AppErrorFilter` registered, in tests — matching production
 - Use `vi.fn()` (vitest) for Express mocks, `jest.fn()` for NestJS mocks
 - Every mock MUST be reset in `beforeEach` to prevent cross-test contamination
 - Zod validation tests (Express) MUST verify that invalid input is rejected BEFORE calling the service

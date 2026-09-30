@@ -110,6 +110,7 @@ from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+from opentelemetry.metrics import NoOpMeterProvider
 
 
 def instrument_auto(app, engine=None):
@@ -122,6 +123,8 @@ def instrument_auto(app, engine=None):
     FastAPIInstrumentor.instrument_app(
         app,
         excluded_urls="health,ready,metrics",
+        # MetricsMiddleware (2.3) is the single source of HTTP server metrics; don't record a second set
+        meter_provider=NoOpMeterProvider(),
     )
 
     # SQLAlchemy — wraps every query in a child span
@@ -274,10 +277,11 @@ async def call_downstream(url: str, payload: dict, ctx: RequestContext) -> httpx
     If using auto-instrumented httpx, trace context is injected automatically.
     For manual propagation (e.g., with raw aiohttp):
     """
+    # No tenant header: the downstream authenticates THIS service (service token or mTLS) and takes the
+    # tenant from that credential. A forwarded tenant header would be a spoofable authorization input.
     headers: dict[str, str] = {
         "Content-Type": "application/json",
         "X-Request-ID": ctx.request_id,
-        "X-Tenant-ID": ctx.tenant_id,
     }
     # Inject W3C Trace Context (traceparent, tracestate) into headers
     inject(headers)
@@ -311,9 +315,13 @@ from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+from opentelemetry.sdk.metrics.view import ExplicitBucketHistogramAggregation, View
 from opentelemetry.sdk.resources import Resource, SERVICE_NAME, SERVICE_VERSION
 
 from app.config import settings
+
+# OTel HTTP semconv buckets (seconds); the NFR latency threshold must be one of them
+HTTP_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10]
 
 
 def configure_metrics() -> MeterProvider:
@@ -330,7 +338,13 @@ def configure_metrics() -> MeterProvider:
         }
     )
 
-    provider = MeterProvider(resource=resource)
+    views = [
+        View(
+            instrument_name="http.server.request.duration",
+            aggregation=ExplicitBucketHistogramAggregation(HTTP_DURATION_BUCKETS),
+        )
+    ]
+    provider = MeterProvider(resource=resource, views=views)
 
     if settings.OTEL_EXPORTER_OTLP_ENDPOINT:
         exporter = OTLPMetricExporter(
@@ -341,7 +355,7 @@ def configure_metrics() -> MeterProvider:
             exporter,
             export_interval_millis=30000,
         )
-        provider = MeterProvider(resource=resource, metric_readers=[reader])
+        provider = MeterProvider(resource=resource, metric_readers=[reader], views=views)
 
     metrics.set_meter_provider(provider)
     return provider
@@ -356,18 +370,13 @@ from opentelemetry import metrics
 
 meter = metrics.get_meter("order-service")
 
-# ── Counters ──────────────────────────────────────────────────────────
-request_count = meter.create_counter(
-    name="http.server.request.total",
-    description="Total HTTP requests",
-    unit="{request}",
-)
+# No request counter: the http.server.request.duration histogram's count IS the request count.
 
 # ── Histograms ────────────────────────────────────────────────────────
 request_duration = meter.create_histogram(
     name="http.server.request.duration",
-    description="HTTP request duration in seconds",
-    unit="s",
+    description="Duration of HTTP server requests",
+    unit="s",  # buckets set by the View in configure_metrics()
 )
 
 db_query_duration = meter.create_histogram(
@@ -383,7 +392,7 @@ external_request_duration = meter.create_histogram(
 )
 
 # ── UpDownCounters ────────────────────────────────────────────────────
-active_connections = meter.create_up_down_counter(
+active_requests = meter.create_up_down_counter(
     name="http.server.active_requests",
     description="Currently active HTTP requests",
     unit="{request}",
@@ -414,48 +423,49 @@ from starlette.requests import Request
 from starlette.responses import Response
 
 from app.observability.app_metrics import (
-    request_count,
     request_duration,
-    active_connections,
+    active_requests,
 )
+
+_KNOWN_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 
 
 class MetricsMiddleware(BaseHTTPMiddleware):
+    """Stable OTel HTTP semconv. Every attribute is bounded: no tenant_id, IDs, raw paths or query strings."""
+
     async def dispatch(self, request: Request, call_next) -> Response:
-        if request.url.path in ("/health", "/ready", "/metrics"):
+        if request.url.path in ("/health", "/ready", "/metrics"):  # skip list only, never a label
             return await call_next(request)
 
-        tenant_id = request.headers.get("x-tenant-id", "unknown")
-        method = request.method
-        endpoint = request.url.path
-
-        attrs = {
-            "tenant_id": tenant_id,
-            "method": method,
-            "endpoint": endpoint,
+        # The route isn't known until the router has matched, so active_requests has method + scheme only
+        base = {
+            "http.request.method": request.method if request.method in _KNOWN_METHODS else "_OTHER",
+            "url.scheme": request.url.scheme,
         }
-
-        active_connections.add(1, attrs)
+        active_requests.add(1, base)
         start = time.perf_counter()
+        status = 500  # stays 500 if the app raises
 
         try:
             response = await call_next(request)
-        except Exception:
-            elapsed = time.perf_counter() - start
-            status_attrs = {**attrs, "status_code": 500}
-            request_count.add(1, status_attrs)
-            request_duration.record(elapsed, status_attrs)
-            raise
+            status = response.status_code
+            return response
         finally:
-            active_connections.add(-1, attrs)
-
-        elapsed = time.perf_counter() - start
-        status_attrs = {**attrs, "status_code": response.status_code}
-        request_count.add(1, status_attrs)
-        request_duration.record(elapsed, status_attrs)
-
-        return response
+            active_requests.add(-1, base)
+            attrs = {**base, "http.response.status_code": status}
+            # The route TEMPLATE, known only after routing: FastAPI puts the matched APIRoute in
+            # scope["route"] (path "/api/v1/orders/{order_id}"). Unmatched (404) → no http.route.
+            # NEVER request.url.path: raw paths are unbounded series.
+            route = request.scope.get("route")
+            if route is not None and getattr(route, "path", None):
+                attrs["http.route"] = route.path
+            if status >= 500:
+                attrs["error.type"] = str(status)
+            request_duration.record(time.perf_counter() - start, attrs)
 ```
+
+Test the route template: request `/api/v1/orders/123` and `/api/v1/orders/456`, then assert there is
+exactly one series, with `http.route="/api/v1/orders/{order_id}"`.
 
 ### 2.4 Recording Business Metrics
 
@@ -469,9 +479,8 @@ class OrderService:
     async def create_order(self, ctx: RequestContext, req: CreateOrderRequest) -> Order:
         order = await self._process_order(ctx, req)
 
-        # Business metrics
+        # Business metrics — small enums only, no tenant_id (see 2.7)
         metric_attrs = {
-            "tenant_id": ctx.tenant_id,
             "payment_method": order.payment_method,
             "region": ctx.region,
         }
@@ -529,17 +538,36 @@ Instrumentator(
 ).instrument(app).expose(app, endpoint="/metrics")
 ```
 
+This path uses its own names (`http_request_duration_seconds`, with a `handler` label holding the
+route template). Pick one path per service, either OTel (2.2–2.3) or this one, so the SLO queries have
+exactly one source. Never add a tenant label to it.
+
 ### 2.7 Key Metrics Reference
+
+Every label comes from a small, known set: no `tenant_id`, user or entity IDs, raw paths, query
+strings or error messages. If you really need a per-tenant dimension, the only one allowed is a
+bounded `tenant.tier` (free/pro/enterprise). Ask per-tenant questions of traces and logs.
 
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `http.server.request.total` | Counter | tenant_id, method, endpoint, status_code | Request volume and error rates |
-| `http.server.request.duration` | Histogram | tenant_id, method, endpoint, status_code | Latency distribution (p50/p95/p99) |
-| `http.server.active_requests` | UpDownCounter | tenant_id, endpoint | Concurrency / saturation |
+| `http.server.request.duration` | Histogram (s) | http.request.method, http.route (template), http.response.status_code, url.scheme, error.type (5xx) | Rate, errors and latency (RED); the count is the request count |
+| `http.server.active_requests` | UpDownCounter | http.request.method, url.scheme | Concurrency / saturation |
 | `db.query.duration` | Histogram | db.system, db.operation | Database performance |
-| `external.request.duration` | Histogram | tenant_id, service, endpoint | Upstream latency |
-| `business.order.total` | Counter | tenant_id, payment_method | Revenue KPI |
-| `business.order.count` | Counter | tenant_id, region | Volume KPI |
+| `external.request.duration` | Histogram | service (dependency name), operation (a small fixed set, never the raw URL) | Upstream latency |
+| `business.order.total` | Counter | payment_method, region | Revenue KPI |
+| `business.order.count` | Counter | payment_method, region | Volume KPI |
+
+### 2.8 SLIs and Alerting
+
+Don't compute SLIs in-process, so no p99, availability or "budget remaining" gauges. Percentiles
+can't be averaged across workers or pods, and an in-memory window resets on every restart. Compute
+SLIs at query time from the `http.server.request.duration` histogram instead:
+- availability is 1 minus the 5xx share of its count;
+- the latency SLI is the share of requests at or under the NFR threshold, which must be one of the
+  bucket boundaries.
+
+Alert with multi-window burn rates (14.4×, 6×, 1×). See `core/observability-patterns.md` §SLOs and
+Alerting.
 
 ---
 
@@ -551,6 +579,7 @@ Instrumentator(
 # app/observability/logging.py
 
 import logging
+import re
 import sys
 
 import structlog
@@ -593,6 +622,8 @@ def configure_logging() -> None:
     )
 
     formatter = structlog.stdlib.ProcessorFormatter(
+        # stdlib records (uvicorn, sqlalchemy, httpx, ...) run through the same chain, redaction included
+        foreign_pre_chain=shared_processors,
         processors=[
             structlog.stdlib.ProcessorFormatter.remove_processors_meta,
             renderer,
@@ -620,21 +651,30 @@ def _add_service_info(logger, method_name, event_dict):
 
 
 # ── Sensitive Data Filter ─────────────────────────────────────────────
+# Redaction by KEY NAME, in the processor chain, for every level: DEBUG gets switched on during
+# incidents, and it must stay safe then. Call sites don't have to remember anything.
 
-_SENSITIVE_KEYS = frozenset({
-    "password", "passwd", "secret", "token", "api_key", "apikey",
-    "authorization", "cookie", "session_id", "ssn", "credit_card",
-    "card_number", "cvv", "private_key",
-})
+_SENSITIVE_KEY = re.compile(
+    r"pass(word|wd)?|secret|token|authorization|cookie|api[-_]?key|session|card|cvv|iban|ssn|private[-_]?key",
+    re.IGNORECASE,
+)
+
+
+def redact_sensitive(value):
+    """Return a copy with the value of every key matching _SENSITIVE_KEY replaced, at any depth."""
+    if isinstance(value, dict):
+        return {k: "[REDACTED]" if _SENSITIVE_KEY.search(str(k)) else redact_sensitive(v) for k, v in value.items()}
+    if isinstance(value, list):  # not tuples: exc_info=(type, value, tb) must stay a tuple
+        return [redact_sensitive(v) for v in value]
+    return value
 
 
 def _filter_sensitive_keys(logger, method_name, event_dict):
-    """Replace values of sensitive keys with '[REDACTED]'."""
-    for key in list(event_dict.keys()):
-        if key.lower() in _SENSITIVE_KEYS:
-            event_dict[key] = "[REDACTED]"
-    return event_dict
+    return redact_sensitive(event_dict)
 ```
+
+Never log request or response bodies. Log an allow-listed set of fields instead. Add a unit test that
+logs `password` and `authorization` fields and asserts they come out as `[REDACTED]`.
 
 ### 3.2 Log Correlation with Trace ID and Span ID
 
@@ -677,6 +717,9 @@ shared_processors = [
 ```python
 # app/middleware/logging_middleware.py
 
+import re
+import uuid
+
 import structlog
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -684,26 +727,33 @@ from starlette.responses import Response
 
 logger = structlog.get_logger()
 
+# Bounded charset and length: no log injection. fullmatch, because "$" also matches before a trailing "\n".
+_VALID_REQUEST_ID = re.compile(r"[A-Za-z0-9._-]{8,128}")
+
 
 class LoggingMiddleware(BaseHTTPMiddleware):
     """
-    Bind tenant_id, request_id, user_id to structlog contextvars
-    so every log line within this request includes them automatically.
+    Bind request_id, method and path to structlog contextvars so every log line within this request
+    includes them automatically. tenant_id and user_id are NOT read here from headers. The auth
+    middleware (inside this one, see 4.2) takes them from the verified token, puts them on
+    request.state and binds them with structlog.contextvars.bind_contextvars(...), so every log line
+    below it carries them. A client header such as X-Tenant-ID is spoofable and never used.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
         # Clear context from previous request (uvicorn may reuse the worker)
         structlog.contextvars.clear_contextvars()
 
-        tenant_id = request.headers.get("x-tenant-id", "unknown")
-        request_id = request.headers.get("x-request-id", "")
+        # Request ID — accept a well-formed inbound ID, otherwise generate one
+        inbound = request.headers.get("x-request-id", "")
+        request_id = inbound if _VALID_REQUEST_ID.fullmatch(inbound) else f"req_{uuid.uuid4()}"
+        request.state.request_id = request_id
 
         # Bind to contextvars — all downstream log calls inherit these
         structlog.contextvars.bind_contextvars(
-            tenant_id=tenant_id,
             request_id=request_id,
             method=request.method,
-            path=request.url.path,
+            path=request.url.path,  # no query string: it can carry tokens and PII
         )
 
         logger.info("request_started")
@@ -711,13 +761,15 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         try:
             response = await call_next(request)
         except Exception:
-            logger.exception("request_failed")
+            logger.exception("request_failed", tenant_id=getattr(request.state, "tenant_id", "unknown"))
             raise
 
         logger.info(
             "request_completed",
             status_code=response.status_code,
+            tenant_id=getattr(request.state, "tenant_id", "unknown"),  # set by the auth middleware
         )
+        response.headers["X-Request-ID"] = request_id
 
         return response
 ```
@@ -775,8 +827,8 @@ class OrderService:
 | `timestamp` | structlog TimeStamper | When it happened |
 | `level` | structlog add_log_level | Severity |
 | `event` | Developer | What happened (structlog uses `event` instead of `msg`) |
-| `tenant_id` | contextvars (middleware) | Whose request |
-| `request_id` | contextvars (middleware) | Correlate within a request |
+| `tenant_id` | contextvars (auth middleware, from the verified token) | Whose request |
+| `request_id` | contextvars (LoggingMiddleware, validated or generated) | Correlate within a request |
 | `trace_id` | OTel span context | Correlate across services |
 | `span_id` | OTel span context | Exact span for log line |
 | `service` | _add_service_info processor | Which service |
@@ -838,6 +890,7 @@ from datetime import datetime, timezone
 from opentelemetry import trace
 
 from app.config import settings
+from app.observability.logging import redact_sensitive
 
 
 class JSONFormatter(logging.Formatter):
@@ -860,9 +913,9 @@ class JSONFormatter(logging.Formatter):
             log_entry["trace_id"] = format(ctx.trace_id, "032x")
             log_entry["span_id"] = format(ctx.span_id, "016x")
 
-        # Merge extra fields
+        # Merge extra fields — redacted by key name, the same rule as the structlog chain, at every level
         if hasattr(record, "extra_fields"):
-            log_entry.update(record.extra_fields)
+            log_entry.update(redact_sensitive(record.extra_fields))
 
         # Exception info
         if record.exc_info and record.exc_info[1]:
@@ -928,6 +981,7 @@ from fastapi import FastAPI
 
 from app.observability import instrument_app
 from app.db import create_engine
+from app.middleware.auth_middleware import AuthMiddleware
 from app.middleware.logging_middleware import LoggingMiddleware
 from app.middleware.metrics_middleware import MetricsMiddleware
 
@@ -954,9 +1008,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Middleware order matters — outermost runs first
-app.add_middleware(LoggingMiddleware)
-app.add_middleware(MetricsMiddleware)
+# Middleware order matters — outermost runs first. Starlette: the LAST one added is the OUTERMOST.
+app.add_middleware(AuthMiddleware)     # innermost: verifies the token; sets request.state.tenant_id/user_id
+                                       # from its claims and binds them to structlog contextvars
+app.add_middleware(LoggingMiddleware)  # request_id (validated or generated) + request-scoped log context
+app.add_middleware(MetricsMiddleware)  # outermost: sees every response, including 401s
 ```
 
 ### 4.3 Configuration via Environment Variables
@@ -998,7 +1054,8 @@ from dataclasses import dataclass
 class RequestContext:
     """
     Immutable request context threaded through service and repository layers.
-    Extracted from HTTP headers in middleware / dependency injection.
+    tenant_id and user_id come from the verified credential (request.state, set by the auth
+    middleware), never from client headers.
     """
     tenant_id: str
     user_id: str
@@ -1011,20 +1068,18 @@ class RequestContext:
 ```python
 # app/dependencies.py
 
-from fastapi import Depends, Header, Request
+from fastapi import Request
 
 from app.context import RequestContext
 
 
-async def get_request_context(
-    request: Request,
-    x_tenant_id: str = Header(...),
-    x_request_id: str = Header(""),
-) -> RequestContext:
+async def get_request_context(request: Request) -> RequestContext:
+    # tenant_id and user_id come from the VERIFIED token (the auth middleware put them on
+    # request.state). Never from a client header such as X-Tenant-ID: anyone can send it.
     return RequestContext(
-        tenant_id=x_tenant_id,
-        user_id=getattr(request.state, "user_id", ""),
-        request_id=x_request_id or request.headers.get("x-request-id", ""),
+        tenant_id=request.state.tenant_id,
+        user_id=request.state.user_id,
+        request_id=request.state.request_id,  # validated or generated by LoggingMiddleware
     )
 ```
 
@@ -1090,13 +1145,14 @@ services:
 
 ## 6. Critical Rules
 
-1. **`tenant_id` on every log, metric, and trace** — zero exceptions
+1. **`tenant_id` on every log line and trace span, never on a metric.** At most a bounded `tenant.tier`. The tenant comes from the verified token, never from a client header.
 2. **Structured logging only** — no f-string log messages like `logger.info(f"Order {id} created")`; use `logger.info("order_created", order_id=id)` instead
 3. **JSON format in production** — human-readable only in local dev
 4. **trace_id and span_id on every log line** — via the `add_otel_context` processor
-5. **ERROR level means "wake someone up"** — don't use it for expected business conditions
-6. **Never log sensitive data** — passwords, tokens, API keys, PII (the `_filter_sensitive_keys` processor catches common keys, but developers must be vigilant)
-7. **Metrics at every boundary** — HTTP handler, service method, repository call, external API call
+5. **ERROR means a server-side failure someone should look at.** Don't use it for expected business conditions. Alerts come from SLO burn rates, not from counting ERROR lines.
+6. **Never log sensitive data.** `_filter_sensitive_keys` redacts by key name, at any depth and at every level, and stdlib records go through it too via `foreign_pre_chain`. Never log request or response bodies.
+7. **Metrics at every boundary** (HTTP handler, service method, repository call, external API call), with bounded labels only. `http.route` is the route template (`scope["route"].path`), never `request.url.path`.
 8. **Every span records errors** — use `span.record_exception(exc)` + `span.set_status(StatusCode.ERROR)` in the except block
 9. **Clean shutdown** — call `force_flush()` and `shutdown()` on both providers in the FastAPI lifespan teardown
-10. **Use contextvars** — bind tenant_id, request_id in middleware once; never pass them manually to every log call
+10. **Use contextvars.** Bind request_id (validated) in LoggingMiddleware, and tenant_id in the auth middleware, once each. Never pass them manually to every log call.
+11. **SLIs come from the histogram at query time.** No in-process SLA gauges. Alert on multi-window burn rates (see 2.8).

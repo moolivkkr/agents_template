@@ -223,7 +223,7 @@ func (r *PostgresOrderRepo) Save(ctx context.Context, order *Order) error {
 
 | Attribute | Layer | Source |
 |-----------|-------|--------|
-| `tenant_id` | All | Context middleware |
+| `tenant_id` | All | Auth middleware (verified token claims). Spans and logs only, never metrics |
 | `user_id` | Handler, Service | Auth middleware |
 | `request_id` | Handler | Request ID middleware |
 | `order_id` (or relevant entity) | Service, Repo | Business logic |
@@ -237,9 +237,11 @@ func (r *PostgresOrderRepo) Save(ctx context.Context, order *Order) error {
 package server
 
 import (
+    "fmt"
     "net/http"
 
     "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+    "go.opentelemetry.io/otel/metric/noop"
 )
 
 // WrapHandler wraps your root mux so every incoming request gets a span.
@@ -249,12 +251,15 @@ func NewServer(handler http.Handler) *http.Server {
     //   - http.method, http.url, http.status_code, etc.
     wrappedHandler := otelhttp.NewHandler(handler, "http-server",
         otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
+        // MetricsMiddleware (2.2) is the single source of HTTP server metrics; don't let otelhttp
+        // record a second set under other names.
+        otelhttp.WithMeterProvider(noop.NewMeterProvider()),
         otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
-            // Use the route pattern if available (Go 1.22+ ServeMux)
+            // Use the route pattern if available (Go 1.23+ ServeMux sets r.Pattern)
             if pattern := r.Pattern; pattern != "" {
                 return fmt.Sprintf("HTTP %s %s", r.Method, pattern)
             }
-            return fmt.Sprintf("HTTP %s %s", r.Method, r.URL.Path)
+            return "HTTP " + r.Method // never r.URL.Path: raw paths make span names unbounded
         }),
     )
 
@@ -384,9 +389,9 @@ func (s *Service) Process(ctx context.Context, id string) error {
 //
 //   Request arrives
 //     -> otelhttp extracts W3C traceparent header, creates root span
-//     -> RequestIDMiddleware injects request_id into context
-//     -> TenantMiddleware injects tenant_id into context
-//     -> AuthMiddleware injects user_id into context
+//     -> RequestIDMiddleware validates an inbound X-Request-ID (or generates one) into context
+//     -> AuthMiddleware verifies the token and puts tenant_id + user_id FROM ITS CLAIMS into context
+//        (never from a client header such as X-Tenant-ID: anyone can set it)
 //     -> Handler reads context, calls service
 //       -> Service reads context, starts child span, calls repo
 //         -> Repo reads context, starts child span, executes query
@@ -405,6 +410,7 @@ const (
     ctxKeyLogger
 )
 
+// TenantFromContext returns the tenant AuthMiddleware took from the verified token.
 func TenantFromContext(ctx context.Context) string {
     if v, ok := ctx.Value(ctxKeyTenantID).(string); ok {
         return v
@@ -520,13 +526,23 @@ func serveMetrics(addr string) *http.Server {
 }
 ```
 
-### 2.2 Counter — Request Count by Route, Status, Tenant
+### 2.2 HTTP Server Metrics — Duration Histogram and Active Requests
+
+These follow the stable OTel HTTP semantic conventions. There is one `http.server.request.duration`
+histogram, and its count is the request count, so there's no separate request counter. Next to it
+sits `http.server.active_requests`. Every attribute is bounded, and **there is no `tenant_id`**: each
+distinct value is a new time series (see `core/observability-patterns.md` §tenant_id). If you really
+need a per-tenant dimension on a metric, the only one allowed is a bounded `tenant.tier`
+(free/pro/enterprise). Ask per-tenant questions of traces and logs.
 
 ```go
 package middleware
 
 import (
+    "fmt"
     "net/http"
+    "strconv"
+    "strings"
     "time"
 
     "go.opentelemetry.io/otel"
@@ -537,7 +553,6 @@ import (
 var meter = otel.Meter("myapp/middleware")
 
 var (
-    httpRequestTotal    metric.Int64Counter
     httpRequestDuration metric.Float64Histogram
     httpActiveRequests  metric.Int64UpDownCounter
 )
@@ -545,18 +560,10 @@ var (
 func init() {
     var err error
 
-    httpRequestTotal, err = meter.Int64Counter("http.server.request.total",
-        metric.WithDescription("Total HTTP requests received"),
-        metric.WithUnit("{request}"),
-    )
-    if err != nil {
-        panic(fmt.Sprintf("creating request counter: %v", err))
-    }
-
     httpRequestDuration, err = meter.Float64Histogram("http.server.request.duration",
-        metric.WithDescription("HTTP request duration in seconds"),
+        metric.WithDescription("Duration of HTTP server requests"),
         metric.WithUnit("s"),
-        metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10),
+        metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1, 2.5, 5, 7.5, 10),
     )
     if err != nil {
         panic(fmt.Sprintf("creating request duration histogram: %v", err))
@@ -567,34 +574,47 @@ func init() {
         metric.WithUnit("{request}"),
     )
     if err != nil {
-        panic(fmt.Sprintf("creating active requests gauge: %v", err))
+        panic(fmt.Sprintf("creating active requests counter: %v", err))
     }
 }
 
-// MetricsMiddleware records request count, duration, and active requests.
+var knownMethods = map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "OPTIONS": true}
+
+// MetricsMiddleware records request duration and in-flight requests. It must wrap the ServeMux
+// DIRECTLY: the mux sets r.Pattern on this same *http.Request, and a middleware in between that
+// calls r.WithContext would hand the mux a copy and hide the pattern from us.
 func MetricsMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         ctx := r.Context()
         start := time.Now()
-        tenantID := TenantFromContext(ctx)
 
-        baseAttrs := []attribute.KeyValue{
-            attribute.String("tenant_id", tenantID),
-            attribute.String("http.method", r.Method),
-            attribute.String("http.route", routePattern(r)),
+        method := r.Method
+        if !knownMethods[method] {
+            method = "_OTHER"
         }
-
-        httpActiveRequests.Add(ctx, 1, metric.WithAttributes(baseAttrs...))
-        defer httpActiveRequests.Add(ctx, -1, metric.WithAttributes(baseAttrs...))
+        // The route isn't known until the mux has routed, so active_requests carries no http.route.
+        activeAttrs := metric.WithAttributes(
+            attribute.String("http.request.method", method),
+            attribute.String("url.scheme", scheme(r)),
+        )
+        httpActiveRequests.Add(ctx, 1, activeAttrs)
+        defer httpActiveRequests.Add(ctx, -1, activeAttrs)
 
         rec := &statusRecorder{ResponseWriter: w, statusCode: http.StatusOK}
         next.ServeHTTP(rec, r)
 
-        duration := time.Since(start).Seconds()
-        allAttrs := append(baseAttrs, attribute.Int("http.status_code", rec.statusCode))
-
-        httpRequestTotal.Add(ctx, 1, metric.WithAttributes(allAttrs...))
-        httpRequestDuration.Record(ctx, duration, metric.WithAttributes(allAttrs...))
+        attrs := []attribute.KeyValue{
+            attribute.String("http.request.method", method),
+            attribute.Int("http.response.status_code", rec.statusCode),
+            attribute.String("url.scheme", scheme(r)),
+        }
+        if route := routePattern(r); route != "" { // unmatched (404): leave http.route out
+            attrs = append(attrs, attribute.String("http.route", route))
+        }
+        if rec.statusCode >= 500 {
+            attrs = append(attrs, attribute.String("error.type", strconv.Itoa(rec.statusCode)))
+        }
+        httpRequestDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
     })
 }
 
@@ -609,15 +629,27 @@ func (r *statusRecorder) WriteHeader(code int) {
     r.ResponseWriter.WriteHeader(code)
 }
 
-// routePattern returns the registered route pattern (Go 1.22+ ServeMux)
-// or falls back to the raw path. Avoid high-cardinality paths in metrics.
+// routePattern returns the route TEMPLATE the ServeMux matched, as its path part. r.Pattern (Go 1.23+)
+// is e.g. "GET /api/v1/orders/{id}", and this returns "/api/v1/orders/{id}". It returns "" when nothing
+// matched. Never fall back to r.URL.Path: raw paths are unbounded series.
+// (chi: chi.RouteContext(r.Context()).RoutePattern().)
 func routePattern(r *http.Request) string {
-    if p := r.Pattern; p != "" {
-        return p
+    if i := strings.IndexByte(r.Pattern, '/'); i >= 0 {
+        return r.Pattern[i:] // drop the "METHOD " and host prefixes
     }
-    return r.URL.Path
+    return ""
+}
+
+func scheme(r *http.Request) string {
+    if r.TLS != nil {
+        return "https"
+    }
+    return "http"
 }
 ```
+
+Test the route template: request `/api/v1/orders/123` and `/api/v1/orders/456`, then assert there is
+exactly one series, with `http.route="/api/v1/orders/{id}"`.
 
 ### 2.3 Histogram — DB Query Duration
 
@@ -649,8 +681,8 @@ func init() {
 // recordQueryDuration is a helper called after every DB operation.
 func recordQueryDuration(ctx context.Context, start time.Time, operation, table string) {
     duration := time.Since(start).Seconds()
+    // Bounded attributes only (operation and table), with no tenant_id
     dbQueryDuration.Record(ctx, duration, metric.WithAttributes(
-        attribute.String("tenant_id", TenantFromContext(ctx)),
         attribute.String("db.operation", operation),
         attribute.String("db.sql.table", table),
     ))
@@ -805,8 +837,8 @@ func init() {
 
 // After a successful order creation:
 func (s *OrderService) recordBusinessMetrics(ctx context.Context, order *Order) {
+    // Small enums only; no tenant_id (at most a bounded tenant.tier, see 2.2)
     attrs := metric.WithAttributes(
-        attribute.String("tenant_id", TenantFromContext(ctx)),
         attribute.String("payment_method", order.PaymentMethod),
         attribute.String("currency", order.Currency),
     )
@@ -836,6 +868,18 @@ spec:
       interval: 15s
 ```
 
+### 2.7 SLIs and Alerting
+
+Don't compute SLIs in-process, so no p99, availability or "budget remaining" gauges. Percentiles
+can't be averaged across pods, and an in-memory window resets on every restart. Compute SLIs at query
+time from the `http.server.request.duration` histogram instead:
+- availability is 1 minus the 5xx share of its count;
+- the latency SLI is the share of requests at or under the NFR threshold, which must be one of the
+  bucket boundaries.
+
+Alert with multi-window burn rates (14.4×, 6×, 1×), not on ERROR log lines. The PromQL and the rule
+layout are in `core/observability-patterns.md` §SLOs and Alerting.
+
 ---
 
 ## 3. Structured Logging
@@ -850,7 +894,7 @@ import (
     "io"
     "log/slog"
     "os"
-    "strings"
+    "regexp"
 )
 
 // NewLogger creates the application logger.
@@ -867,10 +911,9 @@ func NewLogger(serviceName, version, env string) *slog.Logger {
     opts := &slog.HandlerOptions{
         Level:     level,
         AddSource: env == "development", // file:line in dev only (performance cost)
-        ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-            // Mask sensitive fields
-            return maskSensitiveAttr(a)
-        },
+        // The handler redacts by key name at EVERY level, so turning DEBUG on during an incident
+        // can't leak secrets, and no call site has to remember to do it.
+        ReplaceAttr: redactSensitive,
     }
 
     if env == "development" || env == "local" {
@@ -889,25 +932,20 @@ func NewLogger(serviceName, version, env string) *slog.Logger {
     return logger
 }
 
-// maskSensitiveAttr redacts known-sensitive field names.
-func maskSensitiveAttr(a slog.Attr) slog.Attr {
-    sensitiveKeys := map[string]bool{
-        "password":      true,
-        "token":         true,
-        "secret":        true,
-        "authorization": true,
-        "api_key":       true,
-        "ssn":           true,
-        "credit_card":   true,
-        "email":         true, // PII — redact in production
-    }
+var sensitiveKey = regexp.MustCompile(`(?i)(pass(word)?|secret|token|authorization|cookie|api[-_]?key|session|card|cvv|iban|ssn|email)`)
 
-    if sensitiveKeys[strings.ToLower(a.Key)] {
-        a.Value = slog.StringValue("[REDACTED]")
+// redactSensitive redacts every attribute whose key matches sensitiveKey. slog calls ReplaceAttr for
+// attributes nested in groups too.
+func redactSensitive(_ []string, a slog.Attr) slog.Attr {
+    if sensitiveKey.MatchString(a.Key) {
+        return slog.String(a.Key, "[REDACTED]")
     }
     return a
 }
 ```
+
+Never log request or response bodies. Log an allow-listed set of fields instead. Add a unit test that
+logs `password` and `authorization` fields and asserts they come out as `[REDACTED]`.
 
 ### 3.2 Log Correlation with trace_id and span_id
 
@@ -982,7 +1020,7 @@ func LoggerMiddleware(baseLogger *slog.Logger) func(http.Handler) http.Handler {
                 "tenant_id", TenantFromContext(ctx),
                 "user_id", UserIDFromContext(ctx),
                 "http.method", r.Method,
-                "http.path", r.URL.Path,
+                "http.path", r.URL.Path, // no query string: it can carry tokens and PII
                 "http.remote_addr", r.RemoteAddr,
             )
 
@@ -1032,7 +1070,8 @@ func NewLogger(env string) *slog.Logger {
     }
 
     handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-        Level: programLevel,
+        Level:       programLevel,
+        ReplaceAttr: redactSensitive, // same redaction as 3.1, so switching to DEBUG below stays safe
     })
 
     return slog.New(NewTracingHandler(handler))
@@ -1061,7 +1100,7 @@ func handleSetLogLevel(w http.ResponseWriter, r *http.Request) {
 
 ### 3.5 Sensitive Data Masking
 
-The `maskSensitiveAttr` function in 3.1 handles field-level masking. Additional patterns:
+The handler's `redactSensitive` (3.1) redacts by key name. These helpers are for partial masking:
 
 ```go
 // MaskEmail partially masks email addresses: j***@example.com
@@ -1081,10 +1120,11 @@ func MaskCard(card string) string {
     return "****" + card[len(card)-4:]
 }
 
-// Usage — NEVER log raw PII:
+// Usage — NEVER log raw PII. The handler redacts keys matching sensitiveKey outright, so put a
+// masked value under a key that doesn't match:
 logger.InfoContext(ctx, "payment processed",
-    "email", MaskEmail(user.Email),      // j***@example.com
-    "card", MaskCard(payment.CardNumber), // ****1234
+    "contact_hint", MaskEmail(user.Email),     // j***@example.com
+    "pan_last4", MaskCard(payment.CardNumber), // ****1234
     "amount", payment.Amount,
 )
 ```
@@ -1099,8 +1139,8 @@ logger.InfoContext(ctx, "payment processed",
 |-------|-----|--------|-------|--------|
 | `trace_id` | Yes | No (linked via exemplars) | Automatic | OTel SDK |
 | `span_id` | Yes | No | Automatic | OTel SDK |
-| `request_id` | Yes | Yes (attribute) | Yes (attribute) | RequestID middleware |
-| `tenant_id` | Yes | Yes (attribute) | Yes (attribute) | Tenant middleware |
+| `request_id` | Yes | **No** (unbounded) | Yes (attribute) | RequestID middleware (validated or generated) |
+| `tenant_id` | Yes | **No** (at most a bounded `tenant.tier`) | Yes (attribute) | Auth middleware (verified token) |
 
 ### 4.2 Correlation Context Middleware Stack
 
@@ -1111,21 +1151,37 @@ func buildMiddlewareChain(logger *slog.Logger, handler http.Handler) http.Handle
     // Applied bottom-to-top (last middleware runs first):
     h := handler
 
-    // 5. Business logic handler
-    // 4. Metrics recording
+    // 5. Business logic handler (the ServeMux)
+    // 4. Metrics recording, which wraps the mux directly so it can read r.Pattern (see 2.2)
     h = MetricsMiddleware(h)
     // 3. Request-scoped logger (needs tenant_id, request_id, user_id from ctx)
     h = LoggerMiddleware(logger)(h)
-    // 2. Auth — extracts and validates user identity
+    // 2. Auth verifies the token and puts tenant_id + user_id FROM ITS CLAIMS into ctx.
+    //    There is no tenant middleware reading X-Tenant-ID: a client header is spoofable.
     h = AuthMiddleware(h)
-    // 1b. Tenant ID extraction
-    h = TenantMiddleware(h)
-    // 1a. Request ID — generate or extract from header
+    // 1. Request ID: validate an inbound X-Request-ID or generate one
     h = RequestIDMiddleware(h)
     // 0. OTel HTTP handler — creates root trace span, extracts W3C traceparent
     //    (applied in NewServer via otelhttp.NewHandler)
 
     return h
+}
+
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
+
+// RequestIDMiddleware accepts a well-formed inbound X-Request-ID, otherwise generates one, and echoes
+// it on the response. The charset and length are bounded: no log injection, and no megabyte IDs
+// copied onto every log line.
+func RequestIDMiddleware(next http.Handler) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        requestID := r.Header.Get("X-Request-ID")
+        if !validRequestID.MatchString(requestID) {
+            requestID = "req_" + uuid.NewString()
+        }
+        w.Header().Set("X-Request-ID", requestID)
+        ctx := context.WithValue(r.Context(), ctxKeyRequestID, requestID)
+        next.ServeHTTP(w, r.WithContext(ctx))
+    })
 }
 ```
 
@@ -1165,9 +1221,8 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
     if reqID := RequestIDFromContext(ctx); reqID != "" {
         req.Header.Set("X-Request-ID", reqID)
     }
-    if tenantID := TenantFromContext(ctx); tenantID != "" {
-        req.Header.Set("X-Tenant-ID", tenantID)
-    }
+    // No tenant header: the downstream authenticates THIS service (service token or mTLS) and takes
+    // the tenant from that credential. A forwarded tenant header would be a spoofable authz input.
 
     return c.inner.Do(req.WithContext(ctx))
 }
@@ -1341,32 +1396,34 @@ func getEnv(key, fallback string) string {
 
 ## 7. Metric Naming Convention
 
-Follow OpenTelemetry semantic conventions:
+Follow OpenTelemetry semantic conventions. Every attribute comes from a small, known set: no
+`tenant_id`, user or entity IDs, request IDs, raw paths, query strings or error messages. The request
+count is the histogram's count, so there is no `http.server.request.total`.
 
 | Metric | Type | Unit | Attributes |
 |--------|------|------|------------|
-| `http.server.request.total` | Counter | `{request}` | tenant_id, http.method, http.route, http.status_code |
-| `http.server.request.duration` | Histogram | `s` | tenant_id, http.method, http.route |
-| `http.server.active_requests` | UpDownCounter | `{request}` | tenant_id, http.route |
-| `db.query.duration` | Histogram | `s` | tenant_id, db.operation, db.sql.table |
+| `http.server.request.duration` | Histogram | `s` | http.request.method, http.route (the template; left out when unmatched), http.response.status_code, url.scheme, error.type (5xx) |
+| `http.server.active_requests` | UpDownCounter | `{request}` | http.request.method, url.scheme |
+| `db.query.duration` | Histogram | `s` | db.operation, db.sql.table |
 | `db.pool.open_connections` | Gauge | `{connection}` | - |
 | `db.pool.in_use` | Gauge | `{connection}` | - |
 | `go.goroutine.count` | Gauge | `{goroutine}` | - |
 | `queue.depth` | Gauge | `{item}` | queue_name |
-| `business.orders.created` | Counter | `{order}` | tenant_id, payment_method |
-| `business.orders.revenue` | Counter | `USD` | tenant_id, currency |
+| `business.orders.created` | Counter | `{order}` | payment_method, currency |
+| `business.orders.revenue` | Counter | `USD` | payment_method, currency |
 
 ---
 
 ## Critical Rules
 
-1. **tenant_id on every signal** — logs, metrics, traces. Zero exceptions.
+1. **tenant_id on every log line and span, never on a metric.** At most a bounded `tenant.tier`. The tenant comes from the verified token, never from a client header.
 2. **trace_id + span_id on every log line** — use `TracingHandler` to automate this.
 3. **RecordError + SetStatus on every error** — never swallow errors silently in spans.
-4. **Middleware order matters** — otelhttp first, then request_id, tenant, auth, logger, metrics.
-5. **No high-cardinality metric attributes** — never use user_id, order_id, or raw paths as metric labels. Use route patterns.
+4. **Middleware order matters.** otelhttp runs first, then request_id (validated), then auth (which sets tenant_id and user_id), then the logger, then metrics wrapping the mux.
+5. **No high-cardinality metric attributes.** Never use tenant_id, user_id, order_id, request_id, raw paths, query strings or error messages as metric labels. `http.route` is the route template (`r.Pattern`), never `r.URL.Path`.
 6. **JSON logs in production** — text logs only in local development.
-7. **Never log sensitive data** — passwords, tokens, API keys, raw PII. Use masking helpers.
+7. **Never log sensitive data.** The handler's `ReplaceAttr` redacts by key name at every level. Never log request or response bodies. Use the masking helpers for the rest.
 8. **Graceful shutdown flushes telemetry** — defer `shutdownTracer` and `shutdownMetrics` to avoid losing final spans/metrics.
 9. **Separate metrics port** — serve `/metrics` on a different port (9090) from the application port (8080). Keeps Prometheus scraping out of application routing.
 10. **Exemplars link metrics to traces** — the OTel Prometheus exporter handles this automatically when context carries valid trace spans.
+11. **SLIs come from the histogram at query time.** No in-process SLA gauges. Alert on multi-window burn rates (see 2.7).

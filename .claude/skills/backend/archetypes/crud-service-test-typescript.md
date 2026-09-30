@@ -120,7 +120,6 @@ export function createMockRepository(): {
     update: vi.fn(),
     softDelete: vi.fn(),
     list: vi.fn(),
-    listOffset: vi.fn(),
   };
 }
 
@@ -176,13 +175,12 @@ import {
   createMockLogger,
 } from "./__mocks__/widget.mocks";
 import { makeWidget, makeCreateInput, makeUpdateInput, makeListFilters } from "../test-utils/widget.factory";
-import {
-  ValidationError,
-  NotFoundError,
-  ConflictError,
-} from "../errors/domain-errors";
+import { notFound } from "../errors/domain-errors";
 import type { ListResult } from "../types/pagination";
 import type { Widget } from "../domain/entity";
+
+// Errors are AppErrors from error-handling-typescript.md — assert on the stable code (and status):
+//   await expect(p).rejects.toMatchObject({ code: "NOT_FOUND", status: 404 });
 
 describe("WidgetService", () => {
   let svc: WidgetService;
@@ -229,35 +227,38 @@ describe("WidgetService", () => {
       expect(repo.findByName).toHaveBeenCalledWith(tenantId, input.name);
     });
 
-    it("throws ValidationError for empty name", async () => {
+    it("throws VALIDATION_FAILED for empty name", async () => {
       const input = makeCreateInput({ name: "" });
 
-      await expect(svc.create(tenantId, userId, input)).rejects.toThrow(
-        ValidationError,
-      );
+      await expect(svc.create(tenantId, userId, input)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+        status: 400,
+        details: [{ field: "name", code: "required", message: expect.any(String) }],
+      });
 
       // Repo should NOT be called when validation fails
       expect(repo.create).not.toHaveBeenCalled();
       expect(repo.findByName).not.toHaveBeenCalled();
     });
 
-    it("throws ValidationError for name exceeding 255 characters", async () => {
+    it("throws VALIDATION_FAILED for name exceeding 255 characters", async () => {
       const input = makeCreateInput({ name: "x".repeat(256) });
 
-      await expect(svc.create(tenantId, userId, input)).rejects.toThrow(
-        ValidationError,
-      );
+      await expect(svc.create(tenantId, userId, input)).rejects.toMatchObject({
+        code: "VALIDATION_FAILED",
+      });
 
       expect(repo.create).not.toHaveBeenCalled();
     });
 
-    it("throws ConflictError when duplicate name exists within tenant", async () => {
+    it("throws CONFLICT when duplicate name exists within tenant", async () => {
       const input = makeCreateInput({ name: "Existing Widget" });
       repo.findByName.mockResolvedValueOnce(makeWidget({ name: "Existing Widget" }));
 
-      await expect(svc.create(tenantId, userId, input)).rejects.toThrow(
-        ConflictError,
-      );
+      await expect(svc.create(tenantId, userId, input)).rejects.toMatchObject({
+        code: "CONFLICT",
+        status: 409,
+      });
 
       expect(repo.create).not.toHaveBeenCalled();
     });
@@ -329,13 +330,14 @@ describe("WidgetService", () => {
       );
     });
 
-    it("throws NotFoundError when widget does not exist", async () => {
+    it("throws NOT_FOUND when widget does not exist", async () => {
       cache.get.mockResolvedValueOnce(null);
       repo.findById.mockResolvedValueOnce(null);
 
-      await expect(svc.get(tenantId, "nonexistent-id")).rejects.toThrow(
-        NotFoundError,
-      );
+      await expect(svc.get(tenantId, "nonexistent-id")).rejects.toMatchObject({
+        code: "NOT_FOUND",
+        status: 404,
+      });
     });
 
     it("cache set failure does NOT propagate — logs warning instead", async () => {
@@ -378,7 +380,7 @@ describe("WidgetService", () => {
       );
     });
 
-    it("throws ConflictError on version mismatch (optimistic lock)", async () => {
+    it("throws CONFLICT on version mismatch (optimistic lock)", async () => {
       const existing = makeWidget({ tenantId, version: 3 });
       const input = makeUpdateInput(1); // stale version
 
@@ -386,18 +388,18 @@ describe("WidgetService", () => {
 
       await expect(
         svc.update(tenantId, existing.id, input),
-      ).rejects.toThrow(ConflictError);
+      ).rejects.toMatchObject({ code: "CONFLICT", status: 409 });
 
       // Repo.update should NOT be called
       expect(repo.update).not.toHaveBeenCalled();
     });
 
-    it("throws NotFoundError when widget does not exist", async () => {
+    it("throws NOT_FOUND when widget does not exist", async () => {
       repo.findById.mockResolvedValueOnce(null);
 
       await expect(
         svc.update(tenantId, "nonexistent", makeUpdateInput(1)),
-      ).rejects.toThrow(NotFoundError);
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
       expect(repo.update).not.toHaveBeenCalled();
     });
@@ -427,22 +429,22 @@ describe("WidgetService", () => {
       expect(result).toBeDefined();
     });
 
-    it("throws ValidationError for empty name", async () => {
+    it("throws VALIDATION_FAILED for empty name", async () => {
       await expect(
         svc.update(tenantId, "some-id", makeUpdateInput(1, { name: "" })),
-      ).rejects.toThrow(ValidationError);
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
 
       expect(repo.findById).not.toHaveBeenCalled();
     });
 
-    it("throws ValidationError for missing version", async () => {
+    it("throws VALIDATION_FAILED for missing version", async () => {
       await expect(
         svc.update(tenantId, "some-id", {
           name: "Valid",
           description: "desc",
           version: -1,
         }),
-      ).rejects.toThrow(ValidationError);
+      ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
 
       expect(repo.findById).not.toHaveBeenCalled();
     });
@@ -485,14 +487,12 @@ describe("WidgetService", () => {
       expect(cache.delete).toHaveBeenCalledWith(cacheKey);
     });
 
-    it("propagates NotFoundError from repository", async () => {
-      repo.softDelete.mockRejectedValueOnce(
-        new NotFoundError("widget", "nonexistent"),
-      );
+    it("propagates NOT_FOUND from repository", async () => {
+      repo.softDelete.mockRejectedValueOnce(notFound("Widget"));
 
-      await expect(svc.delete(tenantId, "nonexistent")).rejects.toThrow(
-        NotFoundError,
-      );
+      await expect(svc.delete(tenantId, "nonexistent")).rejects.toMatchObject({
+        code: "NOT_FOUND",
+      });
     });
 
     it("fires audit log on successful delete", async () => {
@@ -611,10 +611,7 @@ import {
   createMockLogger,
 } from "./__mocks__/widget.mocks";
 import { makeCreateInput } from "../test-utils/widget.factory";
-import {
-  ValidationError,
-  ConflictError,
-} from "../errors/domain-errors";
+import { AppError } from "../errors/app-error";
 import type { Widget } from "../domain/entity";
 
 describe("WidgetService.create — table-driven", () => {
@@ -638,19 +635,20 @@ describe("WidgetService.create — table-driven", () => {
       },
     },
     {
-      name: "empty name returns ValidationError",
+      name: "empty name returns VALIDATION_FAILED",
       input: makeCreateInput({ name: "" }),
       setupMocks: () => { /* no mock setup — validation fails before calls */ },
       assertResult: (_result: Widget | null, error: unknown) => {
-        expect(error).toBeInstanceOf(ValidationError);
+        expect(error).toBeInstanceOf(AppError);
+        expect(error).toMatchObject({ code: "VALIDATION_FAILED", status: 400 });
       },
     },
     {
-      name: "name > 255 chars returns ValidationError",
+      name: "name > 255 chars returns VALIDATION_FAILED",
       input: makeCreateInput({ name: "x".repeat(256) }),
       setupMocks: () => {},
       assertResult: (_result: Widget | null, error: unknown) => {
-        expect(error).toBeInstanceOf(ValidationError);
+        expect(error).toMatchObject({ code: "VALIDATION_FAILED", details: [{ field: "name", code: "too_long" }] });
       },
     },
     {
@@ -845,29 +843,29 @@ describe("Edge cases and isolation", () => {
     svc = new WidgetService(repo as any, cache as any, audit as any, logger);
   });
 
-  it("zero-value input (empty object) throws ValidationError", async () => {
+  it("zero-value input (empty object) throws VALIDATION_FAILED", async () => {
     await expect(
       svc.create(tenantId, userId, { name: "", description: "" }),
-    ).rejects.toThrow(ValidationError);
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
 
     expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it("whitespace-only name throws ValidationError", async () => {
+  it("whitespace-only name throws VALIDATION_FAILED", async () => {
     await expect(
       svc.create(tenantId, userId, { name: "   ", description: "desc" }),
-    ).rejects.toThrow(ValidationError);
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
 
     expect(repo.create).not.toHaveBeenCalled();
   });
 
-  it("description exceeding 2000 chars throws ValidationError", async () => {
+  it("description exceeding 2000 chars throws VALIDATION_FAILED", async () => {
     await expect(
       svc.create(tenantId, userId, {
         name: "Valid",
         description: "x".repeat(2001),
       }),
-    ).rejects.toThrow(ValidationError);
+    ).rejects.toMatchObject({ code: "VALIDATION_FAILED" });
   });
 
   it("audit writer failure does NOT propagate to caller", async () => {
@@ -898,7 +896,7 @@ describe("Edge cases and isolation", () => {
 
     await expect(
       svc.update(tenantId, existing.id, makeUpdateInput(1)), // still sending v1
-    ).rejects.toThrow(ConflictError);
+    ).rejects.toMatchObject({ code: "CONFLICT" });
   });
 
   it("list enforces minimum pageSize of 1", async () => {
@@ -1042,7 +1040,8 @@ describe("Audit logging", () => {
 - Cache failures MUST NOT propagate — verify with `mockRejectedValueOnce` + expect no throw
 - Audit failures MUST NOT propagate — verify with `mockRejectedValueOnce` + expect no throw
 - Audit tests MUST verify action, entityId, tenantId, and timestamp
-- Version conflict test: set existing.version = 3, input.version = 1 — assert ConflictError
+- Version conflict test: set existing.version = 3, input.version = 1 — assert an AppError with `code: "CONFLICT"` (409)
+- Assert domain errors by their stable `code` (`rejects.toMatchObject({ code: "NOT_FOUND" })`), not by message text
 - Validation tests MUST verify that repo methods are NOT called when input is invalid
 - Use `expect.objectContaining()` for partial matching of complex objects
 - Use `vi.waitFor()` to assert on fire-and-forget audit calls

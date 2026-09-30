@@ -128,10 +128,13 @@ pub fn init_telemetry(service_name: &str, service_version: &str) -> anyhow::Resu
     if is_prod {
         tracing_subscriber::registry()
             .with(env_filter)
-            .with(fmt::layer().json().flatten_event(true))
+            // RedactingJson redacts by field NAME for every event at every level
+            // (see Sensitive Data Protection)
+            .with(fmt::layer().json().event_format(RedactingJson))
             .with(otel_trace_layer)
             .init();
     } else {
+        // Pretty output is not redacted: local development only
         tracing_subscriber::registry()
             .with(env_filter)
             .with(fmt::layer().pretty())
@@ -318,8 +321,8 @@ pub fn build_router() -> Router {
         .route("/health", get(health_check))
         .route("/metrics", get(metrics_handler))
         .layer(trace_layer)
-        .layer(RequestIdLayer::new())
-        .layer(TenantLayer::new())
+        // The request-ID, auth and tenant layers, and a make_span_with that declares tenant_id,
+        // are in "Complete Middleware Stack" below
 }
 ```
 
@@ -520,8 +523,8 @@ use std::sync::LazyLock;
 
 static METER: LazyLock<Meter> = LazyLock::new(|| global::meter("order-service"));
 
+// No request counter: the http.server.request.duration histogram's count IS the request count.
 pub struct AppMetrics {
-    pub request_count: Counter<u64>,
     pub request_duration: Histogram<f64>,
     pub active_requests: UpDownCounter<i64>,
     pub db_query_duration: Histogram<f64>,
@@ -537,16 +540,13 @@ impl AppMetrics {
         let meter = &*METER;
 
         Self {
-            request_count: meter
-                .u64_counter("http.server.request.total")
-                .with_description("Total HTTP requests")
-                .with_unit("request")
-                .build(),
-
             request_duration: meter
                 .f64_histogram("http.server.request.duration")
-                .with_description("HTTP request duration in seconds")
+                .with_description("Duration of HTTP server requests")
                 .with_unit("s")
+                // OTel HTTP semconv buckets; the NFR latency threshold must be one of them. If your
+                // opentelemetry version has no with_boundaries, set the same buckets with a View.
+                .with_boundaries(vec![0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0])
                 .build(),
 
             active_requests: meter
@@ -597,15 +597,23 @@ impl AppMetrics {
 
 ### Axum Metrics Middleware
 
+These follow the stable OTel HTTP semantic conventions, and every attribute is bounded. **There is no
+`tenant_id`**: each distinct value is a new time series (see `core/observability-patterns.md`
+§tenant_id). If you really need a per-tenant dimension on a metric, the only one allowed is a bounded
+`tenant.tier` (free/pro/enterprise). Ask per-tenant questions of traces and logs.
+
 ```rust
 use axum::{
     body::Body,
-    extract::State,
+    extract::{MatchedPath, State},
     http::{Request, Response},
     middleware::Next,
 };
+use opentelemetry::KeyValue;
 use std::sync::Arc;
 use std::time::Instant;
+
+const KNOWN_METHODS: [&str; 7] = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
 pub async fn metrics_middleware(
     State(state): State<Arc<AppState>>,
@@ -613,59 +621,49 @@ pub async fn metrics_middleware(
     next: Next,
 ) -> Response<Body> {
     let start = Instant::now();
-    let method = request.method().to_string();
-    let path = request.uri().path().to_string();
-
-    let tenant_id = request
+    let method = match request.method().as_str() {
+        m if KNOWN_METHODS.contains(&m) => m.to_owned(),
+        _ => "_OTHER".to_owned(),
+    };
+    let scheme = request.uri().scheme_str().unwrap_or("http").to_owned();
+    // The route TEMPLATE ("/api/v1/orders/{id}"), which the router puts in the extensions for layers
+    // added with Router::layer. It is None for an unmatched request (404), and then http.route is left
+    // out. NEVER request.uri().path(): raw paths are unbounded series.
+    let route = request
         .extensions()
-        .get::<TenantId>()
-        .map(|t| t.0.clone())
-        .unwrap_or_else(|| "unknown".into());
+        .get::<MatchedPath>()
+        .map(|p| p.as_str().to_owned());
 
-    let base_attrs = [
-        KeyValue::new("tenant_id", tenant_id.clone()),
-        KeyValue::new("http.method", method.clone()),
-        KeyValue::new("http.route", normalize_path(&path)),
+    // Concurrency is measured per method and scheme only, with no http.route
+    let active_attrs = [
+        KeyValue::new("http.request.method", method.clone()),
+        KeyValue::new("url.scheme", scheme.clone()),
     ];
-
-    state.metrics.active_requests.add(1, &base_attrs);
+    state.metrics.active_requests.add(1, &active_attrs);
 
     let response = next.run(request).await;
 
-    let duration = start.elapsed().as_secs_f64();
     let status = response.status().as_u16();
-
-    let full_attrs = [
-        KeyValue::new("tenant_id", tenant_id),
-        KeyValue::new("http.method", method),
-        KeyValue::new("http.route", normalize_path(&path)),
-        KeyValue::new("http.status_code", i64::from(status)),
+    let mut attrs = vec![
+        KeyValue::new("http.request.method", method),
+        KeyValue::new("url.scheme", scheme),
+        KeyValue::new("http.response.status_code", i64::from(status)),
     ];
-
-    state.metrics.request_count.add(1, &full_attrs);
-    state.metrics.request_duration.record(duration, &full_attrs);
-    state.metrics.active_requests.add(-1, &base_attrs);
+    if let Some(route) = route {
+        attrs.push(KeyValue::new("http.route", route));
+    }
+    if status >= 500 {
+        attrs.push(KeyValue::new("error.type", status.to_string()));
+    }
+    state.metrics.request_duration.record(start.elapsed().as_secs_f64(), &attrs);
+    state.metrics.active_requests.add(-1, &active_attrs);
 
     response
 }
-
-/// Normalize paths to avoid high-cardinality metrics.
-/// /api/v1/orders/abc123 → /api/v1/orders/{id}
-fn normalize_path(path: &str) -> String {
-    let segments: Vec<&str> = path.split('/').collect();
-    segments
-        .iter()
-        .map(|s| {
-            if uuid::Uuid::parse_str(s).is_ok() || s.parse::<i64>().is_ok() {
-                "{id}"
-            } else {
-                s
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
 ```
+
+Test the route template: request `/api/v1/orders/123` and `/api/v1/orders/456`, then assert there is
+exactly one series, with `http.route="/api/v1/orders/{id}"`.
 
 Wire it into the router:
 
@@ -677,6 +675,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .nest("/api/v1/orders", order_routes())
         .route("/health", get(health_check))
         .route("/metrics", get(metrics_handler))
+        // Router::layer after the routes: the router has matched by then, so MatchedPath is set
         .layer(middleware::from_fn_with_state(state.clone(), metrics_middleware))
         .with_state(state)
 }
@@ -730,13 +729,12 @@ pub async fn create_order(
 
     self.repo.insert(&order).await?;
 
-    // Record business metrics
+    // Record business metrics. Small enums only, with no tenant_id (it is on the span already).
     self.metrics.order_total.add(1, &[
-        KeyValue::new("tenant_id", tenant_id.to_owned()),
         KeyValue::new("payment_method", order.payment_method.to_string()),
     ]);
     self.metrics.order_value.record(order.total_as_f64(), &[
-        KeyValue::new("tenant_id", tenant_id.to_owned()),
+        KeyValue::new("payment_method", order.payment_method.to_string()),
     ]);
 
     Ok(order)
@@ -745,16 +743,24 @@ pub async fn create_order(
 
 ### Key Metrics Table
 
+Every label comes from a small, known set: no `tenant_id`, user or entity IDs, raw paths, query
+strings or error messages.
+
 | Metric | Type | Labels | Purpose |
 |--------|------|--------|---------|
-| `http.server.request.total` | Counter | tenant_id, method, route, status_code | Request volume and error rates |
-| `http.server.request.duration` | Histogram | tenant_id, method, route | Latency distribution (p50/p95/p99) |
-| `http.server.active_requests` | UpDownCounter | tenant_id, route | Concurrency / saturation |
-| `db.query.duration` | Histogram | tenant_id, operation, table | Database performance |
+| `http.server.request.duration` | Histogram (s) | http.request.method, http.route (`MatchedPath`), http.response.status_code, url.scheme, error.type (5xx) | Rate, errors and latency (RED); the count is the request count |
+| `http.server.active_requests` | UpDownCounter | http.request.method, url.scheme | Concurrency / saturation |
+| `db.query.duration` | Histogram | operation, table | Database performance |
 | `db.pool.active_connections` | UpDownCounter | pool_name | Connection pool saturation |
-| `cache.hit.total` | Counter | tenant_id, cache_name | Cache effectiveness |
-| `cache.miss.total` | Counter | tenant_id, cache_name | Cache miss rate |
-| `business.<event>.total` | Counter | tenant_id, type | Business KPIs |
+| `cache.hit.total` | Counter | cache_name | Cache effectiveness |
+| `cache.miss.total` | Counter | cache_name | Cache miss rate |
+| `business.<event>.total` | Counter | type (a small enum) | Business KPIs |
+
+**SLIs and alerting.** Don't compute SLIs in-process: no p99, availability or "budget remaining"
+gauges. Percentiles can't be averaged across pods, and an in-memory window resets on every restart.
+Compute SLIs at query time from the `http.server.request.duration` histogram (its 5xx share and its
+bucket counts; the NFR latency threshold must be a bucket boundary), and alert with multi-window burn
+rates. See `core/observability-patterns.md` §SLOs and Alerting.
 
 ---
 
@@ -825,10 +831,11 @@ tracing::error!(
     "payment charge failed"
 );
 
-// DEBUG — troubleshooting detail (off in production by default)
+// DEBUG — troubleshooting detail (off in production by default). The query shape, never the
+// parameter values.
 tracing::debug!(
     query = "SELECT * FROM orders WHERE tenant_id = $1",
-    params = ?[tenant_id],
+    param_count = 1,
     "executing database query"
 );
 ```
@@ -884,6 +891,84 @@ impl std::fmt::Display for SensitiveEmail {
 }
 ```
 
+`skip_all` and safe `Display` types protect a single call site. On top of them, **redaction by key
+name is enforced in the subscriber**, for every event at every level. DEBUG gets switched on in
+production during incidents, and it must stay safe then. tracing-subscriber's JSON formatter has no
+redaction hook, so `init_telemetry()` plugs in this event formatter instead:
+
+```rust
+use serde_json::{Map, Value};
+use std::fmt;
+use tracing::field::{Field, Visit};
+use tracing::{Event, Subscriber};
+use tracing_subscriber::fmt::format::{JsonFields, Writer};
+use tracing_subscriber::fmt::time::{FormatTime, SystemTime};
+use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormattedFields};
+use tracing_subscriber::registry::LookupSpan;
+
+const SENSITIVE: &[&str] = &[
+    "pass", "secret", "token", "authorization", "cookie", "api_key", "apikey",
+    "session", "card", "cvv", "iban", "ssn",
+];
+
+fn redact(key: &str, value: Value) -> Value {
+    let key = key.to_ascii_lowercase();
+    if SENSITIVE.iter().any(|s| key.contains(s)) { Value::from("[REDACTED]") } else { value }
+}
+
+struct RedactingVisitor<'a>(&'a mut Map<String, Value>);
+
+impl RedactingVisitor<'_> {
+    fn put(&mut self, field: &Field, value: Value) {
+        self.0.insert(field.name().to_owned(), redact(field.name(), value));
+    }
+}
+
+impl Visit for RedactingVisitor<'_> {
+    fn record_str(&mut self, f: &Field, v: &str) { self.put(f, v.into()) }
+    fn record_i64(&mut self, f: &Field, v: i64) { self.put(f, v.into()) }
+    fn record_u64(&mut self, f: &Field, v: u64) { self.put(f, v.into()) }
+    fn record_bool(&mut self, f: &Field, v: bool) { self.put(f, v.into()) }
+    fn record_debug(&mut self, f: &Field, v: &dyn fmt::Debug) { self.put(f, format!("{v:?}").into()) }
+}
+
+/// JSON event formatter that redacts by field NAME. That covers the event's own fields and the ones
+/// inherited from parent spans (tenant_id, request_id, ...).
+pub struct RedactingJson;
+
+impl<S> FormatEvent<S, JsonFields> for RedactingJson
+where
+    S: Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn format_event(&self, ctx: &FmtContext<'_, S, JsonFields>, mut w: Writer<'_>, event: &Event<'_>) -> fmt::Result {
+        let mut out = Map::new();
+        let mut ts = String::new();
+        SystemTime.format_time(&mut Writer::new(&mut ts))?;
+        out.insert("timestamp".into(), ts.into());
+        out.insert("level".into(), event.metadata().level().to_string().into());
+        out.insert("target".into(), event.metadata().target().into());
+        // Span fields first, root to leaf, so the event's own fields win on a name clash
+        if let Some(scope) = ctx.event_scope() {
+            for span in scope.from_root() {
+                if let Some(f) = span.extensions().get::<FormattedFields<JsonFields>>() {
+                    if let Ok(Value::Object(fields)) = serde_json::from_str::<Value>(&f.fields) {
+                        for (k, v) in fields {
+                            let v = redact(&k, v);
+                            out.insert(k, v);
+                        }
+                    }
+                }
+            }
+        }
+        event.record(&mut RedactingVisitor(&mut out));
+        writeln!(w, "{}", Value::Object(out))
+    }
+}
+```
+
+Never log request or response bodies. Add a unit test that logs `password` and `authorization` fields
+and asserts they come out as `[REDACTED]`.
+
 ### Log Correlation: trace_id and span_id
 
 When the `tracing-opentelemetry` layer is active, every log event automatically includes `trace_id` and `span_id` fields. This allows you to:
@@ -917,7 +1002,14 @@ use axum::{
 };
 use uuid::Uuid;
 
-/// Extract or generate a request ID. Propagate it in the response header and on the current span.
+/// Bounded charset and length: an inbound ID can't inject log lines or bloat every record.
+fn valid_request_id(id: &str) -> bool {
+    (8..=128).contains(&id.len())
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+}
+
+/// Accept a well-formed inbound request ID, otherwise generate one. Propagate it in the response
+/// header and on the current span.
 pub async fn request_id_middleware(
     mut request: Request<Body>,
     next: Next,
@@ -926,11 +1018,12 @@ pub async fn request_id_middleware(
         .headers()
         .get("x-request-id")
         .and_then(|v| v.to_str().ok())
+        .filter(|v| valid_request_id(v))
         .map(String::from)
         .unwrap_or_else(|| format!("req_{}", Uuid::new_v4()));
 
-    // Record on the current tracing span
-    tracing::Span::current().record("request_id", &request_id.as_str());
+    // Record on the request span, which declares request_id as an Empty field (see the middleware stack)
+    tracing::Span::current().record("request_id", request_id.as_str());
 
     // Store in extensions for downstream extractors
     request.extensions_mut().insert(RequestId(request_id.clone()));
@@ -952,22 +1045,26 @@ pub struct RequestId(pub String);
 
 ## Tenant-Aware Observability
 
-Every log, metric, and trace MUST include `tenant_id`. This is enforced at the middleware layer.
+Every log line and trace span MUST include `tenant_id`, and **no metric** may. This is enforced at
+the middleware layer.
 
 ```rust
+/// Runs after the auth middleware. The tenant comes from the VERIFIED token's claims, via the
+/// `AuthUser` the auth middleware put in the request extensions. It never comes from a client header
+/// such as X-Tenant-ID, which anyone can set.
 pub async fn tenant_middleware(
     mut request: Request<Body>,
     next: Next,
 ) -> Result<Response<Body>, AppError> {
     let tenant_id = request
-        .headers()
-        .get("x-tenant-id")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from)
-        .ok_or_else(|| AppError::BadRequest("missing X-Tenant-ID header".into()))?;
+        .extensions()
+        .get::<AuthUser>()
+        .map(|user| user.tenant_id.clone())
+        .ok_or_else(|| AppError::Unauthorized("no verified credential".into()))?;
 
-    // Record on the current tracing span — propagates to all child spans and logs
-    tracing::Span::current().record("tenant_id", &tenant_id.as_str());
+    // Record on the request span (declared as an Empty field in make_span_with; see the middleware
+    // stack). Every child span and log line inherits it. Never on a metric.
+    tracing::Span::current().record("tenant_id", tenant_id.as_str());
 
     request.extensions_mut().insert(TenantId(tenant_id));
 
@@ -1047,16 +1144,30 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/health", get(health_check))
         .route("/metrics", get(metrics_handler))
         // --- Middleware applied bottom-up (last added = first executed) ---
-        // 4. Metrics: records request count, duration, active requests
-        .layer(middleware::from_fn_with_state(state.clone(), metrics_middleware))
-        // 3. Tenant extraction: reads X-Tenant-ID, records on span
+        // 5. Tenant: records tenant_id from the verified AuthUser on the request span
         .layer(middleware::from_fn(tenant_middleware))
-        // 2. Request ID: generates or extracts X-Request-ID
+        // 4. Auth (your auth middleware): verifies the bearer token and inserts AuthUser
+        //    { tenant_id, user_id } from its claims into the extensions
+        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        // 3. Metrics: duration histogram + active requests. It sits outside auth so 401s are counted;
+        //    MatchedPath is available because every layer here is a Router::layer.
+        .layer(middleware::from_fn_with_state(state.clone(), metrics_middleware))
+        // 2. Request ID: validates an inbound X-Request-ID or generates one
         .layer(middleware::from_fn(request_id_middleware))
-        // 1. HTTP trace: creates root span for each request
+        // 1. HTTP trace: the root span for each request. It declares the fields the middleware records
+        //    later, because Span::record() on a field the span wasn't created with is silently dropped.
+        //    It records url.path only, since the query string can carry tokens and PII.
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
+                .make_span_with(|req: &Request<Body>| {
+                    tracing::info_span!(
+                        "http_request",
+                        http.request.method = %req.method(),
+                        url.path = %req.uri().path(),
+                        request_id = tracing::field::Empty,
+                        tenant_id = tracing::field::Empty,
+                    )
+                })
                 .on_response(DefaultOnResponse::new().level(Level::INFO)),
         )
         .with_state(state)
@@ -1073,8 +1184,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 | `level` | tracing macro | Severity |
 | `target` | Module path (automatic) | Which module |
 | `message` | Developer | What happened |
-| `tenant_id` | Span field from middleware | Whose request |
-| `request_id` | Span field from middleware | Correlate within a request |
+| `tenant_id` | Span field from middleware (verified token) | Whose request |
+| `request_id` | Span field from middleware (validated or generated) | Correlate within a request |
 | `trace_id` | tracing-opentelemetry layer | Correlate across services |
 | `span_id` | tracing-opentelemetry layer | Specific span reference |
 
@@ -1082,13 +1193,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
 ## Critical Rules
 
-- `tenant_id` on every log, metric, and trace -- zero exceptions
+- `tenant_id` on every log line and trace span, and on **no metric** (at most a bounded `tenant.tier`). It comes from the verified token (`AuthUser`), never from a client header.
 - Use `#[tracing::instrument]` at every layer boundary (handler, service, repository)
-- Use `skip_all` and explicitly list safe fields to avoid leaking sensitive data
+- Use `skip_all` and explicitly list safe fields to avoid leaking sensitive data. `RedactingJson` also redacts by field name at every level. Never log request or response bodies.
+- Request IDs from an inbound header are validated (charset + length) before use
 - JSON logging in production, pretty logging in development
 - `RUST_LOG` env filter controls verbosity -- never hardcode log levels
 - Every span records errors with `tracing::error!()` -- do not swallow errors silently
 - Flush telemetry on graceful shutdown -- pending spans and metrics must be exported
-- Path normalization in metrics middleware -- avoid high-cardinality label explosion
+- `http.route` on metrics is the router's `MatchedPath` template, never `uri().path()`. All metric labels are bounded; no request counter (the histogram count is the request count).
+- SLIs come from the histogram at query time, and alerts use multi-window burn rates. No in-process SLA gauges.
 - Business metrics alongside technical metrics -- track domain events, not just HTTP stats
 - Prometheus `/metrics` endpoint for pull-based monitoring alongside OTLP push

@@ -370,7 +370,8 @@ services:
     environment:
       DATABASE_URL: "postgresql+asyncpg://postgres:postgres@db:5432/appdb"
       REDIS_URL: "redis://redis:6379/0"
-      JWT_SECRET_KEY: "dev-secret-change-in-production"
+      # generated once into a gitignored .env:  printf 'JWT_SECRET_KEY=%s\n' "$(openssl rand -hex 32)" >> .env
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:?generate JWT_SECRET_KEY into .env (gitignored)}"
       LOG_LEVEL: "info"
     depends_on:
       db:

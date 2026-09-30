@@ -23,8 +23,9 @@ package com.example.app.service;
 import com.example.app.model.dto.*;
 import com.example.app.model.entity.Widget;
 import com.example.app.model.entity.WidgetStatus;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.ScrollPosition;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Window;
 
 import java.util.UUID;
 
@@ -37,7 +38,8 @@ public interface WidgetService {
     Widget findById(UUID id, UUID tenantId);
     Widget update(UUID id, UpdateWidgetRequest request, UUID tenantId, UUID userId);
     void delete(UUID id, UUID tenantId, UUID userId);
-    Page<Widget> findAll(UUID tenantId, WidgetStatus status, Pageable pageable);
+    /** Cursor (keyset) list: one window of at most `limit` rows after `position`. No offset, no COUNT. */
+    Window<Widget> findAll(UUID tenantId, WidgetStatus status, ScrollPosition position, Sort sort, int limit);
 }
 ```
 
@@ -52,13 +54,15 @@ import com.example.app.model.dto.*;
 import com.example.app.model.entity.Widget;
 import com.example.app.model.entity.WidgetStatus;
 import com.example.app.repository.WidgetRepository;
+import com.example.app.repository.WidgetSpecs;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
-import org.springframework.data.domain.Page;
-import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.ScrollPosition;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.domain.Window;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -123,8 +127,9 @@ public class WidgetServiceImpl implements WidgetService {
         var requestId = MDC.get("requestId");
         log.debug("Fetching widget, id={}, tenant={}, requestId={}", id, tenantId, requestId);
 
+        // Missing, soft-deleted or another tenant's: all 404 NOT_FOUND
         return repository.findByIdAndTenantId(id, tenantId)
-            .orElseThrow(() -> new ResourceNotFoundException("widget", id.toString()));
+            .orElseThrow(() -> new ResourceNotFoundException("Widget", id.toString()));
     }
 
     @Override
@@ -137,7 +142,7 @@ public class WidgetServiceImpl implements WidgetService {
 
         // 1. Fetch existing (tenant-scoped)
         var existing = repository.findByIdAndTenantId(id, tenantId)
-            .orElseThrow(() -> new ResourceNotFoundException("widget", id.toString()));
+            .orElseThrow(() -> new ResourceNotFoundException("Widget", id.toString()));
 
         // 2. Optimistic lock check — client must send current version
         if (!existing.getVersion().equals(request.version())) {
@@ -170,7 +175,7 @@ public class WidgetServiceImpl implements WidgetService {
 
         // 1. Verify exists and belongs to tenant
         var widget = repository.findByIdAndTenantId(id, tenantId)
-            .orElseThrow(() -> new ResourceNotFoundException("widget", id.toString()));
+            .orElseThrow(() -> new ResourceNotFoundException("Widget", id.toString()));
 
         // 2. Soft delete (via @SQLDelete on entity — sets deleted_at)
         repository.delete(widget);
@@ -182,20 +187,18 @@ public class WidgetServiceImpl implements WidgetService {
     }
 
     @Override
-    public Page<Widget> findAll(UUID tenantId, WidgetStatus status, Pageable pageable) {
+    public Window<Widget> findAll(UUID tenantId, WidgetStatus status, ScrollPosition position, Sort sort, int limit) {
         var requestId = MDC.get("requestId");
-        log.debug("Listing widgets, tenant={}, status={}, page={}, requestId={}",
-            tenantId, status, pageable.getPageNumber(), requestId);
+        log.debug("Listing widgets, tenant={}, status={}, limit={}, requestId={}",
+            tenantId, status, limit, requestId);
 
-        Page<Widget> result;
-        if (status != null) {
-            result = repository.findByTenantIdAndStatus(tenantId, status, pageable);
-        } else {
-            result = repository.findByTenantId(tenantId, pageable);
-        }
+        // Keyset scroll: WHERE (sort key, id) after the cursor ORDER BY sort LIMIT limit+1 — no OFFSET, no COUNT.
+        // `sort` ends with id (the controller adds it) so every position is unique.
+        var spec = WidgetSpecs.belongsToTenant(tenantId).and(WidgetSpecs.hasStatus(status));
+        Window<Widget> result = repository.findBy(spec, q -> q.sortBy(sort).limit(limit).scroll(position));
 
-        log.info("Listed widgets, tenant={}, resultCount={}, total={}, requestId={}",
-            tenantId, result.getNumberOfElements(), result.getTotalElements(), requestId);
+        log.info("Listed widgets, tenant={}, resultCount={}, hasNext={}, requestId={}",
+            tenantId, result.size(), result.hasNext(), requestId);
         return result;
     }
 }
@@ -330,60 +333,19 @@ public class CacheConfig {
 
 ## Custom Exception Hierarchy
 
+The sealed `DomainException` hierarchy is defined once, in `error-handling-java.md`
+(`com.example.app.exception`); `GlobalExceptionHandler` turns it into the error envelope from
+`api/response-envelope.md`. The service throws:
+
 ```java
-package com.example.app.exception;
-
-// Base class — all domain exceptions extend this
-public abstract sealed class DomainException extends RuntimeException
-    permits ResourceNotFoundException, ConflictException, BusinessRuleException, UpstreamServiceException {
-
-    private final String resource;
-
-    protected DomainException(String message, String resource) {
-        super(message);
-        this.resource = resource;
-    }
-
-    protected DomainException(String message, String resource, Throwable cause) {
-        super(message, cause);
-        this.resource = resource;
-    }
-
-    public String getResource() { return resource; }
-}
-
-// 404 — resource not found or soft-deleted
-public final class ResourceNotFoundException extends DomainException {
-    private final String identifier;
-
-    public ResourceNotFoundException(String resource, String identifier) {
-        super(resource + " '" + identifier + "' not found", resource);
-        this.identifier = identifier;
-    }
-
-    public String getIdentifier() { return identifier; }
-}
-
-// 409 — duplicate, version mismatch, state conflict
-public final class ConflictException extends DomainException {
-    public ConflictException(String resource, String reason) {
-        super(resource + " conflict: " + reason, resource);
-    }
-}
-
-// 422 — business rule violation that validation annotations cannot express
-public final class BusinessRuleException extends DomainException {
-    public BusinessRuleException(String resource, String rule) {
-        super("Business rule violated: " + rule, resource);
-    }
-}
-
-// 502 — upstream service failure
-public final class UpstreamServiceException extends DomainException {
-    public UpstreamServiceException(String service, Throwable cause) {
-        super("Upstream service '" + service + "' is unavailable", service, cause);
-    }
-}
+// new ResourceNotFoundException("Widget", id.toString())  → 404 NOT_FOUND (also another tenant's widget)
+// new ConflictException("widget", "…")                    → 409 CONFLICT (duplicate, stale version)
+// new BusinessRuleException("widget", "…")                → 422 BUSINESS_RULE_VIOLATION
+// new ValidationException("name", "reserved", "…")        → 400 VALIDATION_FAILED, details[] entry
+// new UpstreamServiceException("payment-service", e)      → 503 UNAVAILABLE (retryable, Retry-After)
+//
+// The reason/rule text is shown to users as-is: write it for users, never pass an exception's
+// message, SQL or a constraint name.
 ```
 
 ## Input Validation Beyond Annotations
@@ -456,4 +418,4 @@ public Widget create(CreateWidgetRequest request, UUID tenantId, UUID userId) {
 - Every service method MUST read `requestId` from MDC and include it in log lines.
 - Audit logging is async (`@Async`) — audit failures must NEVER block business operations.
 - Max 30 lines of logic per method — extract private helpers for complex workflows.
-- Never return unbounded collections — always use `Pageable` for list operations.
+- Never return unbounded collections — list operations take a cursor `ScrollPosition` + `limit` and return a keyset `Window` (no offset pages, no `Page<T>`).

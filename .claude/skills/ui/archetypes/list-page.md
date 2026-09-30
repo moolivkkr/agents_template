@@ -38,10 +38,8 @@ div.space-y-6
 │                   └── DropdownMenuItem.text-destructive → "Delete"
 │
 └── Pagination (div.flex.items-center.justify-between)
-    ├── p.text-sm.text-muted-foreground → "{total} users"
-    └── div.flex.gap-2
-        ├── Button(outline, sm) → "Previous" (disabled if page=1)
-        └── Button(outline, sm) → "Next" (disabled if last page)
+    ├── p.text-sm.text-muted-foreground → "{loaded} users" (or "{total_count} users" only if the endpoint documents total_count)
+    └── Button(outline, sm) → "Load more" (hidden when !hasNextPage; spinner while isFetchingNextPage)
 ```
 
 ## Component Tree — Mobile (375px)
@@ -53,13 +51,13 @@ div.space-y-6
 ## Data Flow
 ```tsx
 const [search, setSearch] = useQueryState("q", parseAsString.withDefault(""));
-const [page, setPage] = useQueryState("page", parseAsInteger.withDefault(1));
 const [sort, setSort] = useQueryState("sort", parseAsString.withDefault("name"));
 
-const { data, isLoading, isError, error, refetch } = useQuery(
-  resourceQueries.list({ search, page, sort })
-);
-// data type: { data: Resource[], meta: { total, page, per_page } }
+// Cursor pagination (api/response-envelope.md): each page is { data: Resource[], meta: { request_id,
+// pagination: { next_cursor, has_more, limit } } }; the next page is requested with ?cursor=next_cursor.
+const { data, isLoading, isError, error, refetch, fetchNextPage, hasNextPage, isFetchingNextPage } =
+  useInfiniteQuery(resourceQueries.list({ search, sort }));
+const rows = data?.pages.flatMap((p) => p.data) ?? [];
 ```
 
 ## 4 States
@@ -88,7 +86,7 @@ const { data, isLoading, isError, error, refetch } = useQuery(
 
 ### Error
 - Icon: `AlertCircle` (destructive)
-- Message: `{error.message}`
+- Message: `{error.message}` (the envelope's user-safe message, rendered as text) + "Reference: {error.requestId}"
 - Action: Button(outline) "Try again" → `refetch()`
 
 ### Populated

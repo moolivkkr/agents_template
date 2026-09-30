@@ -71,11 +71,11 @@ async fn get_widget(path: web::Path<Uuid>) -> HttpResponse {
     // ...
 }
 
-// Query parameters: /widgets?page_size=20&cursor=abc
+// Query parameters: /widgets?limit=20&cursor=abc (cursor pagination only)
 #[derive(Deserialize)]
 struct ListParams {
-    page_size: Option<i32>,
-    cursor: Option<String>,
+    limit: Option<i64>,     // clamp to 1..=100; echoed as meta.pagination.limit
+    cursor: Option<String>, // meta.pagination.next_cursor from the previous page
 }
 async fn list_widgets(query: web::Query<ListParams>) -> HttpResponse {
     let params = query.into_inner();
@@ -106,7 +106,8 @@ async fn update_widget(
 - Extractors implement `FromRequest` trait — create custom extractors for auth context
 - `web::Data<T>` wraps `Arc<T>` — zero-cost cloning for shared state
 - `web::Json` validates Content-Type and deserializes automatically
-- Failed extraction returns 400 by default — customize via `JsonConfig`
+- Failed extraction returns actix's plain-text error by default — set the `JsonConfig`/`QueryConfig`/`PathConfig`
+  error handlers (JSON Configuration below) so it becomes the envelope
 
 ## Custom Extractor (AuthUser)
 ```rust
@@ -120,7 +121,7 @@ pub struct AuthUser {
 }
 
 impl FromRequest for AuthUser {
-    type Error = actix_web::Error;
+    type Error = AppError; // ResponseError → the envelope (ErrorUnauthorized would send plain text)
     type Future = Ready<Result<Self, Self::Error>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
@@ -131,7 +132,7 @@ impl FromRequest for AuthUser {
                 tenant_id: user.tenant_id,
                 roles: user.roles.clone(),
             })),
-            None => ready(Err(actix_web::error::ErrorUnauthorized("missing auth context"))),
+            None => ready(Err(AppError::Unauthenticated)),
         }
     }
 }
@@ -233,56 +234,135 @@ where
 - For simpler middleware, prefer `wrap_fn` or `from_fn` helpers
 
 ## Error Handling (ResponseError trait)
+Every error body is the envelope in `api/response-envelope.md`:
+`{"error": {code, message, details?, request_id, retryable}}` — no `data`, no source-error text.
 ```rust
-use actix_web::{HttpResponse, ResponseError};
+use actix_web::{
+    dev::{Service, ServiceResponse},
+    http::{header::{self, HeaderName, HeaderValue}, StatusCode},
+    HttpResponse, ResponseError,
+};
+use serde::Serialize;
 use std::fmt;
+
+/// One error.details[] entry: stable lower_snake `code`, fixed catalog `message`.
+#[derive(Debug, Serialize)]
+pub struct FieldError {
+    pub field: String,
+    pub code: &'static str,
+    pub message: &'static str,
+}
 
 #[derive(Debug)]
 pub enum AppError {
-    NotFound(String),
-    BadRequest(String),
-    Unauthorized(String),
-    Conflict(String),
-    Validation { field: String, reason: String },
-    Internal(String),
+    MalformedRequest,                // 400: unparseable JSON, wrong content type, body too large
+    Validation(Vec<FieldError>),     // 400: details[] lists the fields
+    Unauthenticated,                 // 401
+    Forbidden,                       // 403: authenticated, not allowed
+    NotFound(&'static str),          // 404: resource name — also another tenant's object (never 403)
+    Conflict(String),                // 409: user-safe text
+    BusinessRule(String),            // 422: user-safe text
+    RateLimited { retry_after_secs: u64 }, // 429
+    Unavailable(anyhow::Error),      // 503: a dependency failed/timed out — cause is logged, not sent
+    Internal(anyhow::Error),         // 500: cause is logged, not sent
 }
 
+// Display is server-side log text. error_response() never uses it.
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NotFound(msg) => write!(f, "not found: {msg}"),
-            Self::BadRequest(msg) => write!(f, "bad request: {msg}"),
-            Self::Unauthorized(msg) => write!(f, "unauthorized: {msg}"),
-            Self::Conflict(msg) => write!(f, "conflict: {msg}"),
-            Self::Validation { field, reason } => write!(f, "validation error on {field}: {reason}"),
-            Self::Internal(msg) => write!(f, "internal error: {msg}"),
+            Self::Unavailable(e) => write!(f, "dependency unavailable: {e:#}"),
+            Self::Internal(e) => write!(f, "internal error: {e:#}"),
+            other => write!(f, "{other:?}"),
+        }
+    }
+}
+
+impl AppError {
+    /// (status, code, user-safe message, retryable) — exactly the table in api/response-envelope.md
+    fn parts(&self) -> (StatusCode, &'static str, String, bool) {
+        match self {
+            Self::MalformedRequest => (StatusCode::BAD_REQUEST, "MALFORMED_REQUEST", "The request could not be read.".into(), false),
+            Self::Validation(_) => (StatusCode::BAD_REQUEST, "VALIDATION_FAILED", "Some fields are invalid.".into(), false),
+            Self::Unauthenticated => (StatusCode::UNAUTHORIZED, "UNAUTHENTICATED", "Sign in to continue.".into(), false),
+            Self::Forbidden => (StatusCode::FORBIDDEN, "FORBIDDEN", "You don't have permission to do this.".into(), false),
+            Self::NotFound(resource) => (StatusCode::NOT_FOUND, "NOT_FOUND", format!("{resource} not found."), false),
+            Self::Conflict(msg) => (StatusCode::CONFLICT, "CONFLICT", msg.clone(), false),
+            Self::BusinessRule(msg) => (StatusCode::UNPROCESSABLE_ENTITY, "BUSINESS_RULE_VIOLATION", msg.clone(), false),
+            Self::RateLimited { .. } => (StatusCode::TOO_MANY_REQUESTS, "RATE_LIMITED", "Too many requests. Try again shortly.".into(), true),
+            Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "UNAVAILABLE", "The service is temporarily unavailable.".into(), true),
+            Self::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL", "Something went wrong.".into(), false),
         }
     }
 }
 
 impl ResponseError for AppError {
-    fn error_response(&self) -> HttpResponse {
-        let (status, code) = match self {
-            Self::NotFound(_) => (StatusCode::NOT_FOUND, "NOT_FOUND"),
-            Self::BadRequest(_) => (StatusCode::BAD_REQUEST, "BAD_REQUEST"),
-            Self::Unauthorized(_) => (StatusCode::UNAUTHORIZED, "UNAUTHORIZED"),
-            Self::Conflict(_) => (StatusCode::CONFLICT, "CONFLICT"),
-            Self::Validation { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "VALIDATION_ERROR"),
-            Self::Internal(_) => (StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL_ERROR"),
-        };
+    fn status_code(&self) -> StatusCode {
+        self.parts().0
+    }
 
-        HttpResponse::build(status).json(serde_json::json!({
-            "error": {
-                "code": code,
-                "message": self.to_string(),
+    fn error_response(&self) -> HttpResponse {
+        let (status, code, message, retryable) = self.parts();
+        let request_id = REQUEST_ID.try_with(Clone::clone).unwrap_or_default();
+        if status.is_server_error() {
+            tracing::error!(%request_id, code, error = %self, "request failed"); // the cause: logs only
+        }
+        let mut error = serde_json::json!({
+            "code": code, "message": message, "request_id": request_id, "retryable": retryable,
+        });
+        if let Self::Validation(details) = self {
+            error["details"] = serde_json::json!(details);
+        }
+        let mut res = HttpResponse::build(status);
+        match self {
+            Self::RateLimited { retry_after_secs } => {
+                res.insert_header((header::RETRY_AFTER, HeaderValue::from(*retry_after_secs)));
             }
-        }))
+            Self::Unavailable(_) => {
+                res.insert_header((header::RETRY_AFTER, HeaderValue::from_static("5")));
+            }
+            Self::Unauthenticated => {
+                res.insert_header((header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer")));
+            }
+            _ => {}
+        }
+        res.json(serde_json::json!({ "error": error }))
     }
 }
+
+tokio::task_local! {
+    /// The current request's id; set by the request-id middleware and equal to the X-Request-Id header.
+    pub static REQUEST_ID: String;
+}
+
+// Request-id middleware — register it LAST (outermost). Inner errors are rendered inside its scope,
+// so every envelope carries the same id the response echoes as X-Request-Id.
+App::new()
+    // ... other .wrap(...) calls first ...
+    .wrap_fn(|req, srv| {
+        let id = req.headers().get("x-request-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let http_req = req.request().clone();
+        let fut = srv.call(req);
+        REQUEST_ID.scope(id.clone(), async move {
+            let mut res = match fut.await {
+                Ok(res) => res.map_into_boxed_body(),
+                Err(err) => ServiceResponse::from_err(err, http_req), // error_response() runs here, in scope
+            };
+            if let Ok(value) = HeaderValue::from_str(&id) {
+                res.headers_mut().insert(HeaderName::from_static("x-request-id"), value);
+            }
+            Ok::<_, actix_web::Error>(res)
+        })
+    })
 ```
 - Implement `ResponseError` on your error type — Actix calls it automatically on `Err`
 - Handler return type: `Result<HttpResponse, AppError>` enables `?` operator
-- Never expose internal error details to clients in 500 responses
+- Never expose internal error details to clients — no `Display`/source text in any body, 4xx or 5xx
+- Success bodies are `{"data": …, "meta": {"request_id": …}}`; lists add `meta.pagination`
+  (`next_cursor`, `has_more`, `limit`) — the `ApiResponse` type in `languages/rust.md`
 
 ## Connection Pooling
 ```rust
@@ -347,6 +427,7 @@ mod tests {
 
         let body: serde_json::Value = test::read_body_json(resp).await;
         assert!(body["data"]["id"].is_string());
+        assert!(body["meta"]["request_id"].is_string()); // envelope: data + meta.request_id
     }
 
     #[actix_rt::test]
@@ -382,30 +463,37 @@ mod tests {
 
 ## JSON Configuration
 ```rust
-// Customize JSON extractor behavior globally
+// Customize extractor failures globally: each becomes an AppError, so the body is the envelope.
+// serde's text goes to a debug log — never into the message.
 App::new()
     .app_data(
         web::JsonConfig::default()
             .limit(1_048_576) // 1MB body limit
             .error_handler(|err, _req| {
-                let detail = err.to_string();
-                actix_web::error::InternalError::from_response(
-                    err,
-                    HttpResponse::BadRequest().json(serde_json::json!({
-                        "error": {
-                            "code": "BAD_REQUEST",
-                            "message": format!("invalid JSON: {detail}")
-                        }
-                    })),
-                ).into()
+                // bad syntax, wrong shape, wrong content type, too large → 400 MALFORMED_REQUEST
+                tracing::debug!(error = %err, "json body rejected");
+                AppError::MalformedRequest.into()
             })
+    )
+    .app_data(
+        web::QueryConfig::default().error_handler(|err, _req| {
+            tracing::debug!(error = %err, "query rejected");
+            AppError::MalformedRequest.into()
+        })
+    )
+    .app_data(
+        web::PathConfig::default().error_handler(|err, _req| {
+            tracing::debug!(error = %err, "path rejected");
+            AppError::NotFound("Resource").into() // /widgets/not-a-uuid can't name an existing resource
+        })
     )
 ```
 
 ## Rules
 - Use `web::Data<T>` for shared state — it wraps `Arc<T>` internally
 - Never use `.unwrap()` in handlers — return `Result<HttpResponse, AppError>` and use `?`
-- Implement `ResponseError` on your error type for automatic HTTP error mapping
+- Implement `ResponseError` on your error type for automatic HTTP error mapping — it writes the envelope
+  (`api/response-envelope.md`), and extractor failures map to `AppError` via the `*Config` error handlers
 - Use `deadpool` or `sqlx` for async connection pooling — `r2d2` is sync only
 - `web::block()` for CPU-bound work — offloads to thread pool, prevents blocking the event loop
 - Custom extractors via `FromRequest` — never parse auth headers manually in every handler

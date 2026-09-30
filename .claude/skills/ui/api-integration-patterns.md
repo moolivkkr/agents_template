@@ -1,7 +1,7 @@
 ---
 skill: api-integration-patterns
-description: UI data-fetching layer — TanStack Query hooks, HTTP client setup, request/response typing; bans direct fetch in components
-version: "1.0"
+description: UI data-fetching layer — TanStack Query hooks, HTTP client setup (cookie session + CSRF, never tokens in web storage), request/response typing against the one envelope; bans direct fetch in components
+version: "1.1"
 tags:
   - api
   - tanstack-query
@@ -11,6 +11,10 @@ tags:
 ---
 
 # API Integration Patterns — HTTP Client + TanStack Query
+
+The response shape is defined once, in `~/.claude/skills/api/response-envelope.md`; the TypeScript types
+below are generated from it (`ui/type-generation-protocol.md`). Token handling follows
+`~/.claude/skills/security/secure-coding.md` §3 and `~/.claude/skills/infrastructure/auth-session-flows.md`.
 
 ## CRITICAL RULE: No Raw Data Fetching in Components
 
@@ -25,7 +29,7 @@ Components MUST use the project's data fetching layer (TanStack Query hooks). Th
 **REQUIRED:**
 - `useQuery()` from TanStack Query with query key factory
 - `useMutation()` for state-changing operations
-- `useInfiniteQuery()` for paginated lists
+- `useInfiniteQuery()` for paginated lists (cursor pagination)
 - Custom hooks in `lib/api/` that wrap the above
 
 **WHY:** Raw fetch bypasses query caching, deduplication, retry logic, and invalidation. It causes:
@@ -41,70 +45,135 @@ Components MUST use the project's data fetching layer (TanStack Query hooks). Th
 
 ## HTTP Client Setup
 
+**Where the session lives.** The server sets the session in an **httpOnly, Secure, SameSite=Lax (or
+Strict) cookie**. JavaScript never reads, stores or forwards a token. Never put a token in
+`localStorage` or `sessionStorage`: any XSS, including one from a compromised dependency, can read
+them. Never put one in a URL either, because URLs end up in logs.
+
 ```tsx
 // lib/api-client.ts
-const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api";
+import type { ApiErrorBody, ApiSuccess, FieldError } from "@/types/api"; // generated from the envelope
 
-async function fetcher<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = typeof window !== "undefined"
-    ? localStorage.getItem("auth_token")
-    : null;
+// Same-origin by default: the ingress routes /api to the backend, so one build runs in dev, qa and prod.
+// If the API is on another origin, the base URL is a build-time value named the way the bundler exposes
+// it: process.env.NEXT_PUBLIC_API_URL in Next.js, import.meta.env.VITE_API_URL in Vite (process.env is
+// undefined in a Vite browser bundle). Cross-origin cookies also need CORS with an explicit origin.
+const API_BASE = "/api";
 
-  const res = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      "Content-Type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...init?.headers,
-    },
-    ...init,
-  });
-
-  // 401 → redirect to login
-  if (res.status === 401 && typeof window !== "undefined") {
-    window.location.href = "/login";
-    throw new Error("Unauthorized");
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    public code: string,              // UPPER_SNAKE, e.g. VALIDATION_FAILED, NOT_FOUND
+    message: string,                  // safe to show the user
+    public details: FieldError[] = [],// field errors for VALIDATION_FAILED
+    public requestId?: string,        // show it in the error UI so support can find the log line
+    public retryable = false,
+  ) {
+    super(message);
   }
-
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    // Backend returns: {"error": {"code": "...", "message": "...", "details": {...}}}
-    // Unwrap the error envelope so consumers can access .code, .message, .details directly.
-    const envelope = body.error ?? body;
-    const error: any = new Error(envelope.message ?? `Request failed: ${res.status}`);
-    error.status = res.status;
-    error.code = envelope.code;
-    error.details = envelope.details; // For 422 field-level validation errors
-    throw error;
-  }
-
-  // Handle 204 No Content
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
+
+// CSRF (cookie sessions): the server sets a readable csrf_token cookie; state-changing requests echo it
+// in a header the server requires. SameSite alone is not enough for every browser/flow.
+export function csrfToken(): string | undefined {
+  if (typeof document === "undefined") return undefined;
+  return document.cookie.split("; ").find((c) => c.startsWith("csrf_token="))?.split("=")[1];
+}
+
+export async function fetcher<T>(path: string, init: RequestInit = {}): Promise<ApiSuccess<T>> {
+  const method = (init.method ?? "GET").toUpperCase();
+  const headers = new Headers(init.headers);
+  headers.set("Accept", "application/json");
+  if (init.body) headers.set("Content-Type", "application/json");
+  if (!["GET", "HEAD", "OPTIONS"].includes(method)) {
+    const token = csrfToken();
+    if (token) headers.set("X-CSRF-Token", token);
+  }
+
+  const res = await fetch(`${API_BASE}${path}`, { ...init, method, headers, credentials: "same-origin" });
+
+  if (res.status === 204) {
+    return { data: undefined as T, meta: { request_id: res.headers.get("X-Request-Id") ?? "" } };
+  }
+  const body: unknown = await res.json().catch(() => null);
+
+  // Success and error are exclusive: branch on the status, never on `error === null`.
+  if (!res.ok) {
+    const e = (body as ApiErrorBody | null)?.error;
+    if (res.status === 401 && typeof window !== "undefined") {
+      // The login page only accepts a same-origin path in returnTo (open-redirect guard).
+      window.location.assign(`/login?returnTo=${encodeURIComponent(window.location.pathname)}`);
+    }
+    throw new ApiError(res.status, e?.code ?? "UNKNOWN", e?.message ?? `Request failed (${res.status})`,
+      e?.details ?? [], e?.request_id, e?.retryable ?? false);
+  }
+  return body as ApiSuccess<T>;
+}
+
+const toQuery = (p: Record<string, string | number | undefined>) =>
+  new URLSearchParams(
+    Object.entries(p).filter(([, v]) => v !== undefined && v !== "").map(([k, v]) => [k, String(v)]),
+  ).toString();
 
 // Typed resource API — matches api-contracts.md exactly
 export const api = {
   users: {
-    list: (params?: { page?: number; search?: string; role?: string }) =>
-      fetcher<{ data: User[]; meta: { total: number; page: number } }>(
-        `/v1/users?${new URLSearchParams(params as any)}`
-      ),
-    get: (id: string) => fetcher<{ data: User }>(`/v1/users/${id}`),
-    create: (data: CreateUserInput) =>
-      fetcher<{ data: User }>("/v1/users", { method: "POST", body: JSON.stringify(data) }),
-    update: (id: string, data: Partial<User>) =>
-      fetcher<{ data: User }>(`/v1/users/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
-    delete: (id: string) =>
-      fetcher<void>(`/v1/users/${id}`, { method: "DELETE" }),
+    // Cursor pagination: pass meta.pagination.next_cursor back as ?cursor=; never page/offset.
+    list: (params: { cursor?: string; limit?: number; search?: string; role?: string } = {}) =>
+      fetcher<User[]>(`/v1/users?${toQuery(params)}`),
+    get: (id: string) => fetcher<User>(`/v1/users/${encodeURIComponent(id)}`),
+    // One Idempotency-Key per user action, reused if the same submit is retried.
+    create: ({ input, idempotencyKey }: { input: CreateUserRequest; idempotencyKey: string }) =>
+      fetcher<User>("/v1/users", {
+        method: "POST",
+        body: JSON.stringify(input),
+        headers: { "Idempotency-Key": idempotencyKey },
+      }),
+    update: (id: string, input: UpdateUserRequest) =>
+      fetcher<User>(`/v1/users/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(input) }),
+    delete: (id: string) => fetcher<void>(`/v1/users/${encodeURIComponent(id)}`, { method: "DELETE" }),
   },
 };
 ```
+
+### Bearer-token APIs (only when IMPLEMENTATION_GUIDELINES §4.1 says so)
+
+Keep the short-lived **access token in memory** (a module variable, or React state/context). The
+**refresh token is an httpOnly cookie** scoped to the refresh endpoint. After a reload the app calls
+refresh once to get a new access token. Nothing is persisted in web storage.
+
+```tsx
+// lib/auth-token.ts
+import { csrfToken } from "@/lib/api-client";
+let accessToken: string | null = null;            // memory only: gone on reload, unreadable to other origins
+export const setAccessToken = (t: string | null) => { accessToken = t; };
+export const authHeader = (): Record<string, string> => (accessToken ? { Authorization: `Bearer ${accessToken}` } : {});
+
+let refreshing: Promise<boolean> | null = null;   // one refresh at a time, shared by concurrent 401s
+export function refreshAccessToken(): Promise<boolean> {
+  refreshing ??= fetch("/api/v1/auth/refresh", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "X-CSRF-Token": csrfToken() ?? "" },   // the refresh cookie is SameSite=Strict + this header
+  })
+    .then(async (r) => (r.ok ? (setAccessToken((await r.json()).data.access_token), true) : false))
+    .finally(() => { refreshing = null; });
+  return refreshing;
+}
+// In fetcher: merge authHeader() into headers; on the FIRST 401, await refreshAccessToken() and retry the
+// request once; a second 401 goes to /login. Never log the token, never put it in a URL.
+```
+
+WebSockets never carry a token in the URL (`?token=` ends up in proxy and access logs). See
+`ui/advanced-state-patterns.md` §WebSocket: fetch a short-lived single-use ticket over an authenticated
+request, or rely on the session cookie the handshake already sends.
 
 ## TanStack Query Setup
 
 ```tsx
 // lib/query-client.ts
 import { QueryClient } from "@tanstack/react-query";
+import { ApiError } from "@/lib/api-client";
 
 export function makeQueryClient() {
   return new QueryClient({
@@ -112,9 +181,13 @@ export function makeQueryClient() {
       queries: {
         staleTime: 60 * 1000,       // 1 minute
         gcTime: 5 * 60 * 1000,      // 5 minutes (was cacheTime in v4)
-        retry: 1,                    // Retry once on failure
+        // Queries are GETs (idempotent): retry once, but not on 4xx — they won't change on retry.
+        retry: (count, err) => count < 1 && !(err instanceof ApiError && err.status < 500 && err.status !== 429),
         refetchOnWindowFocus: false,
       },
+      // Mutations are not retried automatically: a retried POST without the same Idempotency-Key can
+      // create a duplicate. Retry only by re-submitting the same variables (same key).
+      mutations: { retry: 0 },
     },
   });
 }
@@ -141,15 +214,20 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
 ```tsx
 // lib/queries/users.ts
-import { queryOptions } from "@tanstack/react-query";
+import { infiniteQueryOptions, queryOptions } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
+
+type UserFilters = { search?: string; role?: string };
 
 export const userQueries = {
   all: () => ["users"] as const,
-  list: (filters?: { page?: number; search?: string; role?: string }) =>
-    queryOptions({
-      queryKey: ["users", "list", filters ?? {}],
-      queryFn: () => api.users.list(filters),
+  list: (filters: UserFilters = {}) =>
+    infiniteQueryOptions({
+      queryKey: ["users", "list", filters],
+      queryFn: ({ pageParam }) => api.users.list({ ...filters, cursor: pageParam, limit: 20 }),
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: (last) =>
+        last.meta.pagination?.has_more ? last.meta.pagination.next_cursor ?? undefined : undefined,
     }),
   detail: (id: string) =>
     queryOptions({
@@ -164,22 +242,24 @@ export const userQueries = {
 
 ```tsx
 // hooks/use-users.ts
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { userQueries } from "@/lib/queries/users";
-import { api } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import { toast } from "sonner";
 
-// READ (list)
-export function useUsers(filters?: Parameters<typeof api.users.list>[0]) {
-  return useQuery(userQueries.list(filters));
+// READ (list) — pages of { data: User[], meta.pagination }
+export function useUsers(filters?: Parameters<typeof userQueries.list>[0]) {
+  return useInfiniteQuery(userQueries.list(filters));
 }
+// consumer: const users = query.data?.pages.flatMap((p) => p.data) ?? [];
+//           <LoadMore disabled={!query.hasNextPage} onClick={() => query.fetchNextPage()} />
 
 // READ (single)
 export function useUser(id: string) {
   return useQuery(userQueries.detail(id));
 }
 
-// CREATE
+// CREATE — the caller creates the Idempotency-Key once per submit: crypto.randomUUID()
 export function useCreateUser() {
   const queryClient = useQueryClient();
   return useMutation({
@@ -188,9 +268,10 @@ export function useCreateUser() {
       toast.success("User created");
       queryClient.invalidateQueries({ queryKey: userQueries.all() });
     },
-    onError: (error: any) => {
-      if (error.status !== 422) toast.error("Failed to create user");
-      // 422 errors handled by form's mapServerErrors
+    onError: (error) => {
+      // VALIDATION_FAILED: the form maps error.details[] onto its fields (error-handling-patterns.md)
+      if (error instanceof ApiError && error.code === "VALIDATION_FAILED") return;
+      toast.error(error instanceof ApiError ? error.message : "Failed to create user");
     },
   });
 }
@@ -199,7 +280,7 @@ export function useCreateUser() {
 export function useUpdateUser(id: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (data: Partial<User>) => api.users.update(id, data),
+    mutationFn: (input: UpdateUserRequest) => api.users.update(id, input),
     onSuccess: () => {
       toast.success("User updated");
       queryClient.invalidateQueries({ queryKey: userQueries.all() });
@@ -213,14 +294,14 @@ export function useDeleteUser() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: api.users.delete,
-    onMutate: async (id) => {
+    onMutate: async () => {
       await queryClient.cancelQueries({ queryKey: userQueries.all() });
-      const previous = queryClient.getQueryData(["users", "list"]);
+      const previous = queryClient.getQueriesData({ queryKey: ["users", "list"] });
       // Optimistic removal handled in component or via setQueryData
       return { previous };
     },
     onError: (_err, _id, context) => {
-      queryClient.setQueryData(["users", "list"], context?.previous);
+      context?.previous.forEach(([key, data]) => queryClient.setQueryData(key, data));
       toast.error("Failed to delete user");
     },
     onSuccess: () => toast.success("User deleted"),
@@ -231,27 +312,14 @@ export function useDeleteUser() {
 
 ## Response Shape — TypeScript Types
 
+Import the generated types; never hand-write an envelope (`ui/type-generation-protocol.md`).
+
 ```tsx
-// Types match api-contracts.md EXACTLY
-interface ApiResponse<T> {
-  data: T;
-  error: string | null;
-  meta?: { total: number; page: number; per_page: number };
-}
+import type { ApiSuccess, ApiErrorBody, Pagination, User } from "@/types/api";
 
-interface User {
-  id: string;
-  name: string;
-  email: string;
-  role: "admin" | "member" | "viewer";
-  created_at: string;
-  updated_at: string;
-}
-
-// When consuming:
-const { data: response } = useUsers();
-// response.data = User[]  (the array)
-// response.meta = { total, page }  (pagination)
+// Single:  { data: User, meta: { request_id } }
+// List:    { data: User[], meta: { request_id, pagination: { next_cursor, has_more, limit, total_count? } } }
+// Error:   { error: { code, message, details[], request_id, retryable } }   ← thrown as ApiError, no `data`
 ```
 
 ## Server Component Prefetching (Next.js)
@@ -265,7 +333,7 @@ import { UserList } from "@/components/features/user-list";
 
 export default async function UsersPage() {
   const queryClient = makeQueryClient();
-  await queryClient.prefetchQuery(userQueries.list());
+  await queryClient.prefetchInfiniteQuery(userQueries.list());
 
   return (
     <HydrationBoundary state={dehydrate(queryClient)}>
@@ -275,30 +343,32 @@ export default async function UsersPage() {
 }
 ```
 
+A server-side prefetch runs without the browser's cookies unless you forward them explicitly (Next.js
+`cookies()`). Forward only the session cookie, and only to your own API origin.
+
 ## HTTP Client Error Interceptor
 
-The `fetcher` function above already unwraps the backend error envelope (`{"error": {"code": "...", ...}}`). If you use a different HTTP client (e.g., Axios), add an interceptor to normalize the error shape:
+The `fetcher` above already turns the error envelope into an `ApiError`. If the project uses Axios
+instead, normalize to the same class:
 
 ```tsx
 // lib/axios-client.ts — alternative to fetch-based client
 import axios from "axios";
+import { ApiError } from "@/lib/api-client";
 
 const apiClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL ?? "/api",
+  baseURL: "/api",                 // same-origin; see API_BASE above
+  xsrfCookieName: "csrf_token",    // Axios echoes this cookie…
+  xsrfHeaderName: "X-CSRF-Token",  // …in this header on state-changing requests
 });
 
-// Response interceptor: unwrap error envelope from backend
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    const e = error.response?.data?.error;
     if (error.response) {
-      // Backend returns: {"error": {"code": "...", "message": "...", "details": {...}}}
-      const envelope = error.response.data?.error ?? error.response.data;
-      const normalized: any = new Error(envelope?.message ?? error.message);
-      normalized.status = error.response.status;
-      normalized.code = envelope?.code;
-      normalized.details = envelope?.details;
-      return Promise.reject(normalized);
+      return Promise.reject(new ApiError(error.response.status, e?.code ?? "UNKNOWN",
+        e?.message ?? error.message, e?.details ?? [], e?.request_id, e?.retryable ?? false));
     }
     return Promise.reject(error);
   },
@@ -307,11 +377,12 @@ apiClient.interceptors.response.use(
 export { apiClient };
 ```
 
-This ensures that regardless of HTTP client, error consumers always see the same shape:
-- `error.status` — HTTP status code (e.g., 422, 404, 409)
-- `error.code` — machine-readable code (e.g., `"VALIDATION_ERROR"`, `"NOT_FOUND"`)
-- `error.message` — human-readable message
-- `error.details` — structured details (field errors for 422, resource info for 404, etc.)
+This way every error consumer sees the same shape, whatever the HTTP client:
+- `error.status` — HTTP status (400, 401, 403, 404, 409, 422, 429, 5xx)
+- `error.code` — machine-readable code (`"VALIDATION_FAILED"`, `"NOT_FOUND"`, `"BUSINESS_RULE_VIOLATION"`)
+- `error.message` — user-safe message
+- `error.details` — `FieldError[]` for `VALIDATION_FAILED`, otherwise `[]`
+- `error.requestId` / `error.retryable`
 
 ## Anti-Patterns
 
@@ -319,7 +390,13 @@ This ensures that regardless of HTTP client, error consumers always see the same
 |----------|-----------|
 | Fetch in `useEffect` | `useQuery` from TanStack Query |
 | Store API data in `useState` | Let Query cache manage it |
-| Hardcode API URLs | Use `process.env.NEXT_PUBLIC_API_URL` |
+| Token in `localStorage` / `sessionStorage` | httpOnly Secure SameSite cookie, or an in-memory access token |
+| Token in a URL (`?token=`, WS URL) | Cookie, `Authorization` header, or a single-use WS ticket |
+| Cookie auth without CSRF protection | SameSite + `X-CSRF-Token` on state-changing requests |
+| Hardcode API URLs / `process.env` in a Vite app | Same-origin `/api`, or the bundler's public env var |
+| `page` / `per_page` / `offset` params | `cursor` + `limit`, next page from `meta.pagination.next_cursor` |
+| Check `if (body.error === null)` | Branch on `res.ok` / `"error" in body` |
+| Retry a POST without the same `Idempotency-Key` | One key per user action, reused on re-submit |
 | Ignore `isLoading`/`isError` | Handle ALL 3 states in every query consumer |
 | Duplicate query keys as strings | Query key factory in `lib/queries/` |
 | `new QueryClient()` outside useState | `useState(() => makeQueryClient())` |

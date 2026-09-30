@@ -1,6 +1,6 @@
 ---
 skill: crud-handler-test-rust
-description: Axum handler test archetype — TestApp helper, reqwest integration tests, CRUD endpoint coverage, pagination (cursor + offset), validation errors, auth tests, error response assertions, helper macros
+description: Axum handler test archetype — TestApp helper, reqwest integration tests, CRUD endpoint coverage, cursor pagination, validation errors, auth tests, response envelope assertions, helper macros
 version: "1.0"
 tags:
   - rust
@@ -251,13 +251,21 @@ pub async fn assert_json_response(resp: reqwest::Response, expected_status: u16)
     serde_json::from_str(&body_text).expect("response is not valid JSON")
 }
 
-/// Assert the response is an error envelope with the expected code.
+/// Assert the response is an error envelope (api/response-envelope.md) with the expected
+/// status and code; returns the parsed body for further checks.
 pub async fn assert_error_response(
     resp: reqwest::Response,
     expected_status: u16,
     expected_code: &str,
-) {
+) -> Value {
+    let header_request_id = resp.headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
     let body = assert_json_response(resp, expected_status).await;
+
+    // {"error": {code, message, details?, request_id, retryable}} — never a 'data' key
+    assert!(body.get("data").is_none(), "success and error are exclusive: no 'data' in an error body");
     let error = body.get("error").expect("missing 'error' key in response");
     assert_eq!(
         error.get("code").and_then(|v| v.as_str()),
@@ -265,31 +273,58 @@ pub async fn assert_error_response(
         "expected error code '{expected_code}', got: {error}"
     );
     assert!(
-        error.get("message").and_then(|v| v.as_str()).is_some(),
-        "error must have a 'message' field"
+        error.get("message").and_then(|v| v.as_str()).is_some_and(|m| !m.is_empty()),
+        "error must have a non-empty 'message'"
     );
+    let request_id = error.get("request_id")
+        .and_then(|v| v.as_str())
+        .expect("error must have 'request_id'");
+    assert!(!request_id.is_empty(), "'request_id' must not be empty");
+    assert_eq!(
+        header_request_id.as_deref(),
+        Some(request_id),
+        "X-Request-Id header must equal error.request_id"
+    );
+    assert!(
+        error.get("retryable").is_some_and(Value::is_boolean),
+        "error must have a boolean 'retryable'"
+    );
+    assert!(error.get("detail").is_none(), "no technical 'detail' field");
+    body
 }
 
-/// Assert the response is a single-resource envelope with 'data' and 'meta'.
+/// Assert a single-resource success envelope: exactly 'data' + 'meta', 'meta.request_id', no pagination.
 pub fn assert_envelope(body: &Value) {
-    assert!(body.get("data").is_some(), "response must have 'data' key");
-    assert!(body.get("meta").is_some(), "response must have 'meta' key");
+    let obj = body.as_object().expect("response must be a JSON object");
+    assert!(obj.contains_key("data"), "response must have 'data' key");
+    assert!(obj.contains_key("meta"), "response must have 'meta' key");
+    assert!(!obj.contains_key("error"), "success and error are exclusive");
 
-    let meta = body.get("meta").unwrap();
-    assert!(meta.get("request_id").is_some(), "meta must have 'request_id'");
-    assert!(meta.get("timestamp").is_some(), "meta must have 'timestamp'");
+    let meta = &body["meta"];
+    assert!(
+        meta["request_id"].as_str().is_some_and(|s| !s.is_empty()),
+        "meta must have 'request_id'"
+    );
+    assert!(meta.get("pagination").is_none(), "a single resource has no pagination");
 }
 
-/// Assert the response is a list envelope with array data and pagination meta.
+/// Assert a list envelope: 'data' is an array ([] when empty) and 'meta.pagination' has
+/// 'next_cursor' (string or null), 'has_more' and 'limit'.
 pub fn assert_list_envelope(body: &Value) {
-    let data = body.get("data").expect("response must have 'data' key");
-    assert!(data.is_array(), "'data' must be an array");
+    let obj = body.as_object().expect("response must be a JSON object");
+    assert_eq!(obj.len(), 2, "only 'data' and 'meta' at the top level");
+    assert!(body["data"].is_array(), "'data' must be an array");
 
-    let meta = body.get("meta").expect("response must have 'meta' key");
-    assert!(meta.get("has_more").is_some(), "meta must have 'has_more'");
-    assert!(meta.get("total").is_some(), "meta must have 'total'");
-    assert!(meta.get("request_id").is_some(), "meta must have 'request_id'");
-    assert!(meta.get("timestamp").is_some(), "meta must have 'timestamp'");
+    let meta = &body["meta"];
+    assert!(
+        meta["request_id"].as_str().is_some_and(|s| !s.is_empty()),
+        "meta must have 'request_id'"
+    );
+    let pagination = meta.get("pagination").expect("list responses carry meta.pagination");
+    let next = pagination.get("next_cursor").expect("pagination must have 'next_cursor'");
+    assert!(next.is_string() || next.is_null(), "'next_cursor' is a string or null");
+    assert!(pagination["has_more"].is_boolean(), "pagination must have 'has_more'");
+    assert!(pagination["limit"].is_u64(), "pagination must have 'limit'");
 }
 ```
 
@@ -328,7 +363,9 @@ macro_rules! json_request {
 ```rust
 // tests/api/widget_test.rs
 
-use crate::helpers::{spawn_app, assert_json_response, assert_error_response, assert_envelope};
+use crate::helpers::{
+    spawn_app, assert_json_response, assert_error_response, assert_envelope, assert_list_envelope,
+};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -376,8 +413,8 @@ async fn create_widget_invalid_json() {
         .await
         .expect("request failed");
 
-    // Malformed JSON -> 400 Bad Request (not 422)
-    assert_error_response(resp, 400, "BAD_REQUEST").await;
+    // Malformed JSON -> 400 MALFORMED_REQUEST (not 422, not VALIDATION_FAILED)
+    assert_error_response(resp, 400, "MALFORMED_REQUEST").await;
 }
 
 #[tokio::test]
@@ -393,7 +430,7 @@ async fn create_widget_empty_body() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 400, "BAD_REQUEST").await;
+    assert_error_response(resp, 400, "MALFORMED_REQUEST").await;
 }
 
 #[tokio::test]
@@ -414,7 +451,11 @@ async fn create_widget_validation_error_empty_name() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 422, "VALIDATION_ERROR").await;
+    // Field validation -> 400 VALIDATION_FAILED with details[] {field, code, message}
+    let json = assert_error_response(resp, 400, "VALIDATION_FAILED").await;
+    let details = json["error"]["details"].as_array().expect("details must be an array");
+    assert_eq!(details[0]["field"].as_str(), Some("name"));
+    assert!(details[0]["code"].as_str().is_some());
 }
 
 #[tokio::test]
@@ -435,7 +476,7 @@ async fn create_widget_validation_error_name_too_long() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 422, "VALIDATION_ERROR").await;
+    assert_error_response(resp, 400, "VALIDATION_FAILED").await;
 }
 ```
 
@@ -494,7 +535,7 @@ async fn get_widget_invalid_uuid() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 422, "VALIDATION_ERROR").await;
+    assert_error_response(resp, 400, "VALIDATION_FAILED").await;
 }
 ```
 
@@ -608,7 +649,7 @@ async fn update_widget_invalid_json() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 400, "BAD_REQUEST").await;
+    assert_error_response(resp, 400, "MALFORMED_REQUEST").await;
 }
 ```
 
@@ -675,7 +716,7 @@ async fn delete_widget_invalid_uuid() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 422, "VALIDATION_ERROR").await;
+    assert_error_response(resp, 400, "VALIDATION_FAILED").await;
 }
 
 #[tokio::test]
@@ -722,7 +763,7 @@ async fn list_widgets_happy_path() {
     }
 
     let resp = app.client
-        .get(app.url("/api/v1/widgets?page_size=3&sort_by=created_at&sort_dir=desc"))
+        .get(app.url("/api/v1/widgets?limit=3&sort_by=created_at&sort_dir=desc"))
         .header("Authorization", &auth)
         .send()
         .await
@@ -733,9 +774,10 @@ async fn list_widgets_happy_path() {
 
     let data = json["data"].as_array().unwrap();
     assert_eq!(data.len(), 3);
-    assert_eq!(json["meta"]["has_more"].as_bool(), Some(true));
-    assert_eq!(json["meta"]["total"].as_i64(), Some(5));
-    assert!(json["meta"]["cursor"].as_str().is_some());
+    let pagination = &json["meta"]["pagination"];
+    assert_eq!(pagination["has_more"].as_bool(), Some(true));
+    assert_eq!(pagination["limit"].as_i64(), Some(3));
+    assert!(pagination["next_cursor"].as_str().is_some());
 }
 
 #[tokio::test]
@@ -753,10 +795,11 @@ async fn list_widgets_empty() {
     let json = assert_json_response(resp, 200).await;
     assert_list_envelope(&json);
 
-    let data = json["data"].as_array().unwrap();
+    let data = json["data"].as_array().expect("empty list is [] — never null");
     assert_eq!(data.len(), 0);
-    assert_eq!(json["meta"]["has_more"].as_bool(), Some(false));
-    assert_eq!(json["meta"]["total"].as_i64(), Some(0));
+    let pagination = &json["meta"]["pagination"];
+    assert_eq!(pagination["has_more"].as_bool(), Some(false));
+    assert!(pagination["next_cursor"].is_null(), "next_cursor is null when has_more is false");
 }
 
 #[tokio::test]
@@ -774,7 +817,7 @@ async fn list_widgets_cursor_pagination() {
 
     // Page 1: get first 3
     let resp = app.client
-        .get(app.url("/api/v1/widgets?page_size=3"))
+        .get(app.url("/api/v1/widgets?limit=3"))
         .header("Authorization", &auth)
         .send()
         .await
@@ -783,13 +826,13 @@ async fn list_widgets_cursor_pagination() {
     let json = assert_json_response(resp, 200).await;
     let page1_data = json["data"].as_array().unwrap();
     assert_eq!(page1_data.len(), 3);
-    assert_eq!(json["meta"]["has_more"].as_bool(), Some(true));
+    assert_eq!(json["meta"]["pagination"]["has_more"].as_bool(), Some(true));
 
-    let cursor = json["meta"]["cursor"].as_str().unwrap();
+    let cursor = json["meta"]["pagination"]["next_cursor"].as_str().unwrap();
 
-    // Page 2: use cursor to get remaining
+    // Page 2: follow next_cursor to get the remaining items
     let resp = app.client
-        .get(app.url(&format!("/api/v1/widgets?page_size=3&cursor={cursor}")))
+        .get(app.url(&format!("/api/v1/widgets?limit=3&cursor={cursor}")))
         .header("Authorization", &auth)
         .send()
         .await
@@ -798,7 +841,8 @@ async fn list_widgets_cursor_pagination() {
     let json = assert_json_response(resp, 200).await;
     let page2_data = json["data"].as_array().unwrap();
     assert_eq!(page2_data.len(), 2);
-    assert_eq!(json["meta"]["has_more"].as_bool(), Some(false));
+    assert_eq!(json["meta"]["pagination"]["has_more"].as_bool(), Some(false));
+    assert!(json["meta"]["pagination"]["next_cursor"].is_null());
 
     // Verify no overlap between pages
     let page1_ids: Vec<&str> = page1_data.iter()
@@ -813,36 +857,32 @@ async fn list_widgets_cursor_pagination() {
 }
 
 #[tokio::test]
-async fn list_widgets_page_size_defaults_and_limits() {
+async fn list_widgets_limit_defaults_and_caps() {
     let app = spawn_app().await;
     let auth = app.default_auth_header();
 
-    // page_size=0 -> defaults to 20
-    let resp = app.client
-        .get(app.url("/api/v1/widgets?page_size=0"))
-        .header("Authorization", &auth)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status().as_u16(), 200);
+    // limit defaults to 20 when missing, zero or negative; capped at 100
+    for (query, expected) in [
+        ("", 20),
+        ("?limit=0", 20),
+        ("?limit=-5", 20),
+        ("?limit=500", 100),
+        ("?limit=50", 50),
+    ] {
+        let resp = app.client
+            .get(app.url(&format!("/api/v1/widgets{query}")))
+            .header("Authorization", &auth)
+            .send()
+            .await
+            .unwrap();
 
-    // page_size=-5 -> clamped to 1 minimum
-    let resp = app.client
-        .get(app.url("/api/v1/widgets?page_size=-5"))
-        .header("Authorization", &auth)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status().as_u16(), 200);
-
-    // page_size=500 -> clamped to 100 maximum
-    let resp = app.client
-        .get(app.url("/api/v1/widgets?page_size=500"))
-        .header("Authorization", &auth)
-        .send()
-        .await
-        .unwrap();
-    assert_eq!(resp.status().as_u16(), 200);
+        let json = assert_json_response(resp, 200).await;
+        assert_eq!(
+            json["meta"]["pagination"]["limit"].as_i64(),
+            Some(expected),
+            "limit for '{query}'"
+        );
+    }
 }
 
 #[tokio::test]
@@ -907,7 +947,12 @@ async fn auth_missing_authorization_header() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 401, "UNAUTHORIZED").await;
+    assert_eq!(
+        resp.headers().get("www-authenticate").and_then(|v| v.to_str().ok()),
+        Some("Bearer"),
+        "401 responses carry WWW-Authenticate: Bearer"
+    );
+    assert_error_response(resp, 401, "UNAUTHENTICATED").await;
 }
 
 #[tokio::test]
@@ -921,7 +966,7 @@ async fn auth_invalid_jwt_token() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 401, "UNAUTHORIZED").await;
+    assert_error_response(resp, 401, "UNAUTHENTICATED").await;
 }
 
 #[tokio::test]
@@ -952,7 +997,7 @@ async fn auth_expired_jwt_token() {
         .await
         .expect("request failed");
 
-    assert_error_response(resp, 401, "UNAUTHORIZED").await;
+    assert_error_response(resp, 401, "UNAUTHENTICATED").await;
 }
 
 #[tokio::test]
@@ -1039,10 +1084,10 @@ async fn response_shape_single_resource() {
         assert!(data.get(field).is_some(), "data must contain '{field}'");
     }
 
-    // meta must contain tracking fields
+    // meta carries request_id; a single resource has no pagination
     let meta = &json["meta"];
     assert!(meta.get("request_id").is_some());
-    assert!(meta.get("timestamp").is_some());
+    assert!(meta.get("pagination").is_none());
 }
 
 #[tokio::test]
@@ -1057,12 +1102,14 @@ async fn response_shape_error_envelope() {
         .await
         .unwrap();
 
-    let json = assert_json_response(resp, 404).await;
+    let json = assert_error_response(resp, 404, "NOT_FOUND").await;
 
-    // Error envelope: {"error": {"code": "...", "message": "..."}}
-    let error = json.get("error").expect("must have 'error' key");
-    assert!(error.get("code").is_some());
-    assert!(error.get("message").is_some());
+    // Error envelope: {"error": {"code", "message", "details"?, "request_id", "retryable"}} — no "data"
+    assert_eq!(json.as_object().unwrap().len(), 1, "an error body has only the 'error' key");
+    let error = &json["error"];
+    for key in ["code", "message", "request_id", "retryable"] {
+        assert!(error.get(key).is_some(), "error must contain '{key}'");
+    }
 }
 
 #[tokio::test]
@@ -1082,15 +1129,14 @@ async fn internal_error_does_not_leak_details() {
         .await
         .expect("request failed");
 
-    let json = assert_json_response(resp, 500).await;
-    let error = json.get("error").unwrap();
+    let json = assert_error_response(resp, 500, "INTERNAL").await;
+    assert_eq!(json["error"]["retryable"].as_bool(), Some(false));
 
-    // CRITICAL: Internal errors must NOT leak database details
-    let message = error.get("message").unwrap().as_str().unwrap();
-    assert!(!message.contains("postgres"), "must not leak DB details");
-    assert!(!message.contains("connection"), "must not leak connection info");
-    assert!(!message.contains("pool"), "must not leak pool info");
-    assert_eq!(error["code"].as_str(), Some("INTERNAL_ERROR"));
+    // CRITICAL: Internal errors must NOT leak database details anywhere in the body
+    let body = serde_json::to_string(&json).unwrap();
+    assert!(!body.contains("postgres"), "must not leak DB details");
+    assert!(!body.contains("connection"), "must not leak connection info");
+    assert!(!body.contains("pool"), "must not leak pool info");
 }
 ```
 
@@ -1098,16 +1144,17 @@ async fn internal_error_does_not_leak_details() {
 
 - Every integration test MUST use `spawn_app()` to get an isolated test instance with its own database
 - Every test database MUST be created fresh and cleaned up after tests
-- Malformed JSON MUST return 400 Bad Request, not 422 Validation Error
+- Malformed JSON MUST return 400 `MALFORMED_REQUEST`; failed field validation 400 `VALIDATION_FAILED`; a domain rule 422 `BUSINESS_RULE_VIOLATION`
 - Wrong tenant MUST return 404 Not Found, not 403 Forbidden — prevents entity enumeration
-- Internal errors MUST NOT leak error details to the client — assert generic message in 500 responses
-- Every response MUST follow the envelope format: `{"data": T, "meta": {...}}` for success, `{"error": {...}}` for failure
+- Internal errors MUST NOT leak error details to the client — assert the 500 `INTERNAL` body has no driver/pool text
+- Every response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}` for success, `{"error": {code, message, details?, request_id, retryable}}` for failure, never both
+- Every error assertion MUST check `request_id` (= `X-Request-Id` header) and `retryable` — use `assert_error_response`
 - DELETE MUST return 204 with empty body
 - POST create MUST return 201 Created
-- List responses MUST include `has_more`, `total` in meta
-- Page size MUST be clamped: default to 20 when missing/zero, cap at 100
+- List responses MUST include `meta.pagination` `{next_cursor, has_more, limit}`; `data` is `[]` when empty; `next_cursor` is null when `has_more` is false
+- `limit` MUST be clamped: default to 20 when missing/zero/negative, cap at 100
 - Sort and filter fields MUST be allow-listed — disallowed values default to safe values
 - Cursor pagination MUST produce non-overlapping pages
-- Auth tests MUST cover: missing header (401), invalid JWT (401), expired JWT (401), wrong role (403), wrong tenant (404)
+- Auth tests MUST cover: missing header (401 `UNAUTHENTICATED` + `WWW-Authenticate`), invalid JWT (401), expired JWT (401), wrong role (403 `FORBIDDEN`), wrong tenant (404 `NOT_FOUND`)
 - Use `#[tokio::test]` on every async test function
 - Every test function should be self-contained — no shared mutable state between tests

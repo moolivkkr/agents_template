@@ -56,7 +56,8 @@ tokens/colors too.
 | **error-handling-patterns.md** | Error-type → UI pattern mapping, error boundaries | design system for `<EmptyState>` |
 | **form-patterns.md** | React Hook Form + Zod form UX | design system for `<FormBuilder>` when present |
 | **form-validation-protocol.md** | Deriving Zod schemas from data-contracts.md | form-patterns for rendering |
-| **api-integration-patterns.md** | HTTP client + TanStack Query hooks, cache keys | — |
+| **api-integration-patterns.md** | HTTP client + TanStack Query hooks, cache keys, token handling (httpOnly cookie or in-memory, CSRF) | `security/secure-coding.md` §3 |
+| **secure-rendering.md** | DOM-XSS: HTML sinks only with DOMPurify, URL-scheme allowlist on href/src, markdown without raw HTML, safe redirects, postMessage origins, CSP-compatible code, the XSS-RENDER test | `security/secure-coding.md` §4 — **not overridable by any design system** |
 | **type-generation-protocol.md** | data-contracts.md → `types/api.ts` generation | — |
 | **advanced-state-patterns.md** | Complex client state (machines, cross-component) | — |
 | **shadcn.md** | shadcn/ui component mechanics (how to compose primitives) | design system for whether to use shadcn vs `@portal/components` |
