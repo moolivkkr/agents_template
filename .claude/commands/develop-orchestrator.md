@@ -175,6 +175,8 @@ mkdir -p "agent_state/phases/${PHASE}"
 #  - touches auth/PII/trust-boundary: ADD threat_model_agent (design-time STRIDE; usually run in /plan
 #    but list it here if the phase itself introduces the security-relevant surface).
 #  - adds/changes a service with an NFR-PERF-*/availability target: ADD reliability_agent.
+#  - declares schema changes (new/changed tables in the specs or a data-model section): ADD database_agent
+#    (Wave 2A.1 schema design — it is NOT in the base list, so without this rule 2A.1 never ran).
 #  - has DB migrations: ADD migration_agent AND migration_safety_reviewer (adversarial migration review).
 #  - changes a cross-phase contract (API/type/event/column consumed by an earlier phase): ADD breaking_change_reviewer.
 #  - platform: also add architecture_orchestrator + adr_agent (see Wave 0 table).
@@ -1225,12 +1227,15 @@ This file is read by `project_planner` when planning Phase N+1 — agents query 
 If `agent_state/codebase/` exists, update `.last-mapped` with a confidence indicator:
 
 ```bash
-# After gate passes, codebase knowledge confidence increases
-# (the mapping was validated by successful implementation + tests)
-echo "sha:$(git rev-parse --short HEAD)" > agent_state/codebase/.last-mapped
-echo "confidence:high" >> agent_state/codebase/.last-mapped
-echo "validated_by:phase-${PHASE}-gate" >> agent_state/codebase/.last-mapped
-echo "ts:$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> agent_state/codebase/.last-mapped
+# Keep `sha:` = the commit the knowledge base was MAPPED at. /map --incremental diffs sha..HEAD, so
+# overwriting it with the post-phase HEAD (as this step used to) made every later incremental map
+# see "no changes" and froze the KB after the first gate while labelling it high-confidence.
+F=agent_state/codebase/.last-mapped
+MAPPED="$(grep '^sha:' "$F" 2>/dev/null | head -1)"; MAPPED="${MAPPED:-sha:unknown}"
+HEAD_SHA="$(git rev-parse --short HEAD)"
+if [ "${MAPPED#sha:}" = "$HEAD_SHA" ]; then CONF=high; else CONF=stale; fi   # stale → run /map --incremental
+{ echo "$MAPPED"; echo "confidence:$CONF"; echo "validated_sha:$HEAD_SHA"
+  echo "validated_by:phase-${PHASE}-gate"; echo "ts:$(date -u +%Y-%m-%dT%H:%M:%SZ)"; } > "$F"
 ```
 
 If the gate FAILS, confidence degrades:

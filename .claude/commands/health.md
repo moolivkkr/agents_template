@@ -751,11 +751,11 @@ When `--fix` flag is set, after completing all diagnostic steps, apply repairs:
    done
    ```
 
-7. **Archive oversized execution logs** — for gated phases with >500 log lines
+7. **Back up oversized execution logs** — for gated phases with >500 log lines (copy only; the log itself is never truncated)
    ```bash
+   # Compress a COPY only. Never truncate execution.jsonl: it is the roster gate's evidence, and
+   # truncating it made verify-gate block the (already gated) phase on "agent never completed".
    gzip -c "${EXEC_LOG}" > "${phase_dir}execution.jsonl.archived-${TIMESTAMP}.gz"
-   # Truncate to last 50 entries (keep recent for quick diagnostics)
-   tail -50 "${EXEC_LOG}" > "${EXEC_LOG}.tmp" && mv "${EXEC_LOG}.tmp" "${EXEC_LOG}"
    ```
 
 ### Unsafe Repairs (NEVER automatic)

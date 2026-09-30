@@ -88,7 +88,10 @@ esac
 # validate required inputs for add/retire
 for v in SUBJECT:"$SUBJECT" RELATION:"$RELATION" TITLE:"$TITLE" DATE:"$DATE" FACT:"$FACT"; do
   k="${v%%:*}"; val="${v#*:}"
-  [ -z "$val" ] && { echo "remember $ACTION: --${k,,} is required"; exit 3; }
+  # bash 3.2-safe lowercase (macOS /bin/bash): ${k,,} is bash-4 only, and under 3.2 its "bad
+  # substitution" skipped this exit, so a missing --fact recorded a blank fact that superseded the
+  # real one (review 2026-09-30, D1).
+  if [ -z "$val" ]; then echo "remember $ACTION: --$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]') is required"; exit 3; fi
 done
 
 ensure_file

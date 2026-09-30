@@ -40,6 +40,15 @@ echo "$inj" | grep -q 'F-001' && bad "inject hook surfaced phantom/ superseded F
 # no leftover pedagogical example comment in the live file
 grep -q 'Example (delete' docs/PROJECT_FACTS.md && bad "template example comment leaked into live file" || ok "example comment stripped"
 
+# A missing --fact must fail (exit 3) and must NOT record a blank fact that supersedes the real one.
+# Run under /bin/bash explicitly: macOS ships bash 3.2, where the old ${k,,} silently skipped the exit.
+before="$(grep -c '^### F-' docs/PROJECT_FACTS.md)"
+CLAUDE_PROJECT_DIR="$W" /bin/bash "$R" add --subject svc-b --relation environment --title "oops" --date 2026-07-09 >/dev/null 2>&1; rc=$?
+after="$(grep -c '^### F-' docs/PROJECT_FACTS.md)"
+[ "$rc" = "3" ] && [ "$before" = "$after" ] && ok "missing --fact → exit 3, nothing recorded (bash 3.2)" || bad "missing --fact: rc=$rc, facts $before→$after"
+lst="$(CLAUDE_PROJECT_DIR="$W" bash "$R" list)"
+echo "$lst" | grep -q 'svc-b env' && ! echo "$lst" | grep -q 'oops' && ok "real svc-b fact still active, no blank 'oops' fact" || bad "svc-b fact was superseded by a blank one"
+
 echo "────────────────────────────────────────────"
 echo "remember.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

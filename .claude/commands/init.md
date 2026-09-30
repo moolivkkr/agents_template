@@ -35,7 +35,7 @@ Bootstraps a new project from scratch. Reads `./requirements/`, produces `docs/B
 
 > Full protocol: `~/.claude/skills/core/context-budget-protocol.md`. Per-step token targets below are specific to this command.
 
-**Read discipline:** `brd_agent` and `impl_guidelines_agent` run in parallel — each reads only its own input files. They do NOT read each other's outputs mid-run.
+**Read discipline:** `brd_agent` runs first; `impl_guidelines_agent` then reads the finished `docs/BRD.md` plus its own inputs. Neither reads the other's work in progress.
 
 **Interviews run through this session.** Subagents cannot ask the user questions. When `brd_agent` or `impl_guidelines_agent` returns `NEEDS_INPUT`, ask the user its questions here (AskUserQuestion for choices, plain text for open answers), then relaunch the same agent with the original task plus the answers. Repeat until it returns `COMPLETE` (at most the agent's own round limit). In `--auto` mode the agents resolve gaps with recorded defaults and never return `NEEDS_INPUT`.
 
@@ -80,9 +80,11 @@ If `--brd_only` flag: skip to Step 1 only, then stop.
 
 ---
 
-## Step 1 + 2 — BRD and IMPLEMENTATION_GUIDELINES (PARALLEL)
+## Step 1 → Step 2 — BRD, then IMPLEMENTATION_GUIDELINES (SEQUENTIAL)
 
-Run both agents simultaneously — they read from `./requirements/` independently.
+Run `brd_agent` first, then `impl_guidelines_agent`: the guidelines agent declares `docs/BRD.md` as a
+required input (NFR targets drive stack choices), so starting both at once made it stop on a missing
+input on every fresh project.
 
 ### Step 1: `brd_agent`
 
@@ -141,7 +143,7 @@ The agent:
 | Service | Port | Start Command |
 ```
 
-**⚠ Both agents run in parallel. Step 3 waits for BOTH to complete.**
+**⚠ Step 2 starts only after Step 1 has written `docs/BRD.md`. Step 3 waits for both.**
 
 ---
 
@@ -374,7 +376,8 @@ Also embed the **Ground Truth** block from `~/.claude/templates/CLAUDE.md.templa
 
 ```bash
 mkdir -p docs
-sed "s/{{PROJECT_NAME}}/<PROJECT_NAME>/g" \
+# Never overwrite: re-running /init (e.g. --update_agents) used to wipe every recorded Tier-0 fact.
+[ -f docs/PROJECT_FACTS.md ] || sed "s/{{PROJECT_NAME}}/<PROJECT_NAME>/g" \
   ~/.claude/templates/PROJECT_FACTS.md.template > docs/PROJECT_FACTS.md
 ```
 

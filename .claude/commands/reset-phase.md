@@ -44,12 +44,20 @@ Preserves all code changes. Agents will build on existing implementation during 
      mv "agent_state/phases/${PHASE}/reports" "agent_state/phases/${PHASE}/reports.archived-${TIMESTAMP}"
    fi
 
-   # Archive agent manifests
-   for agent_dir in agent_state/phases/${PHASE}/*/; do
-     if [ -d "$agent_dir" ] && [ "$(basename $agent_dir)" != "reports" ] && [ "$(basename $agent_dir)" != "test-data" ]; then
-       mv "$agent_dir" "${agent_dir%.*/}.archived-${TIMESTAMP}/"
-     fi
+   # Archive agent dirs, checkpoints and the execution-guarantee files. A re-run must start from an
+   # EMPTY roster/execution log: surviving `completed` lines let the roster gate pass on the previous
+   # attempt's evidence, and surviving wave checkpoints make the orchestrator skip waves. (The old loop
+   # computed "${agent_dir%.*/}" — the dir itself — and tried to move a directory into itself.)
+   ARCH="agent_state/phases/${PHASE}/archived-${TIMESTAMP}"
+   mkdir -p "$ARCH"
+   for item in agent_state/phases/${PHASE}/*; do
+     name="$(basename "$item")"
+     case "$name" in
+       archived-*|reports.archived-*|test-data) continue ;;   # keep earlier archives + seed data
+     esac
+     mv "$item" "$ARCH/"
    done
+   echo "Archived phase ${PHASE} state → $ARCH (roster.json, execution.jsonl, checkpoints/, agent dirs)"
    ```
 
 3. **Remove gate pass:**
