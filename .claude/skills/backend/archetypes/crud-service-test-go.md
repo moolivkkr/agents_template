@@ -13,6 +13,8 @@ tags:
 
 # CRUD Service Test Archetype
 
+> Go samples compile-checked and run 2026-09-30 with Go 1.27.1, testify v1.12.1, OpenTelemetry v1.46.0 (metric/noop), against the service, error and auth archetypes (tests/archetype-compile/go/run.sh).
+
 Complete unit test template for the service layer. Every generated service test file MUST follow this pattern.
 
 ## Test File Location
@@ -134,11 +136,11 @@ package widget
 
 import (
     "context"
-    "encoding/json"
     "time"
 
     "github.com/google/uuid"
     "github.com/stretchr/testify/mock"
+    "go.opentelemetry.io/otel/metric/noop"
     "yourapp/internal/domain"
 )
 
@@ -217,22 +219,20 @@ func (m *mockAuditWriter) Write(ctx context.Context, entry domain.AuditEntry) er
 }
 
 // --- Metrics Stub ---
-// For unit tests, use noop counters/histograms from OTel SDK's noop package.
-// import "go.opentelemetry.io/otel/metric/noop"
-//
-// func noopMetrics() Metrics {
-//     mp := noop.NewMeterProvider()
-//     meter := mp.Meter("test")
-//     opCount, _ := meter.Int64Counter("op_count")
-//     opLatency, _ := meter.Float64Histogram("op_latency")
-//     errCount, _ := meter.Int64Counter("err_count")
-//     cacheHits, _ := meter.Int64Counter("cache_hits")
-//     cacheMiss, _ := meter.Int64Counter("cache_miss")
-//     return Metrics{
-//         OpCount: opCount, OpLatency: opLatency,
-//         ErrCount: errCount, CacheHits: cacheHits, CacheMiss: cacheMiss,
-//     }
-// }
+// For unit tests, use the no-op instruments from OTel's metric/noop package.
+
+func noopMetrics() Metrics {
+    meter := noop.NewMeterProvider().Meter("test")
+    opCount, _ := meter.Int64Counter("op_count")
+    opLatency, _ := meter.Float64Histogram("op_latency")
+    errCount, _ := meter.Int64Counter("err_count")
+    cacheHits, _ := meter.Int64Counter("cache_hits")
+    cacheMiss, _ := meter.Int64Counter("cache_miss")
+    return Metrics{
+        OpCount: opCount, OpLatency: opLatency,
+        ErrCount: errCount, CacheHits: cacheHits, CacheMiss: cacheMiss,
+    }
+}
 ```
 
 ## Approach A: testify/suite (Setup/Teardown)
@@ -250,7 +250,6 @@ import (
     "log/slog"
     "os"
     "testing"
-    "time"
 
     "github.com/google/uuid"
     "github.com/stretchr/testify/assert"
@@ -258,7 +257,7 @@ import (
     "github.com/stretchr/testify/require"
     "github.com/stretchr/testify/suite"
 
-    "yourapp/internal/domain"
+    "yourapp/internal/apperr"
 )
 
 type ServiceSuite struct {
@@ -285,7 +284,7 @@ func (s *ServiceSuite) SetupTest() {
     s.auditWriter = new(mockAuditWriter)
 
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    s.svc = NewService(s.repo, s.cache, logger, noopMetrics())
+    s.svc = NewService(s.repo, s.cache, s.auditWriter, logger, noopMetrics())
 
     s.tenantID = uuid.New()
     s.userID = uuid.New()
@@ -377,7 +376,7 @@ func (s *ServiceSuite) TestGet_NotFound() {
 
     s.cache.On("Get", mock.Anything, cacheKey).Return(nil, errors.New("miss"))
     s.repo.On("GetByID", mock.Anything, s.tenantID, id).
-        Return(nil, NewNotFoundError("Widget"))
+        Return(nil, apperr.NewNotFoundError("Widget"))
 
     result, err := s.svc.Get(s.ctx, id)
 
@@ -438,7 +437,7 @@ func (s *ServiceSuite) TestDelete_NotFound() {
     id := uuid.New()
 
     s.repo.On("SoftDelete", mock.Anything, s.tenantID, id).
-        Return(NewNotFoundError("Widget"))
+        Return(apperr.NewNotFoundError("Widget"))
 
     err := s.svc.Delete(s.ctx, id)
 
@@ -538,7 +537,7 @@ func TestCreate_TableDriven(t *testing.T) {
             cache := new(mockCache)
             audit := new(mockAuditWriter)
             logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-            svc := NewService(repo, cache, logger, noopMetrics())
+            svc := NewService(repo, cache, audit, logger, noopMetrics())
 
             tenantID := uuid.New()
             userID := uuid.New()
@@ -629,7 +628,7 @@ func TestList_TableDriven(t *testing.T) {
             repo := new(mockRepository)
             cache := new(mockCache)
             logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-            svc := NewService(repo, cache, logger, noopMetrics())
+            svc := NewService(repo, cache, new(mockAuditWriter), logger, noopMetrics())
 
             ctx := contextWithTenant(context.Background(), tenantID, uuid.New())
 
@@ -659,7 +658,7 @@ func TestCreate_MissingTenantContext_ReturnsUnauthorized(t *testing.T) {
     repo := new(mockRepository)
     cache := new(mockCache)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    svc := NewService(repo, cache, logger, noopMetrics())
+    svc := NewService(repo, cache, new(mockAuditWriter), logger, noopMetrics())
 
     // context.Background() has no tenant — should fail
     input := makeCreateInput(t)
@@ -676,7 +675,7 @@ func TestGet_WrongTenant_ReturnsNotFound(t *testing.T) {
     repo := new(mockRepository)
     cache := new(mockCache)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    svc := NewService(repo, cache, logger, noopMetrics())
+    svc := NewService(repo, cache, new(mockAuditWriter), logger, noopMetrics())
 
     tenantA := uuid.New()
     tenantB := uuid.New()
@@ -688,7 +687,7 @@ func TestGet_WrongTenant_ReturnsNotFound(t *testing.T) {
 
     cache.On("Get", mock.Anything, cacheKey).Return(nil, errors.New("miss"))
     repo.On("GetByID", mock.Anything, tenantB, widgetID).
-        Return(nil, NewNotFoundError("Widget"))
+        Return(nil, apperr.NewNotFoundError("Widget"))
 
     result, err := svc.Get(ctx, widgetID)
 
@@ -705,7 +704,7 @@ func TestCreate_NilInput_ReturnsValidationError(t *testing.T) {
     repo := new(mockRepository)
     cache := new(mockCache)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    svc := NewService(repo, cache, logger, noopMetrics())
+    svc := NewService(repo, cache, new(mockAuditWriter), logger, noopMetrics())
 
     ctx := contextWithTenant(context.Background(), uuid.New(), uuid.New())
 
@@ -722,7 +721,7 @@ func TestGet_ContextCancelled_ReturnsError(t *testing.T) {
     repo := new(mockRepository)
     cache := new(mockCache)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    svc := NewService(repo, cache, logger, noopMetrics())
+    svc := NewService(repo, cache, new(mockAuditWriter), logger, noopMetrics())
 
     tenantID := uuid.New()
     ctx, cancel := context.WithCancel(
@@ -754,9 +753,7 @@ func TestCreate_AuditLogContainsCorrectFields(t *testing.T) {
     cache := new(mockCache)
     audit := new(mockAuditWriter)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-
-    // Inject audit writer into service (constructor may need extending)
-    svc := NewServiceWithAudit(repo, cache, logger, noopMetrics(), audit)
+    svc := NewService(repo, cache, audit, logger, noopMetrics())
 
     tenantID := uuid.New()
     userID := uuid.New()
@@ -784,7 +781,7 @@ func TestUpdate_AuditLogRecordsChanges(t *testing.T) {
     cache := new(mockCache)
     audit := new(mockAuditWriter)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    svc := NewServiceWithAudit(repo, cache, logger, noopMetrics(), audit)
+    svc := NewService(repo, cache, audit, logger, noopMetrics())
 
     tenantID := uuid.New()
     userID := uuid.New()
@@ -814,7 +811,7 @@ func TestDelete_AuditLogRecordsDeletion(t *testing.T) {
     cache := new(mockCache)
     audit := new(mockAuditWriter)
     logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-    svc := NewServiceWithAudit(repo, cache, logger, noopMetrics(), audit)
+    svc := NewService(repo, cache, audit, logger, noopMetrics())
 
     tenantID := uuid.New()
     userID := uuid.New()
@@ -845,40 +842,49 @@ import (
 
     "github.com/google/uuid"
     "github.com/stretchr/testify/assert"
+
+    "yourapp/internal/apperr"
+    "yourapp/internal/middleware"
 )
 
-// contextWithTenant builds a context with tenant and user IDs injected.
+// contextWithTenant builds the context the auth middleware produces after verifying a token.
+// The context keys are private to the middleware package, so go through its setter.
 func contextWithTenant(parent context.Context, tenantID, userID uuid.UUID) context.Context {
-    ctx := context.WithValue(parent, ctxKeyTenantID, tenantID)
-    return context.WithValue(ctx, ctxKeyUserID, userID)
+    return middleware.WithIdentity(parent, tenantID, userID)
 }
 
-// assertIsValidationError asserts the error is a ValidationError.
+// assertAppErrorCode asserts err wraps an *apperr.AppError with the given code (the envelope's
+// error.code). Every domain error is an *apperr.AppError; there are no per-kind error types.
+func assertAppErrorCode(t *testing.T, err error, code string) {
+    t.Helper()
+    var appErr *apperr.AppError
+    if assert.ErrorAs(t, err, &appErr, "expected *apperr.AppError, got %T: %v", err, err) {
+        assert.Equal(t, code, appErr.Code)
+    }
+}
+
+// assertIsValidationError asserts a 400 VALIDATION_FAILED.
 func assertIsValidationError(t *testing.T, err error) {
     t.Helper()
-    var ve *ValidationError
-    assert.ErrorAs(t, err, &ve, "expected ValidationError, got %T: %v", err, err)
+    assertAppErrorCode(t, err, "VALIDATION_FAILED")
 }
 
-// assertIsConflictError asserts the error is a ConflictError.
+// assertIsConflictError asserts a 409 CONFLICT.
 func assertIsConflictError(t *testing.T, err error) {
     t.Helper()
-    var ce *ConflictError
-    assert.ErrorAs(t, err, &ce, "expected ConflictError, got %T: %v", err, err)
+    assertAppErrorCode(t, err, "CONFLICT")
 }
 
-// assertIsUnauthorizedError asserts the error is an UnauthorizedError.
+// assertIsUnauthorizedError asserts a 401 UNAUTHENTICATED.
 func assertIsUnauthorizedError(t *testing.T, err error) {
     t.Helper()
-    var ue *UnauthorizedError
-    assert.ErrorAs(t, err, &ue, "expected UnauthorizedError, got %T: %v", err, err)
+    assertAppErrorCode(t, err, "UNAUTHENTICATED")
 }
 
-// assertIsNotFoundError asserts the error is a NotFoundError.
+// assertIsNotFoundError asserts a 404 NOT_FOUND.
 func assertIsNotFoundError(t *testing.T, err error) {
     t.Helper()
-    var nfe *NotFoundError
-    assert.ErrorAs(t, err, &nfe, "expected NotFoundError, got %T: %v", err, err)
+    assertAppErrorCode(t, err, "NOT_FOUND")
 }
 ```
 
@@ -895,4 +901,5 @@ func assertIsNotFoundError(t *testing.T, err error) {
 - Context cancellation and missing-tenant scenarios MUST be covered
 - Use `require.NoError` for preconditions, `assert.Error`/`assert.NoError` for assertions
 - Use `mock.MatchedBy(func)` for complex argument matching instead of `mock.Anything`
-- Version conflict test: set existing.Version = 3, input.Version = 1 — assert ConflictError
+- Version conflict test: set existing.Version = 3, input.Version = 1 — assert a CONFLICT `*apperr.AppError`
+- Assert domain errors by `*apperr.AppError` code (`assertAppErrorCode`), never by message text

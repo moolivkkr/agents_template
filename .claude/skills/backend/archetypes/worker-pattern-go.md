@@ -14,6 +14,8 @@ tags:
 
 # Worker / Background Job Pattern — Go
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, x/sync v0.23.0, OpenTelemetry v1.46.0 (tests/archetype-compile/go/run.sh). Not run.
+
 > **Canonical reference**: This is the Go counterpart to `worker-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Go workers leverage goroutines, channels, and `context.Context` for cancellation. Use `errgroup` for coordinating multiple concurrent consumers.
@@ -268,6 +270,9 @@ func (w *Worker) processJob(ctx context.Context, logger *slog.Logger, job *domai
 func exponentialBackoff(attempt int) time.Duration {
     base := time.Second
     maxDelay := 5 * time.Minute
+    if attempt < 1 {
+        attempt = 1 // attempt 0 would give a zero delay, and rand.Int63n(0) panics
+    }
 
     delay := base * time.Duration(math.Pow(2, float64(attempt-1)))
     if delay > maxDelay {
@@ -289,6 +294,8 @@ import (
     "context"
     "log/slog"
     "time"
+
+    "golang.org/x/sync/errgroup"
 )
 
 // LockStore provides distributed locking for leader election.

@@ -12,6 +12,8 @@ tags:
 
 # Error Handling Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testify v1.12.1; the tests in Testing Error Types were run (tests/archetype-compile/go/run.sh).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for backend error handling patterns.
 > The wire shape it produces is the error envelope in `~/.claude/skills/api/response-envelope.md`
 > (`{"error": {code, message, details[], request_id, retryable}}`); if the two ever disagree, the envelope wins. All other skill packs that mention error handling should defer to this file for definitive guidance. For the TypeScript equivalent, see `backend/archetypes/error-handling-typescript.md`.
@@ -228,8 +230,16 @@ type APIError struct {
 ## Error Mapping Middleware
 
 ```go
+// requestID returns the ID the RequestID middleware (auth-middleware-go.md) already set on this
+// response as X-Request-Id. The body repeats it, so the header and error.request_id always match.
+// Reading it from the response keeps apperr free of an import on the middleware package, which
+// itself imports apperr.
+func requestID(w http.ResponseWriter) string {
+    return w.Header().Get("X-Request-Id")
+}
+
 // writeErrorBody is the only function that writes an error response.
-func writeErrorBody(w http.ResponseWriter, r *http.Request, e *AppError) {
+func writeErrorBody(w http.ResponseWriter, e *AppError) {
     w.Header().Set("Content-Type", "application/json; charset=utf-8")
     if e.RetryAfter > 0 {
         w.Header().Set("Retry-After", strconv.Itoa(e.RetryAfter))
@@ -240,7 +250,7 @@ func writeErrorBody(w http.ResponseWriter, r *http.Request, e *AppError) {
     w.WriteHeader(e.HTTPStatus)
     _ = json.NewEncoder(w).Encode(ErrorBody{Error: APIError{
         Code: e.Code, Message: e.Message, Details: e.Details,
-        RequestID: RequestIDFromContext(r.Context()), Retryable: e.Retryable,
+        RequestID: requestID(w), Retryable: e.Retryable,
     }})
 }
 
@@ -256,12 +266,12 @@ func RecoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
                     logger.ErrorContext(r.Context(), "panic recovered",
                         "panic", rec,
                         "stack", string(buf[:n]),
-                        "request_id", RequestIDFromContext(r.Context()),
+                        "request_id", requestID(w),
                         "method", r.Method,
                         "route", r.Pattern, // the route template, not the raw path
                     )
                     // Return a clean 500 — never expose panic details to clients
-                    writeErrorBody(w, r, NewInternalError(nil))
+                    writeErrorBody(w, NewInternalError(nil))
                 }
             }()
             next.ServeHTTP(w, r)
@@ -279,10 +289,10 @@ func ErrorMapper(w http.ResponseWriter, r *http.Request, err error) {
         slog.ErrorContext(r.Context(), "request failed",
             "code", appErr.Code,
             "error", err, // the full chain, server-side only
-            "request_id", RequestIDFromContext(r.Context()),
+            "request_id", requestID(w),
         )
     }
-    writeErrorBody(w, r, appErr)
+    writeErrorBody(w, appErr)
 }
 ```
 
@@ -311,7 +321,7 @@ func ErrorMapper(w http.ResponseWriter, r *http.Request, err error) {
 //
 //    // In repository — this is where we know "no rows" means "not found":
 //    if errors.Is(err, pgx.ErrNoRows) {
-//        return nil, apperr.NewNotFoundError("widget", id.String())
+//        return nil, apperr.NewNotFoundError("Widget")
 //    }
 //    // NOT in the handler — the handler shouldn't know about pgx.
 //
@@ -337,14 +347,16 @@ func ErrorMapper(w http.ResponseWriter, r *http.Request, err error) {
 ## Testing Error Types
 
 ```go
-// Testing helpers — use in unit tests to assert specific error types.
+// Assert an error's type and code, never its message text. Services wrap repository errors
+// ("widget get: %w"), so the assertions must see through the chain. (Service tests with mocks:
+// crud-service-test-go.md.)
 
-func TestServiceReturnsNotFound(t *testing.T) {
-    svc := NewService(mockRepo{getErr: apperr.NewNotFoundError("Widget")}, ...)
-    _, err := svc.Get(ctx, uuid.MustParse("abc"))
+func TestNotFoundSurvivesWrapping(t *testing.T) {
+    err := fmt.Errorf("widget get: %w", apperr.NewNotFoundError("Widget"))
 
-    // Assert using errors.Is with sentinel
+    // Assert using errors.Is with the sentinel (AppError.Is compares codes)
     assert.True(t, errors.Is(err, apperr.ErrNotFound))
+    assert.False(t, errors.Is(err, apperr.ErrConflict))
 
     // Assert using errors.As for detailed inspection
     var appErr *apperr.AppError
@@ -353,14 +365,25 @@ func TestServiceReturnsNotFound(t *testing.T) {
     assert.Equal(t, http.StatusNotFound, appErr.HTTPStatus)
 }
 
-func TestServiceReturnsConflict(t *testing.T) {
-    svc := NewService(mockRepo{updateErr: apperr.NewConflictError("This widget was changed by someone else.")}, ...)
-    _, err := svc.Update(ctx, id, input)
+func TestConflictSurvivesWrapping(t *testing.T) {
+    err := fmt.Errorf("widget update: %w", apperr.NewConflictError("This widget was changed by someone else."))
 
     var appErr *apperr.AppError
     require.True(t, errors.As(err, &appErr))
     assert.Equal(t, "CONFLICT", appErr.Code)
     assert.Equal(t, http.StatusConflict, appErr.HTTPStatus)
+}
+
+func TestErrorMapperHidesUnknownErrors(t *testing.T) {
+    rec := httptest.NewRecorder()
+    rec.Header().Set("X-Request-Id", "req-1") // the RequestID middleware sets this in production
+    req := httptest.NewRequest(http.MethodGet, "/api/v1/widgets", nil)
+
+    apperr.ErrorMapper(rec, req, errors.New("dial tcp 10.0.0.5:5432: connection refused"))
+
+    assert.Equal(t, http.StatusInternalServerError, rec.Code)
+    assert.JSONEq(t, `{"error": {"code": "INTERNAL", "message": "Something went wrong.",
+        "request_id": "req-1", "retryable": false}}`, rec.Body.String())
 }
 ```
 

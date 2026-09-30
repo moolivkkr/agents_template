@@ -13,6 +13,8 @@ tags:
 
 # Migration Pattern Archetype
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-migrate v4.20.1, pgx v5.11.0 (tests/archetype-compile/go/run.sh). The SQL migrations in this file were not executed.
+
 Complete PostgreSQL migration templates. Every generated migration MUST follow this pattern.
 
 ## Naming Convention
@@ -141,7 +143,7 @@ ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 
 -- Policy: tenant can only see/modify their own rows
--- Application sets current_setting('app.current_tenant_id') before each request
+-- The application sets app.current_tenant_id inside each transaction (WithTenantTx, below)
 CREATE POLICY tenant_isolation ON widgets
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
@@ -377,6 +379,8 @@ package main
 import (
     "database/sql"
     "embed"
+    "errors"
+    "fmt"
     "log/slog"
 
     "github.com/golang-migrate/migrate/v4"
@@ -402,8 +406,11 @@ func runMigrations(db *sql.DB, logger *slog.Logger) error {
     if err != nil {
         return fmt.Errorf("migration init: %w", err)
     }
+    // m.Close also closes db (postgres.WithInstance takes it over), so give the migrator a *sql.DB of
+    // its own — the migrate job's — never the application's pool.
+    defer func() { _, _ = m.Close() }()
 
-    if err := m.Up(); err != nil && err != migrate.ErrNoChange {
+    if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
         return fmt.Errorf("migration up: %w", err)
     }
 
@@ -419,23 +426,16 @@ func runMigrations(db *sql.DB, logger *slog.Logger) error {
 ## RLS Application-Level Setup
 
 ```go
-// setTenantContext sets the RLS context variable before each query.
-// Call this at the start of every request handler or repository method.
-func setTenantContext(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID) error {
-    _, err := pool.Exec(ctx,
-        "SELECT set_config('app.current_tenant_id', $1, true)", // true = local to transaction
-        tenantID.String(),
-    )
-    return err
-}
-
-// WithTenantTx wraps a function in a transaction with the tenant context set.
+// WithTenantTx runs fn in a transaction with the RLS tenant set. The setting MUST live in the same
+// transaction as the queries: set_config(..., true) is transaction-local, so issued as a bare
+// pool.Exec it ends with that statement's own implicit transaction — and the next query may run on
+// another pooled connection anyway. Run every tenant-scoped query through here.
 func WithTenantTx(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, fn func(pgx.Tx) error) error {
     tx, err := pool.Begin(ctx)
     if err != nil {
         return fmt.Errorf("begin tx: %w", err)
     }
-    defer tx.Rollback(ctx)
+    defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful Commit
 
     // Set RLS context for this transaction
     if _, err := tx.Exec(ctx,

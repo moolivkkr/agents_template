@@ -1,0 +1,417 @@
+{
+  "_comment": [
+    "Compilation units for the Go archetype samples. See harness.py for the rules.",
+    "files: every archetype with ```go blocks -> the heading above each block, in order. A mismatch in",
+    "count or heading fails the run, so a new or moved block can't be compiled as the wrong code.",
+    "skip: blocks not compiled, each with a reason; a 'comment-only' reason is verified.",
+    "units[].files[].blocks: 'file.md#N' or 'file.md#N-M'. A file whose first block has a package clause",
+    "is used verbatim; a fragment gets 'package' here and its imports from goimports (candidates: 'imports').",
+    "units[].stubs: harness-only files for types the archetypes leave to the project (testdata/stubs)."
+  ],
+  "archetypes_dir": ".claude/skills/backend/archetypes",
+  "files": {
+    "auth-middleware-go.md": [
+      "Context Key Types",
+      "Context Helpers",
+      "Request ID Middleware",
+      "JWT Authentication Middleware",
+      "API Key Authentication (Alternative to JWT)",
+      "RBAC Middleware",
+      "Rate Limiting per Tenant",
+      "CORS Configuration",
+      "Request Logger Enrichment",
+      "Middleware Stack Assembly",
+      "Auth Error Response Helper"
+    ],
+    "crud-handler-go.md": [
+      "Handler Struct and Constructor",
+      "Route Registration",
+      "Response Envelope Types",
+      "Create Handler",
+      "Get Handler",
+      "Update Handler",
+      "Delete Handler",
+      "List Handler with Cursor Pagination and Filters",
+      "Helper Functions",
+      "Input Sanitization Pattern"
+    ],
+    "crud-handler-test-go.md": [
+      "Service Mock",
+      "Test Setup and Helpers",
+      "Create Handler Tests",
+      "Get Handler Tests",
+      "Update Handler Tests",
+      "Delete Handler Tests",
+      "List Handler with Pagination Tests",
+      "Error Mapping Tests",
+      "Auth Tests",
+      "Response Shape Tests"
+    ],
+    "crud-repository-go.md": [
+      "Interface Definition",
+      "Constructor and Pool Configuration",
+      "Create",
+      "GetByID with Multi-Level Cache",
+      "Update with Optimistic Locking",
+      "Soft Delete",
+      "List with Cursor-Based Pagination",
+      "Cursor Encoding / Decoding",
+      "Batch Operations",
+      "Query Builder for Dynamic Filters",
+      "Error Mapping"
+    ],
+    "crud-repository-test-go.md": [
+      "Test Infrastructure — testcontainers + Migrations",
+      "Transaction-Per-Test Isolation",
+      "Test Factory",
+      "CRUD Tests with Real Database",
+      "Pagination Tests",
+      "Tenant Isolation Tests",
+      "Concurrent Access / Optimistic Locking Tests",
+      "Filter Tests",
+      "Error Mapping Tests",
+      "Batch Operation Tests",
+      "Test Error Assertion Helpers",
+      "Cache Integration Tests (Optional)"
+    ],
+    "crud-service-go.md": [
+      "Domain Types",
+      "Interface Definition",
+      "Constructor with Dependency Injection",
+      "Create Implementation",
+      "Get with Cache-Aside Pattern",
+      "Update with Cache Invalidation and Optimistic Locking",
+      "Delete with Cache Invalidation",
+      "List with Filters",
+      "Transaction Support for Multi-Step Operations",
+      "Audit Logging Helper",
+      "Input Validation Pattern"
+    ],
+    "crud-service-test-go.md": [
+      "Test Factory Pattern",
+      "Mock Definitions",
+      "Approach A: testify/suite (Setup/Teardown)",
+      "Approach B: Table-Driven Tests",
+      "Edge Case and Isolation Tests",
+      "Audit Logging Verification",
+      "Test Helpers"
+    ],
+    "dockerfile-go.md": ["Version Metadata Injection", "Health Check Endpoint (Go Implementation)"],
+    "error-handling-go.md": [
+      "Domain Error Type",
+      "Error Taxonomy — Constructor Functions",
+      "Sentinel Errors for Common Cases",
+      "HTTP Error Response Format",
+      "Error Mapping Middleware",
+      "Error Wrapping Guidelines",
+      "Testing Error Types"
+    ],
+    "grpc-pattern-go.md": [
+      "Server Implementation",
+      "Server Streaming",
+      "Client Streaming",
+      "Interceptors",
+      "Error Mapping",
+      "Server Startup",
+      "Proto-to-Domain Conversion"
+    ],
+    "migration-pattern-go.md": ["Go Migration Runner Integration", "RLS Application-Level Setup"],
+    "observability-go.md": [
+      "1.1 TracerProvider Setup (main.go)",
+      "1.2 Span Creation in Handlers, Services, Repositories",
+      "1.4 HTTP Middleware — otelhttp (Automatic Span Creation)",
+      "1.5 Database Span Instrumentation (otelsql)",
+      "1.6 Redis Span Instrumentation",
+      "1.7 Error Recording on Spans",
+      "1.8 Context Propagation — Full Picture",
+      "2.1 MeterProvider Setup (main.go)",
+      "2.2 HTTP Server Metrics — Duration Histogram and Active Requests",
+      "2.3 Histogram — DB Query Duration",
+      "2.4 Gauge — Active Connections, Goroutines, Queue Depth",
+      "2.5 Custom Business Metrics",
+      "3.1 slog Setup with JSON Handler",
+      "3.2 Log Correlation with trace_id and span_id",
+      "3.3 Request-Scoped Logger (via Context)",
+      "3.4 Log Level Strategy",
+      "3.5 Sensitive Data Masking",
+      "4.2 Correlation Context Middleware Stack",
+      "4.3 W3C TraceContext Propagation to Downstream Services",
+      "4.4 Log-to-Trace Linking",
+      "4.4 Log-to-Trace Linking",
+      "5. Full Initialization (main.go)"
+    ],
+    "performance-go.md": [
+      "1.1 database/sql Pool Settings",
+      "1.2 pgx Pool Configuration (Direct)",
+      "1.3 Redis Pool (go-redis)",
+      "1.4 HTTP Client with Connection Reuse",
+      "2.1 sync.Pool for Hot-Path Allocations",
+      "2.2 Avoid Allocations in Tight Loops",
+      "2.3 Pointer vs Value Receivers — When It Matters",
+      "2.4 Escape Analysis Awareness",
+      "3.1 GOMAXPROCS Tuning for Containers",
+      "3.2 Worker Pool Pattern",
+      "3.3 Channel Buffer Sizing",
+      "3.4 Mutex Contention Reduction",
+      "4.1 pprof Setup",
+      "4.6 Benchmark Tests",
+      "5.1 Avoid Reflection in Hot Paths",
+      "5.2 Cache Compiled Regexps",
+      "5.3 sync.Map vs Sharded Map vs Regular Map",
+      "5.4 Binary Search vs Map Lookup",
+      "5.5 JSON Encoding — Faster Alternatives",
+      "6.1 Prepared Statements",
+      "6.2 Batch Inserts (COPY Protocol via pgx)",
+      "6.3 Read Replicas",
+      "6.4 Query Result Caching Strategy",
+      "6.5 N+1 Query Detection"
+    ],
+    "websocket-pattern-go.md": [
+      "Connection and Hub Types",
+      "Hub Run Loop",
+      "HTTP Upgrade Handler with Authentication",
+      "Read and Write Pumps",
+      "Message Handling (Subscribe, Unsubscribe, Message)",
+      "Helper Methods",
+      "Route Registration"
+    ],
+    "worker-pattern-go.md": [
+      "Worker Struct and Constructor",
+      "Main Run Loop with Graceful Shutdown",
+      "Job Processing with Timeout and Idempotency",
+      "Exponential Backoff with Jitter",
+      "Cron / Scheduled Job with Leader Election",
+      "Health Check Endpoint",
+      "Main Entrypoint with Signal Handling",
+      "Example: Email Send Handler"
+    ]
+  },
+  "skip": {
+    "observability-go.md#20": "comment-only: example log line for log-to-trace linking",
+    "observability-go.md#21": "comment-only: note on Prometheus exemplars",
+    "performance-go.md#11": "comment-only: channel buffer sizing guidance",
+    "performance-go.md#17": "comment-only: sync.Map vs sharded map decision matrix",
+    "performance-go.md#19": "comment-only: JSON library comparison"
+  },
+  "units": [
+    {
+      "name": "crud-http",
+      "doc": "errors + domain + auth middleware + widget service + handler, with the service and handler unit tests (mocks, no DB) — compiled together and run, so cross-file references resolve against the real blocks, not stubs",
+      "imports": [
+        "github.com/google/uuid",
+        "go.opentelemetry.io/otel/attribute",
+        "go.opentelemetry.io/otel/metric",
+        "yourapp/internal/apperr",
+        "yourapp/internal/domain",
+        "yourapp/internal/middleware",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/mock",
+        "github.com/stretchr/testify/require"
+      ],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/apperr/apperr_test.go", "blocks": ["error-handling-go.md#7"], "package": "apperr_test"},
+        {"path": "internal/domain/domain.go", "blocks": ["crud-service-go.md#1"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/widget/ports.go", "blocks": ["crud-service-go.md#2"]},
+        {"path": "internal/widget/service.go", "blocks": ["crud-service-go.md#3"]},
+        {"path": "internal/widget/service_create.go", "blocks": ["crud-service-go.md#4"], "package": "widget"},
+        {"path": "internal/widget/service_get.go", "blocks": ["crud-service-go.md#5"], "package": "widget"},
+        {"path": "internal/widget/service_update.go", "blocks": ["crud-service-go.md#6"], "package": "widget"},
+        {"path": "internal/widget/service_delete.go", "blocks": ["crud-service-go.md#7"], "package": "widget"},
+        {"path": "internal/widget/service_list.go", "blocks": ["crud-service-go.md#8"], "package": "widget"},
+        {"path": "internal/widget/service_tx.go", "blocks": ["crud-service-go.md#9"], "package": "widget"},
+        {"path": "internal/widget/service_audit.go", "blocks": ["crud-service-go.md#10"], "package": "widget"},
+        {"path": "internal/widget/input.go", "blocks": ["crud-service-go.md#11"], "package": "widget"},
+        {"path": "internal/widget/handler.go", "blocks": ["crud-handler-go.md#1-9"]},
+        {"path": "internal/widget/sanitize.go", "blocks": ["crud-handler-go.md#10"], "package": "widget"},
+        {"path": "internal/widget/factory_test.go", "blocks": ["crud-service-test-go.md#1"]},
+        {"path": "internal/widget/mocks_test.go", "blocks": ["crud-service-test-go.md#2"]},
+        {"path": "internal/widget/suite_test.go", "blocks": ["crud-service-test-go.md#3"]},
+        {"path": "internal/widget/table_test.go", "blocks": ["crud-service-test-go.md#4"]},
+        {"path": "internal/widget/edge_test.go", "blocks": ["crud-service-test-go.md#5"], "package": "widget"},
+        {"path": "internal/widget/audit_test.go", "blocks": ["crud-service-test-go.md#6"], "package": "widget"},
+        {"path": "internal/widget/helpers_test.go", "blocks": ["crud-service-test-go.md#7"]},
+        {"path": "internal/widget/mock_service_test.go", "blocks": ["crud-handler-test-go.md#1"]},
+        {"path": "internal/widget/handler_test.go", "blocks": ["crud-handler-test-go.md#2-10"]}
+      ],
+      "stubs": {
+        "internal/widget/stub_entity.go": "testdata/stubs/widget_entity.go",
+        "internal/widget/stub_inputs.go": "testdata/stubs/widget_inputs.go",
+        "internal/middleware/smoke_test.go": "testdata/stubs/auth_smoke_test.go"
+      },
+      "tests": true,
+      "run_tests": ["./internal/..."]
+    },
+    {
+      "name": "crud-postgres",
+      "doc": "pgx repository + its testcontainers integration tests (compiled and linked; they need Docker to run — set ARCHETYPE_DB_TESTS=1)",
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/domain/domain.go", "blocks": ["crud-service-go.md#1"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/widget/repository.go", "blocks": ["crud-repository-go.md#1"]},
+        {"path": "internal/postgres/repository.go", "blocks": ["crud-repository-go.md#2-11"]},
+        {"path": "internal/postgres/repository_test.go", "blocks": ["crud-repository-test-go.md#1-12"]}
+      ],
+      "stubs": {
+        "internal/widget/stub_entity.go": "testdata/stubs/widget_entity.go",
+        "internal/postgres/stub_redis_test.go": "testdata/stubs/postgres_redis_test.go"
+      },
+      "tests": true,
+      "db_tests": ["./internal/postgres/..."]
+    },
+    {
+      "name": "grpc",
+      "doc": "gRPC server, interceptors and startup against code protoc generates from grpc-pattern.md's protos",
+      "protoc": {
+        "md": ".claude/skills/backend/archetypes/grpc-pattern.md",
+        "blocks": [1, 2, 3],
+        "out": "gen/proto"
+      },
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/domain/domain.go", "blocks": ["crud-service-go.md#1"]},
+        {"path": "internal/widget/server.go", "blocks": ["grpc-pattern-go.md#1-3", "grpc-pattern-go.md#5", "grpc-pattern-go.md#7"]},
+        {"path": "internal/interceptor/interceptor.go", "blocks": ["grpc-pattern-go.md#4"]},
+        {"path": "cmd/server/main.go", "blocks": ["grpc-pattern-go.md#6"]}
+      ],
+      "stubs": {
+        "internal/domain/stub_grpc.go": "testdata/stubs/domain_grpc.go",
+        "cmd/server/stub_wiring.go": "testdata/stubs/grpc_wiring.go"
+      }
+    },
+    {
+      "name": "migration",
+      "doc": "golang-migrate runner (with an embedded migrations dir) and the RLS transaction helper",
+      "files": [
+        {"path": "cmd/migrate/runner.go", "blocks": ["migration-pattern-go.md#1"]},
+        {"path": "cmd/migrate/rls.go", "blocks": ["migration-pattern-go.md#2"], "package": "main", "imports": ["github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgxpool", "github.com/google/uuid"]}
+      ],
+      "stubs": {
+        "cmd/migrate/stub_main.go": "testdata/stubs/main_stub.go",
+        "cmd/migrate/migrations/20260115100000_create_widgets_table.up.sql": "testdata/fixtures/create_widgets.up.sql"
+      }
+    },
+    {
+      "name": "dockerfile",
+      "doc": "build-metadata main and the health handler from the Dockerfile archetype",
+      "files": [
+        {"path": "cmd/server/main.go", "blocks": ["dockerfile-go.md#1"]},
+        {"path": "internal/handler/health.go", "blocks": ["dockerfile-go.md#2"]}
+      ]
+    },
+    {
+      "name": "observability",
+      "doc": "every observability package (tracing, metrics, logging, correlation) plus the main that wires them",
+      "imports": [
+        "go.opentelemetry.io/otel/attribute",
+        "go.opentelemetry.io/otel/codes",
+        "go.opentelemetry.io/otel/metric",
+        "go.opentelemetry.io/otel/trace",
+        "github.com/google/uuid"
+      ],
+      "files": [
+        {"path": "cmd/server/tracing.go", "blocks": ["observability-go.md#1"]},
+        {"path": "cmd/server/metrics.go", "blocks": ["observability-go.md#8"]},
+        {"path": "cmd/server/main.go", "blocks": ["observability-go.md#22"]},
+        {"path": "internal/order/order.go", "blocks": ["observability-go.md#2"]},
+        {"path": "internal/order/process.go", "blocks": ["observability-go.md#6"], "package": "order"},
+        {"path": "internal/server/server.go", "blocks": ["observability-go.md#3"]},
+        {"path": "internal/database/database.go", "blocks": ["observability-go.md#4"]},
+        {"path": "internal/cache/cache.go", "blocks": ["observability-go.md#5"]},
+        {"path": "internal/middleware/context.go", "blocks": ["observability-go.md#7"], "package": "middleware"},
+        {"path": "internal/middleware/metrics.go", "blocks": ["observability-go.md#9"]},
+        {"path": "internal/middleware/logger.go", "blocks": ["observability-go.md#15"]},
+        {"path": "internal/middleware/chain.go", "blocks": ["observability-go.md#18"], "package": "middleware"},
+        {"path": "internal/repository/metrics.go", "blocks": ["observability-go.md#10"]},
+        {"path": "internal/observability/runtime.go", "blocks": ["observability-go.md#11"]},
+        {"path": "internal/service/business.go", "blocks": ["observability-go.md#12"]},
+        {"path": "internal/logging/logger.go", "blocks": ["observability-go.md#13"]},
+        {"path": "internal/logging/tracing_handler.go", "blocks": ["observability-go.md#14"]},
+        {"path": "internal/logging/level.go", "blocks": ["observability-go.md#16"], "package": "logging"},
+        {"path": "internal/logging/mask.go", "blocks": ["observability-go.md#17"], "package": "logging"},
+        {"path": "internal/httpclient/client.go", "blocks": ["observability-go.md#19"]}
+      ],
+      "stubs": {
+        "internal/order/stub_order.go": "testdata/stubs/obs_order.go",
+        "internal/service/stub_order.go": "testdata/stubs/obs_service.go",
+        "internal/middleware/stub_auth.go": "testdata/stubs/obs_auth.go",
+        "cmd/server/smoke_test.go": "testdata/stubs/obs_smoke_test.go"
+      },
+      "tests": true,
+      "run_tests": ["./cmd/server/"]
+    },
+    {
+      "name": "performance",
+      "doc": "pools, memory, concurrency, profiling, hot-path and database performance samples",
+      "imports": [
+        "go.opentelemetry.io/otel/attribute",
+        "go.opentelemetry.io/otel/codes",
+        "go.opentelemetry.io/otel/trace",
+        "github.com/jackc/pgx/v5",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "github.com/shopspring/decimal"
+      ],
+      "files": [
+        {"path": "internal/database/sqldb.go", "blocks": ["performance-go.md#1"]},
+        {"path": "internal/database/pgxpool.go", "blocks": ["performance-go.md#2"]},
+        {"path": "internal/database/replicas.go", "blocks": ["performance-go.md#22"]},
+        {"path": "internal/cache/redis.go", "blocks": ["performance-go.md#3"]},
+        {"path": "internal/cache/contention.go", "blocks": ["performance-go.md#12"]},
+        {"path": "internal/cache/cached_repo.go", "blocks": ["performance-go.md#23"]},
+        {"path": "internal/httpclient/client.go", "blocks": ["performance-go.md#4"]},
+        {"path": "internal/encoding/encoding.go", "blocks": ["performance-go.md#5"]},
+        {"path": "internal/encoding/encoding_test.go", "blocks": ["performance-go.md#14"]},
+        {"path": "internal/worker/pool.go", "blocks": ["performance-go.md#10"]},
+        {"path": "internal/validation/email.go", "blocks": ["performance-go.md#16"]},
+        {"path": "internal/lookup/lookup.go", "blocks": ["performance-go.md#18"]},
+        {"path": "internal/repository/copy.go", "blocks": ["performance-go.md#21"]},
+        {"path": "cmd/server/gomaxprocs.go", "blocks": ["performance-go.md#9"]},
+        {"path": "cmd/server/pprof.go", "blocks": ["performance-go.md#13"]},
+        {"path": "internal/perf/allocs.go", "blocks": ["performance-go.md#6"], "package": "perf"},
+        {"path": "internal/perf/receivers.go", "blocks": ["performance-go.md#7"], "package": "perf"},
+        {"path": "internal/perf/escape.go", "blocks": ["performance-go.md#8"], "package": "perf"},
+        {"path": "internal/perf/reflection.go", "blocks": ["performance-go.md#15"], "package": "perf"},
+        {"path": "internal/perf/prepared.go", "blocks": ["performance-go.md#20"], "package": "perf"},
+        {"path": "internal/perf/nplusone.go", "blocks": ["performance-go.md#24"], "package": "perf"}
+      ],
+      "stubs": {
+        "cmd/server/stub_main.go": "testdata/stubs/main_stub.go",
+        "internal/repository/stub_order.go": "testdata/stubs/perf_repository.go",
+        "internal/perf/stub_types.go": "testdata/stubs/perf_types.go"
+      },
+      "tests": true,
+      "bench_once": ["./internal/encoding/"]
+    },
+    {
+      "name": "websocket",
+      "doc": "hub, upgrade handler, pumps and message handling on github.com/coder/websocket",
+      "files": [
+        {"path": "internal/ws/hub.go", "blocks": ["websocket-pattern-go.md#1-6"]},
+        {"path": "internal/ws/routes.go", "blocks": ["websocket-pattern-go.md#7"], "package": "ws", "imports": ["github.com/go-chi/chi/v5"]}
+      ],
+      "stubs": {
+        "internal/ws/stub_auth.go": "testdata/stubs/ws_auth.go",
+        "internal/ws/smoke_test.go": "testdata/stubs/ws_smoke_test.go"
+      },
+      "tests": true,
+      "run_tests": ["./internal/ws/"]
+    },
+    {
+      "name": "worker",
+      "doc": "queue worker, cron scheduler and worker main",
+      "files": [
+        {"path": "internal/domain/domain.go", "blocks": ["crud-service-go.md#1"]},
+        {"path": "internal/worker/worker.go", "blocks": ["worker-pattern-go.md#1-4", "worker-pattern-go.md#6"]},
+        {"path": "internal/cron/cron.go", "blocks": ["worker-pattern-go.md#5"]},
+        {"path": "cmd/worker/main.go", "blocks": ["worker-pattern-go.md#7"]},
+        {"path": "cmd/worker/email.go", "blocks": ["worker-pattern-go.md#8"], "package": "main", "imports": ["yourapp/internal/domain"]}
+      ],
+      "stubs": {
+        "internal/domain/stub_job.go": "testdata/stubs/domain_job.go",
+        "cmd/worker/stub_wiring.go": "testdata/stubs/worker_wiring.go"
+      }
+    }
+  ]
+}

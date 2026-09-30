@@ -15,6 +15,8 @@ tags:
 
 # CRUD Repository Test Archetype
 
+> Go samples compile-checked 2026-09-30 with Go 1.27.1, pgx v5.11.0, testcontainers-go v0.44.0, testify v1.12.1, and run once against postgres:16-alpine (26 tests passed) (tests/archetype-compile/go/run.sh); run.sh only compiles them unless ARCHETYPE_DB_TESTS=1 (needs Docker).
+
 Complete integration test template for the repository layer using a real PostgreSQL database. Every generated repository test MUST follow this pattern.
 
 ## Test File Location
@@ -34,8 +36,10 @@ package postgres
 
 import (
     "context"
+    "errors"
     "fmt"
     "log"
+    "log/slog"
     "os"
     "testing"
     "time"
@@ -48,6 +52,7 @@ import (
     "github.com/testcontainers/testcontainers-go/modules/postgres"
     "github.com/testcontainers/testcontainers-go/wait"
 
+    "yourapp/internal/apperr"
     "yourapp/internal/domain"
     "yourapp/internal/widget"
 )
@@ -125,11 +130,11 @@ func runMigrations(ctx context.Context, pool *pgxpool.Pool) error {
             deleted_at TIMESTAMPTZ,
             created_by UUID NOT NULL,
             updated_by UUID NOT NULL,
-            version    INT NOT NULL DEFAULT 1,
-
-            CONSTRAINT uq_widgets_tenant_name UNIQUE (tenant_id, name) WHERE deleted_at IS NULL
+            version    INT NOT NULL DEFAULT 1
         );
 
+        -- A partial unique rule is an index: a table-level UNIQUE constraint can't have a WHERE clause.
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_widgets_tenant_name ON widgets(tenant_id, name) WHERE deleted_at IS NULL;
         CREATE INDEX IF NOT EXISTS idx_widgets_tenant_id ON widgets(tenant_id) WHERE deleted_at IS NULL;
         CREATE INDEX IF NOT EXISTS idx_widgets_tenant_created ON widgets(tenant_id, created_at DESC) WHERE deleted_at IS NULL;
         CREATE INDEX IF NOT EXISTS idx_widgets_tenant_status ON widgets(tenant_id, status) WHERE deleted_at IS NULL;
@@ -163,9 +168,9 @@ func testTx(t *testing.T) (*pgxpool.Pool, func()) {
     return testPool, cleanup
 }
 
-// Alternative: Savepoint-per-test using pgx transactions (more efficient for large datasets).
-// Uses a wrapper pool that routes all queries through a single transaction.
-// See: https://github.com/jackc/pgx/issues/xxx for pgxpool transaction wrapper patterns.
+// Alternative: transaction-per-test (faster for large datasets): begin a pgx.Tx per test, give the
+// repository an interface both *pgxpool.Pool and pgx.Tx satisfy (Exec/Query/QueryRow/CopyFrom/
+// SendBatch), and roll the Tx back in cleanup.
 ```
 
 ## Test Factory
@@ -838,19 +843,24 @@ func TestBatchUpdate_UpdatesAllWithVersionCheck(t *testing.T) {
 ## Test Error Assertion Helpers
 
 ```go
+// Assert the *apperr.AppError code, never the message text (a case-sensitive "conflict" substring
+// check never matches "CONFLICT: ...").
+func assertAppErrorCode(t *testing.T, err error, code string) {
+    t.Helper()
+    var appErr *apperr.AppError
+    if assert.True(t, errors.As(err, &appErr), "expected *apperr.AppError, got %T: %v", err, err) {
+        assert.Equal(t, code, appErr.Code)
+    }
+}
+
 func assertIsNotFoundError(t *testing.T, err error) {
     t.Helper()
-    assert.Error(t, err)
-    // Check for domain error type — adjust to match your apperr package
-    assert.Contains(t, err.Error(), "not found",
-        "expected NotFoundError, got: %v", err)
+    assertAppErrorCode(t, err, "NOT_FOUND")
 }
 
 func assertIsConflictError(t *testing.T, err error) {
     t.Helper()
-    assert.Error(t, err)
-    assert.Contains(t, err.Error(), "conflict",
-        "expected ConflictError, got: %v", err)
+    assertAppErrorCode(t, err, "CONFLICT")
 }
 ```
 
@@ -867,7 +877,7 @@ func TestCache_GetByID_CacheMissPopulatesL1(t *testing.T) {
 
     // Use in-memory Redis mock or real testcontainers Redis
     redis := newTestRedis(t)
-    repo := NewWidgetRepo(pool, redis, testLogger())
+    repo := NewWidgetRepo(pool, redis, slog.New(slog.DiscardHandler))
 
     w := makeWidget(t)
     seedWidgets(t, ctx, repo, w)
@@ -889,7 +899,7 @@ func TestCache_Update_InvalidatesCache(t *testing.T) {
     ctx := context.Background()
 
     redis := newTestRedis(t)
-    repo := NewWidgetRepo(pool, redis, testLogger())
+    repo := NewWidgetRepo(pool, redis, slog.New(slog.DiscardHandler))
 
     w := makeWidget(t)
     seedWidgets(t, ctx, repo, w)
