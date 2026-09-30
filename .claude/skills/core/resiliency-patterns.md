@@ -712,7 +712,7 @@ import { RateLimiterMemory } from 'rate-limiter-flexible';
 const rateLimiter = new RateLimiterMemory({ points: 100, duration: 60, blockDuration: 0 });
 
 async function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  const key = `${req.auth.tenantId}:${req.route?.path ?? "unmatched"}`; // verified tenant + route template
+  const key = `${req.user.tenantId}:${req.route?.path ?? "unmatched"}`; // verified tenant + route template
   try {
     const result = await rateLimiter.consume(key);
     res.set('X-RateLimit-Limit', '100');

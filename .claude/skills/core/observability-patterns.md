@@ -65,9 +65,9 @@ defer span.End()
 ```
 
 ```typescript
-// req.auth is set by the auth middleware from the verified token
+// req.user is set by the auth middleware from the verified token (auth-middleware-typescript.md)
 function contextLogger(req: Request, _res: Response, next: NextFunction) {
-  req.logger = logger.child({ tenant_id: req.auth?.tenantId ?? "unknown", request_id: req.id, trace_id: getTraceId(req) });
+  req.logger = logger.child({ tenant_id: req.user?.tenantId ?? "unknown", request_id: req.id, trace_id: getTraceId(req) });
   next();
 }
 
