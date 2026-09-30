@@ -16,7 +16,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the FastAPI endpoint driven by two TestClient WebSocket clients; the Channels consumer imported under `django.setup()` but not run on a channel layer. FastAPI 0.142.2, Starlette 1.7.0, channels 4.3.2, Django 6.1.1.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, the ticket + WebSocket flow driven through TestClient and a real uvicorn server with a `websockets` 17.1 client (bad ticket → close 4001, cross-tenant room → FORBIDDEN), the Channels consumer run with WebsocketCommunicator, and RedisTicketStore run on Redis 7 (`run.sh --live`). FastAPI 0.142.2, uvicorn 0.54.0, channels 4.3.2, Django 6.1.1, redis 8.1.0.
 
 Python WebSocket servers use FastAPI's built-in WebSocket support (backed by Starlette/uvicorn) or Django Channels for Django projects.
 
@@ -143,6 +143,88 @@ class ConnectionManager:
 manager = ConnectionManager()
 ```
 
+## Single-Use Connection Tickets
+
+Browsers can't set an `Authorization` header on a WebSocket, and a bearer token in the URL lands in
+proxy and access logs (`websocket-pattern.md` §Authentication on Upgrade). The client instead gets a
+ticket from an authenticated `POST /api/v1/ws-tickets` and connects with `?ticket=`. A ticket lives
+~30 s and works once: redeeming it is an atomic GET+DELETE, so a ticket seen in a log is already useless.
+
+```python
+# app/ws/tickets.py
+
+import json
+import secrets
+from dataclasses import asdict, dataclass
+from typing import Any, Protocol
+
+from fastapi import APIRouter, Depends, Response
+from redis.asyncio import Redis
+from starlette.requests import HTTPConnection
+
+from app.dependencies.auth import CurrentUser, get_current_user  # auth-middleware-python.md
+from app.middleware.request_id import get_request_id
+
+TICKET_TTL_SECONDS = 30
+
+
+@dataclass(frozen=True, slots=True)
+class TicketClaims:
+    """Who the ticket was issued to, copied from the verified token at issue time."""
+
+    user_id: str
+    tenant_id: str
+    roles: tuple[str, ...]
+
+
+class TicketStore(Protocol):
+    async def issue(self, claims: TicketClaims) -> str: ...
+
+    async def redeem(self, ticket: str) -> TicketClaims | None:
+        """The ticket's claims, deleted in the same step; None when unknown, expired or already used."""
+        ...
+
+
+class RedisTicketStore:
+    """Tickets in Redis (shared by every replica: the POST and the upgrade can hit different pods)."""
+
+    def __init__(self, redis: Redis) -> None:
+        self._redis = redis
+
+    async def issue(self, claims: TicketClaims) -> str:
+        ticket = secrets.token_urlsafe(32)
+        await self._redis.set(f"ws-ticket:{ticket}", json.dumps(asdict(claims)), ex=TICKET_TTL_SECONDS)
+        return ticket
+
+    async def redeem(self, ticket: str) -> TicketClaims | None:
+        raw = await self._redis.getdel(f"ws-ticket:{ticket}")  # GETDEL (Redis >= 6.2): atomic, single use
+        if raw is None:
+            return None
+        data = json.loads(raw)
+        return TicketClaims(user_id=data["user_id"], tenant_id=data["tenant_id"], roles=tuple(data["roles"]))
+
+
+def get_ticket_store(conn: HTTPConnection) -> TicketStore:
+    """The store the lifespan created. HTTPConnection: usable from HTTP and WebSocket routes."""
+    return conn.app.state.tickets
+
+
+router = APIRouter(tags=["websocket"])
+
+
+@router.post("/ws-tickets", status_code=201)
+async def issue_ticket(
+    response: Response,
+    user: CurrentUser = Depends(get_current_user),  # the same bearer auth as every API route
+    tickets: TicketStore = Depends(get_ticket_store),
+) -> dict[str, Any]:
+    ticket = await tickets.issue(
+        TicketClaims(user_id=str(user.user_id), tenant_id=str(user.tenant_id), roles=tuple(user.roles))
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return {"data": {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}, "meta": {"request_id": get_request_id()}}
+```
+
 ## FastAPI WebSocket Endpoint
 
 ```python
@@ -151,12 +233,12 @@ manager = ConnectionManager()
 import json
 import uuid
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
+from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 import structlog
 
 from app.ws.handlers import handle_message, send_error
 from app.ws.manager import Connection, manager
-from app.auth.jwt import validate_jwt, JWTError
+from app.ws.tickets import TicketStore, get_ticket_store
 
 logger = structlog.get_logger(__name__)
 router = APIRouter()
@@ -167,33 +249,33 @@ MAX_MESSAGE_SIZE = 65536  # 64KB
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
-    token: str = Query(..., description="JWT bearer token"),
+    ticket: str = Query("", description="single-use ticket from POST /api/v1/ws-tickets"),
+    tickets: TicketStore = Depends(get_ticket_store),
 ) -> None:
-    """WebSocket endpoint with JWT authentication on upgrade."""
+    """WebSocket endpoint authenticated by a single-use ticket — never a bearer token in the URL."""
 
-    # 1. Authenticate
-    try:
-        claims = validate_jwt(token)
-    except JWTError as exc:
-        logger.warning("ws.auth_failed", error=str(exc))
+    # 1. Accept, then authenticate. A close BEFORE accept is a refused handshake (ASGI: HTTP 403), which
+    #    browsers report only as 1006. After accept the client gets close code 4001 and a reason, and
+    #    nothing is read from the socket before the ticket is redeemed.
+    await websocket.accept()
+    claims = await tickets.redeem(ticket) if ticket else None
+    if claims is None:
+        logger.warning("ws.auth_failed")  # never log the ticket
         await websocket.close(code=4001, reason="unauthorized")
         return
 
-    # 2. Accept connection
-    await websocket.accept()
-
-    # 3. Create and register connection
+    # 2. Create and register connection
     conn = Connection(
         id=str(uuid.uuid4()),
         user_id=claims.user_id,
         tenant_id=claims.tenant_id,
-        roles=claims.roles,
+        roles=list(claims.roles),
         websocket=websocket,
     )
     await manager.register(conn)
 
     try:
-        # 4. Message loop
+        # 3. Message loop
         while True:
             raw = await websocket.receive_text()
 
@@ -285,11 +367,13 @@ async def handle_message(conn: Connection, msg: dict[str, Any]) -> None:
 
 
 def can_join_room(conn: Connection, room: str) -> bool:
-    """Check if the connection is authorized to join this room."""
-    # Implement room-level authorization:
-    # e.g., "tenant:{id}" requires matching tenant_id
-    # e.g., "project:{id}" requires project membership
-    return True  # Replace with actual logic
+    """
+    Deny by default. A room is "tenant:<tenant_id>" or "tenant:<tenant_id>:<topic>", and only
+    connections of that tenant may join it (the tenant comes from the redeemed ticket, never from the
+    client). Add finer rules here (project membership, roles) as new room kinds appear.
+    """
+    kind, _, rest = room.partition(":")
+    return kind == "tenant" and rest.split(":", 1)[0] == conn.tenant_id
 
 
 async def send_ack(conn: Connection, ref: str | None) -> None:
@@ -309,33 +393,42 @@ async def send_error(conn: Connection, ref: str | None, code: str, message: str)
 ```python
 # myapp/consumers.py
 
-import json
 import logging
+import re
+from urllib.parse import parse_qs
+
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
-from channels.db import database_sync_to_async
+
+from myapp.tickets import redeem_ticket  # atomic GET+DELETE of a single-use ticket (as app/ws/tickets.py)
 
 logger = logging.getLogger(__name__)
+
+
+def group_name(room: str) -> str:
+    """Channels group names allow only ASCII letters, digits, "-", "_" and "." (max 100)."""
+    return re.sub(r"[^A-Za-z0-9._-]", ".", room)[:100]
 
 
 class NotificationConsumer(AsyncJsonWebsocketConsumer):
     """Django Channels WebSocket consumer for real-time notifications."""
 
     async def connect(self):
-        # Authentication (token from query string)
-        token = self.scope["query_string"].decode().split("token=")[-1]
-        try:
-            self.user = await self.authenticate(token)
-        except Exception:
+        # A single-use ticket from an authenticated POST — never a bearer token in the URL. Accept
+        # first: a close before accept reaches the client as a refused handshake, not code 4001.
+        ticket = parse_qs(self.scope["query_string"].decode()).get("ticket", [""])[0]
+        claims = await redeem_ticket(ticket) if ticket else None
+        await self.accept()
+        if claims is None:
             await self.close(code=4001)
             return
 
-        self.room_group = f"user_{self.user.id}"
+        self.claims = claims
+        self.room_group = group_name(f"user_{claims.user_id}")
 
         # Join user-specific group
         await self.channel_layer.group_add(self.room_group, self.channel_name)
-        await self.accept()
 
-        logger.info("ws.connected", extra={"user_id": str(self.user.id)})
+        logger.info("ws.connected", extra={"user_id": claims.user_id})
 
     async def disconnect(self, code):
         if hasattr(self, "room_group"):
@@ -347,9 +440,12 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
 
         if msg_type == "subscribe":
             room = content.get("payload", {}).get("room")
-            if room and await self.can_join(room):
-                await self.channel_layer.group_add(room, self.channel_name)
+            if room and self.can_join(room):
+                await self.channel_layer.group_add(group_name(room), self.channel_name)
                 await self.send_json({"type": "ack", "ref": content.get("id")})
+            else:
+                await self.send_json({"type": "error", "code": "FORBIDDEN",
+                                      "message": "not authorized for this room", "ref": content.get("id")})
 
     # Handler for messages sent via channel_layer.group_send
     async def notification(self, event):
@@ -359,16 +455,10 @@ class NotificationConsumer(AsyncJsonWebsocketConsumer):
             "timestamp": event["timestamp"],
         })
 
-    @database_sync_to_async
-    def authenticate(self, token):
-        # Validate the JWT (signature, exp, iss, aud) and return the user; raise if invalid.
-        # Until it's written, every connection is refused with 4001 (fails closed).
-        raise NotImplementedError("validate the JWT and load the user")
-
-    @database_sync_to_async
-    def can_join(self, room):
-        # Check room authorization
-        return True
+    def can_join(self, room: str) -> bool:
+        """The same rule as can_join_room in app/ws/handlers.py: only the caller's tenant's rooms."""
+        kind, _, rest = room.partition(":")
+        return kind == "tenant" and rest.split(":", 1)[0] == self.claims.tenant_id
 ```
 
 ```python
@@ -409,31 +499,56 @@ async def heartbeat_loop(interval: float = 30.0) -> None:
 ```python
 # app/main.py
 
+import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from redis.asyncio import Redis
+
+from app.config import settings
+from app.dependencies.auth import JWTConfig, configure_jwt
+from app.errors.handlers import register_exception_handlers
+from app.middleware.request_id import RequestIDMiddleware
 from app.ws.endpoint import router as ws_router
+from app.ws.tickets import RedisTicketStore
+from app.ws.tickets import router as tickets_router
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Startup
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Startup: the ticket store, in the Redis every replica shares (REDIS_URL from the environment)
+    redis = Redis.from_url(os.environ["REDIS_URL"])
+    app.state.tickets = RedisTicketStore(redis)
     yield
     # Shutdown: manager cleanup happens via WebSocketDisconnect handlers
+    await redis.aclose()
 
 
 def create_app() -> FastAPI:
     app = FastAPI(title="WebSocket API", lifespan=lifespan)
-    app.include_router(ws_router)
+    # The ticket endpoint authenticates like every API route (auth-middleware-python.md)
+    configure_jwt(JWTConfig(
+        secret_key=settings.jwt_secret_key,
+        issuer=settings.jwt_issuer,
+        audience=settings.jwt_audience,
+    ))
+    app.add_middleware(RequestIDMiddleware)
+    register_exception_handlers(app)
+    app.include_router(tickets_router, prefix="/api/v1")  # POST /api/v1/ws-tickets
+    app.include_router(ws_router)                         # GET /ws?ticket=...
     return app
 ```
 
 ## Critical Rules
 
-- Use `websocket.close(code=4001)` for auth failures — never silently drop
+- Authenticate the upgrade with a single-use ticket (`POST /api/v1/ws-tickets`, redeemed with an atomic GET+DELETE) — never a bearer token in the URL
+- On an auth failure, `accept()` then `close(code=4001)`: a close before accept is a refused handshake (HTTP 403 under ASGI), which browsers report only as 1006
 - Use `asyncio.Lock` for connection manager state — Python asyncio is single-threaded but needs lock for coroutine safety
 - Always wrap `send_json` in try/except — client may disconnect between check and send
 - Clean up in `finally` block — `unregister` MUST run even on unexpected errors
-- Room authorization in `can_join_room` MUST check tenant isolation
+- Room authorization in `can_join_room` MUST check tenant isolation and deny by default: a room is `tenant:<tenant_id>[:topic]`, joinable only by that tenant's connections
+- Channels group names allow only `[A-Za-z0-9._-]` (max 100): map room names with `group_name()`
 - For Django Channels: use `channel_layer.group_send` for cross-process broadcasting
 - FastAPI WebSocket does not support HTTP middleware — auth must happen in the endpoint
 - Set `MAX_MESSAGE_SIZE` and check `len(raw)` before parsing — prevent memory exhaustion

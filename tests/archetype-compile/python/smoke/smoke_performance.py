@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from app.cache.single_flight import SingleFlight
 from harness_stubs.orders import Order
-from perf.event_loop import hash_password
+from perf.event_loop import hash_password, needs_rehash, verify_password
 from perf.intermediate_lists import get_active_order_ids, get_top_active_ids
 
 calls = 0
@@ -23,8 +23,13 @@ async def main() -> None:
     results = await asyncio.gather(*(sf.do("order:1", slow) for _ in range(20)))
     assert results == [42] * 20 and calls == 1, (results, calls)  # one call for 20 concurrent callers
 
-    digest = await hash_password("pw")
-    assert isinstance(digest, str) and len(digest) == 64, digest
+    # §1.1: argon2id, a fresh salt per hash, verify true only for the right password
+    h1, h2 = await hash_password("correct horse"), await hash_password("correct horse")
+    assert h1.startswith("$argon2id$") and h1 != h2, (h1, h2)  # same password, different salts
+    assert await verify_password(h1, "correct horse") and await verify_password(h2, "correct horse")
+    assert not await verify_password(h1, "wrong horse")
+    assert not await verify_password("not-a-hash", "correct horse")  # corrupt stored value: fails closed
+    assert not needs_rehash(h1)
 
 
 asyncio.run(main())
@@ -44,7 +49,18 @@ from perf.serialization import Order as CachedOrder  # noqa: E402
 packed = CachedOrder().to_cache()
 assert isinstance(packed, bytes) and isinstance(CachedOrder.from_cache(packed), CachedOrder), packed
 
-# §6.3: the Celery task is a real task object (celery-types gives pyright the same view)
+# §6.3: the Celery task is a real task object (celery-types gives pyright the same view), retries a
+# transient failure, and notifies once however often it runs
+import harness_stubs.perf as world  # noqa: E402
 from perf.celery_vs_processes import generate_monthly_report  # noqa: E402
 
 assert callable(generate_monthly_report.delay)
+world.FAIL_UPLOADS[:] = [ConnectionError("s3 blip")]
+run = generate_monthly_report.apply(args=("t1", "2026-09"))
+assert run.successful(), run.traceback
+assert world.UPLOADS == {"reports/t1/2026-09.pdf": b"%PDF"} and not world.FAIL_UPLOADS
+assert generate_monthly_report.apply(args=("t1", "2026-09")).successful()  # delivered twice
+assert world.NOTIFIED == {"monthly-report:t1:2026-09:notified": "t1"}, world.NOTIFIED
+world.FAIL_UPLOADS[:] = [ValueError("corrupt pdf"), ValueError("not reached")]
+assert generate_monthly_report.apply(args=("t2", "2026-09")).failed()
+assert len(world.FAIL_UPLOADS) == 1  # a non-transient error ran once

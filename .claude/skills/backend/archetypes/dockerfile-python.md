@@ -15,7 +15,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to the Go multi-stage Dockerfile pattern. Both produce minimal, secure production images with non-root users, health checks, and deterministic dependencies.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): the one Python block (health endpoint) was imported, type-checked and called through TestClient. The Dockerfile and Compose blocks were not built. FastAPI 0.142.2, SQLAlchemy 2.1.1.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): the Python block (/healthz, /readyz, /api/version) was imported, type-checked and called through TestClient (unreachable database → 503 within the timeout; draining → 503), and `/readyz` was run against PostgreSQL 16 across the migration-pattern-python.md revisions (`run.sh --live`). The Dockerfile and Compose blocks were not built. FastAPI 0.142.2, SQLAlchemy 2.1.1, alembic 1.20.0.
 
 Complete Docker build setup for Python backend services. Every generated Dockerfile MUST follow this pattern.
 
@@ -168,15 +168,20 @@ COPY --from=builder /build/alembic.ini ./
 # Set ownership to non-root user
 RUN chown -R appuser:appgroup /app
 
-# Switch to non-root user
-USER appuser
+# The deployed commit, for GET /api/version (docker build --build-arg GIT_SHA=$(git rev-parse HEAD))
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
+# Switch to the non-root user by NUMBER: Kubernetes' runAsNonRoot rejects a named user
+# (CreateContainerConfigError: image has non-numeric user). No trailing comment on the USER line.
+USER 1001:1001
 
 # Expose the application port
 EXPOSE 8000
 
-# Health check — verify the service is responding
+# Health check — liveness only (/healthz checks nothing external; /readyz is for load balancers)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/healthz || exit 1
 
 # Run with uvicorn — production settings
 CMD ["uvicorn", "app.main:create_app", \
@@ -256,12 +261,16 @@ COPY --from=builder /build/alembic ./alembic
 COPY --from=builder /build/alembic.ini ./
 
 RUN chown -R appuser:appgroup /app
-USER appuser
+
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}
+
+USER 1001:1001
 
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8000/health || exit 1
+    CMD curl -f http://localhost:8000/healthz || exit 1
 
 CMD ["uvicorn", "app.main:create_app", \
      "--factory", \
@@ -273,52 +282,113 @@ CMD ["uvicorn", "app.main:create_app", \
      "--no-access-log"]
 ```
 
-## Health Check Endpoint
+## Health and Version Endpoints (the Runtime Contract)
+
+Three endpoints, plain JSON outside the response envelope (`core/resiliency-patterns.md` §Health Checks,
+`core/implementation-guidelines-template.md` §Runtime contract):
+
+| Endpoint | Answers | Checks |
+|---|---|---|
+| `GET /healthz` | liveness (a failure restarts the pod) | nothing external: a DB outage must not become a restart storm |
+| `GET /readyz` | readiness (a failure takes the pod out of rotation) | draining, the database within 500 ms, and the schema at this release's newest migration; 503 otherwise. Never an optional dependency such as the cache |
+| `GET /api/version` | what is deployed | `{"git_sha", "env"}` from `GIT_SHA` / `APP_ENV`, for smoke checks and deployed-sha preflights |
 
 ```python
 # app/api/health.py
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from alembic.util import CommandError
 from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["health"])
 
-# Module-level reference — set during app startup
+_READY_TIMEOUT_S = 0.5  # well under the probe's timeoutSeconds
+
+# The newest migration this release ships. alembic/ and alembic.ini are in the image (WORKDIR /app).
+_scripts = ScriptDirectory.from_config(Config("alembic.ini"))
+_REQUIRED_REVISION = _scripts.get_current_head()
+
 _session_factory: async_sessionmaker[AsyncSession] | None = None
+_draining = False
 
 
 def configure_health(session_factory: async_sessionmaker[AsyncSession]) -> None:
-    """Set the session factory for health check DB ping."""
+    """Set the session factory readiness pings. Call during application startup."""
     global _session_factory
     _session_factory = session_factory
 
 
-@router.get("/health")
-async def health_check() -> dict:
-    """
-    Liveness + readiness probe.
-    Returns 200 if the service can respond and reach the database.
-    Used by Docker HEALTHCHECK and Kubernetes probes.
-    """
-    db_ok = False
-    if _session_factory is not None:
-        try:
-            async with _session_factory() as session:
-                await session.execute(text("SELECT 1"))
-                db_ok = True
-        except Exception:
-            db_ok = False
+def start_draining() -> None:
+    """Call first on SIGTERM (the lifespan shutdown): /readyz answers 503 while in-flight requests
+    finish, so the load balancer stops routing here before the pools close."""
+    global _draining
+    _draining = True
 
-    status = "healthy" if db_ok else "degraded"
-    return {
-        "status": status,
-        "checks": {
-            "database": "ok" if db_ok else "unreachable",
-        },
-    }
+
+def _plain(status: int, body: dict[str, str]) -> JSONResponse:
+    return JSONResponse(body, status_code=status, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/healthz")
+async def healthz() -> JSONResponse:
+    """Liveness: the process answers. Nothing external is checked."""
+    return _plain(200, {"status": "alive"})
+
+
+@router.get("/readyz")
+async def readyz() -> JSONResponse:
+    """Readiness: hard dependencies only. The reason for a 503 goes to the log, never the body."""
+    if _draining:
+        return _plain(503, {"status": "draining"})
+    if _session_factory is None:
+        return _plain(503, {"status": "starting"})
+    try:
+        revision = await asyncio.wait_for(_db_revision(_session_factory), _READY_TIMEOUT_S)
+    except Exception:  # refused, timed out, bad credentials, ...
+        logger.warning("readiness: database unavailable", exc_info=True)
+        return _plain(503, {"status": "database_unavailable"})
+    if not _schema_ready(revision):
+        return _plain(503, {"status": "schema_not_ready"})  # this release waits for its migration
+    return _plain(200, {"status": "ready"})
+
+
+@router.get("/api/version")
+async def version() -> dict[str, str]:
+    return {"git_sha": os.environ.get("GIT_SHA", "unknown"), "env": os.environ.get("APP_ENV", "unknown")}
+
+
+async def _db_revision(session_factory: async_sessionmaker[AsyncSession]) -> str | None:
+    async with session_factory() as session:
+        # a database that was never migrated has no alembic_version table
+        if (await session.execute(text("SELECT to_regclass('alembic_version')"))).scalar() is None:
+            return None
+        return (await session.execute(text("SELECT version_num FROM alembic_version"))).scalar()
+
+
+def _schema_ready(db_revision: str | None) -> bool:
+    """At this release's newest migration, or at one this release doesn't ship (a newer release
+    migrated first; migrations are forward-only and backward compatible, so this code still works)."""
+    if db_revision is None:
+        return False
+    if db_revision == _REQUIRED_REVISION:
+        return True
+    try:
+        _scripts.get_revision(db_revision)
+    except CommandError:  # unknown here: newer than this release
+        return True
+    return False  # an older revision: this release's migration hasn't run yet
 ```
 
 ## Docker Compose — Full Stack with DB
@@ -381,7 +451,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/readyz"]
       interval: 10s
       timeout: 5s
       start_period: 15s
@@ -453,11 +523,12 @@ structlog>=24.1.0,<25.0
 ## Critical Rules
 
 - Multi-stage build is REQUIRED — builder stage has build tools, runtime stage is minimal
-- Non-root user is REQUIRED — `USER appuser` must be set before CMD
+- Non-root user is REQUIRED, by number — `USER 1001:1001` before CMD, on a line with no trailing comment (Kubernetes `runAsNonRoot` rejects a named user)
 - Virtual environment MUST be used even in Docker — isolates from system Python
 - Dependencies MUST be installed before copying source code — Docker layer caching
 - `PYTHONDONTWRITEBYTECODE=1` and `PYTHONUNBUFFERED=1` MUST be set
-- Health check MUST be configured — Docker and orchestrators depend on it
+- Health endpoints follow the runtime contract: `/healthz` (liveness, no dependencies), `/readyz` (503 while draining, the DB is unreachable or the schema is behind), `/api/version` (`git_sha` from the `GIT_SHA` build arg). Never a `/health` that answers 200 with the database down
+- The image `HEALTHCHECK` probes `/healthz`; Compose `depends_on` waits on `/readyz`
 - `.env` files MUST be in `.dockerignore` — never bake secrets into images
 - `requirements.txt` or `uv.lock` MUST be deterministic — use `pip-compile` or `uv lock`
 - Prefer UV over pip for 10-50x faster installs — fall back to pip-compile if UV is unavailable
