@@ -8,7 +8,10 @@ input:
   required:
     - type: guidelines
       path: docs/IMPLEMENTATION_GUIDELINES.md
-      description: "§Mobile — workflow (expo|bare), e2e tool, device matrix, min OS versions, build commands, local backend URL per platform"
+      description: "§Mobile — workflow (expo|bare), e2e tool, device matrix, min OS versions, build commands"
+    - type: commands
+      path: agent_state/config/verify-commands.json
+      description: "commands.test:mobile — the device-flow command, run per platform and slot"
     - type: mobile_test_manifest
       path: agent_state/phases/{{PHASE}}/mobile_test_agent/manifest.json
       description: "Device flow files written this phase + mobile TC-M* IDs deferred to the device tier"
@@ -23,8 +26,10 @@ output:
   primary: agent_state/phases/{{PHASE}}/reports/mobile_e2e_results.md
   artifacts:
     - path: agent_state/phases/{{PHASE}}/reports/mobile_e2e_results.json
+    - path: agent_state/phases/{{PHASE}}/junit/
+      description: "Platform- and slot-tagged JUnit (mobile-<platform>-<slot>[-retry].xml) the sidecar is built from"
     - path: agent_state/mobile/{{PHASE}}/
-      description: "JUnit XML, screenshots, device logs, videos per platform/device slot"
+      description: "Screenshots, device logs, videos per platform/device slot"
 dependencies:
   upstream: [mobile_test_agent]
   downstream: [mobile_platform_auditor, ui_standards_auditor]  # derived by _sync-deps.py — do not hand-edit
@@ -44,11 +49,16 @@ skill_packs:
 ## Role
 
 Runs the device tier for a React Native app. It does not write tests; `mobile_test_agent` does. It
-turns the flows into **evidence on both platforms**: it builds release binaries for iOS simulator
-and Android emulator, boots each device slot in the matrix, installs and launches the app against
-the Wave 3.5 local backend, runs every flow, and records per-platform, per-device results.
-`e2e_orchestrator` is its web and CLI counterpart; this agent is the mobile one, so the web agent
-never has to pretend to test a native app.
+turns the flows into **evidence on both platforms**:
+1. builds release binaries for the iOS simulator and the Android emulator;
+2. boots each device slot in the matrix;
+3. installs and launches the app against the backend Wave 3.5 deployed (`APP_BASE_URL`: qa on
+   lab-cluster projects, the compose stack otherwise);
+4. runs every flow and records per-platform, per-device results.
+
+The results become the gate's `sdlc.test-results/v1` sidecar, built from the runner's JUnit.
+`e2e_orchestrator` is its web and CLI counterpart. This agent is the mobile one, so the web agent never
+has to pretend to test a native app.
 
 ## Shortcuts that look safe here, and why they aren't
 
@@ -57,8 +67,10 @@ never has to pretend to test a native app.
 | "iOS passed; Android is the same code" | JS is shared, but navigation back, permissions, keyboard, cleartext networking and deep-link verification are not. Report each platform separately; a flow is PASS only when it passes on every slot it was scheduled for. |
 | "Run against the Debug build, it's already there" | Debug builds depend on Metro, show LogBox overlays that swallow taps, and skip minification. Run a Release build pointed at the local backend. |
 | "The emulator won't boot, so mark Android SKIPPED and pass the phase" | A SKIPPED platform is not a PASS. Report `BLOCKED — <reason>` and let the gate decide. Never write a PASS for a platform you didn't run. |
-| "It passed on the second try" | That is FLAKY with the retry count, not PASS. Flaky device flows are listed for the fix wave. |
-| "Use `localhost` for the backend" | The Android emulator's `localhost` is the emulator itself. Use `10.0.2.2`, and check the E2E build's network security config allows it. |
+| "It passed on the second try" | That is FLAKY with the retry count, not PASS. The sidecar counts it in `flaky`, and flaky > 0 fails the gate unless the flow is quarantined with an issue and an expiry. |
+| "Use `localhost` for the backend" | The backend is `APP_BASE_URL`. The Android emulator's `localhost` is the emulator itself: rewrite the host to `10.0.2.2`, **keep the port**, and send the original host in a `Host` header, because the lab ingress routes by host. Check the E2E build's network security config allows exactly that host. |
+| "Health-check the compose stack" | Lab-cluster projects have no compose stack. The preflight checks `APP_BASE_URL/healthz`, whatever deployed it. |
+| "Put the TC ID in a comment line" | JUnit carries the flow's `name`. Flow files and their `name:` start with the TC ID, and each JUnit case is tagged with its platform and slot, so one flow on two platforms is two cases. |
 | "Detox is configured, use it" | Check the RN version against Detox's supported window (`detox.md`) and the recorded tool decision. Outside the window with no decision is BLOCKING; report it. |
 
 ---
@@ -82,8 +94,21 @@ Check each item and record it in the report. A failed item BLOCKS only the platf
 |---|---|---|
 | Host can build | macOS + `xcodebuild -version` + `xcrun simctl list runtimes` includes the matrix iOS versions | `$ANDROID_HOME` + `sdkmanager --list_installed` includes the matrix system images + `emulator -list-avds` |
 | Tool installed | `maestro --version` / `npx detox --version` / `npx appium --version` + drivers | same |
-| Backend healthy (Wave 3.5) | `curl -sf http://localhost:$PORT/health` | same URL from the host; the app uses `10.0.2.2` |
+| Backend healthy (Wave 3.5) | `curl -sf "$APP_BASE_URL/healthz"` | `curl -sf -H "Host: $API_HOST" "http://127.0.0.1:$API_PORT/healthz"`: the path the emulator takes via `10.0.2.2` |
+| Backend is this code | `GET $APP_BASE_URL$VERSION_PATH` → `git_sha` equals the code sha (else BLOCKED — stale deploy) | same |
 | Tool / RN compatibility | Detox: RN version inside the supported window, or a DECISIONS.md entry | same |
+
+```bash
+: "${APP_BASE_URL:?BASE URL not given — the parent passes it from checkpoints/wave-3.5.json}"
+API_HOST="$(python3 -c 'import sys,urllib.parse as u; p=u.urlsplit(sys.argv[1]); print(p.hostname)' "$APP_BASE_URL")"
+API_PORT="$(python3 -c 'import sys,urllib.parse as u; p=u.urlsplit(sys.argv[1]); print(p.port or (443 if p.scheme=="https" else 80))' "$APP_BASE_URL")"
+API_URL_IOS="$APP_BASE_URL"                                   # the simulator shares the Mac's network
+API_URL_ANDROID="http://10.0.2.2:$API_PORT"                   # emulator → Mac loopback; send Host: $API_HOST
+```
+
+If the app can't send a `Host` header, port-forward the API to a fixed local port
+(`kubectl -n <app>-qa port-forward svc/<api> <port>:<svc-port>`) and use `10.0.2.2:<port>` /
+`127.0.0.1:<port>`. Record which route you used.
 
 On a non-macOS host iOS is `BLOCKED — requires macOS/Xcode`. That is a reported, visible gap, not a
 silent skip.
@@ -120,12 +145,38 @@ show --last 2m --predicate 'process == "<App>"'`; Android: `adb logcat -d -b cra
   OS-version-dependent API (permissions, notifications, photo picker, biometrics).
 - **Regression**: flows from earlier phases' results, on the Latest slot.
 
-Write JUnit XML per platform per slot (`maestro test --format junit --output ...` or the Detox/Appium
-reporter) into `agent_state/mobile/{{PHASE}}/<platform>/<slot>/`. Keep every screenshot. On each
-failure also keep the device log and a video if the tool supports it.
+Flows are the files whose names start with a TC ID (`.maestro/TC-ME2E-20101-login.yaml`), and each
+flow's `name:` starts with the same ID. Run with `commands."test:mobile"` from
+`agent_state/config/verify-commands.json`, once per platform and slot:
+- pass the slot's device (`--device <udid|serial>`);
+- pass the backend as env (`-e API_URL=$API_URL_IOS` or `$API_URL_ANDROID`, `-e API_HOST=$API_HOST`);
+- write JUnit to `agent_state/phases/{{PHASE}}/junit/mobile-<platform>-<slot>.xml`.
 
-**Retry policy:** re-run a failed flow once. Pass on retry → `FLAKY (1 retry)`. Fail twice → `FAIL`,
-with the failing step, a screenshot and a log excerpt.
+Keep every screenshot under `agent_state/mobile/{{PHASE}}/<platform>/<slot>/`. On each failure also
+keep the device log, and a video if the tool supports it.
+
+**Tag every JUnit case with its platform and slot** before converting, so the same flow on iOS and
+Android is two cases (and the Wave 3 check can see both platforms ran):
+```bash
+tag() {  # $1 junit file, $2 "ios latest"
+  python3 - "$1" "$2" <<'PY'
+import sys, xml.etree.ElementTree as ET
+path, tag = sys.argv[1], sys.argv[2]
+t = ET.parse(path)
+for tc in t.getroot().iter("testcase"):
+    for k in ("name", "classname"):
+        if tc.get(k) is not None and not tc.get(k).endswith(f"[{tag}]"):
+            tc.set(k, f"{tc.get(k)} [{tag}]")
+t.write(path)
+PY
+}
+tag "agent_state/phases/{{PHASE}}/junit/mobile-ios-latest.xml" "ios latest"
+```
+
+**Retry policy:** re-run a failed flow once, writing JUnit to `…-<platform>-<slot>-retry.xml` (tagged
+the same way). Pass on retry is `FLAKY (1 retry)`. `junit-to-sidecar.py` counts a case that failed
+and then passed as `flaky`, as long as the first run's file comes before the retry file on its command
+line. Fail twice is `FAIL`, recorded with the failing step, a screenshot and a log excerpt.
 
 ## Step 5 — Visual and performance evidence (TC-MVIS-*, TC-MPERF-*)
 
@@ -150,10 +201,11 @@ Shut down only the simulators and emulators you booted (`xcrun simctl shutdown <
 
 ## Severity (Native)
 
-- `HIGH` — a flow FAILs on any scheduled slot; crash on launch; build failure; a platform BLOCKED
-  (not run) for an FR-* in scope; a Detox version-window violation with no decision; cold start over
-  2× target. (Phase gate BLOCKER.)
-- `MEDIUM` — FLAKY flow; visual diff over threshold; cold start over target; a Minimum-slot-only failure on a flow not tagged smoke.
+- `HIGH` — a flow FAILs on any scheduled slot; a FLAKY flow (it's a failure at the gate unless
+  quarantined with an issue and an expiry); crash on launch; build failure; a platform BLOCKED (not
+  run) for an FR-* in scope; a Detox version-window violation with no decision; cold start over 2×
+  target. (Phase gate BLOCKER.)
+- `MEDIUM` — visual diff over threshold; cold start over target (emulator timings are indicative); a Minimum-slot-only failure on a flow not tagged smoke.
 - `LOW` — baseline created; perf metric not measurable on one platform (with reason).
 
 Mapping to the unified model (`~/.claude/skills/core/code-quality.md`): HIGH → BLOCKING, MEDIUM → WARNING, LOW → INFO.
@@ -179,7 +231,7 @@ Cold start (median): iOS N ms · Android N ms (target N ms)
 ## Results by TC
 | TC id | Flow file | iOS latest | iOS min | Android latest | Android min | Evidence |
 |-------|-----------|------------|---------|----------------|-------------|----------|
-| TC-ME2E-001 | .maestro/login.yaml | PASS | PASS | FAIL | PASS | agent_state/mobile/N/android/latest/login.png |
+| TC-ME2E-20101 | .maestro/TC-ME2E-20101-login.yaml | PASS | PASS | FAIL | PASS | agent_state/mobile/N/android/latest/login.png |
 
 ## Failures
 | TC id | Platform/slot | Failing step | Root-cause hint | Log excerpt |
@@ -190,16 +242,37 @@ Cold start (median): iOS N ms · Android N ms (target N ms)
 BLOCKING:N WARNING:N INFO:N
 ```
 
-Also write `mobile_e2e_results.json`:
-```json
-{ "agent": "mobile_e2e_orchestrator", "phase": "{{PHASE}}", "tool": "maestro",
-  "platforms": { "ios": { "passed": 0, "failed": 0, "flaky": 0, "blocked": false },
-                 "android": { "passed": 0, "failed": 0, "flaky": 0, "blocked": false } },
-  "results": [ { "tc": "TC-ME2E-001", "flow": ".maestro/login.yaml",
-                 "ios": { "latest": "PASS", "min": "PASS" }, "android": { "latest": "FAIL", "min": "PASS" } } ],
-  "blocking": 0, "warning": 0, "info": 0 }
+### The evidence: `mobile_e2e_results.json` (sdlc.test-results/v1)
+
+Built from the tagged JUnit, never typed by hand:
+
+```bash
+P="agent_state/phases/{{PHASE}}"
+python3 .claude/hooks/junit-to-sidecar.py --tier device --command "$(jq -r '.commands["test:mobile"]' agent_state/config/verify-commands.json)" \
+  --exit-code $WORST_RC --env "${DEPLOY_ENV:-qa}" --base-url "$APP_BASE_URL" --priorities "$P/tc_priorities.json" \
+  --out "$P/reports/mobile_e2e_results.json" \
+  $(ls "$P"/junit/mobile-*-*.xml | grep -v -- '-retry\.xml$') $(ls "$P"/junit/mobile-*-retry.xml 2>/dev/null)   # first runs, then retries
 ```
-The counts in the JSON MUST equal the markdown counts and be derived from `results`.
+
+Then add, with `jq`, what the gate doesn't read but the auditors do. The sdlc schema ignores extra
+keys:
+- `tool`;
+- `platforms: {ios: {passed, failed, flaky, blocked, blocked_reason}, android: {…}}`, derived from
+  the cases;
+- `results: [{tc, flow, ios: {latest, min}, android: {latest, min}, evidence: [screenshot paths]}]`,
+  which `mobile_platform_auditor` and `ui_standards_auditor` read for screenshots;
+- `cold_start_ms: {ios, android, target}`.
+
+**A platform that could not run** (BLOCKED at preflight or build) gets one `UNTESTED` case per
+scheduled flow, named `"<flow name> [<platform> latest]"`, with the flow's priority from
+`tc_priorities.json`. Set the top-level `verdict` to `"BLOCKED"`. A missing platform then blocks
+the gate, and can't vanish.
+
+**Cold start (TC-MPERF):** add one case per platform:
+- `PASS` when ≤ 2× the NFR target (over target alone is a MEDIUM warning in the markdown);
+- `FAIL` when > 2× the target.
+
+The counts in the markdown MUST equal the sidecar's.
 
 ---
 
@@ -240,9 +313,11 @@ Keep it short; the detail belongs in the artifact.
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Report + JSON written to the exact frontmatter paths; raw evidence under `agent_state/mobile/{{PHASE}}/`.
-- [ ] Both platforms were attempted. Each is either run, with real counts, or explicitly `BLOCKED — <reason>`. No platform is silently absent.
-- [ ] Every flow in the mobile_test_agent manifest and every earlier-phase regression flow has a per-platform, per-slot result.
-- [ ] Every FAIL has a failing step, a screenshot and a log excerpt; every FLAKY has its retry count.
+- [ ] Preflight used `APP_BASE_URL` (iOS as is; Android via `10.0.2.2`, same port, `Host` header) and confirmed the deployed sha — no compose assumption, no hard-coded localhost.
+- [ ] Both platforms were attempted. Each is either run, with real counts, or explicitly `BLOCKED — <reason>` with `UNTESTED` cases in the sidecar. No platform is silently absent.
+- [ ] Every flow in the mobile_test_agent manifest and every earlier-phase regression flow has a per-platform, per-slot result; flow file names and `name:` start with their TC ID.
+- [ ] `mobile_e2e_results.json` is `sdlc.test-results/v1`, produced by `junit-to-sidecar.py` from the platform-tagged JUnit (first runs before retries), plus the auditor keys (`platforms`, `results`, `cold_start_ms`).
+- [ ] Every FAIL has a failing step, a screenshot and a log excerpt; every FLAKY has its retry count and counts as a failure.
 - [ ] `Total: 0` flow runs is a FAIL to investigate, never a PASS.
 - [ ] Only the devices I booted were shut down; the backend was left running.
 - [ ] The count line is REAL and equals the JSON counts.
