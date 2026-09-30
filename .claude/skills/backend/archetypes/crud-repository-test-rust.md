@@ -15,6 +15,8 @@ tags:
 
 # CRUD Repository Test Archetype (Rust / sqlx::test)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0; the 29 tests ran against Postgres 17 and pass (with the migration-pattern-rust.md migrations that apply cleanly — three do not, see that file).
+
 Complete integration test template for the repository layer against a real PostgreSQL database. Every generated repository test MUST follow this pattern.
 
 ## Test File Location
@@ -22,7 +24,7 @@ Complete integration test template for the repository layer against a real Postg
 ```
 tests/
   repository/
-    mod.rs
+    main.rs              <- test crate root: `mod widget_repo_test;` (cargo never builds a tests/<dir>/mod.rs)
     widget_repo_test.rs  <- THIS file
 src/
   repositories/
@@ -36,7 +38,7 @@ Rule: Repository integration tests live in `tests/` and run against real Postgre
 ```toml
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 serde_json = "1"
@@ -45,15 +47,17 @@ serde_json = "1"
 ## Test Configuration
 
 ```rust
-// tests/repository/mod.rs
+// tests/repository/main.rs
 
-/// Set DATABASE_URL in .env or environment:
-///   DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
-///
-/// sqlx::test creates a temporary database per test, runs migrations,
-/// and drops it after the test completes (even on panic).
-///
-/// Migrations must be in `./migrations/` directory.
+//! Set DATABASE_URL in .env or environment:
+//!   DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres
+//!
+//! sqlx::test creates a temporary database per test, runs migrations,
+//! and drops it after the test completes (even on panic).
+//!
+//! Migrations must be in `./migrations/` directory.
+
+mod widget_repo_test;
 ```
 
 ## Test Factory
@@ -342,7 +346,7 @@ async fn concurrent_updates_one_wins(pool: PgPool) {
 ```rust
 #[sqlx::test(migrations = "./migrations")]
 async fn soft_delete_happy_path(pool: PgPool) {
-    let repo = PgWidgetRepository::new(pool);
+    let repo = PgWidgetRepository::new(pool.clone()); // PgPool is an Arc: the clone shares the pool
     let tenant_id = Uuid::new_v4();
 
     let widget = make_widget(tenant_id);
@@ -360,7 +364,7 @@ async fn soft_delete_happy_path(pool: PgPool) {
         "SELECT deleted_at FROM widgets WHERE id = $1",
         widget_id,
     )
-    .fetch_one(&repo.pool_ref())
+    .fetch_one(&pool)
     .await
     .expect("row must still exist");
 
@@ -545,6 +549,35 @@ async fn list_cursor_pagination_ascending(pool: PgPool) {
             "items must be in ascending order"
         );
     }
+}
+
+#[sqlx::test(migrations = "./migrations")]
+async fn list_cursor_pagination_by_name(pool: PgPool) {
+    let repo = PgWidgetRepository::new(pool);
+    let tenant_id = Uuid::new_v4();
+
+    for name in ["alpha", "bravo", "charlie", "delta", "echo"] {
+        repo.create(&make_widget_named(tenant_id, name)).await.unwrap();
+    }
+
+    let by_name = |cursor| ListFilters {
+        cursor,
+        page_size: 2,
+        sort_by: "name".into(),
+        sort_dir: "asc".into(),
+        fields: Default::default(),
+    };
+
+    // The cursor carries the last NAME, so page 2 continues after "bravo"
+    let page1 = repo.list(tenant_id, &by_name(None)).await.unwrap();
+    let page2 = repo.list(tenant_id, &by_name(page1.cursor.clone())).await.unwrap();
+    let names: Vec<&str> = page1.items.iter().chain(page2.items.iter()).map(|w| w.name.as_str()).collect();
+    assert_eq!(names, ["alpha", "bravo", "charlie", "delta"]);
+
+    // A cursor issued for one sort is rejected under another
+    let mut by_created = by_name(page1.cursor);
+    by_created.sort_by = "created_at".into();
+    assert!(matches!(repo.list(tenant_id, &by_created).await.unwrap_err(), AppError::Validation { .. }));
 }
 
 #[sqlx::test(migrations = "./migrations")]

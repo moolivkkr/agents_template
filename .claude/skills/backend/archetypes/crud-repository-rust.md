@@ -13,6 +13,8 @@ tags:
 
 # CRUD Repository Archetype (Rust / sqlx)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0 (query! macros checked against the migration-pattern-rust.md schema on Postgres 17), base64 0.23.1; crud-repository-test-rust.md's tests ran against it and pass.
+
 Complete sqlx-based PostgreSQL repository template. Every generated repository MUST follow this pattern.
 
 ## Trait Definition
@@ -225,24 +227,23 @@ impl WidgetRepository for PgWidgetRepository {
             qb.push_bind(value.clone());
         }
 
-        // Apply cursor
+        // Apply cursor: keyset on (sort column, id); the cursor's value is typed for that column
+        let col = sanitize_column(&filters.sort_by);
+        let dir = if filters.sort_dir == "asc" { "ASC" } else { "DESC" };
         if let Some(ref cursor) = filters.cursor {
-            let (ts, cursor_id) = decode_cursor(cursor)?;
-            let col = sanitize_column(&filters.sort_by);
-            if filters.sort_dir == "desc" {
-                qb.push(format!(" AND ({col}, id) < ("));
-            } else {
-                qb.push(format!(" AND ({col}, id) > ("));
-            }
-            qb.push_bind(ts);
+            let c = decode_cursor(cursor, col)?;
+            let op = if dir == "DESC" { "<" } else { ">" };
+            qb.push(format!(" AND ({col}, id) {op} ("));
+            match c.key {
+                CursorKey::Ts(ts) => qb.push_bind(ts),
+                CursorKey::Text(text) => qb.push_bind(text),
+            };
             qb.push(", ");
-            qb.push_bind(cursor_id);
+            qb.push_bind(c.id);
             qb.push(")");
         }
 
         // ORDER BY and LIMIT (request limit+1 to detect has_more)
-        let col = sanitize_column(&filters.sort_by);
-        let dir = if filters.sort_dir == "asc" { "ASC" } else { "DESC" };
         qb.push(format!(" ORDER BY {col} {dir}, id {dir} LIMIT "));
         qb.push_bind(filters.page_size + 1);
 
@@ -257,9 +258,9 @@ impl WidgetRepository for PgWidgetRepository {
             items.truncate(filters.page_size as usize);
         }
 
-        // Build next cursor from last item
+        // Build next cursor from the last item's value of the SORT column (not always created_at)
         let cursor = if has_more {
-            items.last().map(|w| encode_cursor(w.created_at, w.id))
+            items.last().map(|w| encode_cursor(col, w))
         } else {
             None
         };
@@ -354,26 +355,44 @@ impl PgWidgetRepository {
 use base64::{Engine as _, engine::general_purpose::URL_SAFE};
 use chrono::{DateTime, Utc};
 
+/// The last row's value of the sort column, typed for that column (every sortable column needs an arm
+/// in encode_cursor: comparing `(name, id)` with a timestamp is a Postgres error).
 #[derive(serde::Serialize, serde::Deserialize)]
-struct CursorPayload {
-    ts: DateTime<Utc>,
-    id: Uuid,
+enum CursorKey {
+    Ts(DateTime<Utc>),
+    Text(String),
 }
 
-fn encode_cursor(ts: DateTime<Utc>, id: Uuid) -> String {
-    let payload = CursorPayload { ts, id };
+#[derive(serde::Serialize, serde::Deserialize)]
+struct CursorPayload {
+    col: String, // the sort column the cursor was issued for
+    key: CursorKey,
+    id: Uuid,    // tie-breaker: (col, id) is unique
+}
+
+fn encode_cursor(col: &str, w: &Widget) -> String {
+    let key = match col {
+        "updated_at" => CursorKey::Ts(w.updated_at),
+        "name" => CursorKey::Text(w.name.clone()),
+        "status" => CursorKey::Text(w.status.clone()),
+        _ => CursorKey::Ts(w.created_at),
+    };
+    let payload = CursorPayload { col: col.to_owned(), key, id: w.id };
     let json = serde_json::to_vec(&payload).expect("cursor serialization cannot fail");
     URL_SAFE.encode(json)
 }
 
-/// A tampered or stale cursor → 400 VALIDATION_FAILED on field "cursor".
-fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), AppError> {
+/// A tampered or stale cursor, or one issued for another sort → 400 VALIDATION_FAILED on field "cursor".
+fn decode_cursor(cursor: &str, col: &str) -> Result<CursorPayload, AppError> {
     let invalid = || {
         AppError::validation("cursor", "invalid_cursor", "This cursor is not valid. Start from the first page.")
     };
     let bytes = URL_SAFE.decode(cursor).map_err(|_| invalid())?;
     let payload: CursorPayload = serde_json::from_slice(&bytes).map_err(|_| invalid())?;
-    Ok((payload.ts, payload.id))
+    if payload.col != col {
+        return Err(invalid());
+    }
+    Ok(payload)
 }
 ```
 
@@ -468,6 +487,7 @@ pub struct Widget {
 - Update operations MUST use optimistic locking: `WHERE version = $expected`
 - Column names in ORDER BY / WHERE MUST be allow-listed via `sanitize_column`
 - Cursor values MUST be opaque (base64-encoded JSON) — never expose raw DB values
+- The cursor carries the last row's value of the column being sorted on (typed for it) plus `id`; a cursor from another sort is a 400
 - List queries MUST request `LIMIT + 1` to detect `has_more` without an extra count query
 - Batch inserts SHOULD use `push_values` with chunking for large datasets
 - sqlx errors MUST be mapped to domain `AppError` at the repository boundary: unique violation → 409 `CONFLICT`, FK/check violation → 422 `BUSINESS_RULE_VIOLATION`, statement/pool timeout → 503 `UNAVAILABLE`, all with generic messages (constraint names only in logs)

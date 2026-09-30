@@ -15,6 +15,8 @@ tags:
 
 # CRUD Handler Test Archetype (Rust / Axum)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0, reqwest 0.13.5; the 31 tests ran against Postgres 17 and pass (with the migration-pattern-rust.md migrations that apply cleanly — three do not, see that file).
+
 Complete Axum handler test template. Every generated handler test file MUST follow this pattern.
 
 ## Test File Location
@@ -22,7 +24,7 @@ Complete Axum handler test template. Every generated handler test file MUST foll
 ```
 tests/
   api/
-    mod.rs
+    main.rs            <- `mod helpers; mod widget_test;` (cargo builds tests/<dir>/main.rs; a mod.rs there is never compiled)
     helpers.rs         <- TestApp, spawn_app, assertion helpers
     widget_test.rs     <- THIS file (integration tests)
 src/
@@ -37,14 +39,14 @@ Rule: Integration tests live in `tests/` directory. Unit tests (with mocks) live
 ```toml
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4"] }
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "migrate"] }
+sqlx = { version = "0.9", features = ["runtime-tokio", "postgres", "migrate"] }
 once_cell = "1"
 wiremock = "0.6"          # for mocking external services
-fake = { version = "3", features = ["derive"] }
-claims = "0.7"            # for JWT test helpers
+fake = { version = "5", features = ["derive"] }
+claims = "0.8"            # assertion macros (assert_ok!, assert_err!, …)
 ```
 
 ## TestApp Helper
@@ -55,10 +57,10 @@ claims = "0.7"            # for JWT test helpers
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use sqlx::{PgPool, Executor};
+use sqlx::{AssertSqlSafe, PgPool, Executor};
 use uuid::Uuid;
 
-use yourapp::config::Config;
+use yourapp::config::AppConfig;
 use yourapp::startup::build_app;
 
 /// Test application — spawns the real Axum server on a random port with a
@@ -80,7 +82,7 @@ impl TestApp {
     /// Generate a valid JWT for the given tenant/user/roles.
     pub fn auth_token(&self, tenant_id: Uuid, user_id: Uuid, roles: Vec<String>) -> String {
         use jsonwebtoken::{encode, EncodingKey, Header};
-        use yourapp::auth::JwtClaims;
+        use yourapp::auth::claims::JwtClaims;
         use chrono::{Utc, Duration};
 
         let claims = JwtClaims {
@@ -89,6 +91,7 @@ impl TestApp {
             roles,
             exp: (Utc::now() + Duration::hours(1)).timestamp() as usize,
             iat: Utc::now().timestamp() as usize,
+            jti: None,
         };
 
         encode(
@@ -154,14 +157,17 @@ pub async fn spawn_app() -> TestApp {
         .await
         .expect("failed to connect to maintenance DB");
 
+    // sqlx 0.9 accepts only &'static SQL as-is; a built string must be vouched for (db_name is a UUID)
     maintenance_pool
-        .execute(format!(r#"CREATE DATABASE "{db_name}""#).as_str())
+        .execute(AssertSqlSafe(format!(r#"CREATE DATABASE "{db_name}""#)))
         .await
         .expect("failed to create test database");
 
-    let db_url = format!(
-        "postgres://postgres:postgres@localhost:5432/{db_name}"
-    );
+    // Same server and credentials as DATABASE_URL, the fresh database
+    let (server, _) = maintenance_url
+        .rsplit_once('/')
+        .expect("DATABASE_URL must end in /<database>");
+    let db_url = format!("{server}/{db_name}");
 
     // 2. Connect and run migrations
     let pool = PgPool::connect(&db_url)
@@ -174,7 +180,7 @@ pub async fn spawn_app() -> TestApp {
         .expect("failed to run migrations");
 
     // 3. Build and spawn the app on port 0 (OS assigns random port)
-    let mut config = Config::test_defaults();
+    let mut config = AppConfig::test_defaults();
     config.database_url = db_url;
     config.jwt_secret = "test-secret".into();
 
@@ -217,13 +223,11 @@ impl Drop for TestApp {
                 if let Ok(pool) = PgPool::connect(&maintenance_url).await {
                     // Terminate active connections before dropping
                     let _ = pool
-                        .execute(
-                            format!(
-                                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}'"
-                            ).as_str(),
-                        )
+                        .execute(AssertSqlSafe(format!(
+                            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{db_name}'"
+                        )))
                         .await;
-                    let _ = pool.execute(format!(r#"DROP DATABASE IF EXISTS "{db_name}""#).as_str()).await;
+                    let _ = pool.execute(AssertSqlSafe(format!(r#"DROP DATABASE IF EXISTS "{db_name}""#))).await;
                 }
             });
         });
@@ -974,7 +978,7 @@ async fn auth_expired_jwt_token() {
     let app = spawn_app().await;
 
     use jsonwebtoken::{encode, EncodingKey, Header};
-    use yourapp::auth::JwtClaims;
+    use yourapp::auth::claims::JwtClaims;
 
     let claims = JwtClaims {
         sub: Uuid::new_v4(),
@@ -982,6 +986,7 @@ async fn auth_expired_jwt_token() {
         roles: vec!["admin".into()],
         exp: 1000000000, // long expired
         iat: 999999000,
+        jti: None,
     };
     let token = encode(
         &Header::default(),

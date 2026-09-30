@@ -1,0 +1,89 @@
+# Workspace root for the Rust archetype compile harness (tests/archetype-compile/rust/run.sh).
+#
+# harness.py copies this file into the generated workspace and writes one member crate per unit
+# under units/. Every member depends on every crate below (workspace = true), so any sample can use
+# any of them. Versions are the current stable releases on 2026-09-30, checked with `cargo search` /
+# `cargo info`; Cargo.lock (committed next to this file) pins the exact resolution. To move a version:
+# edit it here, run `run.sh --update-lock`, then fix what breaks in the archetypes and in their
+# ```toml manifests (run.sh checks those manifests against this file).
+
+[workspace]
+resolver = "3"
+members = ["units/*"]
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.94"
+
+[workspace.dependencies]
+# --- HTTP / async ---
+axum = { version = "0.8.9", features = ["macros", "ws"] }
+axum-extra = { version = "0.12.6", features = ["typed-header"] }
+tokio = { version = "1.53.1", features = ["full", "test-util"] }
+tokio-stream = "0.1.19"
+tokio-util = "0.7.19"
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.1", features = ["cors", "request-id", "trace", "propagate-header"] }
+tower-layer = "0.3.3"
+http = "1.4"
+http-body-util = "0.1.5"
+futures = "0.3.34"
+futures-util = "0.3.34"
+async-trait = "0.1.92"
+reqwest = { version = "0.13.5", features = ["json", "gzip", "brotli"] }
+
+# --- data ---
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "uuid", "chrono", "json"] }
+deadpool-redis = "0.23.1"
+redis = { version = "1.7.1", features = ["tokio-comp"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+validator = { version = "0.21.0", features = ["derive"] }
+base64 = "0.23.1"
+
+# --- errors / auth ---
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+jsonwebtoken = { version = "11.1.0", features = ["rust_crypto"] }
+ring = "0.17.14"
+bcrypt = "0.19.3"
+
+# --- observability ---
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "fmt"] }
+opentelemetry = { version = "0.33.0", features = ["metrics", "trace"] }
+opentelemetry_sdk = { version = "0.33.0", features = ["rt-tokio", "metrics", "trace"] }
+opentelemetry-otlp = { version = "0.33.0", features = ["grpc-tonic", "metrics", "trace"] }
+opentelemetry-semantic-conventions = "0.33.0"
+opentelemetry-prometheus = "0.33.0"
+tracing-opentelemetry = "0.34.0"
+prometheus = "0.14.0"
+console-subscriber = "0.5.0"
+tracing-timing = "0.7.0"
+dhat = "0.3.3"
+
+# --- gRPC ---
+tonic = "0.14.6"
+tonic-prost = "0.14.6"
+tonic-health = "0.14.6"
+tonic-reflection = "0.14.6"
+prost = "0.14.4"
+prost-types = "0.14.4"
+tonic-prost-build = "0.14.6" # build-dependency of the grpc unit only
+
+# --- performance samples ---
+smallvec = "1.15"
+phf = { version = "0.14.0", features = ["macros"] }
+itoa = "1.0.18"
+num_cpus = "1.17.0"
+rand = "0.10.3"
+
+# --- tests ---
+mockall = "0.15.0"
+criterion = { version = "0.8.2", features = ["html_reports"] }
+once_cell = "1.21.4"
+wiremock = "0.6.5"
+fake = { version = "5.1.0", features = ["derive"] }
+claims = "0.8.0"

@@ -1,0 +1,22 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE widgets\n            SET name = $3, description = $4, status = $5,\n                updated_at = $6, updated_by = $7, version = $8\n            WHERE tenant_id = $1 AND id = $2 AND version = $9 AND deleted_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Varchar",
+        "Text",
+        "Varchar",
+        "Timestamptz",
+        "Uuid",
+        "Int4",
+        "Int4"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "fbcc9f0583aa604eb13847900f7b3452140021a3b7c67a1278a724b5127338a6"
+}

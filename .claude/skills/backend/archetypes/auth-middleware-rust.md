@@ -15,6 +15,8 @@ tags:
 
 # Auth Middleware Archetype (Rust / Axum)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, jsonwebtoken 11.1.0, tower-http 0.7.1, composed with the error-handling and CRUD archetypes into one crate; its tests also ran and pass.
+
 Complete middleware stack for Axum REST APIs. Every generated project MUST follow this pattern.
 
 ## Dependencies (Cargo.toml)
@@ -22,16 +24,24 @@ Complete middleware stack for Axum REST APIs. Every generated project MUST follo
 ```toml
 [dependencies]
 axum = { version = "0.8", features = ["macros"] } # macros: AppJson/AppPath/AppQuery (error-handling-rust.md)
-axum-extra = { version = "0.10", features = ["typed-header"] }
+axum-extra = { version = "0.12", features = ["typed-header"] }
 tower = "0.5"
-tower-http = { version = "0.6", features = ["cors", "request-id", "trace", "propagate-header"] }
+tower-http = { version = "0.7", features = ["cors", "request-id", "trace", "propagate-header"] }
 tower-layer = "0.3"
-jsonwebtoken = "9"
+# 10+: pick exactly one crypto backend ("rust_crypto" or "aws_lc_rs"); with neither it builds, then
+# panics on the first encode/decode
+jsonwebtoken = { version = "11", features = ["rust_crypto"] }
+async-trait = "0.1"    # ApiKeyStore is used as a trait object
+ring = "0.17"          # SHA-256 of API keys
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 tracing = "0.1"
 thiserror = "2"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] } # ServiceExt::oneshot in the tests
+http-body-util = "0.1"
 ```
 
 ## JWT Claims and Validation
@@ -121,12 +131,12 @@ use crate::error::AppError;
 /// Every failure is `AppError::Unauthenticated` → 401 envelope with `WWW-Authenticate: Bearer`
 /// (written by `AppError`'s `IntoResponse`, error-handling-rust.md).
 ///
-/// Usage in router:
-/// ```rust
+/// Usage in router (the state is the shared `Arc<AppConfig>`, see startup.rs below):
+/// ```ignore
 /// Router::new()
 ///     .route("/protected", get(handler))
 ///     .layer(axum::middleware::from_fn_with_state(
-///         app_state.clone(),
+///         state.config.clone(),
 ///         jwt_auth_middleware,
 ///     ))
 /// ```
@@ -191,7 +201,7 @@ use crate::error::{current_request_id, AppError, RequestId};
 /// Requires `jwt_auth_middleware` to run before this extractor.
 ///
 /// Usage in handler:
-/// ```rust
+/// ```ignore
 /// async fn my_handler(auth: AuthUser) -> impl IntoResponse {
 ///     let tenant_id = auth.tenant_id;
 ///     let user_id = auth.user_id;
@@ -218,16 +228,21 @@ impl AuthUser {
 
     /// Require a specific role or return 403 FORBIDDEN.
     pub fn require_role(&self, role: &str) -> Result<(), AppError> {
-        if self.has_role(role) {
+        self.require_any_role(&[role])
+    }
+
+    /// Require any one of the roles or return 403 FORBIDDEN (function-level authorization).
+    pub fn require_any_role(&self, roles: &[&str]) -> Result<(), AppError> {
+        if roles.iter().any(|r| self.has_role(r)) {
             Ok(())
         } else {
-            tracing::warn!(user_id = %self.user_id, required = role, "insufficient permissions");
+            tracing::warn!(user_id = %self.user_id, required = ?roles, "insufficient permissions");
             Err(AppError::Forbidden)
         }
     }
 }
 
-#[axum::async_trait]
+// axum 0.8: FromRequestParts is a native async trait — no #[async_trait] attribute
 impl<S> FromRequestParts<S> for AuthUser
 where
     S: Send + Sync,
@@ -283,17 +298,15 @@ use crate::error::AppError;
 /// Another tenant's object is NOT a role problem: that is 404 NOT_FOUND from the data layer.
 ///
 /// Usage:
-/// ```rust
+/// ```ignore
 /// Router::new()
 ///     .route("/admin/users", get(list_users))
-///     .layer(axum::middleware::from_fn(require_role::<"admin">))
+///     .layer(axum::middleware::from_fn(admin_only()))
 /// ```
 ///
-/// For multiple roles, use the closure variant:
-/// ```rust
-/// .layer(axum::middleware::from_fn(|req, next| {
-///     require_any_role(req, next, &["admin", "editor"])
-/// }))
+/// For multiple roles, use a guard factory (see `editor_or_admin` below):
+/// ```ignore
+/// .layer(axum::middleware::from_fn(editor_or_admin()))
 /// ```
 pub async fn require_any_role(
     req: Request,
@@ -356,13 +369,16 @@ pub fn editor_or_admin() -> impl Fn(Request, Next) -> std::pin::Pin<Box<dyn std:
 // src/auth/api_key.rs
 
 use axum::{
-    extract::Request,
+    extract::{Request, State},
     middleware::Next,
     response::Response,
 };
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::auth::claims::JwtClaims;
+use crate::auth::middleware::jwt_auth_middleware;
+use crate::config::AppConfig;
 use crate::error::AppError;
 
 const API_KEY_HEADER: &str = "X-API-Key";
@@ -383,15 +399,22 @@ pub trait ApiKeyStore: Send + Sync {
     async fn lookup(&self, key_hash: &str) -> Result<Option<ApiKeyRecord>, AppError>;
 }
 
+/// State for `api_key_or_jwt_middleware`: the key store, plus the config the JWT fallback needs.
+#[derive(Clone)]
+pub struct ApiKeyAuth {
+    pub store: Arc<dyn ApiKeyStore>,
+    pub config: Arc<AppConfig>,
+}
+
 /// Middleware: authenticate via API key header.
 /// Falls through to JWT auth if no API key is present.
 ///
-/// Usage (before jwt_auth_middleware in the middleware stack):
-/// ```rust
-/// .layer(axum::middleware::from_fn_with_state(state.clone(), api_key_or_jwt_middleware))
+/// Usage (in place of jwt_auth_middleware on the routes that accept API keys):
+/// ```ignore
+/// .layer(axum::middleware::from_fn_with_state(api_key_auth.clone(), api_key_or_jwt_middleware))
 /// ```
 pub async fn api_key_or_jwt_middleware(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::startup::AppState>>,
+    State(auth): State<ApiKeyAuth>,
     mut req: Request,
     next: Next,
 ) -> Result<Response, AppError> {
@@ -399,8 +422,8 @@ pub async fn api_key_or_jwt_middleware(
     if let Some(api_key) = req.headers().get(API_KEY_HEADER).and_then(|v| v.to_str().ok()) {
         let key_hash = sha256_hex(api_key);
 
-        let record = state
-            .api_key_store
+        let record = auth
+            .store
             .lookup(&key_hash)
             .await?
             .ok_or_else(|| {
@@ -429,12 +452,7 @@ pub async fn api_key_or_jwt_middleware(
     }
 
     // No API key — fall through to JWT validation
-    jwt_auth_middleware(
-        axum::extract::State(std::sync::Arc::new(state.config.clone())),
-        req,
-        next,
-    )
-    .await
+    jwt_auth_middleware(State(auth.config.clone()), req, next).await
 }
 
 /// Hash an API key with SHA-256 (never store raw keys).
@@ -615,12 +633,14 @@ use std::time::Duration;
 use tower_http::trace::TraceLayer;
 
 use crate::auth::middleware::jwt_auth_middleware;
+use crate::config::AppConfig;
 use crate::error::{recovery_middleware, request_id_middleware};
 use crate::middleware::cors::cors_layer;
 use crate::middleware::rate_limit::{rate_limit_middleware, RateLimiter};
+use crate::services::widget::WidgetService;
 
 pub struct AppState {
-    pub config: AppConfig,
+    pub config: Arc<AppConfig>, // Arc: jwt_auth_middleware's state (State<Arc<AppConfig>>)
     pub widget_service: WidgetService,
     // ... other services
 }
@@ -638,7 +658,7 @@ pub struct AppState {
 /// 6. Route-specific role guards check permissions
 pub async fn build_app(config: AppConfig, pool: sqlx::PgPool) -> Router {
     let state = Arc::new(AppState {
-        config: config.clone(),
+        config: Arc::new(config),
         widget_service: WidgetService::new(/* ... */),
     });
 
@@ -654,7 +674,7 @@ pub async fn build_app(config: AppConfig, pool: sqlx::PgPool) -> Router {
         .nest("/api/v1/widgets", crate::handlers::widget::widget_routes())
         // Add more resource routes here...
         .layer(middleware::from_fn_with_state(
-            state.clone(),
+            state.config.clone(),
             jwt_auth_middleware,
         ));
 
@@ -663,7 +683,7 @@ pub async fn build_app(config: AppConfig, pool: sqlx::PgPool) -> Router {
         .nest("/admin", crate::handlers::admin::admin_routes())
         .layer(middleware::from_fn(crate::auth::require_role::admin_only()))
         .layer(middleware::from_fn_with_state(
-            state.clone(),
+            state.config.clone(),
             jwt_auth_middleware,
         ));
 

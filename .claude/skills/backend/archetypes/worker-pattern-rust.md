@@ -13,6 +13,8 @@ tags:
 
 # Worker / Background Job Pattern — Rust
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, tokio 1.53.1, tokio-util 0.7.19, async-trait 0.1.92, rand 0.10.3. Compiled, not run.
+
 > **Canonical reference**: This is the Rust counterpart to `worker-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
 Rust workers use `tokio` for async runtime, `tokio::sync::mpsc` for in-process channels, and `CancellationToken` for graceful shutdown. For external queues, use `lapin` (RabbitMQ), `rdkafka` (Kafka), or `redis` crate with streams.
@@ -54,6 +56,8 @@ pub struct DlqEntry {
 use async_trait::async_trait;
 use std::time::Duration;
 
+use super::job::Job;
+
 #[async_trait]
 pub trait JobHandler: Send + Sync + 'static {
     fn job_type(&self) -> &str;
@@ -93,13 +97,19 @@ pub enum WorkerError {
 ```rust
 // src/worker/mod.rs
 
+pub mod job;
+pub mod traits;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info, warn, instrument, Instrument};
+use tracing::{error, info, warn, instrument};
+
+use job::Job;
+use traits::{IdempotencyStore, JobHandler, Queue, WorkerError};
 
 pub struct Worker {
     queue: Arc<dyn Queue>,
@@ -127,7 +137,7 @@ impl Default for WorkerConfig {
     }
 }
 
-struct WorkerState {
+pub struct WorkerState {
     in_flight: u32,
     last_job_at: Option<Instant>,
 }
@@ -153,6 +163,11 @@ impl Worker {
     pub fn register(&mut self, handler: Arc<dyn JobHandler>) {
         self.handlers
             .insert(handler.job_type().to_string(), handler);
+    }
+
+    /// For the health endpoint: `Router::new().route("/health", get(worker_health)).with_state(worker.state())`
+    pub fn state(&self) -> Arc<Mutex<WorkerState>> {
+        self.state.clone()
     }
 
     /// Run the worker until the cancellation token is triggered.
@@ -332,11 +347,10 @@ async fn retry_or_dlq(job: &Job, queue: &Arc<dyn Queue>, config: &WorkerConfig, 
 }
 
 fn exponential_backoff(attempt: u32) -> Duration {
-    use rand::Rng;
     let base_ms: u64 = 1000;
     let max_ms: u64 = 300_000;
     let delay_ms = (base_ms * 2u64.pow(attempt.saturating_sub(1))).min(max_ms);
-    let jitter_ms = rand::thread_rng().gen_range(0..=delay_ms);
+    let jitter_ms = rand::random_range(0..=delay_ms); // full jitter (rand 0.9+; thread_rng() is gone)
     Duration::from_millis(jitter_ms)
 }
 ```
@@ -346,8 +360,16 @@ fn exponential_backoff(attempt: u32) -> Duration {
 ```rust
 // src/main.rs
 
+mod worker;
+
+use std::sync::Arc;
+
 use tokio_util::sync::CancellationToken;
 use tracing::info;
+
+use worker::{Worker, WorkerConfig};
+// App-specific (not shown): Settings, the RedisQueue / RedisIdempotency implementations of Queue /
+// IdempotencyStore, EmailService, ReportService and ReportGenerateHandler.
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -356,18 +378,25 @@ async fn main() -> anyhow::Result<()> {
     let cancel = CancellationToken::new();
 
     // Wire dependencies
+    let config = Settings::from_env()?; // REDIS_URL etc. — no compiled-in defaults for secrets
     let queue = Arc::new(RedisQueue::new(&config.redis_url).await?);
     let idempotency = Arc::new(RedisIdempotency::new(&config.redis_url).await?);
+    let email_svc = Arc::new(EmailService::new(&config));
+    let report_svc = Arc::new(ReportService::new(&config));
 
     let mut worker = Worker::new(queue, idempotency, WorkerConfig::default());
     worker.register(Arc::new(EmailSendHandler::new(email_svc)));
     worker.register(Arc::new(ReportGenerateHandler::new(report_svc)));
 
-    // Signal handling
+    // Signal handling: Kubernetes and Docker stop a pod with SIGTERM; Ctrl+C is SIGINT
     let cancel_clone = cancel.clone();
     tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        info!("received SIGINT");
+        let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = tokio::signal::ctrl_c() => info!("received SIGINT"),
+            _ = sigterm.recv() => info!("received SIGTERM"),
+        }
         cancel_clone.cancel();
     });
 
@@ -454,6 +483,6 @@ pub async fn worker_health(State(state): State<Arc<Mutex<WorkerState>>>) -> Json
 - Use `#[instrument]` from `tracing` for automatic span creation — include `job_id`, `tenant_id`
 - Use `Arc<dyn Trait>` for handler and queue abstractions — enables testing with mocks
 - Use `Mutex` from `tokio::sync` (not `std::sync`) when holding locks across `.await` points
-- `async_trait` is required for async trait methods — Rust does not support them natively yet
+- `#[async_trait]` is required here because the traits are used as `Arc<dyn Trait>`: native `async fn` in traits (Rust 1.75+) is not dyn-compatible
 - All error types MUST implement `thiserror::Error` for structured error propagation
 - Handlers MUST be `Send + Sync + 'static` — required for `tokio::spawn`

@@ -16,6 +16,8 @@ tags:
 
 # Observability Archetype (Rust)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, opentelemetry/_sdk/-otlp/-prometheus 0.33.0, tracing-opentelemetry 0.34.0, prometheus 0.14.0, axum 0.8.9. Compiled, not run (no collector).
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Rust backend observability patterns. All other Rust skill packs that mention logging, tracing, or metrics should defer to this file. For language-agnostic patterns, see `core/observability-patterns.md`.
 
 Complete OpenTelemetry integration for Rust services using Axum, the `tracing` ecosystem, and the `opentelemetry-rust` SDK. Every generated service MUST follow these patterns.
@@ -30,23 +32,26 @@ Complete OpenTelemetry integration for Rust services using Axum, the `tracing` e
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }
 
-# OpenTelemetry integration
-tracing-opentelemetry = "0.28"
-opentelemetry = { version = "0.27", features = ["metrics"] }
-opentelemetry_sdk = { version = "0.27", features = ["rt-tokio", "metrics"] }
-opentelemetry-otlp = { version = "0.27", features = ["tonic", "metrics"] }
-opentelemetry-semantic-conventions = "0.27"
+# OpenTelemetry integration — the opentelemetry* crates move together; tracing-opentelemetry
+# 0.34 pairs with opentelemetry 0.33
+tracing-opentelemetry = "0.34"
+opentelemetry = { version = "0.33", features = ["metrics"] }
+opentelemetry_sdk = { version = "0.33", features = ["rt-tokio", "metrics"] }
+opentelemetry-otlp = { version = "0.33", features = ["tonic", "metrics"] }
+opentelemetry-semantic-conventions = "0.33"
 
 # Prometheus exporter
-opentelemetry-prometheus = "0.27"
-prometheus = "0.13"
+opentelemetry-prometheus = "0.33"
+prometheus = "0.14"
 
 # Axum + tower
 axum = "0.8"
-tower-http = { version = "0.6", features = ["trace", "request-id", "propagate-header"] }
+tower-http = { version = "0.7", features = ["trace", "request-id", "propagate-header"] }
 tower = "0.5"
 
 # Utilities
+anyhow = "1"                                          # init_telemetry's error type
+reqwest = { version = "0.13", features = ["json"] }  # outgoing calls (trace-context propagation)
 uuid = { version = "1", features = ["v4"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -62,26 +67,35 @@ use opentelemetry::trace::TracerProvider as _;
 use opentelemetry::{global, KeyValue};
 use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::{
-    metrics::{SdkMeterProvider, PeriodicReader},
+    metrics::SdkMeterProvider,
     propagation::TraceContextPropagator,
-    runtime,
-    trace::{BatchSpanProcessor, TracerProvider},
+    trace::SdkTracerProvider,
     Resource,
 };
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
+/// The providers init_telemetry installs. Keep them: shutdown_telemetry flushes and stops them
+/// (the global provider has no shutdown since opentelemetry 0.28).
+pub struct Telemetry {
+    tracer_provider: SdkTracerProvider,
+    meter_provider: SdkMeterProvider,
+}
+
 /// Initialize all telemetry: tracing subscriber with OTel layers, metrics, and propagation.
-/// Call this once at application startup before any tracing macros are used.
-pub fn init_telemetry(service_name: &str, service_version: &str) -> anyhow::Result<SdkMeterProvider> {
+/// Call this once at application startup (inside the Tokio runtime: the OTLP exporters use tonic)
+/// before any tracing macros are used.
+pub fn init_telemetry(service_name: &str, service_version: &str) -> anyhow::Result<Telemetry> {
     // --- Resource: identifies this service in all telemetry ---
-    let resource = Resource::new(vec![
-        KeyValue::new("service.name", service_name.to_owned()),
-        KeyValue::new("service.version", service_version.to_owned()),
-        KeyValue::new(
-            "deployment.environment",
-            std::env::var("APP_ENV").unwrap_or_else(|_| "development".into()),
-        ),
-    ]);
+    let resource = Resource::builder()
+        .with_service_name(service_name.to_owned())
+        .with_attributes([
+            KeyValue::new("service.version", service_version.to_owned()),
+            KeyValue::new(
+                "deployment.environment",
+                std::env::var("APP_ENV").unwrap_or_else(|_| "development".into()),
+            ),
+        ])
+        .build();
 
     // --- Trace context propagation (W3C Trace Context) ---
     global::set_text_map_propagator(TraceContextPropagator::new());
@@ -95,13 +109,13 @@ pub fn init_telemetry(service_name: &str, service_version: &str) -> anyhow::Resu
         .with_endpoint(&otlp_endpoint)
         .build()?;
 
-    let tracer_provider = TracerProvider::builder()
+    let tracer_provider = SdkTracerProvider::builder()
         .with_resource(resource.clone())
-        .with_span_processor(BatchSpanProcessor::builder(trace_exporter, runtime::Tokio).build())
+        .with_batch_exporter(trace_exporter)
         .build();
 
     let tracer = tracer_provider.tracer(service_name.to_owned());
-    global::set_tracer_provider(tracer_provider);
+    global::set_tracer_provider(tracer_provider.clone());
 
     // --- OTel tracing layer (bridges tracing spans to OTel spans) ---
     let otel_trace_layer = tracing_opentelemetry::layer().with_tracer(tracer);
@@ -114,7 +128,7 @@ pub fn init_telemetry(service_name: &str, service_version: &str) -> anyhow::Resu
 
     let meter_provider = SdkMeterProvider::builder()
         .with_resource(resource)
-        .with_reader(PeriodicReader::builder(metrics_exporter, runtime::Tokio).build())
+        .with_periodic_exporter(metrics_exporter)
         .build();
 
     global::set_meter_provider(meter_provider.clone());
@@ -125,37 +139,35 @@ pub fn init_telemetry(service_name: &str, service_version: &str) -> anyhow::Resu
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,tower_http=debug,sqlx=warn"));
 
+    // The OTel layer goes on before the branch: a layer's type includes the stack below it, so one
+    // otel_trace_layer can't be added on top of two different stacks
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(otel_trace_layer);
+
     if is_prod {
-        tracing_subscriber::registry()
-            .with(env_filter)
-            // RedactingJson redacts by field NAME for every event at every level
-            // (see Sensitive Data Protection)
-            .with(fmt::layer().json().event_format(RedactingJson))
-            .with(otel_trace_layer)
-            .init();
+        // RedactingJson redacts by field NAME for every event at every level
+        // (see Sensitive Data Protection)
+        subscriber.with(fmt::layer().json().event_format(RedactingJson)).init();
     } else {
         // Pretty output is not redacted: local development only
-        tracing_subscriber::registry()
-            .with(env_filter)
-            .with(fmt::layer().pretty())
-            .with(otel_trace_layer)
-            .init();
+        subscriber.with(fmt::layer().pretty()).init();
     }
 
-    Ok(meter_provider)
+    Ok(Telemetry { tracer_provider, meter_provider })
 }
 
 /// Graceful shutdown: flush all pending spans and metrics before exit.
-pub async fn shutdown_telemetry(meter_provider: SdkMeterProvider) {
+pub async fn shutdown_telemetry(telemetry: Telemetry) {
     tracing::info!("shutting down telemetry — flushing spans and metrics");
 
     // Flush and shutdown the tracer provider
-    if let Err(e) = global::tracer_provider().shutdown() {
+    if let Err(e) = telemetry.tracer_provider.shutdown() {
         tracing::error!(error = %e, "failed to shutdown tracer provider");
     }
 
     // Flush and shutdown the meter provider
-    if let Err(e) = meter_provider.shutdown() {
+    if let Err(e) = telemetry.meter_provider.shutdown() {
         tracing::error!(error = %e, "failed to shutdown meter provider");
     }
 }
@@ -166,9 +178,12 @@ pub async fn shutdown_telemetry(meter_provider: SdkMeterProvider) {
 ```rust
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let meter_provider = init_telemetry("order-service", env!("CARGO_PKG_VERSION"))?;
+    let telemetry = init_telemetry("order-service", env!("CARGO_PKG_VERSION"))?;
 
-    let app = build_router();
+    // Your services, AppMetrics and Prometheus registry (see Metrics); the router is the
+    // "Complete Middleware Stack" at the end of this file
+    let state = Arc::new(AppState::from_env().await?);
+    let app = build_router(state);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
     tracing::info!("listening on {}", listener.local_addr()?);
@@ -177,7 +192,7 @@ async fn main() -> anyhow::Result<()> {
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
-    shutdown_telemetry(meter_provider).await;
+    shutdown_telemetry(telemetry).await;
     Ok(())
 }
 
@@ -202,33 +217,37 @@ async fn shutdown_signal() {
 The `tracing::instrument` attribute macro creates a span for every function invocation. Use it at every layer boundary.
 
 ```rust
-use axum::extract::{Json, Path, State};
-use sqlx::PgPool;
+use std::sync::Arc;
+
+use axum::{extract::{Extension, State}, http::StatusCode, response::IntoResponse, Json};
 use uuid::Uuid;
+
+use crate::error::{AppError, AppJson, RequestId}; // error-handling-rust.md
+use crate::extractors::auth_user::AuthUser;      // auth-middleware-rust.md
 
 // --- Handler layer ---
 #[tracing::instrument(
     name = "HTTP POST /api/v1/orders",
-    skip(state, auth_user, body),
+    skip(state, auth_user, request_id, body),
     fields(
         tenant_id = %auth_user.tenant_id,
         user_id = %auth_user.user_id,
-        request_id = %request_id,
+        request_id = %request_id.0,
     )
 )]
 pub async fn create_order(
     State(state): State<Arc<AppState>>,
     auth_user: AuthUser,
-    request_id: RequestId,
-    Json(body): Json<CreateOrderRequest>,
+    Extension(request_id): Extension<RequestId>, // inserted by request_id_middleware
+    AppJson(body): AppJson<CreateOrderRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    let order = state.order_service.create(
-        &auth_user.tenant_id,
-        &auth_user.user_id,
-        body,
-    ).await?;
+    let order = state.order_service.create(auth_user.tenant_id, auth_user.user_id, body).await?;
 
-    Ok((StatusCode::CREATED, Json(order)))
+    // Success body is the envelope (api/response-envelope.md)
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "data": order, "meta": { "request_id": request_id.0 } })),
+    ))
 }
 
 // --- Service layer ---
@@ -239,8 +258,8 @@ pub async fn create_order(
 )]
 pub async fn create(
     &self,
-    tenant_id: &str,
-    user_id: &str,
+    tenant_id: Uuid,
+    user_id: Uuid,
     body: CreateOrderRequest,
 ) -> Result<Order, AppError> {
     body.validate()?;
@@ -288,7 +307,7 @@ pub async fn insert(&self, order: &Order) -> Result<(), AppError> {
     .await
     .map_err(|e| {
         tracing::error!(error = %e, "failed to insert order");
-        AppError::Internal(anyhow::anyhow!("database error"))
+        AppError::internal(e) // 500 with a generic message; the cause stays in the log
     })?;
 
     Ok(())
@@ -308,10 +327,13 @@ pub async fn insert(&self, order: &Order) -> Result<(), AppError> {
 ### tower-http TraceLayer for Automatic HTTP Spans
 
 ```rust
+use std::sync::Arc;
+
+use axum::{routing::get, Router};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 
-pub fn build_router() -> Router {
+pub fn build_router(state: Arc<AppState>) -> Router {
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(DefaultMakeSpan::new().level(Level::INFO))
         .on_response(DefaultOnResponse::new().level(Level::INFO));
@@ -319,8 +341,9 @@ pub fn build_router() -> Router {
     Router::new()
         .nest("/api/v1/orders", order_routes())
         .route("/health", get(health_check))
-        .route("/metrics", get(metrics_handler))
+        .route("/metrics", get(metrics_handler)) // reads the registry from the state
         .layer(trace_layer)
+        .with_state(state)
         // The request-ID, auth and tenant layers, and a make_span_with that declares tenant_id,
         // are in "Complete Middleware Stack" below
 }
@@ -459,6 +482,7 @@ For outgoing HTTP calls, inject the trace context into headers:
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use reqwest::header::HeaderMap;
+use tracing_opentelemetry::OpenTelemetrySpanExt; // Span::context()
 
 struct HeaderInjector<'a>(&'a mut HeaderMap);
 
@@ -500,7 +524,7 @@ pub async fn call_service(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "outgoing HTTP request failed");
-            AppError::upstream("downstream-service", e)
+            AppError::unavailable("downstream-service", e) // 503, retryable
         })?;
 
     tracing::info!(status = resp.status().as_u16(), "downstream response received");
@@ -668,7 +692,7 @@ exactly one series, with `http.route="/api/v1/orders/{id}"`.
 Wire it into the router:
 
 ```rust
-use axum::middleware;
+use axum::{middleware, routing::get, Router};
 
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
@@ -684,8 +708,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 ### Prometheus Exporter Endpoint
 
 ```rust
+use std::sync::Arc;
+
+use axum::extract::State;
+use opentelemetry::global;
 use opentelemetry_prometheus::exporter;
+use opentelemetry_sdk::metrics::SdkMeterProvider;
 use prometheus::TextEncoder;
+
+use crate::error::AppError;
 
 pub fn setup_prometheus_exporter() -> prometheus::Registry {
     let registry = prometheus::Registry::new();
@@ -695,9 +726,10 @@ pub fn setup_prometheus_exporter() -> prometheus::Registry {
         .build()
         .expect("failed to build prometheus exporter");
 
-    // Register as a global meter provider (alternative to OTLP for metrics)
-    // Use this when you want /metrics endpoint instead of or alongside OTLP push
-    global::set_meter_provider(prometheus_exporter.meter_provider().clone());
+    // The exporter is a metric reader: install a meter provider that reads through it as the global
+    // provider. Use this when you want a /metrics endpoint instead of (or alongside) OTLP push.
+    let provider = SdkMeterProvider::builder().with_reader(prometheus_exporter).build();
+    global::set_meter_provider(provider);
 
     registry
 }
@@ -710,7 +742,7 @@ pub async fn metrics_handler(
     let metric_families = state.prometheus_registry.gather();
     encoder
         .encode_to_string(&metric_families)
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("metrics encoding error: {e}")))
+        .map_err(AppError::internal) // 500 INTERNAL; the encoder's message stays in the log
 }
 ```
 
@@ -786,7 +818,8 @@ The format is configured in `init_telemetry()` above. The key difference:
 This is the killer feature of `tracing` vs traditional logging. When you put fields on a span, every `tracing::info!()` emitted inside that span automatically includes those fields.
 
 ```rust
-#[tracing::instrument(fields(tenant_id = %tenant_id, user_id = %user_id))]
+// skip_all: without it, instrument records every argument with Debug (self, the whole order)
+#[tracing::instrument(skip_all, fields(tenant_id = %tenant_id, user_id = %user_id))]
 pub async fn process_order(&self, tenant_id: &str, user_id: &str, order: Order) -> Result<(), AppError> {
     // This log line automatically includes tenant_id and user_id from the span
     tracing::info!(order_id = %order.id, "starting order processing");
@@ -995,50 +1028,13 @@ When the `tracing-opentelemetry` layer is active, every log event automatically 
 ## Request ID Middleware
 
 ```rust
-use axum::{
-    body::Body,
-    http::{HeaderValue, Request, Response},
-    middleware::Next,
-};
-use uuid::Uuid;
-
-/// Bounded charset and length: an inbound ID can't inject log lines or bloat every record.
-fn valid_request_id(id: &str) -> bool {
-    (8..=128).contains(&id.len())
-        && id.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
-}
-
-/// Accept a well-formed inbound request ID, otherwise generate one. Propagate it in the response
-/// header and on the current span.
-pub async fn request_id_middleware(
-    mut request: Request<Body>,
-    next: Next,
-) -> Response<Body> {
-    let request_id = request
-        .headers()
-        .get("x-request-id")
-        .and_then(|v| v.to_str().ok())
-        .filter(|v| valid_request_id(v))
-        .map(String::from)
-        .unwrap_or_else(|| format!("req_{}", Uuid::new_v4()));
-
-    // Record on the request span, which declares request_id as an Empty field (see the middleware stack)
-    tracing::Span::current().record("request_id", request_id.as_str());
-
-    // Store in extensions for downstream extractors
-    request.extensions_mut().insert(RequestId(request_id.clone()));
-
-    let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        "x-request-id",
-        HeaderValue::from_str(&request_id).unwrap_or_else(|_| HeaderValue::from_static("unknown")),
-    );
-
-    response
-}
-
-#[derive(Clone, Debug)]
-pub struct RequestId(pub String);
+// There is ONE request-id middleware: error-handling-rust.md's (crate::error). It keeps a well-formed
+// inbound X-Request-Id (bounded charset and length, so it can't inject log lines or bloat records) or
+// mints one; runs the request in the task-local scope every error body reads its request_id from;
+// inserts the RequestId extension; records the id on the request span (which declares request_id as
+// an Empty field — see the middleware stack); and echoes X-Request-Id. A second middleware here would
+// leave error bodies with a request_id that doesn't match the header.
+use crate::error::{request_id_middleware, RequestId};
 ```
 
 ---
@@ -1049,8 +1045,13 @@ Every log line and trace span MUST include `tenant_id`, and **no metric** may. T
 the middleware layer.
 
 ```rust
+use axum::{body::Body, http::{Request, Response}, middleware::Next};
+
+use crate::auth::claims::JwtClaims; // auth-middleware-rust.md
+use crate::error::AppError;
+
 /// Runs after the auth middleware. The tenant comes from the VERIFIED token's claims, via the
-/// `AuthUser` the auth middleware put in the request extensions. It never comes from a client header
+/// `JwtClaims` jwt_auth_middleware put in the request extensions. It never comes from a client header
 /// such as X-Tenant-ID, which anyone can set.
 pub async fn tenant_middleware(
     mut request: Request<Body>,
@@ -1058,9 +1059,9 @@ pub async fn tenant_middleware(
 ) -> Result<Response<Body>, AppError> {
     let tenant_id = request
         .extensions()
-        .get::<AuthUser>()
-        .map(|user| user.tenant_id.clone())
-        .ok_or_else(|| AppError::Unauthorized("no verified credential".into()))?;
+        .get::<JwtClaims>()
+        .map(|claims| claims.tenant_id.to_string())
+        .ok_or(AppError::Unauthenticated)?;
 
     // Record on the request span (declared as an Empty field in make_span_with; see the middleware
     // stack). Every child span and log line inherits it. Never on a metric.
@@ -1138,21 +1139,31 @@ scrape_configs:
 ## Complete Middleware Stack (Recommended Order)
 
 ```rust
+use std::sync::Arc;
+
+use axum::{body::Body, http::Request, middleware, routing::get, Router};
+use tower_http::trace::{DefaultOnResponse, TraceLayer};
+use tracing::Level;
+
+use crate::auth::middleware::jwt_auth_middleware; // auth-middleware-rust.md
+use crate::error::request_id_middleware;          // error-handling-rust.md
+// metrics_middleware, metrics_handler and tenant_middleware are the sections above
+
 pub fn build_router(state: Arc<AppState>) -> Router {
     Router::new()
         .nest("/api/v1/orders", order_routes())
         .route("/health", get(health_check))
         .route("/metrics", get(metrics_handler))
         // --- Middleware applied bottom-up (last added = first executed) ---
-        // 5. Tenant: records tenant_id from the verified AuthUser on the request span
+        // 5. Tenant: records tenant_id from the verified JwtClaims on the request span
         .layer(middleware::from_fn(tenant_middleware))
-        // 4. Auth (your auth middleware): verifies the bearer token and inserts AuthUser
-        //    { tenant_id, user_id } from its claims into the extensions
-        .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
+        // 4. Auth: jwt_auth_middleware verifies the bearer token and inserts the verified JwtClaims
+        //    { sub, tenant_id, roles } into the extensions
+        .layer(middleware::from_fn_with_state(state.config.clone(), jwt_auth_middleware))
         // 3. Metrics: duration histogram + active requests. It sits outside auth so 401s are counted;
         //    MatchedPath is available because every layer here is a Router::layer.
         .layer(middleware::from_fn_with_state(state.clone(), metrics_middleware))
-        // 2. Request ID: validates an inbound X-Request-ID or generates one
+        // 2. Request ID (error-handling-rust.md): validates an inbound X-Request-Id or generates one
         .layer(middleware::from_fn(request_id_middleware))
         // 1. HTTP trace: the root span for each request. It declares the fields the middleware records
         //    later, because Span::record() on a field the span wasn't created with is silently dropped.
@@ -1193,7 +1204,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
 
 ## Critical Rules
 
-- `tenant_id` on every log line and trace span, and on **no metric** (at most a bounded `tenant.tier`). It comes from the verified token (`AuthUser`), never from a client header.
+- `tenant_id` on every log line and trace span, and on **no metric** (at most a bounded `tenant.tier`). It comes from the verified token (the `JwtClaims` the auth middleware inserts), never from a client header.
 - Use `#[tracing::instrument]` at every layer boundary (handler, service, repository)
 - Use `skip_all` and explicitly list safe fields to avoid leaking sensitive data. `RedactingJson` also redacts by field name at every level. Never log request or response bodies.
 - Request IDs from an inbound header are validated (charset + length) before use

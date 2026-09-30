@@ -13,6 +13,8 @@ tags:
 
 # CRUD Handler Archetype (Rust / Axum)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, validator 0.21.0, sqlx 0.9.0, composed with the auth, service and repository archetypes; crud-handler-test-rust.md's integration tests ran against it on Postgres 17 and pass.
+
 Complete Axum handler set for REST APIs. Every generated handler MUST follow this pattern.
 
 ## Handler Module and Router
@@ -31,10 +33,11 @@ use uuid::Uuid;
 
 use crate::domain::ListFilters;
 use crate::error::{AppError, AppJson, AppPath, AppQuery};
-use crate::extractors::AuthUser;
+use crate::extractors::auth_user::AuthUser; // auth-middleware-rust.md
+use crate::startup::AppState;
 
 /// Build widget routes. Mount into the main router:
-/// `Router::new().nest("/api/v1/widgets", widget_routes(state))`
+/// `Router::new().nest("/api/v1/widgets", widget_routes())`
 pub fn widget_routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", post(create_widget).get(list_widgets))
@@ -94,6 +97,9 @@ async fn create_widget(
     let request_id = auth.request_id();
     tracing::Span::current().record("request_id", &request_id);
 
+    // Function-level authorization: viewers read, editors and admins write (→ 403 FORBIDDEN)
+    auth.require_any_role(&["admin", "editor"])?;
+
     // 1. Validate input (→ 400 VALIDATION_FAILED with details[])
     input.validate()?;
 
@@ -144,6 +150,7 @@ async fn update_widget(
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = auth.request_id();
     tracing::Span::current().record("request_id", &request_id);
+    auth.require_any_role(&["admin", "editor"])?; // → 403 FORBIDDEN for a viewer
 
     // 1. Validate input
     input.validate()?;
@@ -169,6 +176,7 @@ async fn delete_widget(
 ) -> Result<impl IntoResponse, AppError> {
     let request_id = auth.request_id();
     tracing::Span::current().record("request_id", &request_id);
+    auth.require_any_role(&["admin", "editor"])?; // → 403 FORBIDDEN for a viewer
 
     state.widget_service.delete(auth.tenant_id, auth.user_id, id).await?;
 
@@ -272,63 +280,17 @@ async fn list_widgets(
 
 ## AuthUser Extractor
 
-```rust
-use axum::{
-    extract::FromRequestParts,
-    http::request::Parts,
-};
-
-use crate::error::RequestId;
-
-/// Extracts authenticated user info from request extensions.
-/// The auth middleware must run before this extractor is used.
-pub struct AuthUser {
-    pub tenant_id: Uuid,
-    pub user_id: Uuid,
-    pub roles: Vec<String>,
-    request_id: String,
-}
-
-impl AuthUser {
-    pub fn request_id(&self) -> String {
-        self.request_id.clone()
-    }
-}
-
-#[axum::async_trait]
-impl FromRequestParts<Arc<AppState>> for AuthUser {
-    type Rejection = AppError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        _state: &Arc<AppState>,
-    ) -> Result<Self, Self::Rejection> {
-        // → 401 UNAUTHENTICATED envelope with WWW-Authenticate: Bearer
-        let claims = parts.extensions.get::<JwtClaims>()
-            .ok_or(AppError::Unauthenticated)?;
-
-        // Set by request_id_middleware (error-handling-rust.md)
-        let request_id = parts.extensions.get::<RequestId>()
-            .map(|r| r.0.clone())
-            .unwrap_or_default();
-
-        Ok(AuthUser {
-            tenant_id: claims.tenant_id,
-            user_id: claims.sub,
-            roles: claims.roles.clone(),
-            request_id,
-        })
-    }
-}
-```
+`AuthUser` is defined once, in `auth-middleware-rust.md` (`src/extractors/auth_user.rs`). It carries
+`tenant_id`, `user_id` and `roles` from the verified `JwtClaims`, plus `request_id()`. Import it; do not
+write a second one here. A missing claim → 401 `UNAUTHENTICATED` envelope with `WWW-Authenticate: Bearer`.
 
 ## Request/Response DTOs with Validation
 
 ```rust
-use serde::{Deserialize, Serialize};
+use serde::Deserialize; // Serialize is imported with the envelope types above (same module)
 use validator::Validate;
 
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct CreateWidgetInput {
     #[validate(length(min = 1, max = 255, message = "name must be 1-255 characters"))]
     pub name: String,
@@ -336,7 +298,7 @@ pub struct CreateWidgetInput {
     pub description: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Validate)]
+#[derive(Debug, Clone, Deserialize, Validate)]
 pub struct UpdateWidgetInput {
     #[validate(length(min = 1, max = 255, message = "name must be 1-255 characters"))]
     pub name: String,
@@ -377,6 +339,7 @@ pub struct WidgetResponse {
 
 - Every handler MUST use `#[tracing::instrument]` with `skip` for large args and `fields(request_id)`
 - Every handler MUST extract `AuthUser` — tenant ID comes from JWT, never from path/body
+- Write handlers MUST check the caller's role (`auth.require_any_role(...)`) — a viewer gets 403 `FORBIDDEN`
 - Request body validation MUST happen before any side effects (DB, cache, external calls)
 - Error responses MUST use the `AppError` → `IntoResponse` path — never manual status codes or hand-built error JSON
 - Extract with `AppJson` / `AppPath` / `AppQuery` (error-handling-rust.md), not axum's `Json` / `Path` / `Query`, so rejections become envelope errors

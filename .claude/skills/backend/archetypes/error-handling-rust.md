@@ -12,6 +12,8 @@ tags:
 
 # Error Handling Archetype (Rust)
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0, redis 1.7.1, validator 0.21.0, thiserror 2.0.21; its tests ran and pass.
+
 > **CANONICAL REFERENCE**: This file is the single source of truth for Rust backend error handling patterns.
 > The wire shape it produces is the error envelope in `~/.claude/skills/api/response-envelope.md`
 > (`{"error": {code, message, details[], request_id, retryable}}`); if the two ever disagree, the envelope wins. All other Rust skill packs that mention error handling should defer to this file for definitive guidance. For the Go equivalent, see `backend/archetypes/error-handling-go.md`.
@@ -140,6 +142,9 @@ pub async fn request_id_middleware(mut req: Request, next: Next) -> Response {
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
     req.extensions_mut().insert(RequestId(id.clone()));
+    // On the request span when TraceLayer is outside this layer and declares request_id
+    // (observability-rust.md); a no-op otherwise
+    tracing::Span::current().record("request_id", id.as_str());
     let mut response = REQUEST_ID.scope(id.clone(), next.run(req)).await;
     if let Ok(value) = HeaderValue::from_str(&id) {
         response.headers_mut().insert("x-request-id", value);
@@ -485,7 +490,7 @@ impl From<QueryRejection> for AppError {
 ## Panic Recovery Middleware
 
 ```rust
-use axum::{extract::Request, middleware::Next, response::Response};
+// Same module as request_id_middleware, which already imports Request, Next and Response
 use std::panic::AssertUnwindSafe;
 use futures::FutureExt;
 
