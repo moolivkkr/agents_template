@@ -52,8 +52,14 @@ def blocks(file, *idx, **kw):
     return [B(file, i, **kw) for i in idx]
 
 
+# Skill packs outside backend/archetypes whose Rust blocks are pinned here too (key: path under
+# .claude/skills without .md). Their untouched blocks are listed in SKIP with the reason.
+EXTRA_FILES = ["languages/rust.md", "frameworks/axum.md"]
+
 # ─── expected block counts: a mismatch fails the run until this file is updated ──────────────────
 EXPECTED = {
+    "languages/rust": 25,
+    "frameworks/axum": 8,
     "auth-middleware-rust": 9,
     "crud-handler-rust": 8,
     "crud-handler-test-rust": 10,
@@ -66,7 +72,7 @@ EXPECTED = {
     "migration-pattern-rust": 2,
     "observability-rust": 20,
     "performance-rust": 30,
-    "websocket-pattern-rust": 4,
+    "websocket-pattern-rust": 5,
     "worker-pattern-rust": 6,
 }
 
@@ -77,7 +83,8 @@ TOML = {
     ("crud-handler-test-rust", 1): "deps",
     ("crud-repository-test-rust", 1): "deps",
     ("crud-service-test-rust", 1): "deps",
-    ("dockerfile-rust", 1): "profile",
+    ("dockerfile-rust", 1): "toolchain",  # rust-toolchain.toml: channel = the harness's pinned toolchain
+    ("dockerfile-rust", 2): "profile",
     ("grpc-pattern-rust", 1): "deps",
     ("migration-pattern-rust", 1): "deps",
     ("observability-rust", 1): "deps",
@@ -89,30 +96,22 @@ TOML = {
 }
 
 # The .proto files come from grpc-pattern.md (language-neutral, not edited by this harness).
-# (file suffix, line to insert after, missing line, why)
-PROTO_PATCHES = [
-    ("yourapp/v1/common.proto", "package yourapp.v1;", 'import "yourapp/v1/widget.proto";',
-     "common.proto uses Widget and WidgetStatus without importing widget.proto (grpc-pattern.md)"),
-    ("yourapp/v1/common.proto", "package yourapp.v1;", 'import "google/protobuf/timestamp.proto";',
-     "common.proto uses google.protobuf.Timestamp without importing it (grpc-pattern.md)"),
-]
+# (file suffix, line to insert after, missing line, why). Empty since grpc-pattern.md's common.proto
+# imports widget.proto and timestamp.proto itself (fixed upstream, 2026-09-30); the protos compile as written.
+PROTO_PATCHES = []
 
 # Schema for the sqlx::query! metadata (prepare-sqlx.sh): the ```sql migrations of
 # migration-pattern-rust.md in filename order (.up.sql only), minus these, plus stubs/harness_schema.sql.
-# Each of these fails on a clean Postgres 17 (checked 2026-09-30), so a project that copies the whole
-# migration set fails `sqlx migrate run` and every #[sqlx::test(migrations = "./migrations")] test.
-SCHEMA_EXCLUDE = {
-    "20240103000000_add_search_index.sql":
-        'fails: operator class "gin_trgm_ops" does not exist (no migration runs CREATE EXTENSION pg_trgm)',
-    "20240104000000_migrate_status_values.sql":
-        'fails: relation "_migration_audit" does not exist (no migration creates it)',
-    "20240105000000_create_widget_status_enum.up.sql":
-        "fails: the 'active' default cannot be cast to widget_status; and an enum status would not match the "
-        "Rust samples, which bind and read status as String",
-}
+# Migrations left out of that schema, with the reason. Empty: the doc's full set applies to a clean
+# Postgres 17 (round 2, 2026-09-30), so the macros are checked against exactly what a project migrates to.
+SCHEMA_EXCLUDE = {}
 
 # Blocks (or segments) that are deliberately not compiled, with the reason.
+_NOT_YET = ("not compile-checked yet: round 2 (2026-09-30) checked only the blocks it changed in this pack "
+            "and the ones those depend on")
 SKIP = {
+    **{("languages/rust", i): _NOT_YET for i in [2] + list(range(8, 26))},
+    **{("frameworks/axum", i): _NOT_YET for i in (1, 2, 3, 5, 6, 7)},
 }
 
 EH = "error-handling-rust"
@@ -129,6 +128,8 @@ WK = "worker-pattern-rust"
 GRPC = "grpc-pattern-rust"
 OBS = "observability-rust"
 PERF = "performance-rust"
+LANG = "languages/rust"
+AXUM = "frameworks/axum"
 
 # The service file shows domain types, traits and WidgetService in one place; in the composed app
 # those live in crate::domain / crate::traits (the layout crud-service-test-rust.md states).
@@ -142,7 +143,7 @@ use crate::domain::{AuditEntry, ListFilters, ListResult};
 use crate::error::AppError;
 use crate::handlers::widget::{CreateWidgetInput, UpdateWidgetInput};
 use crate::harness::CreateWithRelationsInput;
-use crate::models::Widget;
+use crate::models::{Widget, WidgetStatus};
 use crate::traits::{audit::AuditWriter, cache::Cache, repository::WidgetRepository};
 """)
 
@@ -154,7 +155,7 @@ use uuid::Uuid;
 
 use crate::domain::{ListFilters, ListResult};
 use crate::error::AppError;
-use crate::models::Widget;
+use crate::models::{Widget, WidgetStatus};
 use crate::traits::repository::WidgetRepository;
 """)
 
@@ -257,14 +258,16 @@ pub mod traits;
 
     Unit("websocket", "websocket-pattern-rust.md: types, ConnectionManager, axum upgrade handler, main.rs (binary crate)", {
         "src/main.rs": [
-            T("mod auth; // harness stub: the app's credential check\nmod ws;\n\nuse ws::{handler::ws_upgrade, manager::ConnectionManager};"),
+            T("mod auth; // harness stub: the app's credential check\nmod error;\nmod ws;\n\n"
+              "use ws::{handler::ws_upgrade, manager::ConnectionManager};"),
             B(WS, 4),
         ],
         "src/auth.rs": [S("ws_auth.rs")],
+        "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7),
         "src/ws/mod.rs": [T("pub mod handler;\npub mod manager;\npub mod types;")],
         "src/ws/types.rs": [B(WS, 1)],
         "src/ws/manager.rs": [B(WS, 2)],
-        "src/ws/handler.rs": [B(WS, 3)],
+        "src/ws/handler.rs": [B(WS, 3), B(WS, 5)],
     }, lib=False),
 
     Unit("worker", "worker-pattern-rust.md: job types, traits, Worker, main.rs, EmailSendHandler, health (binary crate)", {
@@ -466,6 +469,28 @@ use archetype_observability::telemetry::{init_telemetry, shutdown_telemetry};
        # the doc's DHAT manifest: dhat-heap = ["dep:dhat"]; dhat is always a dependency here
        features={"dhat-heap": []}),
 
+    Unit("lang-rust", "languages/rust.md: DomainError + sqlx mapping, ApiResponse, IntoResponse, axum handlers/routes, "
+                      "TenantId extractor (+ harness smoke tests: routes build, limit bounds, extractor)", {
+        "src/lib.rs": [T("pub mod app; // harness stubs: the order service the snippets call\n"
+                         "pub mod error;\npub mod extractors;\npub mod handlers;\npub mod response;")],
+        "src/app.rs": [S("lang_app.rs")],
+        # the pack shows several files' worth in one page: error types, the envelope, the extractor, handlers
+        "src/error.rs": [T("use crate::response::current_request_id;"), B(LANG, 1), B(LANG, 3), B(LANG, 5)],
+        "src/response.rs": [B(LANG, 4)],
+        "src/extractors.rs": [T("use crate::error::DomainError;"), B(LANG, 7)],
+        "src/handlers.rs": [T("""
+use crate::app::*;
+use crate::error::{DomainError, FieldError};
+use crate::extractors::{PaginationParams, TenantId};
+use crate::response::ApiResponse;
+"""), B(LANG, 6), S("lang_smoke.rs")],
+    }),
+
+    Unit("axum-pack", "frameworks/axum.md: AppError envelope, request id, rejection-mapping extractors, and its bad-path test", {
+        "src/lib.rs": [T("pub mod error;")],
+        "src/error.rs": [B(AXUM, 4), B(AXUM, 8)],
+    }),
+
     Unit("crud-service", "crud-service-rust.md as one module (domain types + traits + WidgetService), with error.rs, Widget and the handler DTOs", {
         "src/lib.rs": [T("pub mod dto;\npub mod error;\npub mod harness;\npub mod models;\npub mod service;")],
         "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7),
@@ -476,7 +501,7 @@ use archetype_observability::telemetry::{init_telemetry, shutdown_telemetry};
         "src/service.rs": [T("""
 use crate::dto::{CreateWidgetInput, UpdateWidgetInput};
 use crate::harness::CreateWithRelationsInput;
-use crate::models::Widget;
+use crate::models::{Widget, WidgetStatus};
 """)] + blocks(SVC, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
     }),
 ]

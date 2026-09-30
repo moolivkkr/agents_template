@@ -2,8 +2,10 @@
 # archetype-compile-rust.test.sh — the cheap half of tests/archetype-compile/rust/run.sh, safe for
 # run-all: every ```rust block in .claude/skills/backend/archetypes/*.md is compiled by a unit of the
 # compile harness or skipped with a reason, each file's block count matches the harness config (an
-# added or removed sample fails here until the harness is updated), and no doc-comment ``` fence would
-# become a doctest `cargo test` compiles. Needs only python3 (no Rust toolchain, no network).
+# added or removed sample fails here until the harness is updated), no doc-comment ``` fence would
+# become a doctest `cargo test` compiles, no axum route has a `:param` segment (a startup panic since
+# axum 0.8), and every Rust Dockerfile builder / rust-toolchain.toml equals the harness's pinned
+# toolchain. Also covers languages/rust.md and frameworks/axum.md. Needs only python3 (no Rust, no network).
 #
 # The full check — cargo check of every unit, sqlx macros against .sqlx/, Cargo manifests — is
 #   bash tests/archetype-compile/rust/run.sh

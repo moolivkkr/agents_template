@@ -14,7 +14,7 @@ tags:
 
 # WebSocket Pattern — Rust
 
-> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9 (ws), tokio 1.53.1. Compiled, not run.
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9 (ws), tokio 1.53.1, reqwest 0.13.5; the tests below (cross-tenant room refusals, the 401 envelope over a live server) ran and pass.
 
 > **Canonical reference**: This is the Rust counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
@@ -28,7 +28,7 @@ Rust WebSocket servers use `axum`'s built-in WebSocket support (backed by `tokio
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WsMessage {
     #[serde(rename = "type")]
     pub msg_type: String,
@@ -41,6 +41,12 @@ pub struct WsMessage {
     pub reference: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<String>,
+    /// Error frames only (`"type": "error"`): a stable UPPER_SNAKE code and a user-safe message
+    /// (websocket-pattern.md)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -225,6 +231,7 @@ use uuid::Uuid;
 use super::manager::ConnectionManager;
 use super::types::{ConnectedUser, WsMessage};
 use crate::auth::redeem_ws_ticket;
+use crate::error::AppError; // error-handling-rust.md
 
 const MAX_MESSAGE_SIZE: usize = 65536; // 64KB
 
@@ -245,7 +252,8 @@ pub async fn ws_upgrade(
         Ok(c) => c,
         Err(e) => {
             warn!(error = %e, "ws.auth_failed");
-            return axum::http::StatusCode::UNAUTHORIZED.into_response();
+            // Still HTTP (the upgrade hasn't happened): the one error envelope, WWW-Authenticate: Bearer
+            return AppError::Unauthenticated.into_response();
         }
     };
 
@@ -266,6 +274,7 @@ async fn handle_socket(
     manager: Arc<ConnectionManager>,
 ) {
     let conn_id = user.conn_id.clone();
+    let tenant_id = user.tenant_id; // from the redeemed ticket: authorizes every room this socket uses
     let (mut ws_tx, mut ws_rx) = socket.split();
 
     // Channel for sending messages to this connection
@@ -300,7 +309,7 @@ async fn handle_socket(
                     let text_ref: &str = &text;
                     match serde_json::from_str::<WsMessage>(text_ref) {
                         Ok(ws_msg) => {
-                            handle_message(&cid, ws_msg, &mgr).await;
+                            handle_message(&cid, tenant_id, ws_msg, &mgr).await;
                         }
                         Err(e) => {
                             warn!(conn_id = %cid, error = %e, "ws.invalid_message");
@@ -323,12 +332,25 @@ async fn handle_socket(
     manager.unregister(&conn_id).await;
 }
 
-async fn handle_message(conn_id: &str, msg: WsMessage, manager: &Arc<ConnectionManager>) {
+/// Rooms belong to a tenant and are named `<topic>:<tenant_id>` (websocket-pattern.md's
+/// `dashboard:{tenant_id}`). A connection may join or post only to its own tenant's rooms; the tenant
+/// is the one from the redeemed ticket, never one the message names.
+fn room_in_tenant(room: &str, tenant_id: Uuid) -> bool {
+    room.rsplit_once(':')
+        .and_then(|(_, tenant)| Uuid::parse_str(tenant).ok())
+        .is_some_and(|tenant| tenant == tenant_id)
+}
+
+async fn handle_message(conn_id: &str, tenant_id: Uuid, msg: WsMessage, manager: &Arc<ConnectionManager>) {
     match msg.msg_type.as_str() {
         "subscribe" => {
             if let Some(payload) = &msg.payload {
                 if let Some(room) = payload.get("room").and_then(|r| r.as_str()) {
-                    // TODO: authorization check
+                    if !room_in_tenant(room, tenant_id) {
+                        warn!(conn_id = %conn_id, room = %room, "ws.room_forbidden");
+                        send_error(conn_id, "FORBIDDEN", "You can't join this room.", msg.reference.as_deref(), manager).await;
+                        return;
+                    }
                     manager.subscribe(conn_id, room).await;
                     send_ack(conn_id, msg.reference.as_deref(), manager).await;
                 }
@@ -345,12 +367,17 @@ async fn handle_message(conn_id: &str, msg: WsMessage, manager: &Arc<ConnectionM
         "message" => {
             if let Some(payload) = &msg.payload {
                 if let Some(room) = payload.get("room").and_then(|r| r.as_str()) {
+                    if !room_in_tenant(room, tenant_id) {
+                        warn!(conn_id = %conn_id, room = %room, "ws.room_forbidden");
+                        send_error(conn_id, "FORBIDDEN", "You can't post to this room.", msg.reference.as_deref(), manager).await;
+                        return;
+                    }
                     let broadcast = WsMessage {
                         msg_type: "message".to_string(),
                         payload: payload.get("data").cloned(),
                         room: Some(room.to_string()),
-                        reference: None,
                         timestamp: Some(chrono::Utc::now().to_rfc3339()),
+                        ..Default::default()
                     };
                     manager
                         .broadcast_to_room(room, broadcast, Some(conn_id))
@@ -369,14 +396,25 @@ async fn send_ack(conn_id: &str, reference: Option<&str>, manager: &Arc<Connecti
     if let Some(r) = reference {
         let ack = WsMessage {
             msg_type: "ack".to_string(),
-            payload: None,
-            room: None,
             reference: Some(r.to_string()),
-            timestamp: None,
+            ..Default::default()
         };
         // Send via manager (it owns the connection map and the senders)
         manager.send_to_conn(conn_id, ack).await;
     }
+}
+
+/// `{"type": "error", "code", "message", "ref"}` (websocket-pattern.md): code is stable UPPER_SNAKE,
+/// message is user-safe.
+async fn send_error(conn_id: &str, code: &str, message: &str, reference: Option<&str>, manager: &Arc<ConnectionManager>) {
+    let frame = WsMessage {
+        msg_type: "error".to_string(),
+        code: Some(code.to_string()),
+        message: Some(message.to_string()),
+        reference: reference.map(str::to_string),
+        ..Default::default()
+    };
+    manager.send_to_conn(conn_id, frame).await;
 }
 ```
 
@@ -385,8 +423,9 @@ async fn send_ack(conn_id: &str, reference: Option<&str>, manager: &Arc<Connecti
 ```rust
 // src/main.rs
 
-use axum::{routing::get, Router};
-use std::sync::Arc;
+use axum::{middleware, routing::get, Router};
+
+use crate::error::request_id_middleware; // error-handling-rust.md
 
 #[tokio::main]
 async fn main() {
@@ -396,10 +435,105 @@ async fn main() {
 
     let app = Router::new()
         .route("/ws", get(ws_upgrade))
+        // outermost: X-Request-Id on every response, and the same id in the 401 envelope
+        .layer(middleware::from_fn(request_id_middleware))
         .with_state(manager);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(listener, app).await.unwrap();
+}
+```
+
+## Tests
+
+```rust
+// src/ws/handler.rs (bottom of the file)
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    async fn connect(manager: &Arc<ConnectionManager>, tenant_id: Uuid) -> (String, mpsc::UnboundedReceiver<WsMessage>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let user = ConnectedUser { conn_id: Uuid::new_v4().to_string(), user_id: Uuid::new_v4(), tenant_id, roles: vec![] };
+        let conn_id = user.conn_id.clone();
+        manager.register(user, tx).await;
+        (conn_id, rx)
+    }
+
+    fn frame(msg_type: &str, payload: serde_json::Value) -> WsMessage {
+        WsMessage { msg_type: msg_type.into(), payload: Some(payload), reference: Some("r1".into()), ..Default::default() }
+    }
+
+    #[tokio::test]
+    async fn subscribing_to_another_tenants_room_is_refused() {
+        let manager = ConnectionManager::new();
+        let (tenant_a, tenant_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let (conn_a, mut rx_a) = connect(&manager, tenant_a).await;
+
+        // Tenant A asks for tenant B's room: an error frame, and no membership
+        let room_b = format!("dashboard:{tenant_b}");
+        handle_message(&conn_a, tenant_a, frame("subscribe", serde_json::json!({ "room": room_b })), &manager).await;
+        let refused = rx_a.try_recv().expect("an error frame");
+        assert_eq!(refused.msg_type, "error");
+        assert_eq!(refused.code.as_deref(), Some("FORBIDDEN"));
+        assert_eq!(refused.reference.as_deref(), Some("r1"));
+
+        manager.broadcast_to_room(&room_b, WsMessage { msg_type: "message".into(), ..Default::default() }, None).await;
+        assert!(rx_a.try_recv().is_err(), "tenant A must not receive tenant B's room traffic");
+
+        // Its own tenant's room is allowed
+        let room_a = format!("dashboard:{tenant_a}");
+        handle_message(&conn_a, tenant_a, frame("subscribe", serde_json::json!({ "room": room_a })), &manager).await;
+        assert_eq!(rx_a.try_recv().expect("an ack").msg_type, "ack");
+    }
+
+    #[tokio::test]
+    async fn posting_to_another_tenants_room_is_refused() {
+        let manager = ConnectionManager::new();
+        let (tenant_a, tenant_b) = (Uuid::new_v4(), Uuid::new_v4());
+        let room_b = format!("dashboard:{tenant_b}");
+        let (conn_b, mut rx_b) = connect(&manager, tenant_b).await;
+        handle_message(&conn_b, tenant_b, frame("subscribe", serde_json::json!({ "room": room_b })), &manager).await;
+        assert_eq!(rx_b.try_recv().expect("an ack").msg_type, "ack");
+
+        let (conn_a, mut rx_a) = connect(&manager, tenant_a).await;
+        let post = frame("message", serde_json::json!({ "room": room_b, "data": { "text": "hi" } }));
+        handle_message(&conn_a, tenant_a, post, &manager).await;
+
+        assert_eq!(rx_a.try_recv().expect("an error frame").code.as_deref(), Some("FORBIDDEN"));
+        assert!(rx_b.try_recv().is_err(), "tenant B's room must not receive tenant A's post");
+    }
+
+    #[tokio::test]
+    async fn an_invalid_ticket_is_a_401_error_envelope() {
+        // A real server: the upgrade request is answered before any upgrade happens
+        let app = axum::Router::new()
+            .route("/ws", axum::routing::get(ws_upgrade))
+            .layer(axum::middleware::from_fn(crate::error::request_id_middleware))
+            .with_state(ConnectionManager::new());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let resp = reqwest::Client::new()
+            .get(format!("http://{addr}/ws?ticket=not-a-ticket"))
+            .header("connection", "upgrade")
+            .header("upgrade", "websocket")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), 401);
+        assert_eq!(resp.headers()["www-authenticate"], "Bearer");
+        let header_id = resp.headers()["x-request-id"].to_str().unwrap().to_owned();
+        let body: serde_json::Value = resp.json().await.unwrap();
+        assert!(body.get("data").is_none());
+        assert_eq!(body["error"]["code"], "UNAUTHENTICATED");
+        assert_eq!(body["error"]["request_id"], header_id.as_str());
+    }
 }
 ```
 
@@ -408,10 +542,10 @@ async fn main() {
 - Use `WebSocket::split()` to get separate sink and stream — one task for reading, one for writing
 - Use `mpsc::unbounded_channel` per connection for the write path — the write task receives from the channel
 - Use `RwLock` (from `tokio::sync`) for the connection manager — allows concurrent reads during broadcasts
-- Authenticate BEFORE calling `ws.on_upgrade()` — return 401 before the upgrade happens
+- Authenticate BEFORE calling `ws.on_upgrade()` — a failed ticket is a 401 in the error envelope (`AppError::Unauthenticated`), before the upgrade happens
 - Set `max_message_size()` on the upgrade — prevents memory exhaustion
 - Use `tokio::select!` to wait for either read or write task to finish — then clean up both
 - Always call `manager.unregister()` after the connection tasks finish — prevents leaks
 - `WsMessage` must be `Clone` — it gets sent to multiple connections during broadcast
-- Room authorization must be checked in `handle_message` before subscribing
+- Room authorization is checked in `handle_message` before subscribing AND before posting: a room belongs to the tenant in its name (`<topic>:<tenant_id>`), which must be the connection's tenant from the ticket; anything else gets an error frame with code `FORBIDDEN`
 - For multi-instance: use Redis pub/sub via the `redis` crate to bridge instances

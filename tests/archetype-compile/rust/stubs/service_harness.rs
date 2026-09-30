@@ -3,7 +3,7 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::error::AppError;
-use crate::models::Widget;
+use crate::models::{Widget, WidgetStatus};
 
 /// crud-service-rust.md's create_with_relations takes this input; no archetype defines it.
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ impl Widget {
             tenant_id,
             name: input.name.clone(),
             description: None,
-            status: "active".into(),
+            status: WidgetStatus::Active,
             created_at: now,
             updated_at: now,
             deleted_at: None,

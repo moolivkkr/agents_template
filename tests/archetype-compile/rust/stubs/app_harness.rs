@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::domain::AuditEntry;
 use crate::error::AppError;
-use crate::models::Widget;
+use crate::models::{Widget, WidgetStatus};
 use crate::repositories::widget::PgWidgetRepository;
 use crate::services::widget::WidgetService;
 use crate::traits::{audit::AuditWriter, cache::Cache};
@@ -82,7 +82,7 @@ impl Widget {
             tenant_id,
             name: input.name.clone(),
             description: None,
-            status: "active".into(),
+            status: WidgetStatus::Active,
             created_at: now,
             updated_at: now,
             deleted_at: None,

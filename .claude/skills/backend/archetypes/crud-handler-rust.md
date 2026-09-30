@@ -210,13 +210,20 @@ pub struct ListParams {
 
 impl ListParams {
     /// Convert query params into validated domain filters.
-    fn into_filters(self) -> ListFilters {
-        // Default 20 when missing, zero, negative or not a number; cap at 100
-        let page_size = self.limit
-            .and_then(|l| l.parse::<i64>().ok())
-            .filter(|n| *n > 0)
-            .unwrap_or(20)
-            .min(100);
+    /// `limit` defaults to 20. A value outside 1..=100, or not a whole number, is 400 VALIDATION_FAILED
+    /// with a details[] entry for "limit" — never clamped silently: a client asking for 500 and
+    /// getting 100 can't tell it was truncated (api/response-envelope.md).
+    fn into_filters(self) -> Result<ListFilters, AppError> {
+        let page_size = match self.limit.as_deref() {
+            None => 20,
+            Some(raw) => raw
+                .parse::<i64>()
+                .ok()
+                .filter(|n| (1..=100).contains(n))
+                .ok_or_else(|| {
+                    AppError::validation("limit", "out_of_range", "Limit must be a whole number from 1 to 100.")
+                })?,
+        };
 
         let allowed_sorts = ["created_at", "updated_at", "name"];
         let sort_by = self.sort_by
@@ -228,7 +235,7 @@ impl ListParams {
             .unwrap_or_else(|| "desc".to_owned());
 
         // Extract filter[field]=value from flattened extra params
-        let allowed_filters = ["status", "priority", "category"];
+        let allowed_filters = ["status", "priority"]; // columns that exist (migration-pattern-rust.md)
         let fields: std::collections::HashMap<String, String> = self.extra.into_iter()
             .filter_map(|(k, v)| {
                 k.strip_prefix("filter[")
@@ -238,13 +245,13 @@ impl ListParams {
             })
             .collect();
 
-        ListFilters {
+        Ok(ListFilters {
             cursor: self.cursor,
             page_size,
             sort_by,
             sort_dir,
             fields,
-        }
+        })
     }
 }
 
@@ -257,7 +264,7 @@ async fn list_widgets(
     let request_id = auth.request_id();
     tracing::Span::current().record("request_id", &request_id);
 
-    let filters = params.into_filters();
+    let filters = params.into_filters()?; // bad limit → 400 VALIDATION_FAILED
     let limit = filters.page_size;
     let result = state.widget_service.list(auth.tenant_id, filters).await?;
 
@@ -328,7 +335,7 @@ pub struct WidgetResponse {
     pub id: Uuid,
     pub name: String,
     pub description: Option<String>,
-    pub status: String,
+    pub status: crate::models::WidgetStatus, // the Postgres enum widget_status
     pub version: i32,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
@@ -344,7 +351,7 @@ pub struct WidgetResponse {
 - Error responses MUST use the `AppError` → `IntoResponse` path — never manual status codes or hand-built error JSON
 - Extract with `AppJson` / `AppPath` / `AppQuery` (error-handling-rust.md), not axum's `Json` / `Path` / `Query`, so rejections become envelope errors
 - Internal error messages MUST NOT leak to clients — `AppError::Internal` returns a generic message
-- List endpoints are cursor-only: `?cursor=&limit=`, `limit` defaults to 20 and is capped at 100 — never return unbounded lists
+- List endpoints are cursor-only: `?cursor=&limit=`. `limit` defaults to 20; outside 1..100 (or not a whole number) it is 400 `VALIDATION_FAILED` with a `details[]` entry for `limit` — never clamped silently, never an unbounded list
 - Filter fields MUST be allow-listed — never pass arbitrary query params to the DB
 - Sort fields MUST be allow-listed — never allow sorting by arbitrary columns
 - Every success response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}`; lists add `meta.pagination` `{next_cursor, has_more, limit}` and `data` is `[]` when empty

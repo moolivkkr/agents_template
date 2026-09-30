@@ -8,7 +8,19 @@
         "Uuid",
         "Uuid",
         "Varchar",
-        "Varchar",
+        {
+          "Custom": {
+            "name": "widget_status",
+            "kind": {
+              "Enum": [
+                "active",
+                "archived",
+                "draft",
+                "deleted"
+              ]
+            }
+          }
+        },
         "Timestamptz",
         "Timestamptz",
         "Uuid",
