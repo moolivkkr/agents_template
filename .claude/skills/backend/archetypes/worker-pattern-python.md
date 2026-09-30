@@ -16,6 +16,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `worker-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported and type-checked; the Celery task applied in-process, the dramatiq actor function called, the asyncio worker and APScheduler jobs exercised. No broker was used. celery 5.6.3, dramatiq 2.2.1, APScheduler 3.11.3.
+
 Python workers typically use Celery (Redis/RabbitMQ) or dramatiq for task queues, and APScheduler or Celery Beat for scheduled jobs.
 
 ## Celery Worker Setup
@@ -78,17 +80,16 @@ task_max_retries = 5
 ```python
 # app/tasks/email.py
 
-import uuid
-from datetime import datetime, timezone
-
+import structlog
 from celery import Task
-from celery.utils.log import get_task_logger
 
 from app.services.email import EmailService
 from app.services.idempotency import IdempotencyStore
 from app.worker.celery_app import app
 
-logger = get_task_logger(__name__)
+# structlog, not celery's get_task_logger(): that is a stdlib Logger, with no .bind() and no
+# keyword fields
+logger = structlog.get_logger(__name__)
 
 
 class BaseTask(Task):
@@ -103,32 +104,26 @@ class BaseTask(Task):
     def on_failure(self, exc, task_id, args, kwargs, einfo):
         logger.error(
             "task.failed",
-            extra={
-                "task_id": task_id,
-                "task_name": self.name,
-                "error": str(exc),
-                "attempt": self.request.retries + 1,
-            },
+            task_id=task_id,
+            task_name=self.name,
+            error=str(exc),
+            attempt=self.request.retries + 1,
         )
 
     def on_retry(self, exc, task_id, args, kwargs, einfo):
         logger.warning(
             "task.retrying",
-            extra={
-                "task_id": task_id,
-                "task_name": self.name,
-                "error": str(exc),
-                "attempt": self.request.retries + 1,
-            },
+            task_id=task_id,
+            task_name=self.name,
+            error=str(exc),
+            attempt=self.request.retries + 1,
         )
 
     def on_success(self, retval, task_id, args, kwargs):
         logger.info(
             "task.completed",
-            extra={
-                "task_id": task_id,
-                "task_name": self.name,
-            },
+            task_id=task_id,
+            task_name=self.name,
         )
 
 
@@ -180,16 +175,21 @@ def send_email(
 # app/tasks/email_dramatiq.py
 
 import dramatiq
+import structlog
 from dramatiq.brokers.redis import RedisBroker
-from dramatiq.middleware import CurrentMessage, Retries, TimeLimits
+from dramatiq.middleware import CurrentMessage
 from dramatiq.results import Results
 from dramatiq.results.backends import RedisBackend
 
-# Configure broker
+from app.services.email import EmailService
+from app.services.idempotency import IdempotencyStore
+
+logger = structlog.get_logger(__name__)
+
+# Configure broker. Retries and TimeLimit are already in the broker's default middleware (the actor
+# options below tune them); adding them again would run each twice. CurrentMessage isn't a default.
 broker = RedisBroker(url="redis://localhost:6379/0")
 broker.add_middleware(CurrentMessage())
-broker.add_middleware(Retries(max_retries=5, min_backoff=1000, max_backoff=300_000))
-broker.add_middleware(TimeLimits())
 dramatiq.set_broker(broker)
 
 
@@ -468,7 +468,8 @@ async def worker_health() -> dict:
 # app/services/job_producer.py
 
 import uuid
-from datetime import datetime, timezone
+
+from app.tasks.email import send_email
 
 
 def enqueue_email(

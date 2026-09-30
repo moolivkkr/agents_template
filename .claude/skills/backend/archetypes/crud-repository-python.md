@@ -16,6 +16,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-repository.md` (Go/pgx). Both follow the same structural conventions: parameterized queries, tenant isolation, soft delete, optimistic locking, and multi-level caching.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked (it satisfies crud-service-python.md's `WidgetRepository` protocol), statements compiled with the PostgreSQL dialect; crud-repository-test-python.md passes against PostgreSQL 16 (`run.sh --live`). SQLAlchemy 2.1.1, asyncpg 0.31.0, redis 8.1.0.
+
 Complete SQLAlchemy async repository template backed by asyncpg. Every generated repository MUST follow this pattern.
 
 ## SQLAlchemy Model Definition
@@ -26,7 +28,7 @@ Complete SQLAlchemy async repository template backed by asyncpg. Every generated
 from datetime import datetime
 from uuid import UUID
 
-from sqlalchemy import DateTime, Integer, String, Uuid, text
+from sqlalchemy import DateTime, Index, Integer, String, Uuid, text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -39,15 +41,27 @@ class WidgetModel(Base):
     """SQLAlchemy model for the widgets table."""
 
     __tablename__ = "widgets"
+    __table_args__ = (
+        # The migration's idx_widgets_tenant_name_unique, declared here too so a schema built from the
+        # model (Base.metadata.create_all in tests) rejects duplicates: a name is unique per tenant
+        # among rows that aren't soft-deleted.
+        Index(
+            "idx_widgets_tenant_name_unique",
+            "tenant_id",
+            text("lower(name)"),
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(Uuid, primary_key=True)
     tenant_id: Mapped[UUID] = mapped_column(Uuid, nullable=False, index=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(String(2000), nullable=False, default="")
     status: Mapped[str] = mapped_column(String(50), nullable=False, default="active")
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, default=None)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, default=None)
     created_by: Mapped[UUID] = mapped_column(Uuid, nullable=False)
     updated_by: Mapped[UUID] = mapped_column(Uuid, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
@@ -90,14 +104,14 @@ def create_session_factory(engine) -> async_sessionmaker[AsyncSession]:
 ```python
 # app/db/transaction.py
 
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 
 @asynccontextmanager
-async def transaction(session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[AsyncSession]:
+async def transaction(session_factory: async_sessionmaker[AsyncSession]) -> AsyncGenerator[AsyncSession, None]:
     """
     Async context manager for database transactions.
     Commits on success, rolls back on exception.
@@ -121,10 +135,13 @@ async def transaction(session_factory: async_sessionmaker[AsyncSession]) -> Asyn
 import json
 import logging
 from base64 import urlsafe_b64decode, urlsafe_b64encode
-from datetime import datetime
+from collections.abc import Sequence
+from datetime import datetime, timezone
+from typing import Any, cast
 from uuid import UUID
 
-from sqlalchemy import and_, delete, func, select, update
+from redis.asyncio import Redis
+from sqlalchemy import CursorResult, and_, func, select, tuple_, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.domain.base import ListFilters, ListResult
@@ -151,7 +168,7 @@ class WidgetRepository:
     def __init__(
         self,
         session_factory: async_sessionmaker[AsyncSession],
-        redis: "RedisClient | None" = None,
+        redis: Redis | None = None,
     ) -> None:
         self._session_factory = session_factory
         self._redis = redis
@@ -287,7 +304,8 @@ class WidgetRepository:
                     version=widget.version,
                 )
             )
-            result = await session.execute(stmt)
+            # execute() is typed as Result; DML returns a CursorResult, which carries rowcount
+            result = cast(CursorResult[Any], await session.execute(stmt))
             rows_affected = result.rowcount
 
         if rows_affected == 0:
@@ -309,7 +327,7 @@ class WidgetRepository:
         Returns True if a row was affected, False if not found.
         """
         log = self._logger.getChild("soft_delete")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         async with self._session_factory() as session, session.begin():
             stmt = (
@@ -323,7 +341,8 @@ class WidgetRepository:
                 )
                 .values(deleted_at=now, updated_at=now)
             )
-            result = await session.execute(stmt)
+            # execute() is typed as Result; DML returns a CursorResult, which carries rowcount
+            result = cast(CursorResult[Any], await session.execute(stmt))
             rows_affected = result.rowcount
 
         if rows_affected == 0:
@@ -368,14 +387,17 @@ class WidgetRepository:
             # Apply cursor
             if filters.cursor:
                 sort_value, cursor_id = self._decode_cursor(filters.cursor)
+                # The cursor stores timestamps as ISO text; bind them back as datetimes
+                cursor_value: datetime | str = (
+                    datetime.fromisoformat(sort_value) if sort_col.key in ("created_at", "updated_at") else sort_value
+                )
+                # tuple_() is a SQL row comparison. A Python tuple `<` would compare only the first
+                # column and silently drop the id tie-breaker.
+                row = tuple_(sort_col, WidgetModel.id)
                 if filters.sort_dir == "desc":
-                    stmt = stmt.where(
-                        (sort_col, WidgetModel.id) < (sort_value, cursor_id)
-                    )
+                    stmt = stmt.where(row < tuple_(cursor_value, cursor_id))
                 else:
-                    stmt = stmt.where(
-                        (sort_col, WidgetModel.id) > (sort_value, cursor_id)
-                    )
+                    stmt = stmt.where(row > tuple_(cursor_value, cursor_id))
 
             # Order and limit (request limit+1 to detect has_more)
             if filters.sort_dir == "desc":
@@ -419,7 +441,9 @@ For "jump to page N" admin tables, filter instead (date range, search, status).
 ## Batch Operations
 
 ```python
-    async def batch_create(self, widgets: list[Widget]) -> None:
+    # Sequence, not list[...]: in this class body `list` is the method above, so `list[Widget]`
+    # would raise TypeError when the class is defined.
+    async def batch_create(self, widgets: Sequence[Widget]) -> None:
         """
         Bulk insert widgets using SQLAlchemy's insert with multiple values.
         More efficient than individual inserts for large batches.
@@ -439,7 +463,7 @@ For "jump to page N" admin tables, filter instead (date range, search, status).
 
         log.info("batch created", extra={"count": len(widgets)})
 
-    async def batch_update(self, widgets: list[Widget]) -> None:
+    async def batch_update(self, widgets: Sequence[Widget]) -> None:
         """
         Bulk update widgets within a single transaction.
         Each update uses optimistic locking — ConflictError on version mismatch.
@@ -470,7 +494,7 @@ For "jump to page N" admin tables, filter instead (date range, search, status).
                         version=widget.version,
                     )
                 )
-                result = await session.execute(stmt)
+                result = cast(CursorResult[Any], await session.execute(stmt))
                 if result.rowcount == 0:
                     # Rolls back the whole batch (409 CONFLICT; user-safe message, no DB detail)
                     raise ConflictError(
@@ -587,7 +611,7 @@ For "jump to page N" admin tables, filter instead (date range, search, status).
             self._logger.warning("cache set failed", extra={"key": key}, exc_info=True)
 
     @staticmethod
-    def _deserialize(data: bytes) -> Widget:
+    def _deserialize(data: bytes | str) -> Widget:
         """Deserialize a widget from cached JSON bytes."""
         obj = json.loads(data)
         return Widget(
@@ -712,7 +736,7 @@ class WidgetRawRepository:
             for w in widgets
         ]
         async with self._pool.acquire() as conn:
-            return await conn.copy_records_to_table(
+            status = await conn.copy_records_to_table(
                 "widgets",
                 records=records,
                 columns=[
@@ -720,6 +744,7 @@ class WidgetRawRepository:
                     "created_at", "updated_at", "created_by", "updated_by", "version",
                 ],
             )
+        return int(status.split()[-1])  # asyncpg returns the command tag, e.g. "COPY 50"
 
     @staticmethod
     def _row_to_domain(row: asyncpg.Record) -> Widget:

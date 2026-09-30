@@ -17,6 +17,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/auth-middleware.md` (Go/chi). Both implement the same auth patterns: JWT validation, RBAC, tenant context, rate limiting, CORS, and request ID tracking.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and `create_app()` driven through TestClient with real PyJWT tokens (valid, missing, expired, wrong audience, role check). FastAPI 0.142.2, Starlette 1.7.0, PyJWT 2.15.1.
+
 Complete authentication and authorization middleware for FastAPI. Every generated auth layer MUST follow this pattern.
 
 ## JWT Dependency — HTTPBearer + Decode
@@ -34,8 +36,9 @@ from uuid import UUID
 import jwt
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jwt.types import Options
 
-from app.errors import ForbiddenError, UnauthorizedError
+from app.errors import ForbiddenError, UnauthenticatedError
 
 logger = logging.getLogger(__name__)
 
@@ -90,12 +93,12 @@ class CurrentUser:
 def _decode_token(token: str) -> dict[str, Any]:
     """
     Decode and validate a JWT token.
-    Raises UnauthorizedError on any validation failure.
+    Raises UnauthenticatedError (401) on any validation failure.
     """
     if _jwt_config is None:
         raise RuntimeError("JWT not configured — call configure_jwt() during startup")
 
-    options: dict[str, Any] = {
+    options: Options = {
         "require": ["exp", "sub", "tenant_id"],
         "verify_exp": True,
         "verify_iss": bool(_jwt_config.issuer),
@@ -112,16 +115,11 @@ def _decode_token(token: str) -> dict[str, Any]:
             options=options,
         )
         return payload
-    except jwt.ExpiredSignatureError:
-        raise UnauthorizedError("token has expired")
-    except jwt.InvalidIssuerError:
-        raise UnauthorizedError("invalid token issuer")
-    except jwt.InvalidAudienceError:
-        raise UnauthorizedError("invalid token audience")
-    except jwt.DecodeError as exc:
-        raise UnauthorizedError("malformed token") from exc
     except jwt.InvalidTokenError as exc:
-        raise UnauthorizedError("invalid token") from exc
+        # ExpiredSignatureError, InvalidIssuerError, InvalidAudienceError, DecodeError, ... all subclass
+        # InvalidTokenError. The client always gets the same 401; the reason stays in the exception
+        # chain, which reaches only the log (error-handling-python.md).
+        raise UnauthenticatedError(cause=exc) from exc
 
 
 # ---------------------------------------------------------------------------
@@ -152,7 +150,7 @@ async def get_current_user(
             permissions=payload.get("permissions"),
         )
     except (KeyError, ValueError) as exc:
-        raise UnauthorizedError("invalid token claims") from exc
+        raise UnauthenticatedError(cause=exc) from exc
 
     # Attach to request state for middleware / logging access
     request.state.current_user = user
@@ -181,10 +179,7 @@ def require_role(*required_roles: str):
 
     async def _check_role(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         if not any(role in user.roles for role in required_roles):
-            raise ForbiddenError(
-                action="access",
-                resource=f"endpoint requiring roles: {', '.join(required_roles)}",
-            )
+            raise ForbiddenError()  # 403 FORBIDDEN; the body never names the missing role
         return user
 
     return _check_role
@@ -203,10 +198,7 @@ def require_permission(*required_permissions: str):
         user_perms = set(user.permissions or [])
         missing = [p for p in required_permissions if p not in user_perms]
         if missing:
-            raise ForbiddenError(
-                action="access",
-                resource=f"endpoint requiring permissions: {', '.join(missing)}",
-            )
+            raise ForbiddenError()  # 403 FORBIDDEN; the body never names the missing permission
         return user
 
     return _check_permission
@@ -229,7 +221,7 @@ from fastapi import Depends, Request, Security
 from fastapi.security import APIKeyHeader
 
 from app.dependencies.auth import CurrentUser
-from app.errors import UnauthorizedError
+from app.errors import UnauthenticatedError
 
 logger = logging.getLogger(__name__)
 
@@ -275,7 +267,7 @@ async def get_current_user_from_api_key(
         @router.get("/webhooks", dependencies=[Depends(get_current_user_from_api_key)])
     """
     if api_key is None:
-        raise UnauthorizedError("missing X-API-Key header")
+        raise UnauthenticatedError()
 
     if _api_key_store is None:
         raise RuntimeError("API key store not configured")
@@ -284,7 +276,7 @@ async def get_current_user_from_api_key(
     user = await _api_key_store.lookup(key_hash)
 
     if user is None:
-        raise UnauthorizedError("invalid API key")
+        raise UnauthenticatedError()
 
     request.state.current_user = user
     return user
@@ -306,7 +298,10 @@ from uuid import UUID
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
-from starlette.responses import JSONResponse, Response
+from starlette.responses import Response
+
+from app.errors import RateLimitError
+from app.errors.handlers import error_response
 
 logger = logging.getLogger(__name__)
 
@@ -368,21 +363,12 @@ class TenantRateLimitMiddleware(BaseHTTPMiddleware):
                 "rate limit exceeded",
                 extra={"tenant_id": str(user.tenant_id)},
             )
-            return JSONResponse(
-                status_code=429,
-                content={
-                    "error": {
-                        "code": "RATE_LIMITED",
-                        "message": "too many requests — please retry later",
-                        "details": {"retry_after_seconds": 1},
-                    }
-                },
-                headers={
-                    "Retry-After": "1",
-                    "X-RateLimit-Limit": str(int(self._rate)),
-                    "X-RateLimit-Remaining": "0",
-                },
-            )
+            # Middleware runs outside the AppError handler: build the one error envelope directly
+            # (429 RATE_LIMITED, retryable, Retry-After and X-Request-Id set by error_response)
+            response = error_response(request, RateLimitError(retry_after_seconds=1))
+            response.headers["X-RateLimit-Limit"] = str(int(self._rate))
+            response.headers["X-RateLimit-Remaining"] = "0"
+            return response
 
         return await call_next(request)
 ```
@@ -540,6 +526,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from app.api.v1 import widgets
+from app.config import settings
 from app.dependencies.auth import JWTConfig, configure_jwt
 from app.errors.handlers import register_exception_handlers
 from app.middleware.cors import CORSConfig, setup_cors

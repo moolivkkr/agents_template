@@ -16,6 +16,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/crud-service-test.md` (Go/testify). Both test the same cache-aside, audit, and optimistic locking behavior.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked and run against crud-service-python.md's service: 43 passed. pytest 9.1.1, pytest-asyncio 1.4.0.
+
 Complete unit test template for the Python service layer. Every generated service test file MUST follow this pattern.
 
 ## Test File Location
@@ -38,7 +40,7 @@ Rule: Test file lives in `tests/services/` mirroring the `app/services/` layout.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.domain.base import ListFilters, ListResult
 from app.domain.widget import Widget, WidgetStatus
@@ -56,7 +58,7 @@ def make_widget(
     updated_by: uuid.UUID | None = None,
 ) -> Widget:
     """Build a Widget domain object with sensible defaults. Unique names per call."""
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     return Widget(
         id=id or uuid.uuid4(),
         tenant_id=tenant_id or uuid.uuid4(),

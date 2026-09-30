@@ -16,6 +16,8 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the FastAPI endpoint driven by two TestClient WebSocket clients; the Channels consumer imported under `django.setup()` but not run on a channel layer. FastAPI 0.142.2, Starlette 1.7.0, channels 4.3.2, Django 6.1.1.
+
 Python WebSocket servers use FastAPI's built-in WebSocket support (backed by Starlette/uvicorn) or Django Channels for Django projects.
 
 ## Connection Manager
@@ -146,12 +148,13 @@ manager = ConnectionManager()
 ```python
 # app/ws/endpoint.py
 
+import json
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 import structlog
 
+from app.ws.handlers import handle_message, send_error
 from app.ws.manager import Connection, manager
 from app.auth.jwt import validate_jwt, JWTError
 
@@ -308,13 +311,13 @@ async def send_error(conn: Connection, ref: str | None, code: str, message: str)
 
 import json
 import logging
-from channels.generic.websocket import AsyncJsonWebSocketConsumer
+from channels.generic.websocket import AsyncJsonWebsocketConsumer
 from channels.db import database_sync_to_async
 
 logger = logging.getLogger(__name__)
 
 
-class NotificationConsumer(AsyncJsonWebSocketConsumer):
+class NotificationConsumer(AsyncJsonWebsocketConsumer):
     """Django Channels WebSocket consumer for real-time notifications."""
 
     async def connect(self):
@@ -334,12 +337,12 @@ class NotificationConsumer(AsyncJsonWebSocketConsumer):
 
         logger.info("ws.connected", extra={"user_id": str(self.user.id)})
 
-    async def disconnect(self, close_code):
+    async def disconnect(self, code):
         if hasattr(self, "room_group"):
             await self.channel_layer.group_discard(self.room_group, self.channel_name)
-        logger.info("ws.disconnected", extra={"code": close_code})
+        logger.info("ws.disconnected", extra={"code": code})
 
-    async def receive_json(self, content):
+    async def receive_json(self, content, **kwargs):
         msg_type = content.get("type")
 
         if msg_type == "subscribe":
@@ -358,8 +361,9 @@ class NotificationConsumer(AsyncJsonWebSocketConsumer):
 
     @database_sync_to_async
     def authenticate(self, token):
-        # Validate JWT and return user
-        pass
+        # Validate the JWT (signature, exp, iss, aud) and return the user; raise if invalid.
+        # Until it's written, every connection is refused with 4001 (fails closed).
+        raise NotImplementedError("validate the JWT and load the user")
 
     @database_sync_to_async
     def can_join(self, room):
