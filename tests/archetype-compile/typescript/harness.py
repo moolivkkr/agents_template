@@ -332,10 +332,36 @@ def run_prisma_validate(d: str, specs: list[dict]) -> tuple[bool, str]:
     return True, "prisma validate: " + ", ".join(notes)
 
 
+def run_node_probe(d: str, entry: str) -> tuple[bool, str]:
+    """Emit `entry` (and what it imports) to CommonJS WITH decorator metadata, then run it with node.
+
+    For behaviour tsc can't see — NestJS resolves constructor dependencies from emitted metadata at runtime.
+    """
+    cfg = {"compilerOptions": {"strict": True, "skipLibCheck": True, "target": "es2022", "module": "nodenext",
+                               "moduleResolution": "nodenext", "experimentalDecorators": True,
+                               "emitDecoratorMetadata": True, "esModuleInterop": True, "types": ["node"],
+                               "rootDir": "src", "outDir": "dist-probe"},
+           "files": [entry]}
+    with open(os.path.join(d, "tsconfig.probe.json"), "w") as f:
+        json.dump(cfg, f)
+    tsc = os.path.join(HERE, "node_modules", ".bin", "tsc")
+    p = subprocess.run([tsc, "-p", "tsconfig.probe.json", "--pretty", "false"], cwd=d, capture_output=True, text=True)
+    if p.returncode != 0:
+        return False, "probe emit failed:\n" + p.stdout + p.stderr
+    js = os.path.join("dist-probe", os.path.relpath(entry, "src")).rsplit(".", 1)[0] + ".js"
+    r = subprocess.run(["node", js], cwd=d, capture_output=True, text=True)
+    out = (r.stdout + r.stderr).strip()
+    return r.returncode == 0, ("node probe: " + out.splitlines()[-1]) if r.returncode == 0 else ("node probe FAILED:\n" + out)
+
+
 def check_unit(unit: dict, d: str, src: Source, run_tests: bool) -> tuple[bool, str]:  # noqa: C901
     ok, out = run_tsc(d, src)
     if ok and unit.get("prisma_validate"):
         ok, out = run_prisma_validate(d, unit["prisma_validate"])
+        if not ok:
+            return ok, out
+    if ok and run_tests and unit.get("node_probe"):
+        ok, out = run_node_probe(d, unit["node_probe"])
         if not ok:
             return ok, out
     if not ok or not run_tests or not unit.get("vitest"):
@@ -469,7 +495,7 @@ def main() -> int:
         blocks_desc = f"{len(u['blocks'])} blocks from {', '.join(files)}"
         if ok:
             n_pass += 1
-            print(f"PASS  {u['name']}  ({blocks_desc})" + (f"  [{out}]" if out.startswith(("vitest: ", "prisma validate: ")) else ""))
+            print(f"PASS  {u['name']}  ({blocks_desc})" + (f"  [{out}]" if out.startswith(("vitest: ", "prisma validate: ", "node probe: ")) else ""))
         else:
             n_fail += 1
             print(f"FAIL  {u['name']}  ({blocks_desc})")

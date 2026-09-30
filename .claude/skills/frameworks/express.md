@@ -36,7 +36,9 @@ export default router
 const asyncHandler = (fn: RequestHandler): RequestHandler =>
     (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next)
 ```
-Always wrap async route handlers — unhandled rejections crash the process.
+Express 4: always wrap async route handlers — a rejection never reaches the error middleware and, unhandled,
+exits the process. Express 5 forwards rejected promises from handlers and middleware to the error middleware
+itself, so the wrapper is optional there (and harmless).
 
 ## Error Middleware
 ```typescript

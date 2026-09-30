@@ -854,6 +854,9 @@ const prometheusExporter = new PrometheusExporter({
 
 Alternatively, if you need both OTLP and Prometheus, use `prom-client` alongside OTel:
 
+> As of 2026-09-30, npm marks `prom-client` 15.1.3 deprecated ("replaced by @prometheus-io/client"); the
+> replacement is pre-1.0 (0.16.1), so this sample stays on prom-client until it reaches 1.0.
+
 ```typescript
 // src/routes/metrics.ts
 import { Router } from 'express';

@@ -302,6 +302,7 @@ export function errorHandler(
 
 /**
  * Async route handler wrapper — catches rejected promises and forwards to error middleware.
+ * Required on Express 4; Express 5 forwards rejected promises itself (the wrapper is harmless there).
  *
  * Usage:
  *   router.get("/users/:id", asyncHandler(async (req, res) => {

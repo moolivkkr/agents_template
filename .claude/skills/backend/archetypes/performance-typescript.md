@@ -380,9 +380,12 @@ process.on('SIGTERM', async () => {
 
 **Connection pool sizing guide:**
 
-| Scenario | `connection_limit` | Notes |
-|----------|-------------------|-------|
-| Single instance, light load | 5 | Default is fine |
+Prisma 7 has no pool of its own: size the pg `Pool` the adapter creates (`new PrismaPg({ max, … })`,
+`PG_POOL_MAX` above); the same numbers apply to a plain `pg` pool.
+
+| Scenario | `max` (per process) | Notes |
+|----------|---------------------|-------|
+| Single instance, light load | 10 | pg's default |
 | Single instance, heavy load | 20 | Monitor `db.pool.waiting` metric |
 | 10 instances behind LB | 5-10 each | Total = 50-100 (watch `max_connections`) |
 | Serverless (Lambda) | 1-2 | Use Prisma Accelerate or PgBouncer |

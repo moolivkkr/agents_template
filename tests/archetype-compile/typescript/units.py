@@ -418,6 +418,8 @@ UNITS = [
         "decorators": "legacy",
         "prisma": True,
         "shims": ["crud-stack", "nest-stack"],
+        # Nest resolves constructor deps from emitted metadata at runtime — tsc can't see a missing token
+        "node_probe": "src/di-probe.ts",
     },
     {
         "name": "crud-nest-controller-spec",

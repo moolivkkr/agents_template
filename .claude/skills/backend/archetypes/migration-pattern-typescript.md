@@ -14,7 +14,7 @@ tags:
 
 # Migration Pattern Archetype — TypeScript
 
-> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 + @prisma/adapter-pg, Drizzle ORM 0.45, drizzle-kit 0.31, postgres.js 3.4 (tests/archetype-compile/typescript/run.sh).
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Prisma 7.10 + @prisma/adapter-pg, Drizzle ORM 0.45, drizzle-kit 0.31, postgres.js 3.4; both ```prisma blocks pass `prisma validate` with the prisma.config.ts below (tests/archetype-compile/typescript/run.sh).
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/migration-pattern.md` (Go). Both produce identical database schemas. The Go archetype covers raw SQL migrations and golang-migrate; this covers Prisma and Drizzle ORM migration tooling.
 
