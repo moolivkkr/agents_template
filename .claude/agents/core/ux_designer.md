@@ -201,7 +201,20 @@ For each data-fetching component on the screen, specify:
 > lifecycle, offline). List every interactive element's **testID** (`<screen>.<element>`) in the
 > screen spec. `mobile_test_agent` cannot automate a TC whose element has no testID or accessible name.
 
-Enumerate ALL UI test cases for this screen using the per-page, per-form, and per-component matrices from `~/.claude/skills/testing/test-case-generation.md`. These TC-* IDs are tracked through implementation and gated at phase completion.
+Enumerate ALL UI test cases for this screen using the per-element, per-page, per-form, and per-component matrices from `~/.claude/skills/testing/test-case-generation.md`. These TC-* IDs are tracked through implementation and gated at phase completion.
+
+### Data Element Inventory (MANDATORY — one row per bound element)
+Every element that shows API data gets a row: table columns, card and detail fields, badges, KPI tiles,
+chart series, prefilled form inputs, option lists, headings built from data. Its binding comes from the
+API Bindings section, and its display rule is yours to state exactly — the tests assert it literally.
+| Element | Binding (field → contract_ref) | Display rule (format) | Empty / null shows | Edge behaviour | TC IDs |
+|---------|-------------------------------|-----------------------|--------------------|----------------|--------|
+| Orders table › Total | `data[].total_cents` → `Order.total_cents` | currency of `data[].currency`, 2 decimals for USD, grouping | `—` | negative shows `-$1.00`; largest allowed fits the column | TC-DATA-NNN (value), TC-DATA-NNN (empty), TC-DATA-NNN (edge) |
+| Orders table › Status | `data[].status` → `Order.status` | badge: pending → "Pending" (neutral), paid → "Paid" (success), … every enum value | — (required) | an unknown value → "Unknown" neutral badge | TC-DATA-NNN … |
+
+Each row yields TC-DATA rows from the per-element matrix (value, empty/null when the contract allows it,
+and the edge values for its type). An element without a row here is an element nobody will test —
+`design_quality_reviewer` blocks the wireframe when a bound element has no inventory row.
 
 ### Page-Level Tests
 | TC ID | Test Description | Priority | Tier |
@@ -210,15 +223,17 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 | TC-UI-NNN | Loading state — skeleton matches layout | HIGH | component |
 | TC-UI-NNN | Error state — error message + retry button | HIGH | component |
 | TC-UI-NNN | Empty state — illustration + CTA | MEDIUM | component |
-| TC-UI-NNN | Data state — correct items rendered | HIGH | component |
-| TC-UI-NNN | Pagination — next/prev/page works | MEDIUM | component |
-| TC-UI-NNN | Search/filter updates results | MEDIUM | component |
-| TC-UI-NNN | Sort by column header | LOW | component |
-| TC-UI-NNN | Responsive — desktop (1280px) | HIGH | component |
-| TC-UI-NNN | Responsive — mobile (375px) | HIGH | component |
-| TC-A11Y-NNN | Accessibility — keyboard navigation (WCAG 2.2 AA) | HIGH | component |
+| TC-UI-NNN | Data state — the fixture's rows in API order, every element per its TC-DATA rows | HIGH | component |
+| TC-UI-NNN | Pagination — cursor sent; exactly the next items, no duplicates/gaps; last page hides "next" | MEDIUM | component |
+| TC-UI-NNN | Search/filter — request carries the parameter; no-match → empty state; clear restores; survives reload | MEDIUM | component |
+| TC-UI-NNN | Sort — each sortable column, both directions; request and rendered order match | MEDIUM | component |
+| TC-UI-NNN | Mutation reflected — after create/edit/delete the list and detail show the new values | HIGH | component |
+| TC-UI-NNN | Responsive — desktop (1280px), no clipped data | HIGH | e2e |
+| TC-UI-NNN | Responsive — mobile (375px), every data element readable | HIGH | e2e |
+| TC-A11Y-NNN | Accessibility — axe WCAG 2.2 AA in a real browser (incl. contrast) | HIGH | e2e |
+| TC-A11Y-NNN | Accessibility — keyboard navigation, focus order, no trap | HIGH | e2e |
 | TC-A11Y-NNN | Accessibility — screen reader names/roles | MEDIUM | component |
-| TC-UI-NNN | Navigation — click row → detail page | HIGH | e2e |
+| TC-UI-NNN | Navigation — click row → that item's detail page with its own values | HIGH | e2e |
 | TC-SEC-NNN | XSS-RENDER — stored markup in any user-supplied field renders as text | HIGH | component |
 | TC-SEC-NNN | SESSION-STORAGE — no token in localStorage/sessionStorage/URL after login | HIGH | e2e |
 
@@ -229,7 +244,10 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 | TC-FORM-NNN | Required field validation on empty submit | HIGH | component |
 | TC-FORM-NNN | Field-specific validation (format, length) | HIGH | component |
 | TC-FORM-NNN | Server error mapping to form fields | HIGH | component |
-| TC-FORM-NNN | Successful submit — correct API payload | HIGH | component |
+| TC-FORM-NNN | Successful submit — request body equals the expected payload exactly (types, omitted vs null, trimmed) | HIGH | component |
+| TC-FORM-NNN | Edit prefill — every field shows the record's current value | HIGH | component |
+| TC-FORM-NNN | Options from the API — each select/radio/autocomplete lists exactly the returned options; empty and error states | HIGH | component |
+| TC-FORM-NNN | Dependent fields update, enable or clear as specified | MEDIUM | component |
 | TC-FORM-NNN | Dirty state — navigate away → confirm | MEDIUM | component |
 | TC-FORM-NNN | Cancel/reset returns to previous state | MEDIUM | component |
 | TC-FORM-NNN | Disabled submit while API in flight | HIGH | component |
@@ -237,7 +255,7 @@ Enumerate ALL UI test cases for this screen using the per-page, per-form, and pe
 ### Component Tests (for reusable components on this screen)
 | TC ID | Component | Test Description | Priority | Tier |
 |-------|-----------|-----------------|----------|------|
-| TC-COMP-NNN | [ComponentName] | Renders with provided props | HIGH | component |
+| TC-COMP-NNN | [ComponentName] | Renders with provided props — every bound value in its place (swap-detecting fixture) | HIGH | component |
 | TC-COMP-NNN | [ComponentName] | Props variations | MEDIUM | component |
 | TC-COMP-NNN | [ComponentName] | Callback fires correctly | HIGH | component |
 | TC-COMP-NNN | [ComponentName] | Accessibility — ARIA roles | MEDIUM | component |

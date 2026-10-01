@@ -74,6 +74,8 @@ screens.
 
 | Tempting shortcut | Why it fails, and what to do instead |
 |---|---|
+| "The page-health failure is just console noise; allow it globally" | A console error or failed request during a passing flow is usually a real bug (a broken widget, a 404 asset, a swallowed exception). It's APP until proven otherwise; an expected error is declared in that one test with `health.allow(/…/)`, never ignored for the suite. |
+| "A spec that imports `test` from `@playwright/test` is fine" | Then page health isn't checked for it. Every web spec imports `{ test, expect }` from the page-health fixture (`playwright.md` §Page health); report a spec that doesn't as a TEST finding and switch its import. |
 | "Something answers on localhost, run there" | A leftover stack from an earlier session passes stale code. Run only against `APP_BASE_URL`, and check its `/healthz` **and** its deployed code sha first. |
 | "It passed on the second try" | FLAKY is a failure: retries are 0 and `failOnFlakyTests` is on. Report it with the cause, never as PASS. |
 | "The app has a bug; I'll patch it so the workflow passes" | You never edit product code. Report it to the owning role with the trace, and the tier stays FAIL. |
@@ -196,7 +198,7 @@ HIGH/MEDIUM row of this phase.
 
 | Class | Signal | Action |
 |---|---|---|
-| **APP** | wrong behaviour, a 4xx/5xx the spec doesn't allow, contract shape, a crash in the page | **Don't touch it.** Add it to `bugs_found[]` with the TC ID, the step, expected vs actual and the trace path, owned by `ui_developer` (screens) or `api_developer`/`backend_developer` (API/logic). The tier stays FAIL. |
+| **APP** | wrong behaviour, a wrong or missing value on screen (a TC-DATA or round-trip assertion), a page-health failure (console error, uncaught error, failed request, unexpected 4xx/5xx), contract shape, a crash in the page | **Don't touch it.** Add it to `bugs_found[]` with the TC ID, the step, expected vs actual and the trace path, owned by `ui_developer` (screens) or `api_developer`/`backend_developer` (API/logic). The tier stays FAIL. |
 | **TEST** | a selector that doesn't match the built DOM, a missing wait on a specific element or response, data setup colliding with another test | Fix the **test**, under the Test Failure Recovery Guardrails. No weaker assertion, no `.skip`/`.only`, no retries or sleeps. Put the why and when on one line directly above each change to a test that existed before this phase: `// TEST-CHANGE <YYYY-MM-DD> phase <N>: <why> (spec: <ref> | moved: <where the check lives now>)`; a changed assertion must cite `spec:` or `moved:` (`~/.claude/skills/testing/test-case-traceability.md` §Changing an existing test). At most 2 attempts per test, then re-run the **whole** tier (Steps 4–5). |
 | **ENV** | the app went unhealthy mid-run, or DNS/ingress | re-run preflight; if it fails, the sidecar is BLOCKED with the reason. Don't retry until green. |
 | **FLAKY** | failOnFlakyTests reported it, or it passes and fails across runs | treat it as a failure. Find the race (double submit, unawaited request, shared data) and report it as APP or TEST. Quarantine only with an issue and an expiry (`test-results-sidecar.md`). |
@@ -284,6 +286,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Preflight ran against `APP_BASE_URL`: `/healthz` 200 and deployed sha = code sha (or BLOCKED with the reason) — nothing ran against a dev server or a leftover stack.
 - [ ] Scope = this phase's `Tier: e2e` rows + the full committed e2e suite as regression; nothing invented, nothing earlier dropped. In pipeline mode, every row has a committed process-level test named with its TC ID.
 - [ ] The tier ran ONCE with `commands."test:e2e"`, retries 0; `e2e_results.json` was produced by `junit-to-sidecar.py` from that run, with `UNTESTED` cases for rows no test covered and `deployed_sha` recorded. `Total: 0` is a FAIL to investigate.
+- [ ] Every web spec in scope uses the page-health fixture, and every data-entering workflow asserts its values exactly in the list, detail, after reload and in the API read-back (TC-DATA / round trip); a spec missing either is a TEST finding I fixed or reported.
 - [ ] Every failure is classified APP/TEST/ENV/FLAKY with a trace/screenshot path; APP failures went to `bugs_found[]` for the owning role — I did not edit product code.
 - [ ] Every test I changed is listed for independent verification; no assertion was weakened; every change to a pre-existing test has a TEST-CHANGE comment (why, when, `spec:`/`moved:` for assertions).
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).

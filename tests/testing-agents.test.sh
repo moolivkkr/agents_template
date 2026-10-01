@@ -261,6 +261,24 @@ else ok "vulture runs at --min-confidence 60"; fi
 if grep -rn --exclude-dir=worktrees 'return Specification.where(null)' "$ROOT/.claude" >/dev/null; then bad "Java archetype uses Specification.where(null) (rejected since Spring Data JPA 4.0)"
 else ok "Java archetypes use a no-op predicate, not Specification.where(null)"; fi
 
+echo "── UI data elements, round trip, page health (owner feedback 2026-10-01) ─────────"
+# Tests used to check that a table rendered, not what was in it. Each rule below is one place that stops that.
+has() { grep -qF -- "$2" "$1" && ok "$3" || bad "$3"; }
+has "$S/test-case-generation.md" "Per-Element Data Matrix (TC-DATA)" "test-case-generation has a per-element data matrix"
+has "$S/test-case-generation.md" "Swap-detecting fixtures" "fixtures give every field a distinct value (a swapped binding fails)"
+has "$S/test-case-generation.md" "TC-FORM-{N+9}: Edit prefill" "form matrix covers edit prefill"
+has "$S/test-case-generation.md" "TC-FORM-{N+10}: Options from the API" "form matrix covers API-fed options"
+has "$S/test-case-traceability.md" '| `DATA` |' "DATA is a registered TC category"
+has "$A/core/ux_designer.md" "### Data Element Inventory (MANDATORY" "ux_designer writes a data element inventory"
+has "$A/core/design_quality_reviewer.md" "any bound element with no inventory row" "design review blocks a bound element with no inventory row"
+has "$A/templates/ui_test_agent.tmpl" "### A1b. Data elements (TC-DATA)" "ui_test_agent tests every data element"
+has "$A/templates/ui_test_agent.tmpl" "Page health on every spec" "ui_test_agent uses the page-health fixture"
+has "$A/templates/ui_test_agent.tmpl" "**Data round trip.**" "ui_test_agent asserts the data round trip"
+has "$A/core/e2e_orchestrator.md" "page-health failure (console error" "e2e_orchestrator triages page-health failures as APP"
+has "$A/core/acceptance_test_agent.md" "Browser criteria assert values, not presence" "acceptance specs assert values, not presence"
+has "$S/playwright.md" "{ auto: true }" "playwright.md ships an auto page-health fixture"
+has "$A/templates/ui_developer.tmpl" "shared formatter per kind" "ui_developer renders bound values through shared formatters"
+
 echo "────────────────────────────────────────────"
 echo "testing-agents.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

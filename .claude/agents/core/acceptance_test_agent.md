@@ -95,6 +95,13 @@ You are spawned as `subagent_type: acceptance_test_agent`. If your prompt reads 
 Read `docs/IMPLEMENTATION_GUIDELINES.md` for the product type. If the product has no web API, adapt to
 its real interface. Never produce empty results.
 
+**Browser criteria assert values, not presence.** A UI acceptance spec imports `{ test, expect }` from the
+page-health fixture (`~/.claude/skills/testing/playwright.md` §Page health), so a console error or failed
+request during the persona's journey fails it. Where the criterion involves data the persona entered or
+should see, it asserts the exact values on screen (the wireframe's display rule) and, for data the persona
+created, the round trip (`playwright.md` §Data round trip). "The order appears in the list" is satisfied
+by the order's number, total and status rendered correctly, not by a row existing.
+
 ---
 
 ## Required Reading

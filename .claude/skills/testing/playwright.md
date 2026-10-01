@@ -254,6 +254,65 @@ setup("authenticate", async ({ page }) => {
 //              { name: "chromium", use: { ...devices["Desktop Chrome"], storageState: ".auth/user.json" }, dependencies: ["setup"] }]
 ```
 
+## Page health on every test (fixture)
+
+Import `test` and `expect` from this fixture file instead of `@playwright/test`. Every test then fails on a
+console error, an uncaught page error, a failed request or an unexpected 4xx/5xx. Those are the bugs that
+pass a "the button is visible" test and break for users. Declare an expected error in the test that
+causes it (`health.allow(/…/)`), never globally.
+
+```typescript
+// e2e/fixtures.ts — specs import { test, expect } from "./fixtures"
+import { test as base, expect } from "@playwright/test"
+
+export type Health = { problems: string[]; allow: (pattern: RegExp) => void }
+
+export const test = base.extend<{ health: Health }>({
+  health: [async ({ page }, use, testInfo) => {
+    const problems: string[] = []
+    const allowed: RegExp[] = [/\/favicon\.ico/]   // browsers fetch it on their own; serve one in the app
+    const report = (s: string) => { if (!allowed.some((r) => r.test(s))) problems.push(s) }
+    page.on("console", (m) => { if (m.type() === "error") report(`console.error: ${m.text()}`) })
+    page.on("pageerror", (e) => report(`uncaught: ${e.message}`))
+    page.on("requestfailed", (r) => {
+      const why = r.failure()?.errorText ?? "failed"
+      if (why !== "net::ERR_ABORTED") report(`${r.method()} ${r.url()} ${why}`)   // aborted = navigated away
+    })
+    page.on("response", (r) => { if (r.status() >= 400) report(`${r.request().method()} ${r.url()} → ${r.status()}`) })
+    await use({ problems, allow: (p) => allowed.push(p) })
+    expect(problems, `page health during "${testInfo.title}"`).toEqual([])
+  }, { auto: true }],
+})
+export { expect }
+```
+
+## Data round trip (exact values, everywhere they show)
+
+A workflow that creates or edits data asserts the exact value in every place it shows (list, detail,
+after a reload, edit prefill) and in the API read-back. "A row exists" doesn't prove a value survived
+encoding, trimming or a wrong binding.
+
+```typescript
+// e2e/notes-roundtrip.spec.ts
+import { test, expect } from "./fixtures"
+import { persona, createNoteViaApi } from "./support"
+
+test("TC-E2E-20140 TC-DATA-20141 a note's text round-trips exactly: list, after reload, API read-back", async ({ page, request }) => {
+  const text = `Round-trip ${crypto.randomUUID()} — ünïcødé ✓ «quoted»`   // run-unique, non-ASCII on purpose
+  await createNoteViaApi(persona("buyer"), text)                           // through the product API
+
+  await page.goto("/notes")
+  await expect(page.getByRole("listitem").filter({ hasText: text })).toHaveText(text)   // exact, not "contains"
+  await page.reload()
+  await expect(page.getByRole("listitem").filter({ hasText: text })).toHaveText(text)
+
+  const res = await request.get("/api/v1/notes")
+  expect(res.status()).toBe(200)
+  const body = (await res.json()) as { data: { id: string; text: string }[] }
+  expect(body.data.filter((n) => n.text === text)).toHaveLength(1)        // stored once, byte for byte
+})
+```
+
 ## Run Commands
 
 In the pipeline the command comes from `agent_state/config/verify-commands.json` (`commands."test:e2e"`),

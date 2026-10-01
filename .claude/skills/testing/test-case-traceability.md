@@ -65,6 +65,7 @@ unit case → `TC-UNIT-10101`.
 | `REL` | Failure modes: dependency down/slow, timeouts, drain | integration, system |
 | `E2E` | End-to-end workflow | e2e |
 | `UI` | UI component / page behaviour | component |
+| `DATA` | **UI data element**: one bound value (column, field, badge, KPI, prefilled input, option list) rendered exactly as specified, including empty and edge values | component (round trip: e2e) |
 | `FORM` | Form behaviour | component |
 | `COMP` | Reusable component | component |
 | `A11Y` | **Accessibility** (axe, keyboard, focus, names) | component, e2e |

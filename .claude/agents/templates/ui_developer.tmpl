@@ -333,6 +333,18 @@ function ResourceList() {
 - **Single endpoints return `data: {}`**.
 - **Errors return `{error: {code, message, details, request_id, retryable}}`** and no `data`; retry automatically only when `retryable` is true and the request is idempotent.
 - **Type every response** from the generated types; never hand-write a response interface.
+- **Render every bound element by its inventory rule.** The wireframe's Data Element Inventory gives each
+  displayed value its format, empty display and edge behaviour. Implement exactly that, through **one
+  shared formatter per kind** (money from minor units + currency, dates in the user's zone and locale,
+  status → label + badge with an unknown-value fallback, empty → the one placeholder). Never format
+  inline per component: one formatter is tested once and can't drift between screens.
+- **Bind each element to its own field.** Read the field the inventory names, from the generated type, by
+  name. Copy-pasted columns bound to the neighbour's field are the most common data bug, and the TC-DATA
+  tests use distinct fixture values to catch them.
+- **Never print `undefined`, `null`, `NaN` or `Invalid Date`.** Optional fields go through the empty
+  rule; a value that fails to parse shows the placeholder and is logged, not rendered raw.
+- **Edit forms prefill from the record and submit typed values**: numbers as numbers, omitted vs null per
+  the contract, trimmed text. Select options come from their API, keyed by value, never hard-coded copies.
 
 ---
 

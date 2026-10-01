@@ -238,25 +238,68 @@ TC-E2E-{N+4}: Memory — process 1000 items → no memory leak
 
 ## Tier 4: UI Component Test Cases (ux_designer generates)
 
-For EVERY screen/page in the wireframe, enumerate these IDs:
+For EVERY screen/page in the wireframe, enumerate these IDs. The old weak spot was one row saying
+"data state → correct content": tests then checked that a table rendered, not what was in it, and wrong,
+swapped, unformatted or blank values shipped. The **per-element data matrix** below closes that: every
+value a screen shows is its own row.
+
+### Per-Element Data Matrix (TC-DATA) — one row per bound element
+
+Start from the wireframe's API bindings (`api_bindings` / `data_source` / `contract_ref` in the structured
+format, or the binding table in the markdown format). **Every element that displays API data is a data
+element**: a table column, card field, detail field, badge, KPI tile, chart series, prefilled form
+input, select option list, breadcrumb or heading built from data. For each one, write its display rule
+in the wireframe (format, empty display, edge behaviour) and generate:
+
+```text
+For element: OrdersPage › table column "Total"  (binding: data[].total_cents, contract_ref Order.total_cents)
+
+TC-DATA-{N+0}: Value — fixture total_cents=123456, currency USD → cell text is exactly "$1,234.56" in that row
+TC-DATA-{N+1}: Empty/null — total_cents absent or null (if the contract allows it) → the defined placeholder ("—"), never "NaN", "undefined", "null", "$0.00" or a blank cell
+TC-DATA-{N+2}: Edge — the element's edge values from the list below render per the display rule
+```
+
+Edge values to use, by type (pick the ones the type can carry):
+
+| Type | Edge values the test feeds through the mock |
+|---|---|
+| text | the longest allowed value (truncates as specified; the full text stays reachable, e.g. title/tooltip); unicode, emoji, RTL; leading/trailing spaces; HTML-looking text (also `XSS-RENDER`) |
+| number / money | 0, negative, the largest allowed; money in minor units with the currency's decimals (JPY 0, USD 2, KWD 3) |
+| date / time | a fixed clock and a fixed locale + time zone in the test; a value across midnight in that zone; relative text ("2 hours ago") against the fixed clock |
+| enum / status | every documented value → its exact label and badge variant; an **unknown** value from a newer server → the defined fallback, never a crash or blank |
+| boolean | both values → the exact label or icon (with its accessible name) |
+| list / count | 0, 1, many (and the plural form for 1 vs many) |
+| link / image | the URL built from the bound id or field; a missing image → the defined fallback (initials, placeholder) |
+
+Rules for these rows:
+- **Swap-detecting fixtures.** Every field in a fixture has a distinct, recognisable value
+  (`name: "Name-7f3a"`, `email: "email-7f3a@example.test"`, `total_cents: 123456`), never the same string
+  or number in two fields. A column bound to the wrong field then fails instead of passing by accident.
+- **Assert the exact text in its place.** Scope to the element (`within(row).getByRole("cell", …)`, the
+  labelled detail field, the option list) and assert the exact formatted text. `toBeVisible()`,
+  `toBeInTheDocument()` on a container, row counts or snapshots alone are not data assertions.
+- Priority: **HIGH** for money, dates, status/permission badges and anything the user acts on; MEDIUM
+  otherwise. One test may cover several elements of one row only if it asserts each one separately, and
+  its name lists every TC-DATA ID it covers.
 
 ### Per-Page Matrix
 
 ```text
 For page: PolicyListPage
 
-TC-UI-{N+0}: Renders without crash (mount, no errors)
-TC-UI-{N+1}: Loading state — skeleton/spinner shown while API pending
-TC-UI-{N+2}: Error state — API error → error message + retry button
-TC-UI-{N+3}: Empty state — no items → empty state illustration + CTA
-TC-UI-{N+4}: Data state — items present → correct count, correct content
-TC-UI-{N+5}: Pagination — next page via cursor → correct items shown
-TC-UI-{N+6}: Search/filter — type in search → results update
-TC-UI-{N+7}: Sort — click column header → order changes
-TC-UI-{N+8}: Delete action — click delete → confirm dialog → item removed
-TC-UI-{N+9}: Navigation — click item → navigates to detail page
-TC-UI-{N+10}: Responsive — renders correctly at 1280px (desktop)            [tier e2e]
-TC-UI-{N+11}: Responsive — renders correctly at 375px (mobile)              [tier e2e]
+TC-UI-{N+0}: Renders without crash (mount, no console errors)
+TC-UI-{N+1}: Loading state — skeleton/spinner shown while API pending, and replaced by data (no flash of "empty")
+TC-UI-{N+2}: Error state — API error → error message + retry; retry re-requests and then shows data
+TC-UI-{N+3}: Empty state — `data: []` → empty state + CTA, and no table header/pager left over
+TC-UI-{N+4}: Data state — the fixture's rows in the API's order, each row's elements per its TC-DATA rows
+TC-UI-{N+5}: Pagination — "next" sends the cursor; exactly the next items appear (no duplicates or gaps); has_more=false hides "next"
+TC-UI-{N+6}: Search/filter — the request carries the parameter; results replace the list; no-match → empty state; clearing restores; the state survives reload (URL)
+TC-UI-{N+7}: Sort — each sortable column, both directions: the request carries sort + direction and the rendered order matches
+TC-UI-{N+8}: Delete action — confirm → removed; cancel → unchanged; API error → item restored + error shown
+TC-UI-{N+9}: Navigation — click item → the detail page for THAT item renders (its own field values)
+TC-UI-{N+10}: Mutation reflected — after create/edit/delete, the list and detail show the new values without a manual reload
+TC-UI-{N+11}: Responsive — renders correctly at 1280px (desktop): no horizontal scroll, no clipped data   [tier e2e]
+TC-UI-{N+12}: Responsive — renders correctly at 375px (mobile): every data element still readable      [tier e2e]
 TC-A11Y-{N+0}: axe scan of the rendered page, WCAG 2.2 AA tags — zero violations   [tier e2e]
 TC-A11Y-{N+1}: keyboard — every interactive element reachable and operable, focus order logical, no trap   [tier e2e]
 TC-A11Y-{N+2}: names — every control has a correct accessible name (component tier, by role)   [tier component]
@@ -271,15 +314,18 @@ Colour contrast can't be checked in a component test: jsdom has no layout, and `
 ```text
 For form: CreatePolicyForm
 
-TC-FORM-{N+0}: All fields render with correct types (text, select, checkbox, etc.)
-TC-FORM-{N+1}: Required field validation — submit empty → error on each required field
-TC-FORM-{N+2}: Field-specific validation — email format, min/max length, pattern
-TC-FORM-{N+3}: Server error mapping — API returns 400 VALIDATION_FAILED → details[] shown on the right fields
-TC-FORM-{N+4}: Successful submit — valid data → API called with correct payload → success feedback
+TC-FORM-{N+0}: All fields render with correct types (text, select, checkbox, etc.), labels and defaults
+TC-FORM-{N+1}: Required field validation — submit empty → error on each required field, focus on the first
+TC-FORM-{N+2}: Field-specific validation — every rule in the spec per field (format, min/max length, range, pattern), with the spec's message
+TC-FORM-{N+3}: Server error mapping — API returns 400 VALIDATION_FAILED → each details[] entry on its own field; unknown field → form-level message
+TC-FORM-{N+4}: Successful submit — the request body equals the expected payload exactly (types: numbers as numbers; omitted vs null as the contract says; trimmed text) → success feedback
 TC-FORM-{N+5}: Dirty state — change field → navigate away → confirm dialog
 TC-FORM-{N+6}: Reset/cancel — click cancel → form clears or navigates back
 TC-FORM-{N+7}: Multi-step form — step 1 → step 2 → back → data preserved
 TC-FORM-{N+8}: Disabled submit — button disabled while API in flight (no double-submit)
+TC-FORM-{N+9}: Edit prefill — every field shows the existing record's value (selects, dates, checkboxes, multi-selects included); an unchanged submit sends no spurious changes
+TC-FORM-{N+10}: Options from the API — each select/radio/autocomplete shows exactly the options the API returned (label and value), its empty state, and its load error
+TC-FORM-{N+11}: Dependent fields — changing a controlling field updates, enables or clears the dependent ones as specified
 ```
 
 ### Per-Component Matrix (for reusable components)
@@ -287,10 +333,10 @@ TC-FORM-{N+8}: Disabled submit — button disabled while API in flight (no doubl
 ```text
 For component: DataTable
 
-TC-COMP-{N+0}: Renders with provided data
+TC-COMP-{N+0}: Renders with provided data — every column shows its row's own value (swap-detecting fixture)
 TC-COMP-{N+1}: Props variation — with/without pagination, sorting, selection
 TC-COMP-{N+2}: Callback — row click fires onRowClick with correct item
-TC-COMP-{N+3}: Selection — checkbox selects/deselects, bulk select works
+TC-COMP-{N+3}: Selection — checkbox selects/deselects, bulk select works, selection clears on page change if specified
 TC-A11Y-{N+0}: Table exposes proper roles and labels (component tier, by role)
 ```
 

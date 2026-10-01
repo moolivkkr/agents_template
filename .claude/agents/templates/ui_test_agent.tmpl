@@ -92,6 +92,10 @@ report. Keeping the parts apart means a green component tier can never stand in 
 | "The component is wrong; I'll fix it so the test passes" | You don't edit product code. The failing test stays, and the bug goes to `bugs_found[]` for `ui_developer`. |
 | "Update the snapshot/baseline so it's green" | A baseline change needs recorded approval (a `ui_standards_auditor` report or a DECISIONS entry) in `test-changes.json` (`kind: baseline_update`). A diff on a page this phase didn't touch is a regression. |
 | "Snapshot the screen and call it tested" | Snapshots pass whatever renders. Assert text, roles and state per the spec. |
+| "The table rendered 3 rows, so the data is right" | A count can't see a wrong, swapped, unformatted or blank value — the bugs users actually report. Assert every bound element's exact text in its row (§A1b). |
+| "Reuse one fixture value; the content doesn't matter" | With `name` and `description` both "Test", a column bound to the wrong field still passes. Give every field a distinct value (swap-detecting fixtures). |
+| "`toBeVisible()` on the cell is enough" | Visible isn't correct. `expect(cell).toHaveText("$1,234.56")` — the exact formatted text from the inventory's display rule. |
+| "Dates differ by machine, so skip asserting them" | Fix the clock, locale and time zone in the test setup and assert the exact string. A date that renders a day off is a real bug. |
 
 ## Tech Context
 
@@ -134,6 +138,33 @@ For every screen in the manifest:
   that a mock `navigate` was called).
 - Coverage gate: 80% of implemented components.
 
+### A1b. Data elements (TC-DATA) — every value the screen shows
+The wireframe's **Data Element Inventory** lists each bound element (column, field, badge, KPI, prefilled
+input, option list) with its display rule, empty display and edge behaviour, and its TC-DATA IDs. For each:
+- **Value:** render the screen with a swap-detecting fixture (every field distinct) and assert the exact
+  formatted text *in its place*: scope to the row and cell, the labelled detail field, or the option list.
+- **Empty/null:** where the contract allows it, assert the defined placeholder — never blank, `NaN`,
+  `undefined`, `null`, `Invalid Date` or `$0.00` standing in for missing.
+- **Edge:** the edge values for the element's type (`test-case-generation.md` §Per-Element Data Matrix):
+  longest text and its truncation, unicode/RTL, 0/negative/largest numbers, currency decimals, dates
+  across midnight with a fixed clock, locale and zone, every enum value plus an unknown one.
+
+```typescript
+const order = orderFixture({ id: "ord-7f3a", number: "SO-7f3a", total_cents: 123456, currency: "USD",
+  status: "paid", created_at: "2026-03-01T23:30:00Z", customer: { name: "Name-7f3a" } })
+server.use(http.get("/api/v1/orders", () => page([order])))
+it("TC-DATA-20131 TC-DATA-20134 TC-DATA-20137 order row shows total, status and customer exactly", async () => {
+  render(<OrdersPage />)
+  const row = await screen.findByRole("row", { name: /SO-7f3a/ })
+  expect(within(row).getByRole("cell", { name: "$1,234.56" })).toBeInTheDocument()   // total_cents → money
+  expect(within(row).getByText("Paid")).toBeInTheDocument()                            // status → label
+  expect(within(row).getByRole("cell", { name: "Name-7f3a" })).toBeInTheDocument()     // the customer, not another field
+})
+```
+An element with no TC-DATA test is reported in the output's coverage table as UNTESTED — never silently dropped.
+If the wireframe has no inventory for a screen, derive it from the API bindings and report the gap for
+`ux_designer`.
+
 ### A2. Mocks — typed from the envelope
 Use the typed envelope helpers from `msw.md` (`ok`, `page`, `apiError`), with fixtures typed from the
 generated contract types. For every endpoint a screen uses, test:
@@ -148,8 +179,13 @@ server.use(http.get("/api/v1/orders", () => apiError(503, "UNAVAILABLE", "Try ag
 ```
 
 ### A3. Forms (TC-FORM)
-Required fields, field formats, the server's 400 `details[]` mapped per field, successful submit with
-the exact payload, dirty-state guard, cancel, and submit disabled while in flight (no double submit).
+Required fields, every validation rule with the spec's message, the server's 400 `details[]` mapped
+per field, successful submit with the exact payload (assert the captured request body with `toEqual`:
+number types, omitted vs null, trimmed text), dirty-state guard, cancel, and submit disabled while in
+flight (no double submit). For edit forms, **prefill**: every field shows the record's current value,
+and an unchanged submit sends no spurious changes. For selects, radios and autocompletes fed by the API:
+exactly the returned options (label and value), plus their empty and error states. Dependent fields
+update, enable or clear as the spec says.
 
 ### A4. Accessibility in components (TC-A11Y, tier component)
 Find every interactive element by role and accessible name (`getByRole('button', { name: … })`). Run
@@ -198,6 +234,15 @@ failure, and JUnit to the phase's junit dir.
 One spec per workflow row: happy path, validation → fix → succeed, conflict recovery, permission
 boundary, network-failure recovery, and persistence after reload. Data is created through the
 product's API as the persona, with run-unique identifiers. Never through a seed endpoint.
+
+- **Data round trip.** A workflow that enters data asserts each value the user typed or chose, exactly,
+  everywhere it shows up: the list row, the detail page, after a reload, and in the edit form's prefill.
+  It also reads the record back through the API and compares it field by field. "Persistence" means the
+  values, not that a row exists.
+- **Page health on every spec.** Use the `playwright.md` page-health fixture. A console error, an
+  uncaught page error, a failed request or an unexpected 4xx/5xx during the test fails it. Expected
+  errors are declared per test, never globally ignored. Most "works in the test, broken for users" bugs
+  show up here first.
 
 ### B2. Responsive
 Each page at 375, 768 and 1280 px:
@@ -337,8 +382,10 @@ Keep it short; the detail belongs in the artifact.
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Part A: every `Tier: component` row of this phase has a test **named** with its TC ID; every screen has its four states; every mock body comes from the typed envelope helpers (none hand-shaped).
+- [ ] Part A: every TC-DATA row has a test asserting the element's exact text in its place (value, empty, edge) with swap-detecting fixtures and a fixed clock/locale/zone; forms cover prefill, API-fed options and the exact request body. The report has a data-element coverage table (element → TC IDs → PASS/FAIL/UNTESTED).
 - [ ] Part A: XSS-RENDER and SESSION-STORAGE rows are covered; component a11y checks names/roles and doesn't claim contrast.
 - [ ] Part A ran with `commands."test:ui"` after committing; JUnit under `agent_state/phases/{{PHASE}}/junit/`, converted by `junit-to-sidecar.py` into `reports/ui_test_results.json` — its verdict and counts are what I report. `Total: 0` is a FAIL to investigate.
+- [ ] Part B: every spec uses the page-health fixture, and every data-entering workflow asserts the round trip (list, detail, reload, edit prefill, API read-back) field by field.
 - [ ] Part B: a committed browser spec exists for every UI-owned `Tier: e2e` row (TC-E2E, TC-A11Y page level with AxeBuilder, responsive, visual, stored XSS, session cookie), targeting `APP_BASE_URL`; each new spec passed a 3× dry-run, and the manifest lists files and TC IDs for `e2e_orchestrator`.
 - [ ] No retries, skips or `.only`; baseline changes carry an approval reference; every change to a pre-existing test has a TEST-CHANGE comment.
 - [ ] Product bugs are in `bugs_found[]` — I did not edit components.

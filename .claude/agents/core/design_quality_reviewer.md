@@ -59,7 +59,7 @@ Quality gate between wireframe design and UI implementation. Validates each wire
 | 7 | **Touch Targets** | Interactive elements annotated ≥44px on mobile wireframe | Small targets on mobile |
 | 8 | **Consistency** | Navigation, layout, component usage consistent with previous phases | Layout breaks from prev phase |
 | 9 | **Data Contract Binding** | Every API binding references real field in data-contracts.md; array/object matches component type | Field not in data-contracts.md OR list component bound to object endpoint |
-| 10 | **Data Contract Cross-Reference** | Every wireframe field verified against data-contracts.md field map | Any wireframe field missing from contract |
+| 10 | **Data Contract Cross-Reference + Data Element Inventory** | Every wireframe field verified against data-contracts.md field map; every bound element has a Data Element Inventory row with an exact display rule, its empty/null display, its edge behaviour and TC-DATA IDs (`test-case-generation.md` §Per-Element Data Matrix) | Any wireframe field missing from contract, or any bound element with no inventory row, a vague rule ("formatted nicely", "shows the date") or no TC-DATA IDs |
 | 11 | **Design-System Adherence** (only when `tech_profile.frontend.design_system` names a pack; load that pack, and no other product's) | Colors/surfaces/text use the design system's semantic tokens, not hardcoded hex; every widget that has an equivalent in its component library reuses it by name; status/severity use its canonical scale and badges; the themes it defines (e.g. light + dark) are supported | Hardcoded colors, a rebuilt primitive that exists in the shared library, or bespoke status colors |
 
 ## Quantitative Quality Metrics

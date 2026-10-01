@@ -49,7 +49,7 @@ FILES = {
     "ui/type-generation-protocol.md": 4,
     "ui/vertix-portal-design-system.md": 2,
     "testing/msw.md": 7,
-    "testing/playwright.md": 9,
+    "testing/playwright.md": 11,
     "testing/react-native-testing-library.md": 9,
     "testing/detox.md": 2,
     "testing/appium-mobile.md": 2,
@@ -554,7 +554,7 @@ declare const api: { getUser(id: string): Promise<import("@/types/api").ApiSucce
      }},
     # testing/playwright.md: the config and specs are the pack's; they run (system Chrome, both of the config's
     # projects) against shims/pw-support/server.mjs, a tiny stand-in for the deployed app at APP_BASE_URL.
-    {"name": "playwright", "project": "web", "blocks": [f"playwright#{n}" for n in range(1, 10)],
+    {"name": "playwright", "project": "web", "blocks": [f"playwright#{n}" for n in range(1, 12)],
      "external": [envelope("src/api/types.ts")], "shims": ["pw-support"], "compilerOptions": {"types": ["node"]},
      "auto": {**named("@playwright/test", "test", "expect"), "Page": ("@playwright/test", "type"),
               **named("./support", "signIn", "persona", "SESSION_COOKIE", "createNoteViaApi")},
@@ -563,7 +563,7 @@ declare const api: { getUser(id: string): Promise<import("@/types/api").ApiSucce
                     "env": {"E2E_BUYER_EMAIL": "buyer@example.com", "E2E_BUYER_PASSWORD": "{random}",
                             "E2E_ADMIN_EMAIL": "admin@example.com", "E2E_ADMIN_PASSWORD": "{random}"},
                     "junit": True},
-     "executed_blocks": [f"playwright#{n}" for n in (1, 2, 4, 5, 7, 8, 9)],
+     "executed_blocks": [f"playwright#{n}" for n in (1, 2, 4, 5, 7, 8, 9, 10, 11)],
      "place": {
         "playwright#3": frag("e2e/samples/locators.ts", wrap="function", prelude="declare const page: Page;"),
         "playwright#4": {"path": "e2e/auth.spec.ts"},
@@ -573,6 +573,8 @@ declare const api: { getUser(id: string): Promise<import("@/types/api").ApiSucce
         "playwright#6": frag("e2e/network.sample.ts", wrap="async", prelude="declare const page: Page;"),
         "playwright#7": {"path": "e2e/a11y.spec.ts"},
         "playwright#8": {"path": "e2e/security.spec.ts"},
+        "playwright#10": {"path": "e2e/fixtures.ts"},
+        "playwright#11": {"path": "e2e/notes-roundtrip.spec.ts"},
      }},
     # React Native: react-native-app-patterns.md's OrdersScreen + react-native-testing-library.md's Jest config,
     # MSW server/setup and tests, run with Jest on @react-native/jest-preset (RN 0.87). msw.md's envelope helpers
