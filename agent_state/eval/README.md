@@ -31,6 +31,7 @@ agent_state/eval/
 | `T-004-gate-blocks-missing-review` | multi-phase gate (NEGATIVE) | `verify-gate.sh` Wave-6 gate | the linchpin: gate silently passing an incomplete roster / gate.passed without evidence |
 | `T-005-reconcile-drift` | reconciliation | `/recon` bare then `--fix=docs` | bare recon mutating files; `--fix=docs` erasing as-built behavior |
 | `T-006-plan-small-phase` | planning | `/plan --phase=N` | spec that under-enumerates TC-* IDs (root cause of traceability-gate failures) |
+| `T-007-debate` | decision debate | parent → `debate_moderator` (foreground) → researchers, advocates, arbitrator | a verdict that ignores a MUST requirement; position bias (same request, options reversed); a security decision not resolved to the hardened default; advocate self-scores anchoring the judge; a verdict never promoted to `docs/DECISIONS.md`. Run it before and after changing a debate agent's `effort` |
 
 Tasks are chosen SWE-bench-Pro / Terminal-Bench style: small but end-to-end, deterministic rubric,
 spread across pipeline surfaces. `T-004` is a **negative-path** task — success means the gate

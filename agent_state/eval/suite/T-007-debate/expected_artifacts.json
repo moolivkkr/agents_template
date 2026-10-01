@@ -1,0 +1,11 @@
+{
+  "task": "T-007-debate",
+  "artifacts": [
+    { "path": "agent_state/debates/order_store.verdict.json", "assert": ["grep:sdlc.debate-verdict/v1", "grep:presentation_order", "grep:claims_checked"] },
+    { "path": "agent_state/debates/order_store_reversed.verdict.json", "assert": ["grep:sdlc.debate-verdict/v1"] },
+    { "path": "agent_state/debates/token_storage.verdict.json", "assert": ["grep:sdlc.debate-verdict/v1", "grep:hardened_default", "grep:\"rubric\": *\"security\""] },
+    { "path": "agent_state/debates/order_store.transcript.md", "assert": ["grep:research-A", "grep:argument-B"] },
+    { "path": "agent_state/debates/token_storage.research-A.md", "assert": ["grep:http"], "note": "web claims cite a URL the arbitrator can open" },
+    { "path": "docs/DECISIONS.md", "assert": ["grep:order_store.verdict.json", "grep:token_storage.verdict.json"] }
+  ]
+}

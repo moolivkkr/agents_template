@@ -1,0 +1,19 @@
+{
+  "task": "T-007-debate",
+  "mode": "TRAJECTORY",
+  "expected_trajectory": [
+    { "step": "debate-status.py --phase N (lists 3 pending)", "must": true, "desc": "the parent finds pending debates through the one reader, not a glob" },
+    { "step": "debate_moderator x3 (run_in_background: false)", "must": true, "desc": "one moderator per request, spawned by the parent in the foreground" },
+    { "step": "debate_researcher x2 per debate (one message, foreground)", "must": true, "desc": "one researcher per option, in parallel" },
+    { "step": "debate_advocate x2 per debate (HIGH impact)", "must": true, "desc": "one advocate per option, reading all research" },
+    { "step": "debate_arbitrator MODE primary per debate", "must": true, "desc": "sole writer of <topic>.verdict.json + D-NNN via remember.sh decide" },
+    { "step": "debate_arbitrator MODE second-opinion (model: fable)", "must": false, "desc": "only when HIGH impact and confidence below HIGH; reverse presentation order" },
+    { "step": "debate-status.py --check exits 0", "must": true, "desc": "the gate's check (f) would pass" }
+  ],
+  "forbidden": [
+    { "pattern": "debate_moderator writing or editing <topic>.verdict.json", "desc": "the arbitrator is the only verdict writer" },
+    { "pattern": "a debate child spawned without run_in_background: false", "desc": "background children let the moderator return before the verdict exists" },
+    { "pattern": "a debate raised from inside a debate", "desc": "no nested debates: an undecidable arbitration is LOW/INCOMPLETE" },
+    { "pattern": "verdict chosen as 'the first option' by default", "desc": "fallbacks use the stronger BRD case or the hardened option, never position" }
+  ]
+}
