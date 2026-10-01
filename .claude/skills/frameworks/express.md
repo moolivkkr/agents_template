@@ -73,11 +73,12 @@ import type { NextFunction, Request, Response } from "express"
 import { AppError } from "../errors/app-error"
 import { internal } from "../errors/domain-errors"
 import { logger } from "../lib/logger"
+import { requestIdOf } from "./request-id" // the one request-id source (validated; = X-Request-Id)
 
 export function errorHandler(err: unknown, req: Request, res: Response, next: NextFunction): void {
     if (res.headersSent) return next(err)
     const e = err instanceof AppError ? err : internal(err) // unknown → 500 INTERNAL; its text is never sent
-    const requestId = (req as Request & { requestId?: string }).requestId ?? ""
+    const requestId = requestIdOf(req)
     if (e.status >= 500) logger.error({ err: e.cause ?? e, code: e.code, request_id: requestId }, "request failed")
     if (e.retryAfter > 0) res.set("Retry-After", String(e.retryAfter))
     res.status(e.status).json(e.toBody(requestId)) // { error: { code, message, details?, request_id, retryable } }

@@ -522,8 +522,6 @@ import {
   HttpCode,
   HttpStatus,
   UseGuards,
-  UsePipes,
-  ValidationPipe,
   ParseUUIDPipe,
 } from "@nestjs/common";
 import { WidgetService } from "./widget.service";
@@ -532,7 +530,6 @@ import { CursorPaginationDto } from "./dto/pagination.dto";
 import { JwtAuthGuard } from "../../guards/jwt-auth.guard";
 import { CurrentUser } from "../../decorators/current-user.decorator";
 import { RequestId } from "../../decorators/request-id.decorator";
-import { validationExceptionFactory } from "../../filters/app-error.filter";
 import { validationError } from "../../errors/domain-errors";
 import type { AuthUser } from "../../types/auth";
 import { newMeta, newListMeta } from "../../types/response";
@@ -545,9 +542,10 @@ const uuidPipe = new ParseUUIDPipe({
   exceptionFactory: () => validationError("id", "invalid_format", "Must be a valid ID."),
 });
 
+// Body/query DTOs are validated by the ONE global pipe, appValidationPipe() (error-handling-typescript.md),
+// which configureApp() (src/app.setup.ts) installs for main.ts and the tests — not a per-controller copy.
 @Controller("api/v1/widgets")
 @UseGuards(JwtAuthGuard)
-@UsePipes(new ValidationPipe({ whitelist: true, transform: true, exceptionFactory: validationExceptionFactory }))
 export class WidgetController {
   constructor(private readonly widgetService: WidgetService) {}
 
@@ -727,10 +725,10 @@ export const CurrentUser = createParamDecorator(
 // src/decorators/request-id.decorator.ts
 
 import { createParamDecorator, ExecutionContext } from "@nestjs/common";
-import { requestIdOf } from "../middleware/error-handler";
+import { requestIdOf } from "../middleware/request-id";
 
 /**
- * The request ID set by the request-id middleware (or generated once per request) — the same value
+ * The request ID from the one request-id source (src/middleware/request-id.ts) — the same value
  * the error filter puts in error.request_id and X-Request-Id.
  *
  * Usage: @RequestId() requestId: string

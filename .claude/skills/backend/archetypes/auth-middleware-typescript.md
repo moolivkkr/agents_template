@@ -16,7 +16,7 @@ tags:
 
 # Auth Middleware Archetype — TypeScript
 
-> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, jsonwebtoken 9.0, jose 6.2, express-rate-limit 8.7, cors 2.8; the NestJS guard's DI and the Express auth → request-context chain are also run (tests/archetype-compile/typescript/run.sh).
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, jsonwebtoken 9.0, jose 6.2, express-rate-limit 8.7, cors 2.8; the NestJS guard's DI and the Express auth → request-context chain are also run. The request-id module is run too: hostile X-Request-Id values (CR/LF, oversize, non-matching, repeated) are replaced and never echoed, and pino-http, the middleware and the error body share one id; `configureApp()` is run over HTTP: a bad body is 400 VALIDATION_FAILED with details[] (tests/archetype-compile/typescript/run.sh).
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/auth-middleware.md` (Go). Both implement identical auth flows: JWT validation, tenant context injection, RBAC, rate limiting, and request ID propagation.
 
@@ -62,28 +62,51 @@ export interface JwtConfig {
 
 ## Request ID Middleware — Express
 
+The ONE request-id source. The auth middleware, the error handler and NestJS filter, pino-http's
+`genReqId`, the request-context logger and the NestJS `@RequestId()` decorator all read the id through
+`requestIdOf()`, so log lines, `meta.request_id`, `error.request_id` and the `X-Request-Id` header carry
+the same value — and the validation rule (the same as `core/observability-patterns.md`) exists once.
+
 ```typescript
 // src/middleware/request-id.ts
 
 import { randomUUID } from "node:crypto";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Request, Response, NextFunction } from "express";
 
+declare global {
+  namespace Express {
+    interface Request {
+      requestId?: string; // read it with requestIdOf(req)
+    }
+  }
+}
+
 /**
- * Generates or extracts a unique request ID for tracing.
- * Checks X-Request-ID header first (client correlation), generates UUID if absent.
- * Sets the ID on the response header for client-side correlation.
- *
- * Mount EARLY in the middleware stack — before auth and logging.
+ * An inbound X-Request-Id is reused only when well formed: a bounded charset and length, so it can't
+ * inject log lines (CR/LF), bloat every log record, or carry markup into a log viewer.
  */
+export const VALID_REQUEST_ID = /^[A-Za-z0-9._-]{8,128}$/;
+
+/** A well-formed inbound id, else a fresh one. A value that fails VALID_REQUEST_ID is never echoed. */
+export function resolveRequestId(inbound: unknown): string {
+  return typeof inbound === "string" && VALID_REQUEST_ID.test(inbound) ? inbound : `req_${randomUUID()}`;
+}
+
+/**
+ * The request's id — resolved once per request and cached on it. Takes Express's req or the raw
+ * IncomingMessage that pino-http's genReqId receives (the same object); sets X-Request-Id when given res.
+ */
+export function requestIdOf(req: IncomingMessage, res?: ServerResponse): string {
+  const r = req as IncomingMessage & { requestId?: string };
+  r.requestId ??= resolveRequestId(req.headers["x-request-id"]); // a repeated header (string[]) is replaced
+  if (res && !res.headersSent) res.setHeader("X-Request-Id", r.requestId);
+  return r.requestId;
+}
+
+/** Express middleware. Mount it FIRST — before CORS, auth, logging and the routes. */
 export function requestId(req: Request, res: Response, next: NextFunction): void {
-  const id = (req.headers["x-request-id"] as string) || randomUUID();
-
-  // Attach to request for downstream access
-  (req as any).requestId = id;
-
-  // Set on response for client correlation
-  res.setHeader("X-Request-ID", id);
-
+  requestIdOf(req, res);
   next();
 }
 ```
@@ -100,6 +123,7 @@ import jwt from "jsonwebtoken";
 import type { JwtConfig, JwtCustomPayload, AuthUser } from "../types/auth";
 import { unauthenticated } from "../errors/domain-errors";
 import { logger } from "../lib/logger";
+import { requestIdOf } from "./request-id";
 
 /**
  * Express middleware that validates the Bearer token and injects AuthUser into req.
@@ -110,7 +134,7 @@ import { logger } from "../lib/logger";
  */
 export function authMiddleware(config: JwtConfig) {
   return (req: Request, _res: Response, next: NextFunction): void => {
-    const requestId = (req as any).requestId ?? "";
+    const requestId = requestIdOf(req);
 
     // 1. Extract token from Authorization header
     const token = extractBearerToken(req);
@@ -259,13 +283,15 @@ import {
   ExecutionContext,
   Inject,
   Injectable,
-  UnauthorizedException,
   Logger,
 } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
+import type { Request } from "express";
 import jwt from "jsonwebtoken";
 import type { JwtConfig, JwtCustomPayload, AuthUser } from "../types/auth";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
+import { unauthenticated } from "../errors/domain-errors";
+import { requestIdOf } from "../middleware/request-id";
 
 /**
  * DI token for the guard's JwtConfig. JwtConfig is an interface — it doesn't exist at runtime, so Nest
@@ -292,14 +318,14 @@ export class JwtAuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const request = context.switchToHttp().getRequest();
+    const request = context.switchToHttp().getRequest<Request & { user?: AuthUser }>();
     const auth = request.headers.authorization;
 
     if (!auth?.startsWith("Bearer ")) {
-      throw new UnauthorizedException("missing Authorization header");
+      throw unauthenticated(); // AppErrorFilter writes the 401 envelope
     }
 
-    const token = auth.split(" ")[1];
+    const token = auth.slice("Bearer ".length);
 
     try {
       const payload = jwt.verify(token, this.jwtConfig.secret, {
@@ -309,7 +335,7 @@ export class JwtAuthGuard implements CanActivate {
       }) as JwtCustomPayload;
 
       if (!payload.sub || !payload.tenant_id) {
-        throw new UnauthorizedException("invalid token claims");
+        throw unauthenticated(); // invalid token claims
       }
 
       const authUser: AuthUser = {
@@ -323,11 +349,11 @@ export class JwtAuthGuard implements CanActivate {
       request.user = authUser;
       return true;
     } catch (err) {
-      this.logger.warn("JWT verification failed", {
-        error: err instanceof Error ? err.message : "unknown",
-        request_id: request.headers["x-request-id"],
-      });
-      throw new UnauthorizedException("invalid or expired token");
+      // the validated request id — never the raw X-Request-Id header (it can carry CR/LF into the log)
+      this.logger.warn(
+        `JWT verification failed (${err instanceof Error ? err.name : "unknown"}) request_id=${requestIdOf(request)}`,
+      );
+      throw unauthenticated(); // invalid or expired token
     }
   }
 }
@@ -600,6 +626,7 @@ export function corsMiddleware(config: CorsConfig) {
 
 import type { Request, Response, NextFunction } from "express";
 import { logger } from "../lib/logger";
+import { requestIdOf } from "./request-id";
 
 /**
  * Logs request start/finish with timing and attaches enriched logger to request.
@@ -607,7 +634,7 @@ import { logger } from "../lib/logger";
  */
 export function logEnrichment(req: Request, res: Response, next: NextFunction): void {
   const start = Date.now();
-  const requestId = (req as any).requestId ?? "";
+  const requestId = requestIdOf(req);
   const userId = (req as any).userId ?? "";
   const tenantId = (req as any).tenantId ?? "";
 
@@ -672,8 +699,8 @@ interface MiddlewareConfig {
  * Assembles the full middleware stack in correct order.
  * Order matters: outermost middleware runs first.
  *
- *   1. CORS         — must be outermost to handle preflight before auth
- *   2. Request ID   — generate/extract before anything else
+ *   1. Request ID   — first: even a CORS rejection carries the id
+ *   2. CORS         — before auth, to handle preflight
  *   3. Body parser  — with size limit to prevent abuse
  *   4. Auth         — JWT validation, sets tenant/user context
  *   5. Rate limit   — per-tenant, after auth so we know the tenant
@@ -682,11 +709,11 @@ interface MiddlewareConfig {
  *   7. Error handler — MUST be last
  */
 export function setupMiddleware(app: Application, config: MiddlewareConfig): void {
-  // 1. CORS
-  app.use(corsMiddleware(config.cors));
-
-  // 2. Request ID
+  // 1. Request ID (the one source: ./request-id)
   app.use(requestId);
+
+  // 2. CORS
+  app.use(corsMiddleware(config.cors));
 
   // 3. Body parser with size limit
   app.use(express.json({ limit: "1mb" }));
@@ -717,46 +744,59 @@ export function setupErrorHandler(app: Application): void {
 
 ## Middleware Stack Assembly — NestJS
 
+`configureApp()` is the one place the NestJS app is configured. `main.ts` calls it, and so does every
+e2e/controller test (`crud-handler-test-typescript.md`), so tests run the production request id, body
+limit, CORS, `ValidationPipe` and error filter — not a hand-built copy.
+
 ```typescript
-// src/main.ts — NestJS bootstrap showing middleware and guard wiring
+// src/app.setup.ts
 
-import { NestFactory } from "@nestjs/core";
-import { ValidationPipe } from "@nestjs/common";
-import { AppModule } from "./app.module";
-import { AppErrorFilter } from "./filters/app-error.filter";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { AppErrorFilter, appValidationPipe } from "./filters/app-error.filter";
+import { requestId } from "./middleware/request-id";
 
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+export function configureApp(app: NestExpressApplication): void {
+  // 1. Request ID — first, so every log line, envelope and X-Request-Id header carry the same validated id
+  app.use(requestId);
 
-  // 1. CORS
+  // 2. CORS — an explicit allowlist from config; none configured means no cross-origin access
   app.enableCors({
     origin: process.env.ALLOWED_ORIGINS?.split(",") ?? [],
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
-    exposedHeaders: ["X-Request-ID", "Retry-After"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-Id"],
+    exposedHeaders: ["X-Request-Id", "Retry-After"],
     maxAge: 86400,
   });
 
-  // 2. Global validation pipe (class-validator)
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      transform: true,
-      forbidNonWhitelisted: true,
-    }),
-  );
+  // 3. Body size limit — replaces Nest's default JSON parser (100 KB). Parser errors (malformed JSON, over the
+  //    limit) reach AppErrorFilter too: its toAppError() maps them to 400 MALFORMED_REQUEST in the envelope
+  app.useBodyParser("json", { limit: "1mb" });
 
-  // 3. Global error filter (maps AppError to HTTP responses)
+  // 4. Global validation pipe — class-validator failures are 400 VALIDATION_FAILED with details[] in the
+  //    envelope (exceptionFactory), never Nest's default { statusCode, message, error } body
+  app.useGlobalPipes(appValidationPipe());
+
+  // 5. Global error filter — every exception from guards, pipes and handlers becomes the error envelope
   app.useGlobalFilters(new AppErrorFilter());
+}
+```
 
-  // 4. Request size limit
-  app.use(require("express").json({ limit: "1mb" }));
+```typescript
+// src/main.ts — NestJS bootstrap
 
+import { NestFactory } from "@nestjs/core";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { AppModule } from "./app.module";
+import { configureApp } from "./app.setup";
+
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  configureApp(app);
   await app.listen(process.env.PORT ?? 3000);
 }
 
-bootstrap();
+void bootstrap();
 ```
 
 ---

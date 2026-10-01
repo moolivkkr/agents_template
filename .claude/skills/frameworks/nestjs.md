@@ -63,15 +63,13 @@ export class CreateUserDto {
     password!: string
 }
 ```
-Enable the global `ValidationPipe` with the archetype's `exceptionFactory`, so a failure is 400
-`VALIDATION_FAILED` with `details[]` in the envelope — not Nest's default `{ statusCode, message, error }` body:
+The global `ValidationPipe` is the archetype's `appValidationPipe()`: its `exceptionFactory` makes a failure
+400 `VALIDATION_FAILED` with `details[]` in the envelope — not Nest's default `{ statusCode, message, error }`
+body. `configureApp(app)` (`src/app.setup.ts`, backend/archetypes/auth-middleware-typescript.md) installs it
+with the error filter, the request id and the body limit, for `main.ts` and every e2e test alike:
 ```typescript
-app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-    exceptionFactory: validationExceptionFactory, // backend/archetypes/error-handling-typescript.md
-}))
+// inside configureApp(app) — never a hand-built ValidationPipe elsewhere
+app.useGlobalPipes(appValidationPipe()) // whitelist, forbidNonWhitelisted, transform, exceptionFactory
 app.useGlobalFilters(new AppErrorFilter())
 ```
 

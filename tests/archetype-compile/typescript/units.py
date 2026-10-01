@@ -16,7 +16,7 @@ a sample demonstrates.
 # Expected number of TS blocks per archetype file. A mismatch fails the run: a block was added or
 # removed, so the units below must be updated to cover it.
 FILES = {
-    "backend/archetypes/auth-middleware-typescript.md": 14,
+    "backend/archetypes/auth-middleware-typescript.md": 15,
     "backend/archetypes/crud-handler-test-typescript.md": 11,
     "backend/archetypes/crud-handler-typescript.md": 14,
     "backend/archetypes/crud-repository-test-typescript.md": 17,
@@ -64,7 +64,8 @@ def refs(stem, *nums):
 
 # --- the Express CRUD stack: errors + auth + handler + service + repositories (Prisma and Drizzle)
 ERRORS = refs("error-handling-typescript", 1, 2, 3, 7)
-AUTH_EXPRESS = refs("auth-middleware-typescript", 1, 2, 3, 4, 7, 9, 10, 11, 12, 14)
+AUTH_EXPRESS = refs("auth-middleware-typescript", 1, 2, 3, 4, 7, 9, 10, 11, 12, 15)
+REQUEST_ID = ["auth-middleware-typescript#2"]  # src/middleware/request-id.ts: the error handler imports it
 HANDLER_EXPRESS = refs("crud-handler-typescript", 1, 2, 3, 4, 5, 6, 7, 8, 9)
 SERVICE = refs("crud-service-typescript", 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)
 REPOSITORY = refs("crud-repository-typescript", 1, 2, 3, 4, 5, 6, 7)
@@ -78,7 +79,7 @@ DRIZZLE_REPO_TEST = "src/repositories/drizzle-widget.repository.test.ts"
 # --- the NestJS CRUD stack: filter + guards + controller/DTOs/decorators on the same errors/service
 NEST_STACK = (
     ERRORS + ["error-handling-typescript#4"]
-    + refs("auth-middleware-typescript", 1, 5, 6, 8, 13)
+    + refs("auth-middleware-typescript", 1, 2, 5, 6, 8, 13, 14)
     + refs("crud-handler-typescript", 1, 2, 3, 10, 11, 12, 13, 14)
     + SERVICE + REPOSITORY
 )
@@ -129,7 +130,7 @@ UNITS = [
         # nice-grpc server on the CRUD service/errors; ts-proto output of grpc-pattern.md's protos is
         # committed in shims/grpc/src/gen (grpc-codegen/regen.sh regenerates it)
         "name": "grpc-nice-grpc",
-        "blocks": ERRORS + SERVICE + REPOSITORY + refs("crud-handler-typescript", 2)
+        "blocks": ERRORS + REQUEST_ID + SERVICE + REPOSITORY + refs("crud-handler-typescript", 2)
         + refs("grpc-pattern-typescript", 1, 2, 3, 4, 5),
         "prisma": True,
         "shims": ["crud-stack", "grpc", "project-auth"],
@@ -140,6 +141,15 @@ UNITS = [
         "shims": ["project-auth", "ws-test"],
         # both servers over real sockets: Origin allowlist, single-use tickets, tenant rooms (shims/ws-test)
         "vitest": ["src/ws/ws-authz.test.ts"],
+    },
+    {
+        # the ONE request-id source and its consumers, RUN: hostile X-Request-Id values (CR/LF, oversize,
+        # non-matching, repeated) are replaced, never echoed; pino-http's req.id, meta and error bodies agree
+        "name": "request-id",
+        "blocks": REQUEST_ID + refs("error-handling-typescript", 1, 2, 3) + ["crud-service-typescript#9"]
+        + ["observability-typescript#20"],
+        "shims": ["request-id-test"],
+        "vitest": ["src/middleware/request-id.test.ts"],
     },
     {
         "name": "worker-bullmq",
@@ -154,7 +164,7 @@ UNITS = [
     {
         # illustrative fragments: the service sketch and the isAppError try/catch
         "name": "error-handling-fragments",
-        "blocks": ERRORS + refs("error-handling-typescript", 5, 6) + ["crud-service-typescript#9"],
+        "blocks": ERRORS + REQUEST_ID + refs("error-handling-typescript", 5, 6) + ["crud-service-typescript#9"],
         "place": {
             "error-handling-typescript#5": {
                 "path": "src/services/widget.service.ts",
@@ -203,7 +213,7 @@ UNITS = [
         "name": "observability-express",
         "blocks": refs("observability-typescript", 1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20,
                        21, 26, 27, 28, 30, 33)
-        + refs("error-handling-typescript", 1, 2, 3, 7) + refs("auth-middleware-typescript", 1, 3)
+        + refs("error-handling-typescript", 1, 2, 3, 7) + refs("auth-middleware-typescript", 1, 2, 3)
         + ["dockerfile-typescript#1"],
         "place": {
             "observability-typescript#2": {
@@ -249,7 +259,9 @@ UNITS = [
     },
     {
         "name": "observability-nest",
-        "blocks": refs("observability-typescript", 6, 7, 14, 22, 23, 29, 31, 32),
+        "blocks": refs("observability-typescript", 6, 7, 14, 22, 23, 29, 31, 32)
+        + ERRORS + ["error-handling-typescript#4", "crud-service-typescript#9"]
+        + refs("auth-middleware-typescript", 2, 13),
         "place": {
             "observability-typescript#7": {"path": "src/app.module.tracing.ts", "prelude": "import { Module } from '@nestjs/common';"},
             "observability-typescript#23": {
@@ -438,8 +450,9 @@ UNITS = [
         "decorators": "legacy",
         "prisma": True,
         "shims": ["crud-stack", "nest-stack"],
-        # Nest resolves constructor deps from emitted metadata at runtime — tsc can't see a missing token
-        "node_probe": "src/di-probe.ts",
+        # Nest resolves constructor deps from emitted metadata at runtime — tsc can't see a missing token;
+        # and configureApp() (src/app.setup.ts) is run over HTTP: bad body → 400 VALIDATION_FAILED + details[]
+        "node_probe": ["src/di-probe.ts", "src/validation-probe.ts"],
     },
     {
         "name": "crud-nest-controller-spec",
@@ -597,9 +610,9 @@ PACK_UNITS = [
         "name": "pack-nestjs",
         "blocks": NEST_STACK + refs("nestjs", 1, 2, 3, 4, 5),
         "place": {"nestjs#3": {"path": "src/main.pipes.ts", "wrap": "function", "prelude": lines(
-            'import { ValidationPipe, type INestApplication } from "@nestjs/common";',
-            'import { AppErrorFilter, validationExceptionFactory } from "./filters/app-error.filter";',
-            "declare const app: INestApplication;",
+            'import type { NestExpressApplication } from "@nestjs/platform-express";',
+            'import { AppErrorFilter, appValidationPipe } from "./filters/app-error.filter";',
+            "declare const app: NestExpressApplication;",
         )}},
         "decorators": "legacy",
         "prisma": True,
@@ -645,6 +658,7 @@ PACK_UNITS = [
         "name": "pack-graphql",
         "blocks": refs("graphql", 1, 2),
         "shims": ["pack-graphql"],
+        "vitest": ["src/graphql/resolvers/widget.test.ts"],  # first outside 1–100 → VALIDATION_FAILED
     },
     {
         # testing/vitest.md: config, setup, unit/component/mock/hook/snapshot samples (type-checked; the

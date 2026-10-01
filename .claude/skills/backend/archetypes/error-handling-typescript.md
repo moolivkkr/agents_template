@@ -14,7 +14,7 @@ tags:
 
 # Error Handling Archetype — TypeScript
 
-> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, class-validator 0.15 (tests/archetype-compile/typescript/run.sh).
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, NestJS 12.1, class-validator 0.15. `appValidationPipe()` + `AppErrorFilter` are also run through `configureApp()`: invalid and unknown fields → 400 VALIDATION_FAILED with details[]; malformed JSON and a body over 1 MB → 400 MALFORMED_REQUEST, all in the envelope (tests/archetype-compile/typescript/run.sh).
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/error-handling-go.md` (Go). Both produce the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`), so frontend clients can use a single error parsing strategy. If this file and the envelope ever disagree, the envelope wins.
 
@@ -235,18 +235,13 @@ export function unavailable(service: string, cause?: unknown): AppError {
 ```typescript
 // src/middleware/error-handler.ts
 
-import { randomUUID } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { AppError } from "../errors/app-error";
 import { internal, malformedRequest } from "../errors/domain-errors";
 import { logger } from "../lib/logger"; // the app-wide pino instance
-
-/** The request's ID, set by the request-id middleware; created here if that middleware didn't run. */
-export function requestIdOf(req: Request): string {
-  const r = req as Request & { requestId?: string };
-  r.requestId ||= randomUUID();
-  return r.requestId;
-}
+// The request id comes from the ONE source (auth-middleware-typescript.md §Request ID): the id the
+// request-id middleware set, or — when an error comes before it ran — the same validated resolution.
+import { requestIdOf } from "./request-id";
 
 /** express.json() (body-parser) failures that mean "the body could not be read". */
 const BODY_PARSER_ERRORS = new Set([
@@ -333,6 +328,7 @@ import {
   ArgumentsHost,
   HttpException,
   Logger,
+  ValidationPipe,
 } from "@nestjs/common";
 import type { ValidationError } from "class-validator";
 import type { Request, Response } from "express";
@@ -351,7 +347,8 @@ import {
   unauthenticated,
   unavailable,
 } from "../errors/domain-errors";
-import { requestIdOf, toAppError, writeErrorBody } from "../middleware/error-handler";
+import { toAppError, writeErrorBody } from "../middleware/error-handler";
+import { requestIdOf } from "../middleware/request-id";
 
 @Catch()
 export class AppErrorFilter implements ExceptionFilter {
@@ -412,8 +409,8 @@ const CONSTRAINT_CODES: Record<string, FieldCode> = {
 /**
  * ValidationPipe exceptionFactory: class-validator errors → 400 VALIDATION_FAILED with details[].
  * Constraint messages are never sent; each becomes a stable code + a catalog message.
- * Use it wherever a ValidationPipe is built:
- *   new ValidationPipe({ whitelist: true, transform: true, exceptionFactory: validationExceptionFactory })
+ * Don't build a ValidationPipe by hand: use appValidationPipe() below (configureApp() in src/app.setup.ts
+ * installs it globally, for main.ts and the tests alike).
  */
 export function validationExceptionFactory(errors: ValidationError[]): AppError {
   const fields = errors.flatMap((e) =>
@@ -425,7 +422,22 @@ export function validationExceptionFactory(errors: ValidationError[]): AppError 
   return multiValidationError(fields);
 }
 
-// Register globally in main.ts:
+/**
+ * THE ValidationPipe: strips unknown properties and rejects them (forbidNonWhitelisted → unknown_field),
+ * transforms to the DTO class, and answers 400 VALIDATION_FAILED with details[] in the envelope. Without
+ * exceptionFactory, Nest's BadRequestException reaches the filter as 400 MALFORMED_REQUEST with no details.
+ */
+export function appValidationPipe(): ValidationPipe {
+  return new ValidationPipe({
+    whitelist: true,
+    forbidNonWhitelisted: true,
+    transform: true,
+    exceptionFactory: validationExceptionFactory,
+  });
+}
+
+// Registered globally by configureApp() (src/app.setup.ts):
+//   app.useGlobalPipes(appValidationPipe());
 //   app.useGlobalFilters(new AppErrorFilter());
 ```
 
