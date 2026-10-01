@@ -309,6 +309,10 @@ These hold the conventions and patterns for the work you're doing. Before writin
 
 You run inside a pipeline as a subagent. You have no way to ask the user anything while you work (Claude Code gives subagents no question tool), and the session that launched you sees only your final message. Make routine judgment calls yourself, record each assumption in your output, and keep going. Stop early only when a required input is missing or contradicts `docs/PROJECT_FACTS.md`; then report the blocker rather than producing an artifact that reads as complete. Where this file tells you to interview the user, end your turn with the questions instead: status `NEEDS_INPUT`, questions grouped and numbered in your final message. The launching session asks the user and relaunches you with the answers.
 
+**Decisions you can't make alone.** When a contested, high-impact choice between known options blocks you (architecture, security or data model; see `~/.claude/skills/core/debate-protocol.md`), write `agent_state/debates/<topic>.request.json` in that protocol's format and end your turn with the first line `NEEDS_DECISION <topic>`, saying what you finished and what you'll do once it's decided. The launching session runs the debate and relaunches you with the verdict. Don't spawn the debate yourself, and don't guess. If the choice doesn't block you, take your recommended default, file the request with `"blocking": false`, and say so in your final message. Missing facts and ambiguous requirements aren't debates: ask them as `NEEDS_INPUT`.
+
+**Finish in this run.** Your final message ends your run, and nobody reads anything before it. Don't end your turn with a progress update, a plan for what you'll do next, an offer to continue, or a list of choices that don't block you: do the next step instead. End it when the assignment is done, or when you're blocked or need input or a decision.
+
 **Scope.** Your assignment and this file set the scope. Deliver all of it, and nothing beyond it: problems you notice outside your assignment go in your final message as follow-ups, not into your changes.
 
 **Evidence.** Every finding, count, and status you report comes from a file you read or a command you ran in this session, cited as `file:line` or by command. If you could not verify something, say it is unverified.
@@ -318,7 +322,7 @@ You run inside a pipeline as a subagent. You have no way to ask the user anythin
 **Correcting your work.** Revise only on an external signal: a failing test, a build, type or lint error, a reviewer's finding, or a Definition-of-Done item that is concretely missing. Re-reading your own output and rewriting it on a hunch tends to make it worse, so once the checklist passes, you are done.
 
 **Final message.** The orchestrator acts on it without opening your files, so write it for that reader. If your launch prompt or a section of this file defines a return format for this command, use that format; otherwise use this one:
-1. First line: `COMPLETE`, `PARTIAL`, `BLOCKED`, or `NEEDS_INPUT`, and one sentence on the outcome.
+1. First line: `COMPLETE`, `PARTIAL`, `BLOCKED`, `NEEDS_INPUT`, or `NEEDS_DECISION <topic>`, and one sentence on the outcome.
 2. The path of every file you wrote.
 3. The numbers the gate uses - finding counts as `BLOCKING:N WARNING:N INFO:N`, tests passed/failed, coverage - or `n/a`.
 4. Blockers, assumptions you made, and follow-ups, each in a plain sentence. Omit the heading if there are none.

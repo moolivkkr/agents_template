@@ -164,18 +164,20 @@ Cycle 2: Re-run failed tests
   → All PASS? → proceed
   → Still failing? → deeper analysis
     → If same test keeps failing: likely category D (architectural)
-    → ESCALATE to debate_moderator:
-      debate_request: {
-        topic: "Acceptance test failure: <FR-*> <persona> <use case>",
-        context: "BRD says X, implementation does Y, cannot reconcile after 2 attempts",
-        options: [
-          "Redesign the feature architecture to meet the AC",
-          "Amend the BRD acceptance criteria (with justification)",
-          "Defer to next phase with documented workaround",
-          "The acceptance test interpretation is wrong"
-        ]
-      }
-    → Arbitrator decides → implement → final re-test
+    → raise a debate (debate-protocol.md v2):
+      write agent_state/debates/acc_<fr>_<persona>.request.json
+        { "schema": "sdlc.debate-request/v1", "topic": "acc_<fr>_<persona>", "phase": N,
+          "decision": "Acceptance <TC-ACC id> for <FR-*> (<persona>) can't pass", "impact": "HIGH",
+          "domain": "architecture", "blocking": true,
+          "context": "BRD says X, implementation does Y, cannot reconcile after 2 attempts",
+          "options": [ {"id":"A","label":"Redesign the feature to meet the acceptance criterion"},
+                       {"id":"B","label":"Amend the BRD acceptance criterion (with justification)"},
+                       {"id":"C","label":"Defer to a later phase with a documented workaround"},
+                       {"id":"D","label":"The test misreads the criterion: correct the test"} ] }
+      → return NEEDS_DECISION acc_<fr>_<persona>; the parent runs debate_moderator and relaunches you
+      → implement the verdict → final re-test
+      (a verdict of B or C changes what the product owner agreed to: the parent takes it to the user,
+       through product_manager for B, before acting. Under --auto it is carried to the checkpoint.)
 
 Cycle 3: Final acceptance
   → PASS? → proceed to gate

@@ -227,7 +227,7 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 
 ```bash
 # 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
-for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py; do
+for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py debate-status.py; do
   [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
@@ -265,6 +265,28 @@ instead of proceeding. Do not re-litigate an active decision without new evidenc
 
 The wave prompts below omit this line only for brevity — you must add it to each. See
 `~/.claude/skills/core/shared-context-protocol.md`.
+
+## Spawning agents and reading what they return
+
+**Spawn in the foreground.** Pass `run_in_background: false` on every Agent call in this
+orchestrator.
+- **Why:** an Agent call without it runs in the background, so this turn can end, and a wave can be
+  "verified", while its agents are still working. That was reproduced on 2026-09-30.
+- **Parallel work:** independent agents of one wave go in a single message. They run in parallel,
+  and the turn waits for all of them.
+
+**Read the first line of every return** and act on it:
+
+| First line | What you do |
+|---|---|
+| `COMPLETE` / `PARTIAL` / `BLOCKED` | The wave's own handling below. |
+| `NEEDS_INPUT` | Interactive: ask the user (AskUserQuestion for choices), then relaunch the same agent with its original prompt plus the answers. `--auto`: take the agent's recommended default, record it in `agent_state/debates/unresolved.json` and the manifest's `known_issues[]`, and relaunch. |
+| `NEEDS_DECISION <topic>` | Run the debate. 1) `python3 .claude/hooks/debate-status.py --phase ${PHASE}` shows the request and its problems, if any. 2) Apply the circuit breaker (3 per step, 10 per phase; `step-0-orient.md`). 3) Spawn `debate_moderator` in the foreground with `REQUEST: agent_state/debates/<topic>.request.json` plus the GROUND TRUTH line. 4) When it returns `COMPLETE`, relaunch the requesting agent with its original prompt plus `DECISION <topic>: <verdict_label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.` In an interactive run, show the user any review reasons the moderator listed (LOW, INCOMPLETE, a disagreeing second opinion, assumption) before relaunching. Under `--auto` they go to the checkpoint. |
+| anything else | A progress note ("I'll now…", a plan, an offer to continue) is not a result. Opus 5.5 can end a long turn that way. Re-spawn the agent in the foreground with its original prompt plus `Your previous run ended before finishing (it returned: "<first line>"). Files already written: <paths>. Finish the assignment in this run.` Allow at most two re-spawns, then log it `failed` in `execution.jsonl`. Don't use SendMessage for this: a resumed agent runs in the background. |
+
+The project settings cap nesting at two levels (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2`):
+- this session → `debate_moderator` → researchers, advocates and arbitrators is the deepest a debate goes
+- a wave agent never spawns the moderator itself
 
 ---
 
@@ -1211,18 +1233,23 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
     PY
     ```
 
-0c. **Debate dispatcher — no orphaned escalations.** Any escalation request written by a pipeline
-    agent must have a verdict before the gate. Force-spawn `debate_moderator` for any request lacking
-    a matching verdict; under `--auto`, record auto-resolved debates as `known_issues`.
+0c. **Debate dispatcher — no orphaned decisions.** Every debate request for this phase needs a
+    verdict before the gate, and `verify-gate.sh` check (f) blocks until it has one.
+    `debate-status.py` is the only reader of `agent_state/debates/`, because file names were never
+    reliable: the old glob here matched nothing the protocol wrote.
     ```bash
-    for REQ in agent_state/debates/*-request.json; do
-      [ -e "$REQ" ] || continue
-      VERDICT="${REQ%-request.json}-verdict.json"
-      if [ ! -f "$VERDICT" ]; then
-        echo "⚠ Pending debate with no verdict: $REQ → spawn debate_moderator now (do not gate without it)"
-      fi
-    done
+    python3 .claude/hooks/debate-status.py --phase "${PHASE}"
+    python3 .claude/hooks/debate-status.py --phase "${PHASE}" --check \
+      || echo "⛔ Pending or invalid debate(s) above: run debate_moderator for each before gating"
     ```
+    - **Pending, blocking or not:** spawn one `debate_moderator` per request, in the foreground.
+      Independent requests can share a message.
+    - **Non-blocking request whose verdict differs from the default the agent took:** relaunch that
+      agent with the decision.
+    - **Under `--auto`:** a decision you resolve with a default instead goes into `unresolved.json`
+      and `known_issues[]`.
+    - **Withdrawing:** a request that no longer applies gets `"status": "withdrawn"` and a
+      `withdrawn_reason`. Never delete it.
 
 1. Verify ALL required files exist AND contain real content (tests, reviews, reconciliation,
    acceptance). This list is the hard `REQUIRED_REPORTS` set — it now includes the review and

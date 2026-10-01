@@ -77,14 +77,16 @@ Preserves all code changes. Agents will build on existing implementation during 
    fi
    ```
 
-6. **Clear debate state for this phase:**
+6. **Archive this phase's debates** (only this phase's: the old glob moved every phase's verdicts):
    ```bash
-   # Archive, don't delete — debates contain valuable decision context
-   if ls agent_state/debates/*-verdict.json 1>/dev/null 2>&1; then
+   # Archive, don't delete — debates contain valuable decision context. The D-NNN entries stay in
+   # docs/DECISIONS.md (append-only); if the redo decides differently, record it with --reverses.
+   for T in $(python3 .claude/hooks/debate-status.py --phase "${PHASE}" --json | jq -r '.topics[] | select(.phase != null) | .topic'); do
      mkdir -p "agent_state/debates/archived-${TIMESTAMP}"
-     mv agent_state/debates/*-verdict.json "agent_state/debates/archived-${TIMESTAMP}/" 2>/dev/null
-     mv agent_state/debates/*-transcript.md "agent_state/debates/archived-${TIMESTAMP}/" 2>/dev/null
-   fi
+     for f in agent_state/debates/"$T".* agent_state/debates/"$T"-*; do
+       [ -e "$f" ] && mv "$f" "agent_state/debates/archived-${TIMESTAMP}/"
+     done
+   done
    ```
 
 ### After soft reset

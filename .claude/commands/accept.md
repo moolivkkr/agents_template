@@ -722,7 +722,7 @@ auto-generate release notes from project artifacts:
 
 3. **Read decision logs** — surface significant architectural decisions
    ```bash
-   # Read agent_state/debates/*-verdict.json for key ADRs
+   python3 .claude/hooks/debate-status.py --json   # every debated decision, its D-NNN and any review reason
    # Read agent_state/phases/*/reports/ for optimization decisions
    ```
 

@@ -28,7 +28,7 @@ read-only over the pipeline state.
 | Section | Source artifacts |
 |---|---|
 | Implemented | `agent_state/phases/*/manifest.json` → `artifacts.*`, `brd_requirements_met`; `PHASE_SUMMARY.md` |
-| Decisions | `docs/DECISIONS.md` (spine), `docs/adr/`, `agent_state/debates/*-verdict.json`, `agent_state/phases/*/decision-log.md` |
+| Decisions | `docs/DECISIONS.md` (spine), `docs/adr/`, debates via `.claude/hooks/debate-status.py --json`, `agent_state/phases/*/decision-log.md` |
 | Pending / Deferred | manifest `known_issues[]` + `carried_forward[]`, `test_case_inventory.deferred_ids[]`, `agent_state/debates/unresolved.json`, FORCED gate markers, `agent_state/accept/unresolved_gaps.md` |
 | Activity | `agent_state/phases/*/execution.jsonl`, `checkpoints/`, `roster.json` (skipped/not_applicable agents) |
 
@@ -56,6 +56,16 @@ def load(p):
     try: return json.load(open(p))
     except Exception: return None
 
+# Debates, read through debate-status.py (the only reader of agent_state/debates/), grouped by phase
+import subprocess
+debates = {}
+try:
+    ds = subprocess.run([sys.executable, ".claude/hooks/debate-status.py", "--json"], capture_output=True, text=True)
+    for t in json.loads(ds.stdout)["topics"]:
+        debates.setdefault(str(t.get("phase")), []).append(t)
+except Exception:
+    pass
+
 for ph in phases:
     d = f"agent_state/phases/{ph}"
     m = load(f"{d}/manifest.json") or {}
@@ -79,9 +89,12 @@ for ph in phases:
 
     # 2) Decisions — pointers merged from all sinks
     L.append("### Decisions")
-    for v in sorted(glob.glob(f"{d.rsplit('/',2)[0] if False else 'agent_state/debates'}/*-verdict.json")):
-        vj = load(v) or {}
-        L.append(f"- [DEBATE] {vj.get('verdict_label', os.path.basename(v))} — {vj.get('decisive_factor','')} ({v})")
+    for t in debates.get(str(ph), []):
+        if t["status"] in ("resolved", "overridden"):
+            L.append(f"- [DEBATE] {t.get('verdict_label') or t['topic']} ({t.get('confidence')}, {t.get('decision_id') or 'no D-NNN'}) ({t.get('verdict_file')})"
+                     + (f" — review: {'; '.join(t['review'])}" if t.get("review") else ""))
+        else:
+            L.append(f"- [DEBATE {t['status'].upper()}] {t['topic']} ({t.get('request')})")
     for adr in sorted(glob.glob("docs/adr/ADR-*.md")):
         L.append(f"- [ADR] {os.path.basename(adr)} ({adr})")
     dl = f"{d}/decision-log.md"
@@ -125,6 +138,8 @@ L.append("## Global Backlog")
 if os.path.exists(gaps): L.append(f"- Acceptance gaps: [{gaps}]({gaps})")
 uj = load(unresolved)
 if uj: L.append(f"- Auto-resolved decisions needing review: {unresolved}")
+for t in debates.get("None", []):
+    L.append(f"- Debate with no phase: {t['topic']} [{t['status']}] ({t.get('request') or t.get('verdict_file')})")
 if L[-1] == "## Global Backlog": L.append("- (clean)")
 L.append("")
 

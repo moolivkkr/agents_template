@@ -140,20 +140,20 @@ Cycle 2: Re-run failed tests
 
 Cycle 3: Final attempt
   → All pass? → proceed
-  → Still failing? → ESCALATE to debate_moderator:
-    debate_request: {
-      topic: "E2E test failure after 3 fix attempts",
-      context: "Test: <name>, Error: <error>, Attempts: 3",
-      options: [
-        "Architectural change to fix root cause",
-        "Simplify the feature to make it testable",
-        "Mark as known_issue with workaround",
-        "The test expectation is wrong — adjust test"
-      ]
-    }
-    → debate_moderator spawns researchers + advocates + arbitrator
-    → Arbitrator verdict determines action
-    → Implement verdict → re-run E2E → if still fails: BLOCK gate
+  → Still failing? → raise a debate (debate-protocol.md v2):
+    write agent_state/debates/e2e_<test-slug>.request.json
+      { "schema": "sdlc.debate-request/v1", "topic": "e2e_<test-slug>", "phase": N,
+        "decision": "E2E <name> still fails after 3 fix attempts", "impact": "HIGH",
+        "domain": "testing", "blocking": true,
+        "context": "Test: <name>, Error: <error>, Attempts: 3",
+        "options": [ {"id":"A","label":"Architectural change to fix the root cause"},
+                     {"id":"B","label":"Simplify the feature so it meets the spec testably"},
+                     {"id":"C","label":"Known issue with a workaround, carried forward"},
+                     {"id":"D","label":"The test expectation contradicts the spec: correct the test"} ] }
+    → return NEEDS_DECISION e2e_<test-slug>; the parent runs debate_moderator and relaunches you
+    → implement the verdict → re-run E2E → still failing: BLOCK the gate
+    (option D still goes through spec_test_reconciler's weakening check: a corrected expectation
+     needs the spec row that justifies it)
 ```
 
 **Step 3c.3 — Visual Validation (if wireframe.html exists):**

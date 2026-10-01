@@ -454,17 +454,24 @@ This prevents specs from going stale after implementation while preserving the o
 
 ### Mid-Execution Escalation Protocol
 
-When an agent encounters uncertainty, conflicting options, or missing data:
+When an agent meets uncertainty, conflicting options or missing data, it picks one route. The full
+contract is `~/.claude/skills/core/debate-protocol.md` (v2).
 
-**LOW impact** (reversible, single-option): continue with `continueWithDefault: true`
-```json
-{ "type": "escalation", "impact": "LOW", "recommendation": "A", "continueWithDefault": true }
-```
+| Situation | Route |
+|---|---|
+| **LOW impact** (reversible, one sensible option) | Continue with the default and record it in your output: `{ "type": "escalation", "impact": "LOW", "recommendation": "A", "continueWithDefault": true }` |
+| **Missing data** (a fact nobody wrote down) or an **ambiguous requirement** | Return `NEEDS_INPUT` with the question. A debate can't create a fact about this project or decide what the product owner meant. Under `--auto`, the parent records a default in `unresolved.json` for the checkpoint |
+| **MEDIUM/HIGH impact choice between known options** (architecture, security, data model, library or pattern) | Raise a debate, as below |
 
-**MEDIUM/HIGH impact** (architecture, security, data model): escalate to Debate Team
+**Raising a debate.** Write `agent_state/debates/<topic>.request.json` (topic = a slug such as
+`token_storage`):
+
 ```json
 {
+  "schema": "sdlc.debate-request/v1",
   "type": "debate_request",
+  "topic": "<slug>",
+  "phase": <N>,
   "from_agent": "<agent name>",
   "from_step": "<pipeline step>",
   "decision": "<what needs deciding>",
@@ -474,41 +481,57 @@ When an agent encounters uncertainty, conflicting options, or missing data:
   ],
   "context": "<BRD refs, constraints, what's known>",
   "impact": "HIGH | MEDIUM",
-  "domain": "architecture | security | data_model | feature",
+  "domain": "architecture | security | data_model | feature | testing | operations",
+  "kind": "decision",
   "blocking": true
 }
 ```
 
-Write to `agent_state/debates/<step>-<topic>.json`.
+Then:
+- **Blocking:** end your turn with the first line `NEEDS_DECISION <topic>`. Nothing watches the
+  debates directory, and a subagent can't wait for a verdict. The parent session spawns
+  `debate_moderator` in the foreground and relaunches you with the verdict.
+- **Non-blocking:** continue with your recommended default and say so in your final message. The
+  parent runs the debate before the gate and relaunches you only if the verdict differs.
 
-The `debate_moderator` picks it up and runs:
-1. **Researchers** (parallel) — gather evidence for each option
-2. **Advocates** (parallel, HIGH only) — argue for each option adversarially
-3. **Arbitrator** — evaluates all arguments, produces scored verdict
-
-Verdict written to `agent_state/debates/<topic>-verdict.json`. The requesting agent reads it and continues.
-
-**This replaces guessing with researched, debated, scored decisions.**
+The debate runs researchers (parallel), then advocates (HIGH only, parallel), then the arbitrator,
+then a Fable second opinion for close HIGH calls. The verdict lands in
+`agent_state/debates/<topic>.verdict.json` and a `D-NNN` in `docs/DECISIONS.md`. Read debates with
+`python3 .claude/hooks/debate-status.py --phase N`, never by globbing file names.
 
 ### Escalation Circuit Breaker
 
 Prevent runaway escalation loops that consume context and time:
 
-- **Max escalations per step:** 3 — if a single step (e.g., Step 2 Implementation) triggers more than 3 debate requests, STOP escalating. Write remaining decisions to `agent_state/debates/unresolved.json` with recommended defaults.
-- **In `--auto` mode:** continue with defaults for all unresolved decisions, but flag ALL as `"⚠ AUTO-RESOLVED — may need review"` in the decision log and manifest `known_issues[]`.
-- **Security escalation exception:** Escalations with `"domain": "security"` are NEVER auto-resolved. In `--auto` mode, security decisions MUST use the **hardened default** (the option that is MORE restrictive / MORE secure). Log as `"⚠ SECURITY — hardened default applied, review recommended"`. Security escalations include: auth patterns, token storage, IDOR mitigation, encryption, PII handling, CORS/CSRF config, rate limiting. If no clearly hardened default exists → EXIT auto mode for this decision and surface to user.
-- **Max total escalations per phase:** 10 — if exceeded, EXIT auto mode entirely. Surface all unresolved decisions to the user with: `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
-- **Max escalation depth:** 2 — if a debate triggers another debate (e.g., arbitrator can't decide and re-escalates), the second-level debate auto-resolves with the recommended default (except security — always hardened). A third-level escalation is NEVER allowed.
+- **Max debates per step:** 3. If one step (e.g. Wave 2 implementation) raises more than 3, stop
+  raising them. The parent records the rest in `agent_state/debates/unresolved.json` with
+  recommended defaults.
+- **In `--auto` mode:** continue with defaults for all unresolved decisions, but flag every one as
+  `"⚠ AUTO-RESOLVED — may need review"` in the decision log and the manifest's `known_issues[]`.
+  `debate-status.py` lists them for the checkpoint.
+- **Security exception:** a decision with `"domain": "security"` is never auto-resolved with a
+  permissive default. In `--auto` mode it uses the **hardened default** (the more restrictive, more
+  secure option), logged as `"⚠ SECURITY — hardened default applied, review recommended"`. Security
+  covers auth patterns, token storage, IDOR mitigation, encryption, PII handling, CORS/CSRF config
+  and rate limiting. If there's no clearly hardened option, exit auto mode for this decision and ask
+  the user.
+- **Max debates per phase:** 10. Past that, exit auto mode entirely and show the user every
+  unresolved decision: `"⛔ Phase ${PHASE} exceeded escalation limit (10). Review agent_state/debates/unresolved.json before continuing."`
+- **No nested debates:** an arbitrator that can't decide writes a LOW or INCOMPLETE verdict. It never
+  raises another debate.
+- **Defaults are never "the first option":** use the option with the stronger BRD case in the
+  request, or the hardened option for security.
 
 ```json
-// agent_state/debates/unresolved.json
+// agent_state/debates/unresolved.json: defaults applied without a debate (counted as resolved by
+// the gate, always listed for review)
 {
-  "phase": N,
-  "unresolved_count": 4,
   "decisions": [
     {
       "topic": "cache_strategy",
+      "phase": N,
       "from_agent": "backend_developer",
+      "domain": "architecture",
       "auto_resolved_with": "A",
       "confidence": "LOW",
       "reason": "escalation_limit_exceeded",
@@ -523,7 +546,7 @@ Prevent runaway escalation loops that consume context and time:
 Every agent spawned during this command MUST end by returning this exact format — nothing more — to the parent conversation:
 
 ```text
-✅ <agent-name> — <status: complete | blocked | partial>
+✅ <agent-name> — <status: complete | blocked | partial | needs_decision <topic>>
    Wrote: <output file path>
    Done:  <what was implemented in one line>
    Issues: none | <N blocking / N warning>

@@ -270,8 +270,9 @@ Check for known blockers:
 # Check for gate failures
 GATE_FAILURES=$(ls agent_state/phases/${PHASE}/gate.failed* 2>/dev/null)
 
-# Check for unresolved debates
-UNRESOLVED_DEBATES=$(ls agent_state/debates/unresolved.json 2>/dev/null)
+# Debates still open for this phase (pending or invalid), and auto-resolved defaults awaiting review
+OPEN_DEBATES=$(python3 .claude/hooks/debate-status.py --phase "${PHASE}" --json 2>/dev/null \
+  | jq -r '.topics[] | select(.status=="pending" or .status=="invalid" or .status=="auto_resolved") | "\(.status): \(.topic)"')
 
 # Check for migration failures
 MIGRATION_FAILURE=$(ls agent_state/phases/${PHASE}/migration_failure.json 2>/dev/null)
@@ -308,19 +309,8 @@ fi
 Scan for escalations and debates that are unresolved:
 
 ```bash
-# Unresolved debate requests
-for f in agent_state/debates/*-verdict.json; do
-  [ -f "$f" ] || continue
-  echo "Resolved: $(basename $f)"
-done
-
-for f in agent_state/debates/*.json; do
-  [ -f "$f" ] || continue
-  [[ "$f" == *-verdict.json ]] && continue
-  [[ "$f" == *unresolved.json ]] && continue
-  VERDICT="${f%-*}-verdict.json"
-  [ ! -f "$VERDICT" ] && echo "OPEN: $(basename $f)"
-done
+# Every debate for this phase: PENDING / INVALID are open; REVIEW / AUTO need the user's eyes
+python3 .claude/hooks/debate-status.py --phase "${PHASE}"
 ```
 
 ### Key findings from reviews/tests

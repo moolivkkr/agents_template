@@ -360,19 +360,26 @@ done
 
 ### 5.5d. Orphaned Decision Logs
 
+`debate-status.py` is the only reader of `agent_state/debates/`. It joins requests and verdicts on
+the topic, including debates written under the older names. The glob this check used to run
+derived `step2-verdict.json` from `step2-database_choice.json` and called overrides orphans.
+
 ```bash
-if [ -d "agent_state/debates" ]; then
-  for debate in agent_state/debates/*.json; do
-    [ -f "$debate" ] || continue
-    [[ "$debate" == *-verdict.json ]] && continue
-    [[ "$debate" == *unresolved.json ]] && continue
-    VERDICT="${debate%-*}-verdict.json"
-    DEBATE_MTIME=$(stat -c %Y "$debate" 2>/dev/null || stat -f %m "$debate")
-    DAYS_OLD=$(( ($(date +%s) - DEBATE_MTIME) / 86400 ))
-    if [ ! -f "$VERDICT" ] && [ "$DAYS_OLD" -gt 14 ]; then
-      echo "WARNING: Unresolved debate '$(basename $debate)' is ${DAYS_OLD} days old — resolve or archive"
-    fi
-  done
+if ls agent_state/debates/*.json >/dev/null 2>&1; then
+  python3 .claude/hooks/debate-status.py --json > /tmp/health-debates.json || true
+  python3 - <<'PYCHECK'
+import json, os, time
+rep = json.load(open("/tmp/health-debates.json"))
+for t in rep["topics"]:
+    req = t.get("request")
+    age = int((time.time() - os.path.getmtime(req)) / 86400) if req and os.path.exists(req) else 0
+    if t["status"] == "pending":
+        print(f"WARNING: pending debate '{t['topic']}' (phase {t['phase']}) is {age} days old: run debate_moderator, record a default in unresolved.json, or withdraw it with a reason")
+    elif t["status"] == "invalid":
+        print(f"WARNING: debate '{t['topic']}' breaks the contract: {'; '.join(t['problems'])}")
+for u in rep.get("unrecognized", []):
+    print(f"INFO: agent_state/debates file not recognised as a request, verdict or override: {u}")
+PYCHECK
 fi
 ```
 
@@ -439,15 +446,9 @@ fi
 decision won't reach new sessions.
 
 ```bash
-DEC="docs/DECISIONS.md"
-if [ -d "agent_state/debates" ] && [ -f "$DEC" ]; then
-  for v in agent_state/debates/*-verdict.json; do
-    [ -f "$v" ] || continue
-    base=$(basename "$v" -verdict.json)
-    if ! grep -qi "$base" "$DEC"; then
-      echo "WARNING: debate verdict '$base' has no D-NNN entry in docs/DECISIONS.md — not promoted to durable memory"
-    fi
-  done
+if ls agent_state/debates/*.json >/dev/null 2>&1; then
+  python3 .claude/hooks/debate-status.py --json \
+    | jq -r '.topics[] | select(.review | index("not promoted to docs/DECISIONS.md")) | "WARNING: debate verdict \(.topic) has no D-NNN entry in docs/DECISIONS.md — not promoted to durable memory"'
 fi
 ```
 
