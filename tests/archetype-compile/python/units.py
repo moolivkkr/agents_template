@@ -96,7 +96,7 @@ WK = "worker-pattern-python.md"
 
 EXPECTED = {
     AM: 10, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
-    EH: 7, GR: 5, MG: 8, OB: 22, PF: 28, WS: 8, WK: 8,
+    EH: 7, GR: 5, MG: 10, OB: 22, PF: 28, WS: 8, WK: 8,
 }
 
 # Blocks that hold only comments. The harness verifies that; code added to one fails until it gets a unit.
@@ -180,14 +180,16 @@ def migration_files() -> dict[str, list[B | T | S | MD]]:
     return {
         "alembic.ini": [MD(MG, "ini", 0, "# alembic.ini")],
         "alembic/env.py": [B(MG, 0, "# alembic/env.py")],
+        "alembic/versions/20260115_095000_create_tenants_table.py": [
+            B(MG, 1, "# alembic/versions/20260115_095000_create_tenants_table.py")],
         "alembic/versions/20260115_100000_create_widgets_table.py": [
-            B(MG, 1, "# alembic/versions/20260115_100000_create_widgets_table.py")],
+            B(MG, 2, "# alembic/versions/20260115_100000_create_widgets_table.py")],
         "alembic/versions/20260115_100100_add_widget_categories.py": [
-            B(MG, 2, "# alembic/versions/20260115_100100_add_widget_categories.py")],
+            B(MG, 3, "# alembic/versions/20260115_100100_add_widget_categories.py")],
         "alembic/versions/20260115_100200_seed_default_categories.py": [
-            B(MG, 3, "# alembic/versions/20260115_100200_seed_default_categories.py")],
+            B(MG, 4, "# alembic/versions/20260115_100200_seed_default_categories.py")],
         "alembic/versions/20260115_100300_backfill_widget_category.py": [
-            B(MG, 4, "# alembic/versions/20260115_100300_backfill_widget_category.py")],
+            B(MG, 5, "# alembic/versions/20260115_100300_backfill_widget_category.py")],
     }
 
 
@@ -388,37 +390,44 @@ UNITS.append(Unit(
         # "Large Table Batch Data Migration" is an alternative upgrade() body shown without its file
         # header. The harness gives it one, as the next revision, so offline SQL and --live run it too.
         BATCH_REVISION: [
-            T('"""harness: the batch backfill from the doc, as a revision."""\n'
-              "from alembic import op\n\n"
+            T('"""harness: the batch backfill from the doc, as a revision."""\n\n'
               'revision = "e5f6a7b8c9d0"\ndown_revision = "d4e5f6a7b8c9"\nbranch_labels = None\ndepends_on = None\n'),
-            B(MG, 5, "# For tables > 100K rows, backfill in batches: each batch is its own short transaction, so no lock is"),
+            B(MG, 6, "# For tables > 100K rows, backfill in batches. Inside autocommit_block() every statement commits on its"),
             T("\n\ndef downgrade() -> None:  # harness: the fragment shows upgrade() only\n    pass"),
         ],
         "app/models/widget.py": [B(CR, 0, "# app/models/widget.py")],
-        "app/db/rls.py": [B(MG, 6, "# app/db/rls.py")],
-        # + harness (--live): the batch backfill with rows to move, as the non-superuser owner under FORCE
-        # RLS. Appended to the doc's module to share its session fixtures (one owner role per run).
-        "tests/test_migrations.py": [B(MG, 7, "# tests/test_migrations.py"), S("test_harness_batch_backfill.py")],
+        "app/db/rls.py": [B(MG, 7, "# app/db/rls.py")],
+        "app/db/tenants.py": [B(MG, 8, "# app/db/tenants.py")],
+        # + harness (--live): the batch backfill's locks read from pg_locks while a batch is paused, a
+        # row the application holds during a batch, and the FORCE-toggle design it replaced. Appended to
+        # the doc's module to share its session fixtures (one pair of roles per run).
+        "tests/test_migrations.py": [B(MG, 9, "# tests/test_migrations.py"), S("test_harness_batch_backfill.py")],
         # pg_url for --live: the repository tests' testcontainers fixtures, where this test can see them
         "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py")],
+        "harness_offline_check.py": [S("offline_batch_refused.py")],
     },
     typecheck=[
         "alembic/env.py",
+        "alembic/versions/20260115_095000_create_tenants_table.py",
         "alembic/versions/20260115_100000_create_widgets_table.py",
         "alembic/versions/20260115_100100_add_widget_categories.py",
         "alembic/versions/20260115_100200_seed_default_categories.py",
         "alembic/versions/20260115_100300_backfill_widget_category.py",
         BATCH_REVISION,
         "app/db/rls.py",
+        "app/db/tenants.py",
         "tests/test_migrations.py",
     ],
-    imports=["app.db.rls"],
+    imports=["app.db.rls", "app.db.tenants"],
     pytest="collect",
     live="run",
     env={"DATABASE_URL": "postgresql+asyncpg://harness@localhost:5432/harness"},
     post=[
-        ["{py}", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head", "--sql"],
-        ["{py}", "-m", "alembic", "-c", "alembic.ini", "downgrade", "head:base", "--sql"],
+        # offline SQL for the whole chain the doc ships; the batched backfill has no --sql form, which
+        # the last step checks: it fails with its own message after rendering everything before it
+        ["{py}", "-m", "alembic", "-c", "alembic.ini", "upgrade", "d4e5f6a7b8c9", "--sql"],
+        ["{py}", "-m", "alembic", "-c", "alembic.ini", "downgrade", "d4e5f6a7b8c9:base", "--sql"],
+        ["{py}", "harness_offline_check.py"],
     ],
 ))
 
