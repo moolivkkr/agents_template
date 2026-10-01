@@ -381,6 +381,36 @@ sidecar "$D/agent_state/phases/1/reports/rerun.json" FAIL 10 3 ",\"code_sha\":\"
 echo '{"agent":"test_runner","phase":1,"status":"completed","report":"agent_state/debates/../phases/1/reports/rerun.md","ts":"t2"}' >> "$D/agent_state/phases/1/execution.jsonl"
 LAST_OUT="$(run_hook "$D" 1)"; check "a non-debate agent can't skip report checks by logging a path under agent_state/debates/" 2 "$?" "failed=3"
 
+# (g) Stitch design baseline (skills/ui/stitch-design.md §10): with docs/design/stitch.json, every UI route the
+# phase changed needs an approved, current, hash-matching Stitch render; nothing pending / drift / sync-back.
+stitch_fixture() {  # stitch_fixture <fixture> [mutation-python]  → approved orders-list.desktop + a ui manifest for /orders
+  python3 - "$1" "${2:-}" <<'PY'
+import importlib.util, json, os, sys
+root, mutation = sys.argv[1], sys.argv[2]
+spec = importlib.util.spec_from_file_location("sc", os.environ["STITCH_CASES"]); sc = importlib.util.module_from_spec(spec)
+sys.argv = ["x"]; spec.loader.exec_module(sc)
+state = sc.make_project(root, ("orders-list.desktop",))
+s = state["screens"]["orders-list.desktop"]
+if mutation: exec(mutation)
+sc.save(root, state)
+sc.manifest(root, 1, "ui_developer", [{"route": "/orders"}])
+PY
+}
+export STITCH_CASES="$REPO_ROOT/tests/lib/stitch_cases.py"
+D=$(new_phase stitch_ok); full_phase "$D"; stitch_fixture "$D"
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) changed route with an approved, current, hash-matching Stitch render PASSes" 0 "$?" "current, approved Stitch baseline"
+D=$(new_phase stitch_no_screen); full_phase "$D"; stitch_fixture "$D" 's["route"] = "/elsewhere"'
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) changed route with no Stitch screen BLOCKs" 2 "$?" "route /orders changed in phase 1 but has no Stitch screen"
+D=$(new_phase stitch_pending); full_phase "$D"; stitch_fixture "$D" 's["status"] = "pending_approval"'
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) a render still pending_approval BLOCKs" 2 "$?" "pending_approval"
+D=$(new_phase stitch_tampered); full_phase "$D"; stitch_fixture "$D"; echo "<!-- edited -->" >> "$D/docs/design/stitch/orders-list.desktop/screen.html"
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) a render changed after approval (hash mismatch) BLOCKs" 2 "$?" "does not match its stored sha256"
+D=$(new_phase stitch_syncback); full_phase "$D"; stitch_fixture "$D" 's.update(status="sync_back_pending", deviations=[{"id":"DEV-1-001","phase":1,"what":"rows are 48px","why":"touch targets","source":"ui_developer","resolution":"accepted"}])'
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) an accepted deviation not synced back to Stitch BLOCKs" 2 "$?" "/stitch sync-back"
+D=$(new_phase stitch_forced); full_phase "$D"; stitch_fixture "$D" 's["status"] = "drift"'
+echo '{"phase":1,"blockers":[{"gate_item":"stitch","details":"orders drift"}],"user_rationale":"owner accepts drift until phase 2"}' > "$D/agent_state/phases/1/gate.forced"
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) a Stitch finding is overridable only by a user-approved gate.forced" 0 "$?" "FORCED PASS"
+
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

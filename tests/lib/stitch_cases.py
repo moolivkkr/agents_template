@@ -422,6 +422,22 @@ def cases_gate():
         manifest(t, 1, "ui_developer", web)
     gate_case("PASS: an autonomous approval passes and is listed for the owner", dqr, 0, "owner-review list")
 
+    print("── stitch-state.py ready (develop pre-Wave-2 check) ──")
+    with tempfile.TemporaryDirectory() as tmp:
+        state = make_project(tmp, ("orders-list.desktop", "orders-list.mobile"))
+        d = os.path.join(tmp, "docs", "design", "phases", "2")
+        os.makedirs(d)
+        open(os.path.join(d, "stitch-baseline.md"), "w").write(
+            "| Screen | Route | Change |\n|---|---|---|\n| `orders-list.desktop` | /orders | changed |\n| `orders-list.mobile` | /orders | unchanged |\n")
+        rc, out = run(["ready", "--phase", "2"], tmp)
+        check(rc == 0 and out.count("READY ") == 2, "ready --phase reads stitch-baseline.md; approved current renders are READY", out)
+        state["screens"]["orders-list.mobile"]["status"] = "pending_approval"
+        save(tmp, state)
+        rc, out = run(["ready", "--phase", "2"], tmp)
+        check(rc == 2 and "NOT READY  orders-list.mobile" in out, "a pending_approval render blocks UI implementation", out)
+        rc, out = run(["ready", "--phase", "3"], tmp)
+        check(rc == 2 and "stitch-baseline.md is missing" in out, "a phase never designed in Stitch is NOT READY", out)
+
 
 # ------------------------------------------------------------------------------------------- fidelity
 def cases_fidelity():

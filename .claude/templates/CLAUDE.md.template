@@ -108,7 +108,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/test --traceability` | Check TC-* ID coverage |
 | `/test --mobile [--platform=ios\|android]` | React Native tiers: Jest+RNTL + device flows on iOS simulator / Android emulator |
 | `/demo` | Write, stand up, and rehearse a stakeholder demo of a completed phase |
-| `/design [--source=stitch]` / `/stitch <init\|generate\|variants\|edit\|theme\|sync\|status>` | UI design contract; Google Stitch renders (web DESKTOP / React Native MOBILE) normalized into wireframes behind the design gate |
+| `/design [--source=wireframe]` / `/stitch <init\|import\|adopt\|request\|sync-back\|generate\|variants\|edit\|theme\|sync\|status>` | Google Stitch is the core designer: every new or changed screen (web DESKTOP / React Native MOBILE) is designed in Stitch, approved (owner; design_quality_reviewer under /autonomous), then built against the render + its normalized wireframe; accepted code deviations sync back; the gate checks it |
 | `/ui-audit [--fix=design\|code\|all]` | Audit every built page (web + React Native) against design standards and its Stitch baseline; Stitch keeps the design for all pages |
 | `/review` | Code review on current changes |
 | `/board-review <group\|glob>` | Board review of a group of agents: seven hats (architect, senior dev, tester, SRE, DevOps, security, AI engineer) in parallel, Fable verifiers refute blind to severity, scores from verified findings; re-run after fixes to show scores moved |

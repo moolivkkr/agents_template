@@ -27,7 +27,7 @@ Step 1   /init --auto            BRD + IMPLEMENTATION_GUIDELINES + agents (gaps 
 Step 1b  /map                    codebase knowledge base (skipped for greenfield)
 Step 2a  /discuss --auto         assumptions + decisions for phase 1
 Step 2b  /plan --auto            PHASE_PLAN, specs, data contracts, goal verification
-Step 2c  /design --source=stitch --auto    UI / mobile phases only — AFTER /plan
+Step 2c  /design --auto                    UI / mobile phases only — AFTER /plan (Stitch designs, design_quality_reviewer approves)
 Step 3   🛑 HUMAN CHECKPOINT
 Step 4   /develop-orchestrator --phase=1 --auto
 Step 5   per remaining phase: /map --incremental → /discuss → /plan → /design → [checkpoint] → /develop → verify
@@ -37,8 +37,11 @@ Step 7   final report + /health
 ```
 
 `/design` runs **after** `/plan`: it hard-stops without `PHASE_PLAN.md` and
-`specs/data-contracts.md`, which only `/plan` produces. With `--source=stitch` it falls back to the
-pure-agent design path if the Stitch MCP is unavailable, and logs that.
+`specs/data-contracts.md`, which only `/plan` produces. Google Stitch designs every new or changed
+screen; under `/autonomous`, `design_quality_reviewer` approves each render and the screen joins the
+owner-review list shown at the checkpoint and in the final report. If the Stitch MCP is unavailable,
+each screen is deferred in `docs/design/stitch.json` (queued for Stitch) and designed on the wireframe
+path; the run doesn't stop.
 
 ## 3. Why it no longer stalls
 

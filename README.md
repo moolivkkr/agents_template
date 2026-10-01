@@ -47,7 +47,7 @@ Issue resolution (use anytime):
 /startup:rollback  →  reverse deployment to previous known-good state
 
 Design & demo:
-/startup:stitch    →  Google Stitch workbench (init | generate | variants | edit | theme | sync | status)
+/startup:stitch    →  Google Stitch, the core designer (init | import | adopt | request | sync-back | generate | variants | edit | theme | sync | status)
 /startup:ui-audit  →  audit every built page vs design standards + its Stitch baseline
 /startup:demo      →  write, stand up and rehearse a stakeholder demo of a completed phase
 
@@ -70,7 +70,7 @@ Pipeline diagnostics:
 | **Kubernetes dev/qa on a Lima lab cluster** | `/startup:deploy --target=dev\|qa`: per-app namespaces `<app>-dev`/`<app>-qa` on k3s in Lima (one or two Macs), images promoted to qa **by digest**, migrate/seed Jobs, `env-reset.sh`, `--rollback`, evidence for the phase gate and `/accept`; one-command cluster bootstrap (`cluster-up.sh`); live e2e `tests/k8s-e2e.sh` | [lima-k8s-lab skill](.claude/skills/infrastructure/lima-k8s-lab.md) |
 | **Unattended permissions, prod out of reach** | `sdlc-guard` PreToolUse hook + PATH shims (pinned cluster/credential, writable namespaces by pattern, secrets never read, CLAUDE.md ask-list), RBAC-bounded agent identity, auto-mode settings you apply with one reviewed script, optional root-owned managed layer | [docs/PERMISSIONS_GUIDE.md](docs/PERMISSIONS_GUIDE.md) |
 | **React Native mobile (iOS + Android)** | New generated agents `mobile_developer` and `mobile_test_agent`; new core agents `mobile_e2e_orchestrator` (device matrix runner) and `mobile_platform_auditor`; Maestro (default), Detox and Appium skill packs; TC categories `TC-MCMP/MINT/ME2E/MPLT/MA11Y/MVIS/MPERF`; `/startup:test --mobile [--platform=ios\|android]`; IMPLEMENTATION_GUIDELINES §24 Mobile; `mobile.yml` CI guidance | [docs/MOBILE_GUIDE.md](docs/MOBILE_GUIDE.md) |
-| **Google Stitch design** | `/startup:stitch` workbench; `/startup:design --source=stitch` fixed (real MCP probe, design-system Path A/B, `deviceType` on every call, `edit_screens` in the design-gate BLOCK loop, mobile-only projects included); `docs/design/stitch.json` holds the Stitch baseline for every page | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md) |
+| **Google Stitch design** | `/startup:stitch` workbench; Stitch is the core, two-way designer: every new or changed screen is designed in Stitch and approved before it's built; `/startup:stitch import|adopt` bootstraps an existing app (Playwright capture + fidelity score), `request` and `sync-back` carry changes both ways, and the phase gate checks every changed route has an approved, hash-matching render (`docs/design/stitch.json`, `stitch-state.py`) | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md) |
 | **UI standards audit** | New core agent `ui_standards_auditor` and `/startup:ui-audit`: every built web and React Native page is audited against the design standards and its Stitch baseline | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md#7-auditing-built-pages--startupui-audit) |
 | **`/startup:autonomous` no longer stalls** | Sub-commands run through the Skill tool; their "▶ Next" hints are ignored under autonomous; `/design` runs after `/plan`; every sub-command honours auto mode; a Stop hook keeps the turn going while `run.json` says `running`; resume by step id | [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
 | **`/develop` wave execution** | Wave 2A sequenced named spawns (database → migration → backend → api → ui ∥ mobile); Wave 3 per-tier named agents; Wave 3v `test_runner` independently re-runs suites and cross-checks writer counts; Wave 4 conditional reviewers driven by the roster | [Implementation waves](#implementation-waves) |
@@ -208,7 +208,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup:map` | **NEW** Analyzes codebase with 4 parallel mapper agents (tech, architecture, quality, concerns). Produces persistent knowledge base in `agent_state/codebase/` |
 | `/startup:discuss` | **NEW** Pre-planning context gathering — surfaces assumptions (CONFIRMED/DEDUCED/HYPOTHESIZED), researches gray area decisions, identifies risks. Run before `/plan` |
 | `/startup:plan` | Creates TRDs, typed data contracts, component-level UI specs, and **goal-backward verification** per phase. Supports `--auto` |
-| `/startup:design` | UI/mobile design contract for a phase — wireframe pair per screen (`.wireframe.html` + `.wireframe.md`), component/API bindings, tokens, `TC-UI-*` — behind the BLOCKING `design_quality_reviewer` gate. `--source=stitch` renders screens in Google Stitch first. Runs after `/plan` |
+| `/startup:design` | UI/mobile design contract for a phase — wireframe pair per screen (`.wireframe.html` + `.wireframe.md`), component/API bindings, tokens, `TC-UI-*` — behind the BLOCKING `design_quality_reviewer` gate. Google Stitch designs every new or changed screen first (approved by the owner, or `design_quality_reviewer` under `/autonomous`); `--source=wireframe` is the text-only fallback. Runs after `/plan` |
 | `/startup:develop` | Implements phase end-to-end: audit → build checks → code → tests → review + acceptance (parallel) → gate. Supports `--auto`. Executed wave by wave through `/startup:develop-orchestrator` |
 | `/startup:develop-orchestrator` | The canonical `/develop` executor: the parent session spawns one named agent per wave step and verifies between waves. Supports `--auto` |
 | `/startup:autonomous` | Runs the full pipeline end-to-end — `/init` → `/map` → `/discuss` → `/plan` → `/design` → `/develop` for all phases, then `/accept`. One human checkpoint. Auto-researches all decisions. See [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
@@ -276,17 +276,19 @@ The agents work with whatever you have. If something is missing, they'll ask.
 **`/startup:design`**
 ```
 --phase=N         Phase to design (default: auto-detect)
---source=stitch   Render screens in Google Stitch, then normalize into the same wireframe contract
-                  (falls back to the pure-agent path if the Stitch MCP is unavailable)
+--source=wireframe  Text-wireframe path only (Stitch is the default whenever its MCP is configured)
+                  (Stitch unavailable: interactive stops for "connect Stitch"; --auto defers + continues)
 --screen=NAME     Regenerate a single screen
 --auto            No prompts; a BLOCK verdict auto-fixes (max 2 cycles), then downgrades to WARN
 ```
 
 **`/startup:stitch`**
 ```
-<action>          init | generate | variants | edit | theme | sync | status
+<action>          init | import | adopt | request | sync-back | generate | variants | edit | theme | sync | status
 --phase=N         Phase whose screens to work on (default: current phase)
---screen=NAME     One screen (wireframe base name); omit on generate/sync to process every in-scope screen
+--screen=KEY      One screen (<slug>.<desktop|mobile>, e.g. orders-list.desktop); request: the screen to create/change
+--route=/PATH     request (new screen): its route; import: restrict to these routes
+--threshold=X     import: fidelity threshold 0-1 (default 0.75)
 --device=TYPE     DESKTOP | MOBILE | TABLET (default: MOBILE for React Native, DESKTOP for web)
 --prompt="…"      edit / variants: the change or direction (edit after a gate BLOCK: omit to use the reviewer's fix list)
 --count=N         variants: 1-5 (default 3)
@@ -1357,7 +1359,7 @@ The complete step-by-step workflow for each phase:
 /startup:plan --phase=N
 
 # 3b. UI / mobile phases: design contract behind the design gate
-/startup:design --phase=N                  # add --source=stitch to render screens in Google Stitch
+/startup:design --phase=N                  # Stitch designs + you approve; --source=wireframe without Stitch
 
 # 4. Review specs (optional but recommended)
 #    Check: docs/design/phases/N/specs/
@@ -1402,8 +1404,8 @@ Phase 1:   /init --auto         Creates BRD + agents (auto-researches all gaps)
 Phase 1b:  /map                 Codebase knowledge base (skipped for greenfield)
 Phase 2:   /discuss --auto      Surfaces assumptions (auto-resolved)
 Phase 2b:  /plan --auto         Specs + data contracts + goal verification
-Phase 2c:  /design --source=stitch --auto   UI/mobile phases only — AFTER /plan (needs PHASE_PLAN + data-contracts);
-                                            pure-agent fallback if Stitch is unavailable
+Phase 2c:  /design --auto                   UI/mobile phases only — AFTER /plan (needs PHASE_PLAN + data-contracts);
+                                            Stitch designs, design_quality_reviewer approves; deferred + wireframe path if Stitch is unavailable
 
      ┌─────────────────────────────────────────────────────────┐
      │  🛑 HUMAN CHECKPOINT — the ONE required interaction     │
@@ -1569,7 +1571,7 @@ For new products or unfamiliar markets:
 | Roll back a deploy | `/startup:rollback --target=local` |
 | Add a feature mid-project | `product_manager` agent → `/startup:plan` |
 | Re-do a phase | `/startup:reset-phase --phase=N` → `/startup:develop` |
-| Design screens in Google Stitch | `/startup:stitch init` → `/startup:design --source=stitch` |
+| Design screens in Google Stitch | `/startup:stitch import` (existing app) or `init` → `/startup:design`; one change: `/startup:stitch request <screen> "<change>"` |
 | Check built pages against the design | `/startup:ui-audit` (add `--fix=all` to repair) |
 | Test the React Native app on both platforms | `/startup:test --mobile` |
 | Rehearse a stakeholder demo | `/startup:demo --phase=N` |

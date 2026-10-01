@@ -127,8 +127,8 @@ the file by hand: use its subcommands, then `stitch-state.py validate --check-fi
     "orders-list.mobile": {
       "screenKey": "orders-list.mobile", "screenId": null, "deviceType": "MOBILE", "app": "mobile",
       "route": "/orders", "status": "no_baseline", "origin": "pending",
-      "deferred": { "reason": "stitch_unavailable", "at": "2026-10-01T11:00:00Z",
-                    "detail": "get_project: MCP server 'stitch' not connected", "run": "autonomous" }
+      "deferred": { "reason": "stitch_unavailable", "run": "autonomous",
+                    "at": "2026-10-01T11:00:00Z", "detail": "get_project: MCP server 'stitch' not connected" }
     }
   },
   "queue": [ { "screenKey": "orders-list.mobile", "op": "generate", "reason": "stitch_unavailable: MCP not connected",

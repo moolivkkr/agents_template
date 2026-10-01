@@ -135,7 +135,9 @@ done
 [ -f "$ROOT/.claude/agents/core/ui_standards_auditor.md" ] && ok "core agent ui_standards_auditor exists" || bad "ui_standards_auditor missing"
 grep -q "subagent_type: ui_standards_auditor" "$ROOT/.claude/commands/ui-audit.md" && ok "/ui-audit spawns ui_standards_auditor" || bad "/ui-audit never spawns ui_standards_auditor"
 grep -q "Agent: ui_standards_auditor" "$ROOT/.claude/commands/develop-orchestrator.md" && ok "develop-orchestrator runs ui_standards_auditor in Wave 4" || bad "develop-orchestrator never runs ui_standards_auditor"
-grep -q '"pages"' "$ROOT/.claude/skills/ui/stitch-design.md" && ok "stitch.json schema carries the all-pages baseline map" || bad "stitch-design.md lacks the pages map"
+# The all-pages baseline map is the screens map itself (sdlc.stitch-state/v2): every screen carries its route + app.
+grep -q '"route": "/orders"' "$ROOT/.claude/skills/ui/stitch-design.md" && grep -q '"required": \["screenKey", "screenId", "deviceType", "app", "route"' "$ROOT/.claude/skills/ui/stitch-state.schema.json" \
+  && ok "stitch.json schema carries the all-pages baseline map (route + app on every screen)" || bad "stitch.json screens lack route/app (the all-pages map)"
 if grep -nE "mcp__stitch__" "$ROOT/.claude/agents/core/ui_standards_auditor.md" | grep -v "Do not call\|does not call\|No Stitch MCP" >/dev/null; then bad "ui_standards_auditor calls Stitch directly (parent must)"; else ok "ui_standards_auditor leaves Stitch calls to the parent"; fi
 grep -q "get_project" "$ROOT/.claude/commands/design.md" && ok "/design fetches the screen instance before create_design_system_from_design_md" \
   || bad "/design calls create_design_system_from_design_md without get_project (missing selectedScreenInstance)"
