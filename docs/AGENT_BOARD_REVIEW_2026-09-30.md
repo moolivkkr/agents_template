@@ -574,7 +574,13 @@ Two recipes could pass a run that should fail; both are fixed and have regressio
   - Elasticsearch bodies: parsed only.
   - Maestro flows: checked against the documented command list, not the CLI.
   - `firestore-rules`: no tool was run.
-  - The lab's two-role database wiring: proven on a local Postgres. The live `tests/k8s-e2e.sh` waits for the lab, which is offline during the owner's Thunderbolt IP move.
+  - The lab's two-role database wiring (migrator owns the tables with BYPASSRLS; the API runs as a DML-only role
+    under FORCE RLS; a `db-roles` Job converges old one-superuser volumes) is proven off-cluster only:
+    - `tests/k8s-db-roles.sh` passed 50/50 on postgres:17. The final script's SQL is byte-identical; after Docker
+      was stopped it ran on a local Postgres 17.
+    - `k8s-templates.test.sh` passes 60/60, and kubeconform passes both overlays.
+    - The live `tests/k8s-e2e.sh` (now 40 checks) waits for the lab, which is offline during the owner's
+      Thunderbolt IP move.
 
 **Decisions (confirmed by the owner, 2026-09-30):**
 - **Changing an existing test.** A coder may change an *existing* test's expectation only when this
