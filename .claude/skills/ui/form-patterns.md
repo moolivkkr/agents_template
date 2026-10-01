@@ -12,7 +12,7 @@ tags:
 
 # Form Patterns — React Hook Form + Zod + shadcn/ui
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, react-hook-form 7.89, @hookform/resolvers 5.9, Zod 4.6 and shadcn/ui Form stubs; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, react-hook-form 7.89, @hookform/resolvers 5.9, Zod 4.6 and shadcn/ui Field stubs; CreateUserForm ran in 2 Vitest 5.0.3 tests (jsdom, Radix Select, MSW 3.0.1) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## Canonical Form Setup
 
@@ -20,7 +20,7 @@ tags:
 "use client";
 import { useRef } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
+import { Controller, useForm } from "react-hook-form";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -28,10 +28,7 @@ import { api, ApiError } from "@/lib/api-client";
 import { mapServerErrors } from "@/lib/form-errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  Form, FormControl, FormDescription, FormField,
-  FormItem, FormLabel, FormMessage,
-} from "@/components/ui/form";
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -44,7 +41,7 @@ const createUserSchema = z.object({
 });
 type CreateUserInput = z.infer<typeof createUserSchema>;
 
-// 2. Form component
+// 2. Form component: shadcn's Field primitives + react-hook-form's Controller (shadcn's current form guide)
 export function CreateUserForm({ onSuccess }: { onSuccess?: () => void }) {
   const form = useForm<CreateUserInput>({
     resolver: zodResolver(createUserSchema),
@@ -69,47 +66,48 @@ export function CreateUserForm({ onSuccess }: { onSuccess?: () => void }) {
   }
 
   return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-        <FormField control={form.control} name="name" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Name</FormLabel>
-            <FormControl><Input placeholder="Jane Doe" {...field} /></FormControl>
-            <FormMessage />
-          </FormItem>
+    <form onSubmit={form.handleSubmit(onSubmit)} noValidate>
+      <FieldGroup>
+        <Controller control={form.control} name="name" render={({ field, fieldState }) => (
+          <Field data-invalid={fieldState.invalid}>
+            <FieldLabel htmlFor="user-name">Name</FieldLabel>
+            <Input {...field} id="user-name" placeholder="Jane Doe" aria-invalid={fieldState.invalid} />
+            {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
+          </Field>
         )} />
 
-        <FormField control={form.control} name="email" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Email</FormLabel>
-            <FormControl><Input type="email" placeholder="jane@company.com" {...field} /></FormControl>
-            <FormMessage />
-          </FormItem>
+        <Controller control={form.control} name="email" render={({ field, fieldState }) => (
+          <Field data-invalid={fieldState.invalid}>
+            <FieldLabel htmlFor="user-email">Email</FieldLabel>
+            <Input {...field} id="user-email" type="email" placeholder="jane@company.com" aria-invalid={fieldState.invalid} />
+            {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
+          </Field>
         )} />
 
-        <FormField control={form.control} name="role" render={({ field }) => (
-          <FormItem>
-            <FormLabel>Role</FormLabel>
-            <Select onValueChange={field.onChange} defaultValue={field.value}>
-              <FormControl>
-                <SelectTrigger><SelectValue placeholder="Select role" /></SelectTrigger>
-              </FormControl>
+        <Controller control={form.control} name="role" render={({ field, fieldState }) => (
+          <Field data-invalid={fieldState.invalid}>
+            <FieldLabel htmlFor="user-role">Role</FieldLabel>
+            {/* controlled (value, not defaultValue), so form.reset() clears it too */}
+            <Select name={field.name} value={field.value ?? ""} onValueChange={field.onChange}>
+              <SelectTrigger id="user-role" aria-invalid={fieldState.invalid} onBlur={field.onBlur}>
+                <SelectValue placeholder="Select role" />
+              </SelectTrigger>
               <SelectContent>
                 <SelectItem value="admin">Admin</SelectItem>
                 <SelectItem value="member">Member</SelectItem>
                 <SelectItem value="viewer">Viewer</SelectItem>
               </SelectContent>
             </Select>
-            <FormMessage />
-          </FormItem>
+            {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
+          </Field>
         )} />
 
         <Button type="submit" disabled={form.formState.isSubmitting}>
           {form.formState.isSubmitting && <Loader2 className="mr-2 size-4 animate-spin" />}
           Create User
         </Button>
-      </form>
-    </Form>
+      </FieldGroup>
+    </form>
   );
 }
 ```
@@ -120,7 +118,8 @@ The error envelope is the one in `api/response-envelope.md`: a 400 with
 `{"error": {"code": "VALIDATION_FAILED", "message": "…", "details": [{"field": "email", "code": "invalid_format", "message": "…"}], "request_id": "…", "retryable": false}}`.
 The HTTP client in `api-integration-patterns.md` throws it as `ApiError`, so `error.details` is that
 `FieldError[]`. `details[].field` is the contract's wire name (snake_case), the same name the form field uses
-(`form-validation-protocol.md` §Field Name Matching).
+(`form-validation-protocol.md` §Field Name Matching). The envelope type `FieldError` and shadcn's `<FieldError>`
+component share a name: in a file that needs both, import the type as `type FieldError as ApiFieldError`.
 
 ```tsx
 // lib/form-errors.ts
@@ -162,7 +161,7 @@ function EditUserForm({ userId }: { userId: string }) {
 - **Submitting:** Button disabled + spinner icon + text changes ("Save" → "Saving...")
 - **Success:** `toast.success()` + `form.reset()` + close dialog or redirect
 - **Server error:** `toast.error()` + form stays open with user input preserved
-- **Validation error:** Red text below field via `<FormMessage />`
+- **Validation error:** Red text below the field via `<FieldError />` (`role="alert"`), the field marked `data-invalid` / `aria-invalid`
 - **Dirty tracking:** Warn on navigate away if `form.formState.isDirty`
 
 ## Anti-Patterns
@@ -173,5 +172,5 @@ function EditUserForm({ userId }: { userId: string }) {
 | Show generic "Error" | Show specific field-level message |
 | Disable submit until all valid | Allow submit, show validation errors on attempt |
 | Clear form on error | Preserve user input, highlight errors |
-| Build custom form field wrappers | Use shadcn `FormField/FormItem/FormLabel/FormControl/FormMessage` |
+| Build custom form field wrappers | shadcn `Field` / `FieldLabel` / `FieldError` inside react-hook-form `Controller` |
 | Inline Zod schema in component | Extract to `lib/validations/` and share with server |

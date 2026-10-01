@@ -12,7 +12,7 @@ tags:
 
 # Tailwind CSS utility patterns for layout, spacing, and responsive design.
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against tailwindcss 4.3.3's `Config` type, tailwind-merge 3.7, clsx 2.1 and next-themes 0.4.6; `cn()` also in a `next build`; the class-string list skipped (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against tailwindcss 4.3.3's `Config` type, tailwind-merge 3.7, clsx 2.1 and next-themes 0.4.6; the token CSS (generated file + app tokens) built by `next build` (Next.js 16.3.8, @tailwindcss/postcss 4.3.3, shadcn 4.21's `shadcn/tailwind.css`) and checked in 4 Playwright 1.63 tests on Chrome (each token utility's computed color in light and dark, radius, axe contrast); the class-string list skipped (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## Layout: Flexbox
 ```html
@@ -105,7 +105,7 @@ tags:
 <div class="bg-muted text-muted-foreground">
 <div class="bg-primary text-primary-foreground">
 <div class="border border-border rounded-lg">
-<div class="bg-destructive text-destructive-foreground">
+<div class="bg-destructive text-white">  <!-- shadcn v4 has no --destructive-foreground -->
 
 <!-- Dark mode with class strategy -->
 <div class="bg-white dark:bg-slate-900">
@@ -150,7 +150,7 @@ export function cn(...inputs: ClassValue[]) {
 // Usage: merge conditional and override classes safely
 <div className={cn(
   "flex items-center gap-2 rounded-md p-3",
-  variant === "error" && "bg-destructive text-destructive-foreground",
+  variant === "error" && "bg-destructive text-white",
   className  // allow parent to override
 )} />
 ```
@@ -230,27 +230,157 @@ shadow-none → flat elements within cards
 )} />
 ```
 
-## Dark Mode (class strategy)
+## Dark Mode (class strategy) and the token file
+This is the `globals.css` that `npx shadcn@latest init` writes for Tailwind CSS v4 (shadcn 4.21, "neutral"
+base color). Tokens are full colors (`oklch(…)`), not the bare HSL triplets of the Tailwind v3 era
+(`--primary: 222.2 47.4% 11.2%` + `hsl(var(--primary))`). `@theme inline` maps each token to a Tailwind color
+(`--color-primary` → `bg-primary`, `text-primary`, `bg-primary/50`) and keeps the `var()` reference, so the
+`.dark` values apply wherever the `dark` variant's class is set.
 ```css
-/* globals.css — light and dark tokens */
+/* app/globals.css — written by `npx shadcn@latest init` for Tailwind CSS v4 (shadcn 4.21, neutral) */
+@import "tailwindcss";
+@import "shadcn/tailwind.css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+  --radius: 0.625rem;
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.145 0 0);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.145 0 0);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.145 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --muted-foreground: oklch(0.556 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.577 0.245 27.325);
+  --border: oklch(0.922 0 0);
+  --input: oklch(0.922 0 0);
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar: oklch(0.985 0 0);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-border: oklch(0.922 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+}
+
+.dark {
+  --background: oklch(0.145 0 0);
+  --foreground: oklch(0.985 0 0);
+  --card: oklch(0.205 0 0);
+  --card-foreground: oklch(0.985 0 0);
+  --popover: oklch(0.205 0 0);
+  --popover-foreground: oklch(0.985 0 0);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --secondary: oklch(0.269 0 0);
+  --secondary-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.269 0 0);
+  --muted-foreground: oklch(0.708 0 0);
+  --accent: oklch(0.269 0 0);
+  --accent-foreground: oklch(0.985 0 0);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: oklch(1 0 0 / 10%);
+  --input: oklch(1 0 0 / 15%);
+  --ring: oklch(0.556 0 0);
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --sidebar: oklch(0.205 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.269 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
+  --sidebar-ring: oklch(0.556 0 0);
+}
+
 @layer base {
-  :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
-    --card: 0 0% 100%;
-    --primary: 222.2 47.4% 11.2%;
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
-    /* ... all tokens */
+  * {
+    @apply border-border outline-ring/50;
   }
-  .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
-    --card: 222.2 84% 4.9%;
-    --primary: 210 40% 98%;
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+  body {
+    @apply bg-background text-foreground;
   }
+}
+```
+
+`shadcn/tailwind.css` ships in the `shadcn` package (animations and `data-*` state variants), which `init`
+adds as a dependency. There is no `--destructive-foreground` any more: text on `bg-destructive` is `text-white`,
+as in shadcn's own Button. A token the design needs beyond this set (status colors such as warning and
+success) is added the same way: a value per mode plus a `--color-*` entry. Pick shades with at least 4.5:1
+contrast as text on `--card` in both modes (these do, measured by axe):
+```css
+/* app/globals.css (continued) — app tokens beyond shadcn's: bg-warning, text-success, border-warning/50 … */
+:root {
+  --warning: oklch(0.555 0.163 48.998);  /* Tailwind amber-700 */
+  --success: oklch(0.527 0.154 150.069); /* Tailwind green-700 */
+}
+.dark {
+  --warning: oklch(0.828 0.189 84.429);  /* amber-400 */
+  --success: oklch(0.792 0.209 151.711); /* green-400 */
+}
+@theme inline {
+  --color-warning: var(--warning);
+  --color-success: var(--success);
 }
 ```
 

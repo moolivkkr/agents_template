@@ -13,9 +13,9 @@ npm install msw --save-dev
 > for the major in your lockfile; the examples below are MSW 3. `msw/native` was removed in 3.0.
 > **Svelte:** pin `msw@^2.15` while tests run under `svelteTesting()` — its `browser` resolve condition
 > stops `msw/node` 3.x from loading (see `frameworks/svelte.md`).
-> **React Native (Jest + `@react-native/jest-preset`):** pin `msw@^2.15` too. MSW 3 ships ESM only, and its
-> interceptors use `import.meta` and static class blocks, which the preset's CommonJS Babel transform can't
-> load; MSW 2 needs three Jest settings (`testing/react-native-testing-library.md` §Setup).
+> **React Native (Jest + `@react-native/jest-preset`):** neither major loads with the preset alone. MSW 3
+> (ESM only, `import.meta`, static class blocks) needs two Babel plugins; `msw@^2.15` needs three Jest
+> settings. Both run (`testing/react-native-testing-library.md` §Setup and §MSW for React Native).
 
 ## Mocks are typed from the envelope — never hand-shaped
 

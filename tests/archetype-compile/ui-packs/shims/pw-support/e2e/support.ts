@@ -5,8 +5,13 @@ import { request, type Page } from "@playwright/test";
 export const SESSION_COOKIE = "session";
 export type Persona = { email: string; password: string };
 
-// Seeded test personas (the stub server accepts <name>@example.com / <name>-pass-1).
-export const persona = (name: "buyer" | "admin"): Persona => ({ email: `${name}@example.com`, password: `${name}-pass-1` });
+// Seeded test personas: credentials come from the environment the seed step exported, never from a spec.
+export function persona(name: "buyer" | "admin"): Persona {
+  const key = name.toUpperCase();
+  const email = process.env[`E2E_${key}_EMAIL`], password = process.env[`E2E_${key}_PASSWORD`];
+  if (!email || !password) throw new Error(`E2E_${key}_EMAIL / E2E_${key}_PASSWORD not set`);
+  return { email, password };
+}
 
 export async function signIn(page: Page, who: Persona) {
   await page.goto("/login");

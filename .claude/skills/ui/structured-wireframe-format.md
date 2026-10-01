@@ -377,7 +377,7 @@ components:
       source: "data-contracts.md#CreateUserRequest"
     fields:
       - id: name_field
-        primitive: "FormField"
+        primitive: "Field"
         name: "name"
         type: "text"
         label: "Full Name"
@@ -386,7 +386,7 @@ components:
         validation: { min: 2, max: 50 }
 
       - id: email_field
-        primitive: "FormField"
+        primitive: "Field"
         name: "email"
         type: "email"
         label: "Email Address"
@@ -395,7 +395,7 @@ components:
         validation: { format: "email" }
 
       - id: role_field
-        primitive: "FormField"
+        primitive: "Field"
         name: "role"
         type: "select"
         label: "Role"

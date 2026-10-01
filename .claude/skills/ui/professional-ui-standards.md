@@ -34,7 +34,7 @@ tags:
 --secondary / --secondary-foreground /* Secondary actions */
 --muted / --muted-foreground         /* Disabled, placeholder, secondary text */
 --accent / --accent-foreground       /* Hover highlights */
---destructive / --destructive-foreground /* Delete, error actions */
+--destructive                        /* Delete, error actions (text on it: text-white) */
 --border                             /* All borders */
 --input                              /* Form input borders */
 --ring                               /* Focus rings */

@@ -25,22 +25,22 @@ div.space-y-6
 │   │       │   ├── CardTitle → "Profile"
 │   │       │   └── CardDescription → "Update your personal information."
 │   │       └── CardContent
-│   │           └── Form(profileForm)
-│   │               └── form.space-y-6
+│   │           └── useForm(profileForm) + Controller per field
+│   │               └── form > FieldGroup
 │   │                   ├── div.flex.items-center.gap-6
 │   │                   │   ├── Avatar(lg) > AvatarImage + AvatarFallback
 │   │                   │   └── Button(outline) → "Change avatar"
 │   │                   ├── div.grid.gap-4.sm:grid-cols-2
-│   │                   │   ├── FormField(name) > Input
-│   │                   │   └── FormField(email) > Input(type=email)
-│   │                   ├── FormField(bio) > Textarea
+│   │                   │   ├── Field(name) > Input
+│   │                   │   └── Field(email) > Input(type=email)
+│   │                   ├── Field(bio) > Textarea
 │   │                   └── Button(type=submit) → "Save profile"
 │   │
 │   ├── TabsContent(notifications)
 │   │   └── Card
 │   │       ├── CardHeader > CardTitle + CardDescription
 │   │       └── CardContent
-│   │           └── Form(notificationForm)
+│   │           └── useForm(notificationForm) + Controller per toggle
 │   │               └── div.space-y-4
 │   │                   └── NotificationToggle (×N)
 │   │                       └── div.flex.items-center.justify-between.rounded-lg.border.p-4
@@ -53,11 +53,11 @@ div.space-y-6
 │   │   └── Card
 │   │       ├── CardHeader > CardTitle + CardDescription
 │   │       └── CardContent
-│   │           └── Form(securityForm)
-│   │               └── form.space-y-6
-│   │                   ├── FormField(currentPassword) > Input(type=password)
-│   │                   ├── FormField(newPassword) > Input(type=password)
-│   │                   ├── FormField(confirmPassword) > Input(type=password)
+│   │           └── useForm(securityForm) + Controller per field
+│   │               └── form > FieldGroup
+│   │                   ├── Field(currentPassword) > Input(type=password)
+│   │                   ├── Field(newPassword) > Input(type=password)
+│   │                   ├── Field(confirmPassword) > Input(type=password)
 │   │                   ├── Separator
 │   │                   ├── div.flex.items-center.justify-between
 │   │                   │   ├── div > label + description for 2FA

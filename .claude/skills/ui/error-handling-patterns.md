@@ -12,7 +12,7 @@ tags:
 
 # Error Handling Patterns — UI Reference
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, TanStack Query 5.104, react-hook-form 7.89 and sonner 2.0; `error.tsx` also in a `next build` (Next.js 16.3.8) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, TanStack Query 5.104, react-hook-form 7.89 and sonner 2.0; the submit handler (Idempotency-Key, 400 details[]) and the optimistic delete with rollback ran in 2 Vitest 5.0.3 tests against MSW 3.0.1; `error.tsx` also in a `next build` (Next.js 16.3.8) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## Error Type → UI Pattern Lookup Table
 
@@ -217,7 +217,7 @@ toast("Delete this item?", {
 
 | Scenario | Pattern |
 |----------|---------|
-| Form field validation | Inline — `<FormMessage />` below the field |
+| Form field validation | Inline — `<FieldError />` below the field |
 | Form submission failure | Toast error + keep form open |
 | Mutation success | Toast success |
 | Mutation failure | Toast error with retry action |

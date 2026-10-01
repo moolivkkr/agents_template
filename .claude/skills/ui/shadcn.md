@@ -12,7 +12,7 @@ tags:
 
 # shadcn/ui patterns for composable, accessible React components.
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, radix-ui 1.6, lucide-react 1.49, sonner 2.0, react-hook-form 7.89 and Zod 4.6, with shadcn/ui component stubs (the CLI registry wasn't fetched); type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, radix-ui 1.6, lucide-react 1.49, sonner 2.0, react-hook-form 7.89 and Zod 4.6, with shadcn/ui component stubs (Field copied from the registry); the Field + Controller form ran in 1 Vitest 5.0.3 test; the theme override CSS was built by `next build` (Next.js 16.3.8, @tailwindcss/postcss 4.3.3) and its tokens checked by computed style in Chrome (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## Install and Add Components
 ```bash
@@ -22,7 +22,7 @@ npx shadcn@latest init
 # Add individual components (copies source into your project)
 npx shadcn@latest add button
 npx shadcn@latest add dialog
-npx shadcn@latest add form
+npx shadcn@latest add field      # forms: Field + react-hook-form Controller (see below)
 npx shadcn@latest add input
 npx shadcn@latest add table
 npx shadcn@latest add select
@@ -75,15 +75,16 @@ import {
 </Dialog>
 ```
 
-## Form with react-hook-form + zod
+## Form with react-hook-form + zod (`Field` + `Controller`)
+shadcn's form guides (React Hook Form, TanStack Form) build fields from the `Field` primitives with the form
+library's own `Controller`, not the older `Form` / `FormField` / `FormItem` / `FormControl` / `FormMessage`
+wrapper. `form` is still in the registry with no deprecation flag (checked 2026-09-30), so an existing
+project that uses it keeps working; new forms use `Field` (`npx shadcn@latest add field`).
 ```tsx
-import { useForm } from "react-hook-form"
+import { Controller, useForm } from "react-hook-form"
 import { zodResolver } from "@hookform/resolvers/zod"
 import { z } from "zod"
-import {
-  Form, FormControl, FormField, FormItem,
-  FormLabel, FormMessage,
-} from "@/components/ui/form"
+import { Field, FieldError, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
@@ -91,50 +92,43 @@ const schema = z.object({
   email: z.email("Invalid email"),
   name: z.string().min(2, "Name must be at least 2 characters"),
 })
+type CreateUserValues = z.infer<typeof schema>
 
-export function CreateUserForm() {
-  const form = useForm<z.infer<typeof schema>>({
+export function CreateUserForm({ onCreate }: { onCreate: (values: CreateUserValues) => void }) {
+  const form = useForm<CreateUserValues>({
     resolver: zodResolver(schema),
     defaultValues: { email: "", name: "" },
   })
 
-  function onSubmit(values: z.infer<typeof schema>) {
-    // handle submit
-  }
-
   return (
-    <Form {...form}>
-      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-        <FormField
+    <form onSubmit={form.handleSubmit(onCreate)} noValidate>
+      <FieldGroup>
+        <Controller
           control={form.control}
           name="email"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Email</FormLabel>
-              <FormControl>
-                <Input placeholder="alice@example.com" {...field} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
+          render={({ field, fieldState }) => (
+            <Field data-invalid={fieldState.invalid}>
+              <FieldLabel htmlFor="create-user-email">Email</FieldLabel>
+              <Input {...field} id="create-user-email" placeholder="alice@example.com" aria-invalid={fieldState.invalid} />
+              {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
+            </Field>
           )}
         />
-        {/* every field in the schema needs its FormField, or the form can never pass validation */}
-        <FormField
+        {/* every field in the schema needs its own Controller, or the form can never pass validation */}
+        <Controller
           control={form.control}
           name="name"
-          render={({ field }) => (
-            <FormItem>
-              <FormLabel>Name</FormLabel>
-              <FormControl>
-                <Input placeholder="Alice" {...field} />
-              </FormControl>
-              <FormMessage />
-            </FormItem>
+          render={({ field, fieldState }) => (
+            <Field data-invalid={fieldState.invalid}>
+              <FieldLabel htmlFor="create-user-name">Name</FieldLabel>
+              <Input {...field} id="create-user-name" placeholder="Alice" aria-invalid={fieldState.invalid} />
+              {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
+            </Field>
           )}
         />
         <Button type="submit">Create</Button>
-      </form>
-    </Form>
+      </FieldGroup>
+    </form>
   )
 }
 ```
@@ -169,19 +163,21 @@ import {
 ```
 
 ## Theming and Customization
+Tailwind CSS v4: the tokens are full `oklch(…)` colors in `:root` / `.dark`, mapped to utilities by
+`@theme inline` (the whole generated file: `tailwind.md` §Dark Mode). To theme, change the values after the
+generated blocks; the `@theme inline` mapping stays as `init` wrote it. Give every color you override a
+`.dark` value too: `:root` and `.dark` have the same specificity, so a `:root` override placed after the
+generated `.dark` block also wins in dark mode.
 ```css
-/* globals.css — override CSS variables for theming */
-@layer base {
-  :root {
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
-    --destructive: 0 84.2% 60.2%;
-    --radius: 0.5rem;
-  }
-  .dark {
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
-  }
+/* app/globals.css — overrides, after the :root / .dark blocks `shadcn init` generated */
+:root {
+  --primary: oklch(0.488 0.243 264.376);       /* Tailwind blue-700 */
+  --primary-foreground: oklch(0.985 0 0);
+  --radius: 0.5rem;                            /* rounded-lg = 0.5rem; sm/md/xl… scale from it */
+}
+.dark {
+  --primary: oklch(0.707 0.165 254.624);       /* blue-400 */
+  --primary-foreground: oklch(0.205 0 0);
 }
 ```
 
@@ -351,7 +347,7 @@ toast.promise(saveData(payload), {
 - Always use the `cn()` utility (from `lib/utils`) to merge Tailwind classes — never concatenate strings
 - Use `asChild` when you need a different underlying element (Link as Button, etc.)
 - Override styling via `className` prop and CSS variables — do not edit component source for one-off changes
-- Form components expect react-hook-form — always pair `FormField` with a `control` prop
+- Forms: one react-hook-form `Controller` per field, rendering `Field` > `FieldLabel` + control + `FieldError`
 - Components are unstyled by default — theming is controlled entirely by CSS variables in `globals.css`
 - Every `Button` with only an icon MUST have `aria-label` or `sr-only` text
 - Use `AlertDialog` for destructive confirmations (delete, remove), NOT regular `Dialog`

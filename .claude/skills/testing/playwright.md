@@ -1,6 +1,6 @@
 # Playwright patterns for browser E2E testing.
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against @playwright/test 1.63.0 and @axe-core/playwright 4.13; the config, page object, setup file and specs ran (13 tests: setup + 6 specs x the config's 2 projects) on the system Chrome 154 against a local stub app; the locator and network excerpts type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against @playwright/test 1.63.0 and @axe-core/playwright 4.13; the config, page object, setup file and specs ran (13 tests: setup + 6 specs x the config's 2 projects) on the system Chrome 154 against a local stub app whose seeded users' credentials come from the environment; the locator and network excerpts type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## Configuration
 
@@ -118,11 +118,19 @@ page.getByTestId("user-avatar")
 import { test, expect } from "@playwright/test"
 import { LoginPage } from "./pages/login.page"
 
+// A seeded test user: the seed step exports its credentials to the environment. No credential lives in a spec.
+function seededBuyer() {
+  const email = process.env.E2E_BUYER_EMAIL, password = process.env.E2E_BUYER_PASSWORD
+  if (!email || !password) throw new Error("E2E_BUYER_EMAIL / E2E_BUYER_PASSWORD not set (the seed step exports them)")
+  return { email, password }
+}
+
 test.describe("Authentication", () => {
   test("user can log in and see dashboard", async ({ page }) => {
+    const { email, password } = seededBuyer()
     const loginPage = new LoginPage(page)
     await loginPage.goto()
-    await loginPage.login("alice@example.com", "password123")
+    await loginPage.login(email, password)
 
     await expect(page).toHaveURL("/dashboard")
     await expect(page.getByRole("heading", { name: "Dashboard" })).toBeVisible()
@@ -131,7 +139,7 @@ test.describe("Authentication", () => {
   test("shows error on invalid credentials", async ({ page }) => {
     const loginPage = new LoginPage(page)
     await loginPage.goto()
-    await loginPage.login("alice@example.com", "wrong")
+    await loginPage.login(seededBuyer().email, `not-the-password-${Date.now()}`)
 
     await expect(page.getByRole("alert")).toContainText("Invalid credentials")
   })

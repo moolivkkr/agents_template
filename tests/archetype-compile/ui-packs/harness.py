@@ -5,12 +5,17 @@ Every ```tsx / ```ts / ```typescript / ```jsx / ```javascript / ```js block in t
 units.FILES is extracted AT RUN TIME, placed into a throw-away project per unit (units.py) under
 <project>/.units/<unit>/, and checked with the pinned toolchain of its project:
 
-  web     React 19 + Next.js + TanStack Query + RHF + Zod + MSW + Vitest + Playwright
-          tsc --noEmit (TS 7, strict + noUncheckedIndexedAccess); `vitest run` for units with tests;
-          `next build` for the Next.js app unit; `playwright test` (system Chrome) against a stub server
-  rn      React Native 0.87 + RNTL 14 + Jest (the versions the RN 0.87 app template pins) + MSW
-          tsc --noEmit; `jest` for units with tests
-  device  Detox + WebdriverIO (Appium): tsc --noEmit only — no simulator, emulator or Appium server
+  web      React 19 + Next.js + TanStack Query + RHF + Zod + MSW + Vitest + Playwright + Tailwind CSS v4
+           tsc --noEmit (TS 7, strict + noUncheckedIndexedAccess); `vitest run` for units with tests;
+           `next build` for the Next.js app units; `playwright test` (system Chrome) against a stub server or
+           `next start` (the theme probe: computed styles of the token CSS, axe contrast)
+  rn       React Native 0.87 + RNTL 14 + Jest (the versions the RN 0.87 app template pins) + msw 2
+  rn-msw3  the same with msw 3 and the RNTL pack's Babel-plugin variant
+           tsc --noEmit; `jest` for units with tests
+  device   Detox + WebdriverIO (Appium): tsc --noEmit only — no simulator, emulator or Appium server
+
+Besides TS blocks, a unit can pull any fenced block (```css …) by its first line (`external`), e.g. the token CSS of
+ui/tailwind.md and ui/shadcn.md, and the agent template .claude/agents/templates/ui_developer.tmpl is in scope too.
 
 The run FAILS when:
   * a unit has a type error (or, for an `expect_errors` unit, any error other than the expected ones);
@@ -39,6 +44,7 @@ import glob
 import json
 import os
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -57,6 +63,8 @@ PATH_HEADER = re.compile(
     r"|[\w.-]+\.config\.(?:ts|js|mts)|\.detoxrc\.js|jest\.setup\.ts)(?:\s|$)"
 )
 DIRECTIVE = re.compile(r"""^["']use (?:client|server)["'];?\s*(?://.*)?$""")
+# npm projects, each pinned by its own lockfile (rn-msw3 = rn/ with MSW 3, the RNTL pack's documented variant)
+PROJECTS = ("web", "rn", "rn-msw3", "device")
 
 sys.path.insert(0, HERE)
 import units as CFG  # noqa: E402
@@ -73,7 +81,7 @@ class Block:
 
     @property
     def ref(self) -> str:
-        return f"{os.path.basename(self.relfile)[:-3]}#{self.idx}"
+        return f"{os.path.splitext(os.path.basename(self.relfile))[0]}#{self.idx}"
 
     def first_line(self) -> str:
         return next((l.strip() for l in self.lines if l.strip()), "")
@@ -339,7 +347,7 @@ def tsconfig_for(unit: dict) -> dict:
         "isolatedModules": True,
         "paths": {"@/*": ["./src/*"]},
     }
-    if project == "rn":
+    if project.startswith("rn"):
         opts["lib"] = ["es2023"]
         opts["types"] = ["jest"]
         opts["customConditions"] = ["react-native"]
@@ -473,7 +481,7 @@ def run_jest(unit: dict, d: str, src: Source) -> tuple[bool, str, int]:
     m = re.search(r"Tests:\s+(?:.*?)(\d+) passed", text)
     n = int(m.group(1)) if m else 0
     if p.returncode == 0:
-        return True, "jest: " + summarize(text, ("Test Suites:", "Tests:")), n
+        return True, "jest: " + summarize(text, ("Test Suites:", "Tests:", "Time:")), n
     return False, "jest FAILED:\n" + annotate("\n".join(text.splitlines()[-150:]), src), n
 
 
@@ -496,11 +504,18 @@ def free_port() -> int:
 
 def run_playwright(unit: dict, d: str, src: Source) -> tuple[bool, str, int]:
     pw = unit["playwright"]
+    # "{random}" env values are fresh per run: the harness plays the seed step that creates the test users
+    penv = {k: (secrets.token_urlsafe(18) if v == "{random}" else v) for k, v in pw.get("env", {}).items()}
     port = free_port()
-    server = subprocess.Popen(["node", pw["server"], str(port)], cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                              env={**os.environ, **pw.get("env", {})})
+    # "server": a node script taking the port, or an argv list with {port} / {bin} (the project's node_modules/.bin)
+    if isinstance(pw["server"], list):
+        argv = [a.format(port=port, bin=os.path.dirname(bin_of(unit, "x"))) for a in pw["server"]]
+    else:
+        argv = ["node", pw["server"], str(port)]
+    server = subprocess.Popen(argv, cwd=d, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              env={**os.environ, "NEXT_TELEMETRY_DISABLED": "1", **penv})
     try:
-        deadline = time.time() + 15
+        deadline = time.time() + 30
         while time.time() < deadline:
             try:
                 with socket.create_connection(("localhost", port), timeout=0.5):
@@ -510,14 +525,14 @@ def run_playwright(unit: dict, d: str, src: Source) -> tuple[bool, str, int]:
         else:
             return False, "stub server did not start", 0
         env = {**{k: v for k, v in os.environ.items() if k != "FORCE_COLOR"}, "APP_BASE_URL": f"http://localhost:{port}", "CI": "1", "NO_COLOR": "1",
-               "PHASE": "harness", **pw.get("env", {})}
+               "PHASE": "harness", **penv}
         p = subprocess.run([bin_of(unit, "playwright"), "test", "--config", pw["config"]], cwd=d,
                            capture_output=True, text=True, env=env, timeout=600)
         text = p.stdout + p.stderr
         m = re.search(r"(\d+) passed", text)
         n = int(m.group(1)) if m else 0
         junit = os.path.join(d, "agent_state", "phases", "harness", "junit", "e2e.xml")
-        note = f" ; junit written: {os.path.relpath(junit, d)}" if os.path.exists(junit) else " ; junit NOT written"
+        note = "" if not pw.get("junit") else (f" ; junit written: {os.path.relpath(junit, d)}" if os.path.exists(junit) else " ; junit NOT written")
         if p.returncode == 0 and "flaky" not in text:
             return True, "playwright: " + summarize(text, ("Running", )) + f" ; {n} passed" + note, n
         return False, "playwright FAILED:\n" + annotate("\n".join(text.splitlines()[-120:]), src), n
@@ -569,7 +584,7 @@ def account(blocks: dict[str, list[Block]], by_ref: dict[str, Block]) -> list[st
         if u["name"] in names:
             problems.append(f"duplicate unit name {u['name']}")
         names.add(u["name"])
-        if u["project"] not in ("web", "rn", "device"):
+        if u["project"] not in PROJECTS:
             problems.append(f"unit {u['name']}: unknown project {u['project']}")
         for ref in u["blocks"]:
             if ref not in by_ref:
@@ -624,10 +639,10 @@ def inventory(blocks: dict[str, list[Block]], by_ref: dict[str, Block], problems
                         f"with a reason, and block counts match units.FILES ({len(by_ref)} blocks)")
     used = {r for u in CFG.UNITS for r in u["blocks"]}
     for rel, bl in blocks.items():
-        if any(b.ref in used for b in bl):
+        if rel.endswith(".md") and any(b.ref in used for b in bl):  # agent templates carry no dated line
             text = open(os.path.join(SKILLS, rel), encoding="utf-8").read()
             check(bool(CHECKED_LINE.search(text)), f"{rel}: states what it was compile-checked against, with the date")
-    for project in ("web", "rn", "device"):
+    for project in PROJECTS:
         check(os.path.exists(os.path.join(HERE, project, "package.json"))
               and os.path.exists(os.path.join(HERE, project, "package-lock.json")),
               f"{project}/ is pinned (package.json + package-lock.json)")
@@ -648,7 +663,7 @@ def inventory(blocks: dict[str, list[Block]], by_ref: dict[str, Block], problems
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--unit", action="append", help="run only these units (repeatable)")
-    ap.add_argument("--project", action="append", choices=["web", "rn", "device"], help="run only these projects")
+    ap.add_argument("--project", action="append", choices=list(PROJECTS), help="run only these projects")
     ap.add_argument("--list", action="store_true", help="list blocks and units and exit")
     ap.add_argument("--inventory", action="store_true",
                     help="offline check only (no npm): every block checked or skipped, counts match, files dated")
