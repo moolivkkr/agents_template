@@ -362,6 +362,11 @@ D=$(new_phase debate_forced); full_phase "$D"; debate_req "$D" cache_strategy 1
 echo '{"phase":1,"blockers":[{"debate":"cache_strategy"}],"user_rationale":"owner decides next sprint"}' > "$D/agent_state/phases/1/gate.forced"
 LAST_OUT="$(run_hook "$D" 1)"; check "a pending debate is a finding gate.forced can override" 0 "$?" "FORCED PASS"
 
+D=$(new_phase debate_artifact_words); full_phase "$D"; debate_req "$D" io_model 1; debate_verdict "$D" io_model A
+printf '# Research: A\nKnown weakness: blocking I/O on the hot path (BLOCKING in the old driver)\n' > "$D/agent_state/debates/io_model.research-A.md"
+echo '{"agent":"debate_researcher","phase":1,"status":"completed","report":"agent_state/debates/io_model.research-A.md","ts":"t"}' >> "$D/agent_state/phases/1/execution.jsonl"
+LAST_OUT="$(run_hook "$D" 1)"; check "a research brief that mentions 'blocking I/O' is not read as a BLOCKING finding" 0 "$?" "debate artifact exists"
+
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

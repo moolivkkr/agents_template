@@ -354,6 +354,11 @@ check_report() {  # $1 agent, $2 report path from execution.jsonl
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
     return
   fi
+  # Debate artifacts (research briefs, arguments, verdicts) aren't findings reports: words like
+  # "blocking I/O" in a brief would trip the prose heuristics below. Check (f) validates them.
+  case "$report" in
+    agent_state/debates/*) ok "debate artifact exists: $report (agent '$agent'; validated by check (f))"; return ;;
+  esac
 
   # Test agents: only the machine-readable sidecar counts (board review 2026-09-30, TEST-01).
   sidecar="${candidate%.*}.json"

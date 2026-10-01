@@ -1,7 +1,7 @@
 ---
 skill: debate-protocol
 description: Multi-specialist debate — research, debate, collaborate, decide; produces a durable verdict promoted to the decisions ledger
-version: "1.0"
+version: "2.0"
 tags:
   - debate
   - decisions
@@ -10,190 +10,326 @@ tags:
   - core
 ---
 
-# Debate Protocol — Research, Debate, Collaborate, Decide
+# Debate Protocol — Research, Debate, Decide
 
 ## Purpose
 
-Any agent in the SDLC pipeline that encounters uncertainty, incomplete data, or multiple valid options escalates to the Debate Team. The team researches, argues positions, and produces a scored decision — so the pipeline continues with a well-reasoned answer instead of a guess.
+When a pipeline agent faces a contested, high-impact choice between known options, the debate team
+researches each option, argues for each, and an arbitrator scores them against the project's own
+requirements. The pipeline continues with a reasoned, recorded decision instead of a guess.
 
-## When to Escalate
+Version 2.0 (2026-09-30) fixes what stopped version 1 working as written: requests and verdicts
+under names the gate never looked for, a moderator that could return before its researchers
+finished, a requesting subagent that couldn't wait for a verdict, one rubric for every kind of
+decision, and fallbacks that always picked the first option. The review behind each rule is
+`docs/DEBATE_AND_BOARD_REVIEW_2026-09-30.md` (D1–D11).
 
-An agent MUST escalate when:
+## When a debate is the right tool
 
-1. **Conflicting options** — two or more valid approaches with meaningful tradeoffs
-2. **Missing data** — a decision requires information not in requirements, BRD, or specs
-3. **Ambiguous requirement** — the BRD or spec can be interpreted multiple ways
-4. **High-impact choice** — the decision affects architecture, security, or data model (hard to change later)
-5. **Low confidence** — the auto-research protocol (Level 4-5) couldn't find a confident answer
+A debate decides between **options that already exist**, using evidence and the project's
+requirements. Raise one when:
 
-An agent should NOT escalate when:
-- The answer is clearly in the docs (Level 1-2 of auto-research)
-- The decision is trivially reversible (variable naming, file organization)
-- A reasonable default exists with no meaningful tradeoffs
+1. **Conflicting options**: two or more valid approaches with real trade-offs.
+2. **High-impact choice**: it shapes architecture, security or the data model, and is hard to
+   change later.
+3. **Low confidence**: auto-research (levels 4–5) found no confident answer between known options.
 
-## Escalation Format
+A debate **can't** settle these, so they go to the human instead (D9):
 
-Any agent raises a flag by writing:
+| Situation | Why a debate can't settle it | What to do |
+|---|---|---|
+| **Missing data**: the decision needs a fact nobody has written down (a volume, a contract term, a vendor limit) | Researchers can't create a fact about this project | Return `NEEDS_INPUT` with the question. Under `/autonomous`, record a default in `unresolved.json` (below) with `confidence: LOW` and carry it to the checkpoint |
+| **Ambiguous requirement**: the BRD or spec reads two ways | What the product owner meant isn't decided by scoring options | Same as above: `NEEDS_INPUT`, or an `unresolved.json` default under `/autonomous` |
+
+If the work can't wait, a debate may still propose a working default for one of these; the request
+then carries `"kind": "assumption"` and the verdict is always flagged for the human to confirm.
+
+Don't raise a debate when the answer is in the docs (auto-research levels 1–2), when the choice is
+trivially reversible (naming, file layout), or when a reasonable default has no meaningful
+trade-off.
+
+## Files: one naming contract
+
+Everything lives in `agent_state/debates/`, joined on the **topic slug** (`[a-z0-9][a-z0-9_-]*`,
+e.g. `token_storage`). Both files also carry the slug in `"topic"`.
+
+| File | Written by | Format |
+|---|---|---|
+| `<topic>.request.json` | the agent that needs the decision | `sdlc.debate-request/v1` |
+| `<topic>.research-<option>.md` | `debate_researcher` | evidence brief |
+| `<topic>.argument-<option>.md` | `debate_advocate` (HIGH impact) | argument |
+| `<topic>.verdict.json` | `debate_arbitrator` **only** | `sdlc.debate-verdict/v1` |
+| `<topic>.verdict-detailed.md` | `debate_arbitrator` | scoring matrix + claim checks |
+| `<topic>.second-opinion.json` | `debate_arbitrator` in second-opinion mode (Fable) | `sdlc.debate-second-opinion/v1` |
+| `<topic>.transcript.md` | `debate_moderator` | who ran, what each returned, presentation order |
+| `<topic>.override.json` | the parent session, when the user overrides a verdict | override record |
+| `unresolved.json` | the parent session | decisions auto-resolved with a default |
+
+**Read debates only through `.claude/hooks/debate-status.py`** (`--phase N`, `--json`, `--check`).
+It classifies files by content, so older names (`<step>-<topic>.json`, `<topic>-verdict.json`) are
+still found. The gate (`verify-gate.sh` check (f)), `/health`, `/pause`, `/worklog` and the human
+checkpoint all use it; none of them glob file names.
+
+### Request (`sdlc.debate-request/v1`)
 
 ```json
 {
+  "schema": "sdlc.debate-request/v1",
   "type": "debate_request",
-  "from_agent": "<agent name>",
-  "from_step": "<pipeline step>",
-  "decision": "<what needs deciding — one sentence>",
+  "topic": "token_storage",
+  "phase": 3,
+  "from_agent": "backend_developer",
+  "from_step": "wave2",
+  "decision": "Where the web client keeps the session token",
   "options": [
-    { "id": "A", "label": "<option name>", "initial_reasoning": "<why this might be right>" },
-    { "id": "B", "label": "<option name>", "initial_reasoning": "<why this might be right>" },
-    { "id": "C", "label": "<option name>", "initial_reasoning": "<optional third option>" }
+    { "id": "A", "label": "httpOnly SameSite=strict cookie", "initial_reasoning": "..." },
+    { "id": "B", "label": "localStorage + Authorization header", "initial_reasoning": "..." }
   ],
-  "context": "<what the agent knows so far — relevant BRD refs, spec refs, constraints>",
-  "impact": "HIGH | MEDIUM",
-  "blocking": true,
-  "deadline": "<when the pipeline needs this answer>"
+  "context": "FR-012, NFR-SEC-003; IMPLEMENTATION_GUIDELINES §Auth; what is already known",
+  "impact": "HIGH",
+  "domain": "security",
+  "kind": "decision",
+  "blocking": true
 }
 ```
 
-Write to: `agent_state/debates/<step>-<topic>.json`
+- `options`: 2–4, ids `A`–`D`. The order means nothing; the moderator randomizes it for judging.
+- `impact`: `HIGH` (architecture, security, data model) or `MEDIUM` (library or pattern choice).
+- `domain`: `architecture | security | data_model | feature | testing | operations`. It picks the
+  rubric below, so set it honestly: auth, tokens, crypto, PII, CORS/CSRF, rate limits and tenant
+  isolation are `security`.
+- `kind`: `decision` (default) or `assumption` (a working default for missing data or ambiguity).
+- `blocking`: `true` when the work can't continue correctly without the answer. A non-blocking
+  request lets the agent continue on its stated default; the debate still runs before the gate.
+- To drop a request that no longer applies, set `"status": "withdrawn"` and a `"withdrawn_reason"`
+  (at least a sentence). Don't delete it.
 
-## The Debate Process (3 Phases)
+### Verdict (`sdlc.debate-verdict/v1`)
 
-### Phase 1: Research (PARALLEL — one researcher per option)
-
-Each researcher agent gathers evidence FOR their assigned option:
-
-```text
-Researcher A (assigned Option A):
-  1. Search requirements/ and docs/ for supporting evidence
-  2. Search web for best practices, case studies, benchmarks
-  3. Search competitor analysis (if /research was run)
-  4. Check skill packs for relevant patterns
-  5. Check if this decision was made differently in similar projects
-
-Output:
-  - Evidence FOR this option (with citations)
-  - Known weaknesses (honest — not adversarial yet)
-  - Quantitative data if available (benchmarks, costs, adoption rates)
+```json
+{
+  "schema": "sdlc.debate-verdict/v1",
+  "topic": "token_storage",
+  "phase": 3,
+  "impact": "HIGH",
+  "domain": "security",
+  "status": "RESOLVED",
+  "verdict": "A",
+  "verdict_label": "httpOnly SameSite=strict cookie",
+  "confidence": "HIGH",
+  "rubric": "security",
+  "presentation_order": ["B", "A"],
+  "scores": {
+    "A": { "total": 8.1, "security_posture": 9, "brd_alignment": 8, "feasibility": 7, "constraint_fit": 8, "operability": 7 },
+    "B": { "total": 5.2, "security_posture": 3, "brd_alignment": 7, "feasibility": 8, "constraint_fit": 6, "operability": 6 }
+  },
+  "gap": 2.9,
+  "decisive_factor": "security_posture: B exposes the token to any XSS (OWASP ASVS V3)",
+  "claims_checked": [
+    { "claim": "SameSite=strict blocks the CSRF vector in FR-012's flow", "source": "https://…", "result": "confirmed" }
+  ],
+  "hardened_default": "A",
+  "rationale": "2-3 sentences",
+  "rejected": { "B": "one sentence" },
+  "reconsider_if": ["a native client without cookie support enters scope"],
+  "risk": "…",
+  "mitigation": "…",
+  "decision_id": "D-014"
+}
 ```
 
-All researchers run in parallel — one per option.
+- `status`: `RESOLVED`, or `INCOMPLETE` with a `reason` when the arbitrator decided on evidence it
+  knows is incomplete. `INCOMPLETE` always has `confidence: LOW`.
+- `hardened_default`: required for `domain: security`. It names the more restrictive option, the one
+  that fails closed.
+- `decision_id`: the `D-NNN` that `remember.sh decide` returned. The gate blocks a v1 verdict that
+  never reached `docs/DECISIONS.md`.
+- `kind: "assumption"` and `none_ideal: true` are carried when they apply.
 
-### Phase 2: Debate (PARALLEL — one debater per option, reading ALL research)
+### Second opinion (`sdlc.debate-second-opinion/v1`)
 
-Each debater reads ALL researchers' outputs, then argues FOR their assigned position:
+`{"schema":"sdlc.debate-second-opinion/v1","topic":"…","model":"fable","verdict":"A","gap":0.6,"presentation_order":["A","B"],"scores":{…},"decisive_factor":"…"}`.
+It's required for HIGH impact when the verdict's confidence isn't HIGH. `debate-status.py` compares it
+with the verdict, and a disagreement goes to the checkpoint.
 
-```text
-Debater A (advocates Option A, has read all research):
+## Who runs a debate (hand-back, not a watcher)
 
-## Argument for: [Option A]
+No watcher picks up a request file. The agent that needs the decision hands it back to its parent,
+and the parent runs the debate. A subagent has finished its turn before anyone could run a debate
+for it, so "write a request and wait" doesn't work (D4).
 
-### Strengths (from research)
-1. [Evidence point — cited source]
-2. [Evidence point — cited source]
-3. [Evidence point — cited source]
+1. **Requesting subagent.** It writes `<topic>.request.json`.
+   - **Blocking:** it ends its turn with the first line `NEEDS_DECISION <topic>` and one sentence. The
+     rest of the message says what it finished and what it will do once decided. It doesn't guess.
+   - **Non-blocking:** it continues on its recommended default, says so in its final message, and
+     returns normally.
+2. **Parent session** (the orchestrator or command that spawned the subagent) spawns
+   `debate_moderator` with the request path, **in the foreground** (`run_in_background: false`).
+   - The moderator runs at depth 1 and its researchers, advocates and arbitrators at depth 2. A
+     subagent never spawns the moderator itself: that would put the researchers at depth 3 and hide
+     the decision from the parent's checkpoint.
+3. **Moderator returns** `COMPLETE <topic>: <verdict_label> (<confidence>)` once the arbitrator has
+   written the verdict.
+4. **Parent relaunches** the requesting agent with its original prompt plus `DECISION <topic>:
+   <verdict_label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.`
+5. **Before the gate**, `debate-status.py --phase N --check` must pass. A non-blocking request that
+   was never debated is listed there too. Run its debate, then relaunch the agent if the verdict
+   differs from the default it took.
 
-### Why Option B is worse for THIS project
-- [Specific counterargument based on BRD/constraints]
-- [Evidence that B's strength doesn't apply here]
+**Limits** you can count:
+- **Per step:** at most 3 requests; per phase at most 10. Beyond that, record recommended defaults
+  in `unresolved.json` and, under `/autonomous`, exit auto mode at the phase limit.
+- **Per debate:** 2–4 options, at most 10 web searches per researcher, one advocacy round, one
+  arbitration, plus one second opinion when required.
+- **No nested debates:** an arbitrator that can't decide writes a `LOW`/`INCOMPLETE` verdict. It
+  never raises another debate.
 
-### Why Option C is worse for THIS project
-- [Specific counterargument]
+There are no minute budgets. A subagent can't measure wall-clock time. The Opus 5.5 guidance also
+notes that a model told it is short on time verifies less, which is the wrong trade for a decision.
 
-### Weaknesses I acknowledge
-- [Honest weakness 1 — and why it's manageable]
-- [Honest weakness 2 — and mitigation strategy]
+## The process
 
-### Score (self-assessed, will be validated by arbitrator)
-| Criterion | Weight | Score (1-10) | Reasoning |
-|-----------|--------|-------------|-----------|
-| BRD alignment | 30% | 8 | [why] |
-| Technical feasibility | 25% | 7 | [why] |
-| Team/constraint fit | 20% | 9 | [why] |
-| Long-term scalability | 15% | 6 | [why] |
-| Ecosystem/community | 10% | 8 | [why] |
-| **Weighted total** | | **7.6** | |
+| Impact | Research | Advocacy | Arbitration | Second opinion |
+|---|---|---|---|---|
+| **HIGH** | one researcher per option | one advocate per option | one arbitrator | when confidence isn't HIGH: a second arbitrator on Fable, reverse order |
+| **MEDIUM** | one researcher per option | skipped (the arbitrator judges the research directly) | one arbitrator | no |
+
+### Phase 1: Research (parallel, one researcher per option)
+
+Each researcher gathers evidence for and against its option: the project's documents first, then
+web sources (current-year benchmarks, production reports, known limitations), then ecosystem
+health. It cites every claim with a path or URL, which is what lets the arbitrator re-check the
+decisive one. It doesn't argue or recommend.
+
+### Phase 2: Advocacy (parallel, HIGH impact only)
+
+Each advocate reads **all** the research and makes the strongest honest case for its option:
+strengths with evidence, specific reasons the alternatives fit this project worse, and its own
+option's weaknesses with mitigations. **Advocates don't score.** A self-assigned number anchors the
+judge even when the judge is told to ignore it (D8.2), so the score belongs to the arbitrator alone.
+
+### Phase 3: Arbitration
+
+The arbitrator:
+1. Reads the request and the PROJECT_FACTS and DECISIONS constraints.
+2. Reads the arguments (or, for MEDIUM, the research) **in the presentation order the moderator
+   gives**. The moderator randomizes that order and records it.
+3. Scores **one criterion at a time across all options** using the domain's rubric and anchors below.
+   Going criterion by criterion compares like with like and reduces order and halo effects (D8.3).
+4. Re-opens the source of the one or two claims behind the decisive factor and records what it found
+   in `claims_checked` (D8.6).
+5. Applies the confidence and tie rules, writes the verdict, and records the `D-NNN`.
+
+## Rubrics by domain (D8.1)
+
+Weights sum to 100. The request's `domain` picks the rubric. A request with no domain uses
+`architecture`.
+
+| Domain | Criteria (weight) |
+|---|---|
+| `architecture` | brd_alignment 30 · feasibility 25 · constraint_fit 20 · scalability 15 · ecosystem 10 |
+| `security` | **security_posture 35** · brd_alignment 25 · feasibility 20 · constraint_fit 10 · operability 10 |
+| `data_model` | brd_alignment 25 · data_integrity 25 · access_fit 20 · evolution_cost 20 · operability 10 |
+| `feature` | brd_alignment 30 · implementation_risk 25 · maintainability 20 · ecosystem 15 · performance 10 |
+| `testing` | detection_power 35 · determinism 25 · run_cost 20 · constraint_fit 20 |
+| `operations` | reliability 30 · operability 25 · run_cost 20 · constraint_fit 15 · ecosystem 10 |
+
+### Score anchors (D8.4)
+
+Score 1–10 against these anchors. A 2, 5 or 8 means the same thing in every debate. Use the numbers
+between them for "between these two descriptions". A 10 needs evidence from this project, not
+general reputation.
+
+| Criterion | 2 | 5 | 8 |
+|---|---|---|---|
+| brd_alignment | conflicts with a MUST FR/NFR or a PROJECT_FACTS constraint | meets the in-scope requirements through a workaround or an unverified assumption | meets every in-scope FR/NFR directly; cited |
+| feasibility | needs skills, infrastructure or maturity the project lacks; no production precedent found | buildable with a learning curve or one unproven component | the project's stack already does this; production precedent cited |
+| constraint_fit | breaks an IMPLEMENTATION_GUIDELINES constraint or an active DECISIONS.md entry | fits with one exception that would need recording | fits with no exception |
+| scalability | a known ceiling below the NFR target | reaches the target but needs re-architecture later | reaches 10× the NFR target as designed; evidence cited |
+| ecosystem | unmaintained (no release in 12 months) or a single maintainer | maintained; thin docs or missing integrations | active releases, good docs, the integrations this project needs |
+| security_posture | weaker default, larger attack surface, or fails open | secure only when configured correctly; needs compensating controls | secure by default, fails closed, smallest surface; matches the secure-coding rules |
+| data_integrity | allows lost, duplicated or inconsistent writes the BRD forbids | integrity depends on application code being right | guaranteed by constraints or transactions in the store |
+| access_fit | the main access paths need scans or joins the store does poorly | works with indexes or denormalization | the main access paths are direct lookups |
+| evolution_cost | changes need downtime or rewriting data | online migrations, with care | additive changes are routine |
+| implementation_risk | many moving parts, untested paths, new failure modes | moderate surface, some new code paths | small change on well-trodden paths |
+| maintainability | specialist knowledge to change; tangles layers | understandable with documentation | conventional for this codebase; clear ownership |
+| performance | misses the NFR-PERF target in cited measurements | meets it without headroom, or unmeasured | meets it with headroom; measured |
+| detection_power | would miss the defect classes this phase risks | catches some of them | catches the classes in the threat model and risk list |
+| determinism | depends on timing, network or shared state | deterministic with care | deterministic by construction |
+| run_cost | expensive to run or keep green | moderate | cheap to run and maintain |
+| reliability | a single failure takes the feature down | degrades with manual recovery | fails over or degrades gracefully, automatically |
+| operability | no way to observe or roll it back | observable, with a manual rollback | observable, with an automatic or one-step rollback |
+
+## Confidence, ties and the hardened default (D7)
+
+The confidence comes from the gap between the top two weighted totals:
+
+| Gap | Confidence | What the arbitrator writes |
+|---|---|---|
+| > 1.0 | HIGH | the verdict |
+| 0.3–1.0 | MEDIUM | the verdict and the one decisive factor |
+| < 0.3 | LOW | the verdict and both options explained, flagged for the checkpoint |
+
+- **Ties.** Break a tie on the domain's heaviest criterion, then its second heaviest. If they still
+  tie, pick the option with lower implementation risk, mark the verdict `LOW`, and explain both
+  options.
+  - **Interactive runs:** the parent shows the choice to the user.
+  - **`/autonomous` runs:** the verdict stands and goes to the checkpoint. Nobody is there to ask
+    mid-run, so "always surface to the user" means "surface at the checkpoint".
+- **Security.** For `domain: security`, when the confidence isn't HIGH, the verdict is the
+  `hardened_default` unless a cited MUST requirement rules it out. If you can't name a hardened
+  option, the verdict is `LOW` with `status: INCOMPLETE`, and under `/autonomous` the parent stops
+  for the user.
+- **None ideal.** If every option scores below 5 on the heaviest criterion, the verdict is the least
+  bad option with `"none_ideal": true`, flagged for the checkpoint.
+- **Second opinion.** HIGH impact and confidence below HIGH means the moderator runs a second
+  arbitration on `model: fable` with the presentation order reversed (D8.5). Order sensitivity and
+  same-model blind spots show up as disagreement. Disagreement doesn't change the verdict: it goes
+  to the checkpoint.
+
+## Decided without a debate: `unresolved.json`
+
+The circuit breaker and `/autonomous` record each default they apply in
+`agent_state/debates/unresolved.json`, so it reaches the checkpoint and counts as resolved for the
+gate:
+
+```json
+{ "decisions": [
+  { "topic": "cache_strategy", "phase": 3, "from_agent": "backend_developer", "domain": "architecture",
+    "auto_resolved_with": "A", "confidence": "LOW", "reason": "escalation_limit_exceeded", "needs_review": true }
+] }
 ```
 
-### Phase 3: Arbitration (single agent — reads all debates)
+The default is the option with the stronger BRD-alignment case in the request, and for security the
+hardened option. It's never simply "the first option".
 
-The arbitrator reads ALL debate arguments and produces the final verdict:
+## The human checkpoint
 
-```text
-## Decision: [Topic]
-
-### Verdict: Option [X] — [Name]
-Confidence: [HIGH | MEDIUM | LOW]
-
-### Scoring (arbitrator's independent assessment)
-| Criterion | Weight | Option A | Option B | Option C |
-|-----------|--------|----------|----------|----------|
-| BRD alignment | 30% | 7 | 8 | 6 |
-| Technical feasibility | 25% | 8 | 6 | 7 |
-| Team/constraint fit | 20% | 9 | 5 | 7 |
-| Long-term scalability | 15% | 6 | 8 | 7 |
-| Ecosystem/community | 10% | 8 | 7 | 6 |
-| **Weighted total** | | **7.4** | **6.7** | **6.6** |
-
-### Why [X] wins
-[2-3 sentences — the decisive factors]
-
-### Why [Y] was rejected
-[1-2 sentences — what specific factor lost it]
-
-### Conditions to reconsider
-- Reconsider [Y] if: [specific condition that would change the decision]
-- Reconsider [Z] if: [specific condition]
-
-### Risk mitigation
-- Primary risk of chosen option: [what could go wrong]
-- Mitigation: [how to protect against it]
+```bash
+python3 .claude/hooks/debate-status.py --phase N   # every topic, its status, and why it needs review
 ```
 
-## Decision Classification
+Show the user:
+- **Every topic with review reasons:** LOW confidence, INCOMPLETE, a second opinion that disagrees,
+  a security verdict that isn't the hardened default, an assumption, auto-resolved, or none ideal.
+- **HIGH-impact verdicts** with their score table.
+- **MEDIUM-impact verdicts** with verdict and confidence.
 
-| Impact | Options | Process | Time Budget |
-|--------|---------|---------|-------------|
-| **HIGH** (architecture, security, data model) | 2-4 options | Full 3-phase debate | 3-5 min |
-| **MEDIUM** (library choice, pattern selection) | 2-3 options | Research + arbitrator (skip debate) | 1-2 min |
-| **LOW** (should not escalate) | N/A | Agent decides with auto-research | 0 min |
+The user can override any verdict. The parent writes `<topic>.override.json`
+(`{topic, original_verdict, user_override, user_rationale, overridden_at, phase}`), appends it to
+`overrides.jsonl`, and records the reversal with `remember.sh decide --reverses D-NNN`.
 
-## Integration with Pipeline
-
-### How agents escalate
-```text
-1. Agent detects uncertainty
-2. Agent writes debate_request JSON to agent_state/debates/
-3. debate_moderator picks it up
-4. Debate team runs (research → debate → arbitrate)
-5. Verdict written to agent_state/debates/<topic>-verdict.json
-6. Original agent reads verdict and continues
-```
-
-### How the human checkpoint uses debates
-At the human checkpoint, present:
-```markdown
-## Debated Decisions (N total)
-
-### HIGH Impact (architecture-level)
-| Decision | Options Considered | Verdict | Score | Confidence |
-|----------|-------------------|---------|-------|------------|
-| Database choice | PG vs Mongo vs hybrid | PostgreSQL | 7.4/10 | HIGH |
-| Auth model | JWT vs sessions | JWT + refresh | 8.1/10 | HIGH |
-
-### MEDIUM Impact
-| Decision | Verdict | Confidence |
-|----------|---------|------------|
-
-[User can override any verdict — override logged as USER_OVERRIDE]
-```
-
-## Anti-Patterns
+## Anti-patterns
 
 | Don't | Instead |
-|-------|---------|
-| Escalate trivial decisions | Use auto-research for reversible choices |
-| Let debaters agree with each other | Each debater MUST argue FOR their assigned option |
-| Skip weakness acknowledgment | Honest weaknesses build trust in the verdict |
-| Arbitrate without reading all arguments | Arbitrator must reference specific debater points |
-| Override without logging | Every user override documented with rationale |
+|---|---|
+| Raise a debate for missing data or an ambiguous requirement | `NEEDS_INPUT` to the human, or an `unresolved.json` default under `/autonomous` |
+| Write a request and keep working as if it were decided | Blocking: return `NEEDS_DECISION <topic>`. Non-blocking: state the default you took |
+| Spawn the debate team in the background | One message, `run_in_background: false`, so the turn waits for every child |
+| Let advocates score their own option | Advocates argue with evidence; only the arbitrator scores |
+| Judge options one at a time in request order | Randomized order, one criterion at a time across all options |
+| Fall back to "the first option" | The stronger BRD case, the hardened option for security, or `LOW`/`INCOMPLETE` |
+| Glob `agent_state/debates/` file names | `debate-status.py` |
+| Leave a verdict only in `agent_state/` | `remember.sh decide`, and put the `D-NNN` in the verdict |
 
 > Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed.

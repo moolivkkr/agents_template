@@ -8,6 +8,7 @@ as <step>-<topic>.json and the gate looked for *-request.json (docs/DEBATE_AND_B
 Naming contract (skills/core/debate-protocol.md):
   agent_state/debates/<topic>.request.json   sdlc.debate-request/v1, written by the agent that needs the decision
   agent_state/debates/<topic>.verdict.json   sdlc.debate-verdict/v1, written by debate_arbitrator only
+  agent_state/debates/<topic>.second-opinion.json  sdlc.debate-second-opinion/v1 (Fable arbitrator, close HIGH calls)
   agent_state/debates/<topic>.override.json  a user's override of a verdict
   agent_state/debates/unresolved.json        decisions auto-resolved with a default (circuit breaker, --auto)
 <topic> is a slug ([a-z0-9][a-z0-9_-]*) and the join key; both files also carry it in "topic".
@@ -31,8 +32,9 @@ Usage:
   debate-status.py [--root DIR] [--phase N] [--json] [--check]
     --phase N  only requests for phase N (requests without a phase field are included: an
                unattributed pending decision is still pending)
-    --check    exit 2 if a blocking request is pending or invalid, or a v1 verdict was never
-               promoted to docs/DECISIONS.md (verify-gate.sh check (f))
+    --check    exit 2 if a blocking request is pending or invalid, a v1 verdict was never promoted
+               to docs/DECISIONS.md, or a close HIGH-impact verdict has no second opinion
+               (verify-gate.sh check (f))
 Exit codes: 0 ok, 2 check failed, 3 usage error.
 """
 import argparse
@@ -44,6 +46,7 @@ import sys
 
 REQ_SCHEMA = "sdlc.debate-request/v1"
 VERDICT_SCHEMA = "sdlc.debate-verdict/v1"
+SECOND_SCHEMA = "sdlc.debate-second-opinion/v1"
 SLUG = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 CONFIDENCE = {"HIGH", "MEDIUM", "LOW"}
 IMPACT = {"HIGH", "MEDIUM"}
@@ -73,6 +76,8 @@ def classify(path, doc):
         return "unresolved"
     if "user_override" in doc:
         return "override"
+    if doc.get("schema") == SECOND_SCHEMA or path.endswith(".second-opinion.json"):
+        return "second"
     if doc.get("schema") == REQ_SCHEMA or doc.get("type") == "debate_request":
         return "request"
     if doc.get("schema") == VERDICT_SCHEMA or ("verdict" in doc and ("topic" in doc or path.endswith("verdict.json"))):
@@ -121,20 +126,31 @@ def verdict_problems(ver, req):
                 p.append(f"missing {k}")
         if ver.get("status") and ver.get("status") not in ("RESOLVED", "INCOMPLETE"):
             p.append("status is not RESOLVED|INCOMPLETE")
+        if ver.get("status") == "INCOMPLETE" and conf != "LOW":
+            p.append("an INCOMPLETE verdict must have confidence LOW")
+        domain = (ver.get("domain") or (req or {}).get("domain") or "").lower()
+        if domain == "security" and not ver.get("hardened_default"):
+            p.append("security verdict names no hardened_default")
         if not isinstance(ver.get("scores"), dict) or not ver.get("scores"):
             p.append("no per-option scores")
     return p
 
 
-def verdict_review(ver, req, decisions_text, rel):
+def second_opinion_required(ver, req):
+    impact = (ver.get("impact") or (req or {}).get("impact") or "").upper()
+    return ver.get("schema") == VERDICT_SCHEMA and impact == "HIGH" and (ver.get("confidence") or "").upper() != "HIGH"
+
+
+def verdict_review(ver, req, decisions_text, rel, second=None):
     r = []
     if (ver.get("confidence") or "").upper() == "LOW":
         r.append("LOW confidence")
     if ver.get("status") == "INCOMPLETE":
         r.append("INCOMPLETE: " + (ver.get("reason") or "decided on incomplete evidence"))
-    so = ver.get("second_opinion")
-    if isinstance(so, dict) and so.get("agrees") is False:
-        r.append(f"second opinion ({so.get('model', '?')}) chose {so.get('verdict', '?')}")
+    if second is not None and second.get("verdict") and second.get("verdict") != ver.get("verdict"):
+        r.append(f"second opinion ({second.get('model') or '?'}) chose {second.get('verdict')}")
+    elif second is None and second_opinion_required(ver, req):
+        r.append("second opinion required (HIGH impact, confidence not HIGH) but missing")
     domain = (ver.get("domain") or (req or {}).get("domain") or "").lower()
     hardened = ver.get("hardened_default")
     if domain == "security" and hardened and ver.get("verdict") != hardened:
@@ -162,7 +178,7 @@ def promoted(ver, decisions_text, rel):
 
 def build(root, phase=None):
     ddir = os.path.join(root, "agent_state", "debates")
-    requests, verdicts, overrides, auto = {}, {}, {}, {}
+    requests, verdicts, overrides, auto, seconds = {}, {}, {}, {}, {}
     unrecognized = []
     for path in sorted(glob.glob(os.path.join(ddir, "*.json"))):
         doc = load(path)
@@ -179,6 +195,9 @@ def build(root, phase=None):
             # the v1 file wins over a legacy duplicate for the same topic
             if t not in verdicts or doc.get("schema") == VERDICT_SCHEMA:
                 verdicts[t] = (doc, rel)
+        elif kind == "second":
+            t = doc.get("topic") or stem_topic(path, ".second-opinion.json")
+            seconds[t] = doc
         elif kind == "override":
             t = doc.get("topic") or stem_topic(path, ".override.json", "-override.json")
             overrides[t] = (doc, rel)
@@ -230,7 +249,9 @@ def build(root, phase=None):
             item["verdict_label"] = ver.get("verdict_label")
             item["confidence"] = (ver.get("confidence") or "").upper() or None
             item["decision_id"] = ver.get("decision_id")
-            item["review"] += verdict_review(ver, req, decisions_text, ver_rel)
+            item["review"] += verdict_review(ver, req, decisions_text, ver_rel, seconds.get(t))
+            if t in seconds:
+                item["second_opinion"] = {"model": seconds[t].get("model"), "verdict": seconds[t].get("verdict")}
         if req is not None and req.get("status") == "withdrawn":
             if len((req.get("withdrawn_reason") or "").strip()) >= 10:
                 item["status"] = "withdrawn"
@@ -264,9 +285,15 @@ def build(root, phase=None):
             return f"debate '{i['topic']}' is pending: {i['request']} has no verdict (run debate_moderator, or record it in unresolved.json under --auto)"
         if i["status"] == "invalid":
             return f"debate '{i['topic']}' breaks the debate contract: " + "; ".join(i["problems"])
-        if i["status"] == "resolved" and i.get("verdict_file") and "not promoted to docs/DECISIONS.md" in i["review"] \
-                and (verdicts[i["topic"]][0].get("schema") == VERDICT_SCHEMA):
+        if i["status"] != "resolved" or not i.get("verdict_file"):
+            return None
+        ver = verdicts[i["topic"]][0]
+        if ver.get("schema") != VERDICT_SCHEMA:
+            return None
+        if "not promoted to docs/DECISIONS.md" in i["review"]:
             return f"debate '{i['topic']}' verdict was never promoted to docs/DECISIONS.md (remember.sh decide)"
+        if any(r.startswith("second opinion required") for r in i["review"]):
+            return f"debate '{i['topic']}' is a close HIGH-impact call with no second opinion ({i['topic']}.second-opinion.json)"
         return None
 
     blocking = [b for b in (blocking_reason(i) for i in topics) if b]
