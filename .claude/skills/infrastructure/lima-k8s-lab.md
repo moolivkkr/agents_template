@@ -7,10 +7,10 @@ Templates live in `~/.claude/templates/k8s/` (repo: `.claude/templates/k8s/`).
 ## Topology (two Macs over a Thunderbolt bridge)
 
 ```text
-server Mac (10.10.10.2)                                   dev Mac (10.10.10.3) — Claude runs here
+server Mac (10.10.10.20)                                  dev Mac (10.10.10.30) — Claude runs here
 Lima VM sdlc-server: k3s server, Traefik, registry        Lima VM sdlc-agent: k3s agent
   node IP 172.30.10.2 (dummy iface sdlc0)                   node IP 172.30.10.3
-  forwards on 10.10.10.2: 6443 API, 51820/udp WG,           forwards: 51820/udp WG on 10.10.10.3,
+  forwards on 10.10.10.20: 6443 API, 51820/udp WG,          forwards: 51820/udp WG on 10.10.10.30,
     5001 registry, 18080 ingress                              127.0.0.1:5001 registry, 127.0.0.1:18080 ingress
         └──────────── flannel wireguard-native over forwarded UDP 51820 ────────────┘
 ```
@@ -18,12 +18,17 @@ Lima VM sdlc-server: k3s server, Traefik, registry        Lima VM sdlc-agent: k3
 - Lima can't bridge a VM onto a Thunderbolt Bridge, so k3s runs in its "distributed" mode:
   `--node-external-ip`, `--flannel-backend=wireguard-native`, `--flannel-external-ip`. Each host
   forwards only what the cluster needs. No host routes and no sudo.
-- **On the dev Mac everything is loopback**, except kubectl → `https://10.10.10.2:6443`:
+- **On the dev Mac everything is loopback**, except kubectl → `https://10.10.10.20:6443`:
   - push images to `localhost:5001`;
   - reach apps at `http://<app>-<env>.localhost:18080`. curl and Chromium resolve `*.localhost`
     to 127.0.0.1 themselves.
 - Single-Mac variant: run `cluster-up.sh` with `SERVER_SSH=""` and `AGENT_IP=""`. The registry and
   ingress are then on the server VM's forwards.
+- **Why .20/.30 and not .2/.3.** 10.10.10.0/24 is a common Thunderbolt-bridge choice, and a remote
+  client site reached over ssh uses .1–.3 on the same /24. The guard treats `--lab-host` IPs as local.
+  With the lab on .2/.3, a command aimed at the other site's .2 would pass as a lab call. Keep lab
+  host numbers out of the range other sites use. A routed site-to-site VPN would need a different
+  subnet on one side. ssh tunnels, which resolve addresses on the far side, do not.
 
 ## Who does what
 
@@ -144,7 +149,7 @@ Nothing ever deletes a namespace or a database volume except `env-reset.sh`.
 | | dev | qa |
 |---|---|---|
 | Web/API from the dev Mac (curl, Playwright/Chromium, iOS simulator via Safari*) | `http://<app>-dev.localhost:18080` | `http://<app>-qa.localhost:18080` |
-| From the server Mac | `curl -H 'Host: <app>-dev.localhost' http://10.10.10.2:18080` | same with `-qa` |
+| From the server Mac | `curl -H 'Host: <app>-dev.localhost' http://10.10.10.20:18080` | same with `-qa` |
 | Postgres (debugging) | `kubectl -n <app>-dev port-forward svc/postgres 15432:5432` | `… -n <app>-qa … 25432:5432` |
 
 \*Safari and native apps may not resolve `*.localhost`. Use `http://127.0.0.1:18080` with a Host

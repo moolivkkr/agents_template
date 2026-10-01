@@ -5,7 +5,7 @@
 # kubeconfig and guard policy — all things the permission guard denies to agents on purpose.
 # Idempotent: re-running resumes/repairs instead of recreating.
 #
-#   SERVER_SSH=tb2 SERVER_IP=10.10.10.2 AGENT_IP=10.10.10.3 .claude/templates/k8s/scripts/cluster-up.sh
+#   SERVER_SSH=tb2 SERVER_IP=10.10.10.20 AGENT_IP=10.10.10.30 .claude/templates/k8s/scripts/cluster-up.sh
 #
 #   SERVER_SSH  ssh host of the Mac that runs the k3s server VM ("" = this Mac runs it)
 #   SERVER_IP   the server Mac's Thunderbolt/LAN address the agent joins through
@@ -18,8 +18,8 @@
 set -euo pipefail
 
 SERVER_SSH="${SERVER_SSH-}"
-SERVER_IP="${SERVER_IP:-10.10.10.2}"
-AGENT_IP="${AGENT_IP-10.10.10.3}"
+SERVER_IP="${SERVER_IP:-10.10.10.20}"
+AGENT_IP="${AGENT_IP-10.10.10.30}"
 SERVER_NODE_IP="${SERVER_NODE_IP:-172.30.10.2}"
 AGENT_NODE_IP="${AGENT_NODE_IP:-172.30.10.3}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -51,7 +51,7 @@ case "$(server_status)" in
     else TPL="$K8S/lima/sdlc-server.yaml"; fi
     on_server "limactl create --tty=false --name sdlc-server \
       --set '.param.externalIP=\"$SERVER_IP\" | .param.nodeIP=\"$SERVER_NODE_IP\"' \
-      --set '(.portForwards[] | select(.hostIP == \"10.10.10.2\") | .hostIP) = \"$SERVER_IP\"' $TPL \
+      --set '(.portForwards[] | select(.hostIP == \"10.10.10.20\") | .hostIP) = \"$SERVER_IP\"' $TPL \
       && limactl start --tty=false sdlc-server" ;;
 esac
 
@@ -76,7 +76,7 @@ if [ -n "$AGENT_IP" ]; then
     *)
       limactl create --tty=false --name sdlc-agent \
         --set ".param.serverURL=\"https://$SERVER_IP:6443\" | .param.token=\"$TOKEN\" | .param.externalIP=\"$AGENT_IP\" | .param.nodeIP=\"$AGENT_NODE_IP\"" \
-        --set "(.portForwards[] | select(.hostIP == \"10.10.10.3\") | .hostIP) = \"$AGENT_IP\"" \
+        --set "(.portForwards[] | select(.hostIP == \"10.10.10.30\") | .hostIP) = \"$AGENT_IP\"" \
         "$K8S/lima/sdlc-agent.yaml"
       limactl start --tty=false sdlc-agent ;;
   esac

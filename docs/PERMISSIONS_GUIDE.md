@@ -79,13 +79,13 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (259 cases, including 13 offline `vet-package.py` cases).
+test table is `tests/sdlc-guard.test.sh` (260 cases, including 13 offline `vet-package.py` cases).
 
 ## Set up once per machine
 
 ```bash
 # 1. The lab cluster, agent identity, agent kubeconfig and guard policy (human; see lima-k8s-lab.md)
-SERVER_SSH=tb2 SERVER_IP=10.10.10.2 AGENT_IP=10.10.10.3 .claude/templates/k8s/scripts/cluster-up.sh
+SERVER_SSH=tb2 SERVER_IP=10.10.10.20 AGENT_IP=10.10.10.30 .claude/templates/k8s/scripts/cluster-up.sh
 
 # 2. Install the guard, env hook, shims and policy generator into ~/.claude/hooks/
 ./install.sh --guard
@@ -105,7 +105,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 259/259
+bash tests/sdlc-guard.test.sh     # 260/260
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own
@@ -123,7 +123,7 @@ human). After that, agents deploy with `/deploy --target=dev|qa` and need no pro
   see the same text and adjust. A blocked script shows `sdlc-guard (exec-time): blocked: …` and
   exits 126.
 - **Change the policy by regenerating it, never by editing it:**
-  `python3 ~/.claude/hooks/sdlc-guard-make-policy.py --kubeconfig ~/.kube/sdlc-lab.json --pin ~/.kube/sdlc-lab.json --namespaces '*-dev,*-qa,*-perf' --lima-instance sdlc-agent --lab-host 10.10.10.2 --lab-host 10.10.10.3 --out ~/.config/sdlc-guard/policy.json`
+  `python3 ~/.claude/hooks/sdlc-guard-make-policy.py --kubeconfig ~/.kube/sdlc-lab.json --pin ~/.kube/sdlc-lab.json --namespaces '*-dev,*-qa,*-perf' --lima-instance sdlc-agent --lab-host 10.10.10.20 --lab-host 10.10.10.30 --out ~/.config/sdlc-guard/policy.json`
   (then re-copy it to the managed location if you use step 4).
 - **The agent kubeconfig is recreated** when `cluster-up.sh` rebuilds the cluster. It also rewrites
   the policy, so the CA and credential pins follow automatically.
