@@ -43,7 +43,9 @@ def main() -> None:
                 )
         if spec.get("smoke") and not report["errors"]:
             try:
-                exec(compile(spec["smoke"], "<smoke>", "exec"), {"__name__": "__smoke__"})
+                # dont_inherit: this file's `from __future__ import annotations` must not leak into the
+                # smoke (pydantic models defined there would get string annotations it can't resolve)
+                exec(compile(spec["smoke"], "<smoke>", "exec", dont_inherit=True), {"__name__": "__smoke__"})
             except BaseException as exc:  # noqa: BLE001
                 report["errors"].append(
                     {"what": "smoke", "type": type(exc).__name__, "message": str(exc)[:500], "frames": frames(exc)}
