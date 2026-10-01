@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from units import B, S, T, Unit
+from units import CH, B, S, T, Unit, errors_pkg
 
 _HERE = Path(__file__).parent
 
@@ -66,6 +66,21 @@ SKIPS: dict[tuple[str, int, str], str] = {}
 UNITS: list[Unit] = []
 
 AWS_ENV = {"AWS_DEFAULT_REGION": "us-east-1", "AWS_ACCESS_KEY_ID": "testing", "AWS_SECRET_ACCESS_KEY": "testing"}
+
+
+def django_ignores(md: str, proof: str) -> list[tuple[str, str, str, str]]:
+    """The two pyright false positives every Django model sample hits. Django ships no type information,
+    so pyright infers from its source: it can't see the `objects` manager the model metaclass adds, and it
+    types a field's `default=` parameter from Django's NOT_PROVIDED sentinel. (django-stubs would fix both,
+    but installed next to the archetypes it rejects websocket-pattern-python.md's Channels routing.) Each
+    is proven at runtime by the unit's smoke/tests, which run those lines against a real database."""
+    why = f"Django adds this at runtime (no type information for pyright); {proof} runs it on SQLite."
+    return [
+        (md, 'Cannot access attribute "objects" for class "type[', ".objects", why),
+        *[(md, f'Argument of type "{lit}" cannot be assigned to parameter "default" of type "type[NOT_PROVIDED]"',
+           "default=", why)
+          for lit in ("Literal[True]", "Literal[False]", "Literal[1]", "Literal[0]", "Literal['']")],
+    ]
 
 # ── core/security-owasp.md: the WRONG/RIGHT pair, through psycopg 3 against PostgreSQL (--live) ────────
 UNITS.append(Unit(
@@ -327,4 +342,86 @@ UNITS.append(Unit(
         ],
     },
     smoke=smoke("smoke_graphql.py"),
+))
+
+# ── frameworks/fastapi.md: main.py + router + DI + models + handler as one app, run through TestClient ──
+# The envelope models and the request-id middleware are the crud-handler archetype's own blocks.
+UNITS.append(Unit(
+    name="pack-fastapi",
+    own=[FA],
+    files={
+        **errors_pkg(),
+        "app/schemas/base.py": [B(CH, 0, "# app/schemas/base.py")],
+        "app/middleware/request_id.py": [B(CH, 3, "# app/middleware/request_id.py")],
+        "harness_stubs/fastapi_app.py": [stub("fastapi_app.py")],
+        "users/schemas.py": [
+            T("from datetime import datetime\nfrom uuid import UUID\n\n"
+              "from pydantic import BaseModel, ConfigDict, EmailStr, Field"),
+            B(FA, 3, "class CreateUserRequest(BaseModel):"),
+        ],
+        "users/deps.py": [
+            T("from collections.abc import AsyncGenerator\nfrom typing import Annotated\n\n"
+              "from fastapi import Depends\nfrom sqlalchemy.ext.asyncio import AsyncSession\n\n"
+              "from harness_stubs.fastapi_app import SessionLocal, UserRepository, UserService"),
+            B(FA, 2, "async def get_db() -> AsyncGenerator[AsyncSession, None]:"),
+        ],
+        "users/router.py": [
+            T("from typing import Annotated\nfrom uuid import UUID\n\nfrom fastapi import APIRouter, Depends, Request\n\n"
+              "from app.schemas.base import Envelope, Meta\n"
+              "from harness_stubs.fastapi_app import User, UserService, require_auth\n"
+              "from users.deps import get_user_service\nfrom users.schemas import UserResponse"),
+            B(FA, 1, "# users/router.py"),
+        ],
+        "main.py": [
+            T("from harness_stubs.fastapi_app import auth, db\n"
+              "from users import router as users  # users/router.py: the module whose `router` main.py includes"),
+            B(FA, 0, "# main.py"),
+        ],
+        "errors_handler.py": [
+            T("from fastapi import Request\nfrom fastapi.responses import JSONResponse\n\n"
+              "from harness_stubs.fastapi_app import UserNotFoundError\nfrom main import app"),
+            B(FA, 4, "@app.exception_handler(UserNotFoundError)"),
+        ],
+    },
+    smoke=smoke("smoke_fastapi.py"),
+))
+
+# ── frameworks/django.md: model + serializer + ViewSet in a Django project on SQLite (DRF APIClient) ──
+# The query-optimization fragment uses a User with a profile, groups and a department: the reader's
+# model (stubs/packs/directory_models.py), not the Models section's.
+UNITS.append(Unit(
+    name="pack-django",
+    own=[DJ],
+    files={
+        "harness_django_settings.py": [stub("django_pack_settings.py")],
+        "harness_urls.py": [stub("django_pack_urls.py")],
+        "harness_pagination.py": [T(
+            "from rest_framework.pagination import CursorPagination\n\n\n"
+            "class NewestFirstCursorPagination(CursorPagination):  # harness: the project's list paginator\n"
+            '    ordering = "-created_at"\n    page_size = 20')],
+        "myapp/models.py": [
+            T("from django.db import models"),
+            B(DJ, 0, "class User(models.Model):"),
+            T("\n\nclass Profile(models.Model):  # harness: the relation the ViewSet's select_related('profile') reads\n"
+              "    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name=\"profile\")"),
+        ],
+        "myapp/serializers.py": [
+            T("from rest_framework import serializers\n\nfrom myapp.models import User"),
+            B(DJ, 1, "class UserSerializer(serializers.ModelSerializer):"),
+        ],
+        "myapp/views.py": [
+            T("from rest_framework import viewsets\nfrom rest_framework.permissions import IsAuthenticated\n\n"
+              "from myapp.models import User\nfrom myapp.serializers import UserSerializer"),
+            B(DJ, 2, "class UserViewSet(viewsets.ModelViewSet):"),
+        ],
+        "directory/models.py": [stub("directory_models.py")],
+        "directory/queries.py": [
+            T("from django.db.models import Count\n\nfrom directory.models import User"),
+            B(DJ, 3, "# Always use select_related (FK) and prefetch_related (M2M/reverse FK)"),
+        ],
+    },
+    imports=[],  # Django models import only after django.setup(): the smoke imports them
+    env={"DJANGO_SETTINGS_MODULE": "harness_django_settings"},
+    pyright_ignore=django_ignores(DJ, "smoke_django.py"),
+    smoke=smoke("smoke_django.py"),
 ))
