@@ -38,7 +38,7 @@ The orchestrator still computes a complexity score once per phase and persists i
 | Has UI components | `ls specs/*.wireframe.md 2>/dev/null \| wc -l` | 5 if any |
 | Previous phase had failures | `test -f agent_state/phases/$((PHASE-1))/reports/collective_feedback.md` | 10 if present |
 
-```
+```text
 RAW_SCORE = (spec_count * 3) + (source_files * 2) + (loc_changed / 500) + (fr_count * 2) + (has_ui * 5) + (prev_failures * 10)
 ```
 

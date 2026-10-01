@@ -1,7 +1,7 @@
 # Django REST Framework patterns for Python REST APIs.
 
 ## Project Structure
-```
+```text
 myapp/
 ├── manage.py
 ├── config/

@@ -42,7 +42,7 @@ Produces demo scripts and test data setup instructions for stakeholder demonstra
 
 ### Required Structure
 
-```markdown
+````markdown
 # Demo Guide — Phase N: <Phase Goal>
 
 ## Overview
@@ -210,7 +210,7 @@ Phase N+1: <Next phase goal from PHASE_PLAN.md>
 ```bash
 <cleanup commands — reset seed data, stop services>
 ```
-```
+````
 
 ---
 
@@ -237,7 +237,7 @@ Before finalizing the demo guide:
 
 ### Required Structure
 
-```markdown
+````markdown
 # Test Data — Phase N
 
 ## Personas
@@ -280,7 +280,7 @@ curl -s -X POST $BASE_URL/<resource> -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"title":"Demo Item 1","description":"Seeded for demo"}'
 ```
-```
+````
 
 ---
 

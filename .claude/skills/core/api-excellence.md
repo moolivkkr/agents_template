@@ -384,7 +384,7 @@ func ErrorHandler(next http.Handler) http.Handler {
 
 ## API Versioning
 
-```
+```text
 GET /api/v1/users         # current stable version
 GET /api/v2/users         # next version with breaking changes
 ```
@@ -538,7 +538,7 @@ func OrderLinks(orderID string, status string) Links {
 
 ## URL & Resource Naming
 
-```
+```text
 GET    /api/v1/users              # list
 GET    /api/v1/users/{id}         # single resource
 POST   /api/v1/users              # create
@@ -578,7 +578,7 @@ code maps to. See `backend/archetypes/error-handling-go.md` for the canonical er
 
 - Return `429 Too Many Requests` with a `Retry-After` header
 - Include rate-limit headers on every response:
-  ```
+  ```text
   X-RateLimit-Limit: 1000
   X-RateLimit-Remaining: 847
   X-RateLimit-Reset: 1700000000

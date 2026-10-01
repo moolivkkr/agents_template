@@ -83,7 +83,7 @@ Quality gate for specs. Runs after all phase specs are generated. Ensures nothin
 ```bash
 # Quick TC-* ID validation
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
-ALL_TC_IDS=$(grep -rhoP 'TC-[A-Z0-9]+-\d+' "$SPEC_DIR" 2>/dev/null | sort)
+ALL_TC_IDS=$(grep -rhoE 'TC-[A-Z0-9]+-[0-9]+' "$SPEC_DIR" 2>/dev/null | sort)
 UNIQUE_TC_IDS=$(echo "$ALL_TC_IDS" | sort -u)
 TOTAL=$(echo "$ALL_TC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)
 UNIQUE=$(echo "$UNIQUE_TC_IDS" | grep -c 'TC-' 2>/dev/null || echo 0)

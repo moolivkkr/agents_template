@@ -34,7 +34,7 @@ When reading Wave 3+4 reports, classify each failure into one of these categorie
 
 ## Decision Tree
 
-```
+```text
 Failure detected
   ├─ Can I identify the root cause from the error output?
   │   ├─ YES → Classify (table above) → Apply minimum re-test scope
@@ -67,7 +67,7 @@ Failure detected
 
 When spawning the fix agent in Wave 5, construct the prompt based on classification:
 
-```
+```text
 Agent prompt: "Fix these items from collective feedback:
 
 FAILURE CLASSIFICATION: ${CATEGORY}

@@ -38,7 +38,7 @@ For each dimension, ask: "Is this covered in the requirements?" If NO, categoriz
 
 ## Gap Severity Heuristic
 
-```
+```text
 CRITICAL if:
   - Downstream agents cannot make implementation decisions without it
   - Multiple valid interpretations would lead to different architectures

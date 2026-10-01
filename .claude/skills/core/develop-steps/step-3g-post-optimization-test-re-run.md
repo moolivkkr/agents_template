@@ -12,7 +12,7 @@ If ANY optimization was applied:
 
 Re-run ALL test tiers that passed in Step 3a-3c:
 
-```
+```text
 Re-run 3g.1: Unit tests           → must still pass
 Re-run 3g.2: Integration tests    → must still pass
 Re-run 3g.3: E2E tests            → must still pass (if they ran in 3c)

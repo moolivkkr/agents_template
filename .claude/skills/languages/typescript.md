@@ -64,7 +64,7 @@ function parseConfig(raw: unknown): Result<Config, ValidationError> {
 - `Promise.all` only when all must succeed together
 
 ## Module Conventions
-```
+```text
 src/
   domain/         # types, entities
   services/       # business logic
@@ -1250,4 +1250,4 @@ function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunct
 - Internal errors MUST return generic messages to clients — log full details server-side
 - Never `catch` and swallow errors silently — always log, rethrow, or return a meaningful Result
 
-> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed + tsc --showConfig (TypeScript 5.9).
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 JSON blocks parsed + tsc --showConfig (TypeScript 5.9).

@@ -18,10 +18,10 @@ Reads all phase gate files, manifests, and test results. Prints a comprehensive 
 
 ```bash
 # Completed phases
-COMPLETED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n)
+COMPLETED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p' | sort -n)
 
 # Planned but not developed phases
-PLANNED=$(ls docs/design/phases/*/INDEX.md 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n)
+PLANNED=$(ls docs/design/phases/*/INDEX.md 2>/dev/null | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p' | sort -n)
 
 # Agent registry
 cat agent_state/agent_registry.json 2>/dev/null

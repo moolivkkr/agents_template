@@ -416,7 +416,7 @@ If a CLI tool exists:
 
 ### Output 1: api-intelligence.md
 
-```markdown
+````markdown
 # API Intelligence: {Product Name}
 
 > Researched: {date} | API surfaces: {count} | Endpoints: {count} | Coverage: {N}%
@@ -504,7 +504,7 @@ Response:
 
 ### Entity Relationships
 
-```
+```text
 {Entity A} --[relationship]--> {Entity B}
 ```
 
@@ -570,7 +570,7 @@ Response:
 |---|-----|-------|------|---------|--------|---------|
 | S-1 | {url} | A | API Reference | v2.3 | All REST endpoints | Official REST API docs |
 | S-2 | {url} | D | GitHub | — | Python SDK | Community client library |
-```
+````
 
 ### Output 2: api-schemas.yaml
 

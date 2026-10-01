@@ -41,7 +41,7 @@ tags:
 ```
 
 ### Spacing Scale — 4px Grid (ONLY these values)
-```
+```text
 gap-1 / p-1   →  4px   (icon-to-text within button)
 gap-2 / p-2   →  8px   (label-to-input, tight grouping)
 gap-3 / p-3   → 12px   (between related items)
@@ -72,7 +72,7 @@ Never use arbitrary values like `mt-[13px]` or `gap-5` (20px breaks the 4px grid
 ```
 
 ### Border Radius — Consistent (pick ONE, use everywhere)
-```
+```text
 rounded-sm  → 4px   (small elements: badges, chips)
 rounded-md  → 8px   (inputs, buttons)
 rounded-lg  → 12px  (cards, dialogs — DEFAULT for most projects)
@@ -81,7 +81,7 @@ rounded-full → pill  (avatars, tags)
 ```
 
 ### Shadow System
-```
+```text
 shadow-sm   → cards, elevated surfaces
 shadow-md   → dropdowns, popovers
 shadow-lg   → modals, dialogs, sheets
@@ -89,7 +89,7 @@ shadow-none → flat elements within cards
 ```
 
 ### Z-Index Scale
-```
+```text
 z-0    → default content
 z-10   → sticky headers, floating action buttons
 z-20   → dropdowns, popovers

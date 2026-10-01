@@ -453,7 +453,7 @@ schemas:
 
 Document all external integration touchpoints:
 
-```markdown
+````markdown
 # Integration Map: {Product Name}
 
 ## Integration Points
@@ -499,7 +499,7 @@ graph LR
 
 ## Integration Gaps
 {Integrations mentioned in docs but not API-accessible}
-```
+````
 
 ### 6.4 sources.md
 

@@ -15,7 +15,7 @@ tags:
 
 ## Project Structure
 
-```
+```text
 src/main/java/com/example/app/
 ├── Application.java                 # @SpringBootApplication entry point
 ├── config/                          # @Configuration beans
@@ -240,4 +240,4 @@ class WidgetRepositoryTest {
 - `@Transactional` on service methods, never on controllers or repositories.
 - Test slices (`@WebMvcTest`, `@DataJpaTest`) over full `@SpringBootTest` when possible.
 
-> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail); 1 JSON block parsed + response-envelope rules.
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail), every key a Spring Boot 4.1.1 property (its configuration metadata); 1 JSON block parsed + response-envelope rules.

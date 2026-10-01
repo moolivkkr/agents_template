@@ -15,7 +15,7 @@ tags:
 # Python patterns and conventions for building reliable, maintainable applications.
 
 ## Project Structure
-```
+```text
 src/
   myapp/
     __init__.py

@@ -22,7 +22,7 @@ Trunk-based development with conventional commits for all projects.
 
 ## Branch Naming
 
-```
+```text
 <type>/<ticket-id>-<short-description>
 
 feat/AUTH-42-oauth-google-login
@@ -40,7 +40,7 @@ refactor/CORE-55-extract-payment-service
 
 Format: `<type>(<scope>): <subject>`
 
-```
+```text
 feat(auth): add Google OAuth login
 fix(payments): handle null card token on retry
 chore(deps): upgrade Go to 1.22
@@ -76,7 +76,7 @@ ci(github): cache Go modules in workflow
 
 ### Commit Body (when needed)
 
-```
+```text
 feat(billing): implement subscription proration
 
 Calculate prorated charges when users upgrade mid-cycle.

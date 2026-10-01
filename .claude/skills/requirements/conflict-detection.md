@@ -40,7 +40,7 @@ For each pair of FR-* that touch the same entity/feature, verify they don't cont
 ### Step 3: NFR Impact Assessment
 For each NFR, check if it conflicts with any FR or other NFR:
 
-```
+```text
 NFR-SEC-001: All PII encrypted at rest
   Impact on FR-012 (Search items by name):
     If name is PII, encrypted search is slow → conflict with NFR-PERF-001

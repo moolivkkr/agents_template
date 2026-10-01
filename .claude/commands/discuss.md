@@ -87,7 +87,7 @@ Before skipping ANY step or accepting incomplete analysis, review this table.
 ### Detect phase
 ```bash
 # Auto-detect next unplanned phase
-LAST_PLANNED=$(ls docs/design/phases/ 2>/dev/null | grep -oP '\d+' | sort -n | tail -1)
+LAST_PLANNED=$(ls docs/design/phases/ 2>/dev/null | grep -oE '[0-9]+' | sort -n | tail -1)
 PHASE=${ARG_PHASE:-$(( ${LAST_PLANNED:-0} + 1 ))}
 echo "▶ Discussing Phase $PHASE"
 ```

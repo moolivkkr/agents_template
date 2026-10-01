@@ -20,7 +20,7 @@ Domain knowledge for agents that research enterprise product workflows, extract 
 
 Every enterprise product (security, infrastructure, SaaS) follows this DAG (directed acyclic graph):
 
-```
+```text
 Layer 1: FOUNDATIONAL OBJECTS (definitions, data sources, identifiers, connectors)
     → Layer 2: DETECTION / CLASSIFICATION LOGIC (rules, classifiers, queries, patterns)
     → Layer 3: GROUPING CONTAINERS (rule sets, rule groups, policy groups, profiles)
@@ -124,7 +124,7 @@ When extracting workflow information from video transcripts:
 ### Timestamp Mapping
 
 Map every screen transition to a timestamp:
-```
+```text
 [MM:SS] Screen: {navigation path}
   → Action: {what the presenter does}
   → Field: {field name} = {value set}
@@ -221,7 +221,7 @@ API research reveals the real object model underneath the UI and exposes automat
 
 ### Discovery Search Strategy
 
-```
+```text
 "{product}" REST API reference
 "{product}" API documentation site:{vendor}.com
 "{product}" OpenAPI swagger specification

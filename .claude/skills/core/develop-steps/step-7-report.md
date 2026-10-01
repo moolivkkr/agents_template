@@ -2,7 +2,7 @@
 
 ## Step 7 — Report
 
-```
+```text
 ✅ Phase N complete
 
   Implemented:
@@ -45,7 +45,7 @@
 
 Read `agent_state/phases/${PHASE}/execution.jsonl` and render:
 
-```
+```text
 Phase ${PHASE} Execution (total: Xm Ys)
   <agent_name>        Xm Ys  ✅|⚠|❌  <findings summary>
   ...

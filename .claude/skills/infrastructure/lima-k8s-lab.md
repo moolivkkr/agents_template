@@ -6,7 +6,7 @@ Templates live in `~/.claude/templates/k8s/` (repo: `.claude/templates/k8s/`).
 
 ## Topology (two Macs over a Thunderbolt bridge)
 
-```
+```text
 server Mac (10.10.10.2)                                   dev Mac (10.10.10.3) — Claude runs here
 Lima VM sdlc-server: k3s server, Traefik, registry        Lima VM sdlc-agent: k3s agent
   node IP 172.30.10.2 (dummy iface sdlc0)                   node IP 172.30.10.3

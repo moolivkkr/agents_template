@@ -20,7 +20,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ## By Operation Type
 
 ### List / Search Endpoints
-```
+```text
 □ Empty result set (no items match)
 □ Exactly 1 result
 □ Exactly at page size boundary (e.g., 20 items when page size = 20)
@@ -32,7 +32,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Single Resource (GET by ID)
-```
+```text
 □ Resource exists → 200 + data
 □ Resource doesn't exist → 404
 □ Resource exists but belongs to different tenant → 404 (not 403)
@@ -42,7 +42,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Create (POST)
-```
+```text
 □ All required fields present → 201
 □ Missing required field → 422 with field error
 □ Duplicate unique field (e.g., email already exists) → 409
@@ -54,7 +54,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Update (PATCH/PUT)
-```
+```text
 □ Valid partial update → 200
 □ Update non-existent resource → 404
 □ Update resource from different tenant → 404
@@ -65,7 +65,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Delete
-```
+```text
 □ Delete existing resource → 204
 □ Delete non-existent resource → 404 or 204 (idempotent)
 □ Delete resource from different tenant → 404
@@ -77,7 +77,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ## By System Concern
 
 ### Authentication
-```
+```text
 □ No token → 401
 □ Expired token → 401
 □ Malformed token → 401
@@ -87,7 +87,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Authorization
-```
+```text
 □ User accesses own resource → 200
 □ User accesses other user's resource → 404 (not 403)
 □ Admin accesses any resource → 200
@@ -96,7 +96,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Concurrency
-```
+```text
 □ Two users edit same resource simultaneously
 □ Resource deleted while another user is editing
 □ Bulk operation partially fails (3 of 5 items succeed)
@@ -104,7 +104,7 @@ For each spec, check EVERY applicable category below and generate at least 1 edg
 ```
 
 ### Rate Limiting
-```
+```text
 □ Under limit → normal response
 □ At limit → 429 with Retry-After header
 □ Burst above limit → queued or rejected

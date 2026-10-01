@@ -2,7 +2,7 @@
 
 ## OBJ Anatomy (All Parts Required)
 
-```
+```text
 OBJ-NNN: [Goal Title]
   Goal:     [What outcome we want — one sentence]
   Metric:   [How we measure it — specific, queryable]
@@ -27,7 +27,7 @@ OBJ-NNN: [Goal Title]
 
 Every FR-* should trace to at least one OBJ-*:
 
-```
+```text
 OBJ-001: Reduce onboarding time from 20 min to 5 min
   ├─ FR-001: Single-page registration (reduces steps)
   ├─ FR-002: Guided first-task wizard (reduces confusion)
@@ -45,7 +45,7 @@ OBJ-002: Increase 30-day retention from 40% to 55%
 
 If an OBJ has multiple independent metrics, split it:
 
-```
+```text
 # BAD — two metrics in one OBJ
 OBJ-001: Improve engagement and reduce support costs
 
@@ -58,7 +58,7 @@ OBJ-002: Reduce support tickets per user from 2.1/month to 0.8/month
 
 For each OBJ, verify:
 
-```
+```text
 □ Metric is queryable (can you write a SQL/analytics query for it?)
 □ Baseline exists or is marked "greenfield — establish in first 30 days"
 □ Target is ambitious but realistic (not 10x overnight)

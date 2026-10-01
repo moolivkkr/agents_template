@@ -20,7 +20,7 @@ device tiers): `../testing/mobile-testing-strategy.md`.
 
 ## 1. Project layout
 
-```
+```text
 {{MOBILE_APP_DIR}}/
   app/                    # Expo Router: file-based routes (app/(tabs)/orders/[id].tsx)
   src/

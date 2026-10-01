@@ -31,7 +31,7 @@ acceptance criteria. Each EARS clause deterministically yields **exactly one TC 
 
 ### The Deterministic Split
 
-```
+```text
 WHEN <trigger>  THE SYSTEM SHALL <response>
      └─ precondition ─┘         └─ assertion ─┘
 
@@ -44,7 +44,7 @@ For Ubiquitous clauses (no trigger) the precondition is the default/steady state
 
 ### Worked Example
 
-```
+```text
 FR-007:  WHEN an Admin submits the invite form with a valid email
          THE SYSTEM SHALL create a pending member and send an invite email within 5s.
 FR-007b: IF the invite email is already registered
@@ -75,7 +75,7 @@ FR-007b: IF the invite email is already registered
 Minimum 10 per spec, from the edge-case taxonomy. For every function-level behaviour in the spec,
 enumerate:
 
-```
+```text
 TC-UNIT-{N+0}: happy path — the literal expected output from the spec
 TC-UNIT-{N+1}: boundary — min, max, just outside (off-by-one) values
 TC-UNIT-{N+2}: invalid input — the documented validation error
@@ -93,7 +93,7 @@ Row `{N+4}` covers the resilience code (timeouts, retries, fallbacks). It is bus
 
 ### Per-Endpoint Matrix
 
-```
+```text
 For endpoint: METHOD /api/v1/resource
 
 TC-API-{N+0}: Happy path — valid request → documented status + envelope (data of the documented type, meta.request_id)
@@ -113,7 +113,7 @@ Authorization, token and injection cases live in the **abuse-case matrix** (next
 
 ### Per-DB-Entity Matrix
 
-```
+```text
 For entity: ResourceName
 
 TC-DB-{N+0}: Create → Read round-trip (all fields preserved, types exact)
@@ -195,7 +195,7 @@ workflow in the phase's scope.
 
 ### Per-Workflow Matrix
 
-```
+```text
 For workflow: "Admin creates a policy"
 
 TC-E2E-{N+0}: Happy path — full workflow start to finish
@@ -210,7 +210,7 @@ TC-E2E-{N+6}: Cross-feature — created item appears in other views (dashboard, 
 
 ### For CLI/Pipeline Products
 
-```
+```text
 For pipeline: "Compile DLP policy"
 
 TC-E2E-{N+0}: Happy path — valid config → compile → output file correct
@@ -224,7 +224,7 @@ TC-E2E-{N+6}: Flag variations — each CLI flag combination produces expected be
 
 ### For Library/SDK Products
 
-```
+```text
 For API: "Create and evaluate policy"
 
 TC-E2E-{N+0}: Happy path — import → configure → call → verify return
@@ -242,7 +242,7 @@ For EVERY screen/page in the wireframe, enumerate these IDs:
 
 ### Per-Page Matrix
 
-```
+```text
 For page: PolicyListPage
 
 TC-UI-{N+0}: Renders without crash (mount, no errors)
@@ -268,7 +268,7 @@ Colour contrast can't be checked in a component test: jsdom has no layout, and `
 
 ### Per-Form Matrix
 
-```
+```text
 For form: CreatePolicyForm
 
 TC-FORM-{N+0}: All fields render with correct types (text, select, checkbox, etc.)
@@ -284,7 +284,7 @@ TC-FORM-{N+8}: Disabled submit — button disabled while API in flight (no doubl
 
 ### Per-Component Matrix (for reusable components)
 
-```
+```text
 For component: DataTable
 
 TC-COMP-{N+0}: Renders with provided data
@@ -308,7 +308,7 @@ the results carry separate iOS and Android cases. Strategy: `mobile-testing-stra
 
 ### Per-Mobile-Screen Matrix
 
-```
+```text
 For screen: OrdersScreen   (testIDs: orders.list, orders.row.<id>, orders.refresh, orders.empty)
 
 TC-MCMP-{N+0}: Renders without crash inside real providers
@@ -329,7 +329,7 @@ TC-MVIS-{N+0}: Final-state screenshot per device slot matches baseline
 
 ### Per-Mobile-Workflow Matrix
 
-```
+```text
 For workflow: Place order (FR-012)
 
 TC-ME2E-{N+0}: Happy path — launch → sign in → create → confirmation   [iOS + Android]
@@ -341,7 +341,7 @@ TC-ME2E-{N+4}: Android back / iOS swipe-back at each step → no data loss, no u
 
 ### Per-App Platform Matrix (once per app, re-checked each phase that touches it)
 
-```
+```text
 TC-MPLT-{N+0}: Cold start → first screen, no red screen / native crash
 TC-MPLT-{N+1}: Auth persists across kill + relaunch (token in Keychain/Keystore)
 TC-MPLT-{N+2}: Background → foreground preserves state; Android process death restores
@@ -366,7 +366,7 @@ named with its TC-ACC ID.
 Walk every in-scope FR's acceptance criteria. Each EARS SHALL, for each persona the FR names, is one
 row. **Priority is HIGH for an FR marked MUST** (MoSCoW in the BRD), MEDIUM for SHOULD, LOW for COULD.
 
-```
+```text
 FR-007 (MUST) — Manage policies — persona Admin
   SHALL 1: WHEN Admin saves a valid policy THE SYSTEM SHALL list it with status "active"
   SHALL 2: WHEN Admin deletes a policy THE SYSTEM SHALL ask for confirmation and then remove it
@@ -377,14 +377,14 @@ TC-ACC-{N+1}: FR-007 SHALL 2 — Admin deletes a policy → confirm → gone fro
 
 ### Permission Boundary Rows (what each persona CANNOT do)
 
-```
+```text
 TC-ACC-{N+2}: FR-007 — End User CANNOT create policies (403 / action absent and blocked server-side)
 TC-ACC-{N+3}: FR-007 — Tenant-A admin CANNOT see Tenant-B's policies
 ```
 
 ### Cross-Persona and Lifecycle Rows
 
-```
+```text
 TC-ACC-{N+4}: FR-007 → FR-011 — Admin creates policy → End User's view reflects it
 TC-ACC-{N+5}: Policy lifecycle as Admin — create → list → view → edit → verify → delete → verify gone
 ```
@@ -397,7 +397,7 @@ One `TC-PERF` row per NFR-PERF target in scope, priority **HIGH**, tier `perform
 the endpoint or flow, the **arrival rate**, the percentile and its limit, and the error-rate limit, as
 the NFR states them. For example:
 
-```
+```text
 TC-PERF-{N+0}: NFR-PERF-003 — GET /orders at 50 req/s: p95 < 300 ms, p99 < 800 ms, errors < 0.1 %
 ```
 

@@ -728,7 +728,7 @@ func NewService(repo Repository, cache Cache, logger *slog.Logger) *Service {
 
 ## Layer Boundaries
 
-```
+```text
 ┌─────────────────────────────┐
 │  Handler / Controller       │  HTTP concerns: parse request, validate, call service, format response
 │  (transport layer)          │  Errors: maps service errors → HTTP status codes

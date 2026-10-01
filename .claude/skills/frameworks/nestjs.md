@@ -6,7 +6,7 @@ The full stack (guards, error filter, CRUD controller, DTOs) is `backend/archety
 NestJS needs `"experimentalDecorators": true` and `"emitDecoratorMetadata": true` in tsconfig.json.
 
 ## Module Structure
-```
+```text
 src/
   users/
     users.module.ts

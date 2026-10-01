@@ -37,6 +37,7 @@ HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
 K8S_VERSION = "1.37.1"   # kubeconform schema version: the newest in its default schema repo on 2026-09-30 (1.38 absent)
 NEBULA_VERSION = "v3.8.0"
+SPRING_BOOT = "4.1.1"     # the version java.md / spring-boot.md were compile-checked against
 _ctx = None
 
 
@@ -75,11 +76,11 @@ EXPECTED = {
     "core/product-workflow-research.md": {"yaml": 2},
     "core/resiliency-patterns.md": {"yaml": 2},
     "core/scale-adaptive-depth.md": {"json": 1},
-    "core/shared-backend-patterns.md": {"json": 1, "sql": 1},
+    "core/shared-backend-patterns.md": {"json": 1, "sql": 4},
     "core/verification-protocol.md": {"sh": 4},
     "databases/dynamodb.md": {"sh": 1},
     "databases/elasticsearch.md": {"json": 9},
-    "databases/firestore.md": {"sh": 1},
+    "databases/firestore.md": {"json": 1, "sh": 1},
     "databases/mysql.md": {"sql": 4},
     "databases/nebula.md": {"ngql": 5},
     "databases/postgres.md": {"sql": 7},
@@ -96,9 +97,9 @@ EXPECTED = {
     "infrastructure/secrets-management.md": {"hcl": 1, "sh": 1, "yaml": 1},
     "infrastructure/terraform.md": {"hcl": 2, "sh": 1},
     "languages/go.md": {"yaml": 1},
-    "languages/java.md": {"yaml": 1},
-    "languages/rust.md": {"sh": 2, "sql": 1},
-    "languages/typescript.md": {"json": 1},
+    "languages/java.md": {"yaml": 3},
+    "languages/rust.md": {"sh": 1, "sql": 1},
+    "languages/typescript.md": {"json": 2},
     "testing/appium-mobile.md": {"sh": 1},
     "testing/contract-testing.md": {"sh": 1, "yaml": 1},
     "testing/detox.md": {"sh": 1},
@@ -265,7 +266,12 @@ BLOCKS = {
     # ── core/scale-adaptive-depth.md
     "core/scale-adaptive-depth.md#json1": dict(anchor='{', check="json"),
     # ── core/shared-backend-patterns.md
-    "core/shared-backend-patterns.md#sql1": dict(anchor='-- RLS policy as a safety net (PostgreSQL example)', check="pg", fixture="orders_tenant"),
+    "core/shared-backend-patterns.md#sql1": dict(anchor='-- EVERY query MUST filter by tenant_id', check="mysql", fixture="mysql_orders_tenant", params=True,
+                                                 subst=[("re", r"\?$", "?;"), ("re", r"status\)$", "status);")]),  # a list of statements
+    "core/shared-backend-patterns.md#sql2": dict(anchor='-- RLS policy as a safety net (PostgreSQL example)', check="pg", fixture="orders_tenant"),
+    "core/shared-backend-patterns.md#sql3": dict(anchor='-- Mark as deleted, never physically remove', check="pg", fixture="orders_full", params=True,
+                                                 subst=[("re", r"\$2$", "$2;"), ("re", r"IS NULL$", "IS NULL;")]),  # a list of statements
+    "core/shared-backend-patterns.md#sql4": dict(anchor='-- Include version in update WHERE clause', check="pg", fixture="orders_full", params=True),
     "core/shared-backend-patterns.md#json1": dict(
         anchor='// Canonical definition: ~/.claude/skills/api/response-envelope.md (it wins over this summary)',
         check="json", mode="jsonc", count=3, schema="envelope", subst=[("{ ... }", "{}"), ("[ ... ]", "[]")]),
@@ -500,6 +506,8 @@ BLOCKS = {
     "databases/elasticsearch.md#json8": dict(anchor='// Page 1', check="json", mode="console", subst=[("{ ... }", "{}")]),
     "databases/elasticsearch.md#json9": dict(anchor='POST /widgets/_search?scroll=5m', check="json", mode="console", subst=[("{ ... }", "{}")]),
     # ── databases/firestore.md
+    "databases/firestore.md#json1": dict(anchor='// firestore.indexes.json — required for composite queries', check="json", mode="jsonc",
+                                         schema="firestore_indexes"),
     "databases/firestore.md#sh1": dict(anchor='# Install Firebase CLI', check="sh"),
     # ── databases/mysql.md
     "databases/mysql.md#sql1": dict(anchor='CREATE TABLE users (', check="mysql"),
@@ -549,7 +557,7 @@ BLOCKS = {
     # ── frameworks/react.md: the rules of a flat-config entry
     "frameworks/react.md#json1": dict(anchor='{', check="json", schema="eslint_rules"),
     # ── frameworks/spring-boot.md
-    "frameworks/spring-boot.md#yaml1": dict(anchor='# application.yml — base config', check="yaml"),
+    "frameworks/spring-boot.md#yaml1": dict(anchor='# application.yml — base config', check="yaml", spring=True),
     "frameworks/spring-boot.md#json1": dict(anchor='{"error": {"code": "NOT_FOUND", "message": "Widget not found.", "request_id": "b7e1c2…", "retryable": false}}',
                                             check="json", schema="envelope"),
     # ── infrastructure/docker.md
@@ -632,13 +640,15 @@ BLOCKS = {
     # ── languages/go.md
     "languages/go.md#yaml1": dict(anchor='# .golangci.yml — golangci-lint v2 refuses a config without the version key', check="yaml", golangci=True),
     # ── languages/java.md
-    "languages/java.md#yaml1": dict(anchor='spring:', check="yaml"),
+    "languages/java.md#yaml1": dict(anchor='# application.yml — base config', check="yaml", spring=True),
+    "languages/java.md#yaml2": dict(anchor='spring:', check="yaml", spring=True),
+    "languages/java.md#yaml3": dict(anchor='# Enable virtual threads (Spring Boot 3.2+): Tomcat, @Async and scheduling all use them', check="yaml", spring=True),
     # ── languages/rust.md
-    "languages/rust.md#sh1": dict(anchor='# Create migration (writes migrations/<YYYYMMDDHHMMSS>_create_orders_table.sql)', check="sh"),
-    "languages/rust.md#sql1": dict(anchor='-- migrations/20240115093000_create_orders_table.sql', check="pg", fixture="tenants"),
-    "languages/rust.md#sh2": dict(anchor='# Run migrations', check="sh"),
+    "languages/rust.md#sh1": dict(anchor='sqlx migrate add create_orders   # writes migrations/<timestamp>_create_orders.sql', check="sh"),
+    "languages/rust.md#sql1": dict(anchor='-- migrations/20240115000000_create_orders.sql', check="pg", fixture="app_owner_role", role="app_owner"),
     # ── languages/typescript.md
     "languages/typescript.md#json1": dict(anchor='{', check="json", schema="tsconfig"),
+    "languages/typescript.md#json2": dict(anchor='// tsconfig.json — non-negotiable settings', check="json", mode="jsonc", schema="tsconfig"),
     # ── testing/appium-mobile.md
     "testing/appium-mobile.md#sh1": dict(anchor='npm i -D appium webdriverio @wdio/cli', check="sh"),
     # ── testing/contract-testing.md
@@ -719,6 +729,65 @@ BLOCKS = {
     "ui/structured-wireframe-format.md#yaml6": dict(anchor='screen:', check="yaml"),
 }
 
+# commands/ and agents/ ```bash blocks get one uniform check (harness.check_sh_tree); a block that must be
+# skipped is listed here as key -> dict(anchor=..., skip=reason). Empty: every block passes.
+CMD_SKIPS = {}
+
+# The lines the 2026-09-30 portability fixes changed in commands/agents/hooks, run in a fixture dir on
+# macOS bash 3.2 and (--live) Linux bash 5.2 with GNU tools. `contains` finds the line; `until` extends it.
+_PH = "for p in 1 2 10; do mkdir -p agent_state/phases/$p; touch agent_state/phases/$p/gate.passed; done; mkdir -p agent_state/phases/11"
+SNIPPETS = [
+    dict(name="accept: gate age (GNU stat first)", file="commands/accept.md", contains='GATE_AGE=$(( ($(date +%s) - $(stat -c %Y "$GATE"',
+         setup="touch -t 202001010000 g.txt", env={"GATE": "g.txt"}, post='echo "AGE=$GATE_AGE"', same_shell=True,
+         expect=[r"^AGE=[0-9]{3,}$"], reject=[r"integer|syntax|File:"]),
+    dict(name="accept: completeness verdict (grep -E)", file="commands/accept.md",
+         contains="if ! grep -qE '(COMPLETE|NEAR COMPLETE|INCOMPLETE|FAILING)'", until=r"^fi\b",
+         setup="mkdir -p agent_state/accept && echo 'Verdict: NEAR COMPLETE' > agent_state/accept/pipeline_completeness_report.md",
+         reject=[r"BLOCKED", r"invalid option"]),
+    dict(name="discuss: last planned phase", file="commands/discuss.md", contains="LAST_PLANNED=$(ls docs/design/phases/",
+         setup="mkdir -p docs/design/phases/1 docs/design/phases/2 docs/design/phases/10", post='echo "LAST=$LAST_PLANNED"', same_shell=True,
+         expect=[r"^LAST=10$"]),
+    dict(name="plan: last planned phase", file="commands/plan.md", contains="LAST_PLANNED=$(ls docs/design/phases/",
+         setup="mkdir -p docs/design/phases/1 docs/design/phases/2 docs/design/phases/10", post='echo "LAST=$LAST_PLANNED"', same_shell=True,
+         expect=[r"^LAST=10$"]),
+    dict(name="health: phase list", file="commands/health.md", contains="PHASES=$(ls -d agent_state/phases/*/",
+         setup=_PH, post='echo "PHASES=" $PHASES', same_shell=True, expect=[r"^PHASES= 1 2 10 11$"]),
+    dict(name="health: newest file mtime", file="commands/health.md", contains='LATEST_MTIME=$(stat -c %Y "$LATEST"',
+         setup="touch -t 202601010000 f.txt", env={"LATEST": "f.txt"}, post='echo "M=$LATEST_MTIME"', same_shell=True,
+         expect=[r"^M=[0-9]{9,}$"]),
+    dict(name="health: codebase map mtime", file="commands/health.md", contains='MAP_MTIME=$(stat -c %Y "$CODEBASE_DIR/.last-mapped"',
+         setup="mkdir -p cb && touch cb/.last-mapped", env={"CODEBASE_DIR": "cb"}, post='echo "M=$MAP_MTIME"', same_shell=True,
+         expect=[r"^M=[0-9]{9,}$"]),
+    dict(name="health: debate mtime", file="commands/health.md", contains='DEBATE_MTIME=$(stat -c %Y "$debate"',
+         setup="touch d.json", env={"debate": "d.json"}, post='echo "M=$DEBATE_MTIME"', same_shell=True, expect=[r"^M=[0-9]{9,}$"]),
+    dict(name="forensics: phase of the latest gate.failed", file="commands/forensics.md", contains='PHASE=$(echo "$LATEST_FAILED"',
+         env={"LATEST_FAILED": "agent_state/phases/7/gate.failed"}, post='echo "PHASE=$PHASE"', same_shell=True, expect=[r"^PHASE=7$"]),
+    dict(name="pause: last passed phase", file="commands/pause.md", contains="LAST_PASSED=$(ls agent_state/phases/*/gate.passed",
+         setup=_PH, post='echo "LAST=$LAST_PASSED"', same_shell=True, expect=[r"^LAST=10$"]),
+    dict(name="status: completed phases", file="commands/status.md", contains="COMPLETED=$(ls agent_state/phases/*/gate.passed",
+         setup=_PH, post='echo "DONE=" $COMPLETED', same_shell=True, expect=[r"^DONE= 1 2 10$"]),
+    dict(name="status: planned phases", file="commands/status.md", contains="PLANNED=$(ls docs/design/phases/*/INDEX.md",
+         setup="for p in 3 12; do mkdir -p docs/design/phases/$p; touch docs/design/phases/$p/INDEX.md; done", post='echo "PLANNED=" $PLANNED',
+         same_shell=True, expect=[r"^PLANNED= 3 12$"]),
+    dict(name="spec_verifier: TC ids", file="agents/core/spec_verifier.md", contains="ALL_TC_IDS=$(grep -rhoE",
+         setup="mkdir -p specs && printf 'TC-API-101 a\nTC-UI-7 b TC-API-101\n' > specs/s.md", env={"SPEC_DIR": "specs"},
+         post='echo "IDS=" $ALL_TC_IDS', same_shell=True, expect=[r"^IDS= TC-API-101 TC-API-101 TC-UI-7$"]),
+    dict(name="pipeline_completeness: BRD ids", file="agents/core/pipeline_completeness_agent.md", contains="grep -oE '(FR|NFR|OBJ)-[0-9]+' docs/BRD.md",
+         subst=[("/tmp/brd_ids.txt", "brd_ids.txt")], setup="mkdir -p docs && printf '| FR-1 | x |\n| NFR-22 | OBJ-3 FR-1 |\n' > docs/BRD.md",
+         post="tr '\n' ' ' < brd_ids.txt", expect=[r"^FR-1 NFR-22 OBJ-3 $"]),
+    dict(name="pipeline_completeness: phase of a reconciliation", file="agents/core/pipeline_completeness_agent.md", contains='PHASE=$(echo "$RECON"',
+         env={"RECON": "agent_state/reconciliation/phase-4/specs_vs_impl.md"}, post='echo "PHASE=$PHASE"', same_shell=True, expect=[r"^PHASE=4$"]),
+    dict(name="pipeline_completeness: phase of a gate", file="agents/core/pipeline_completeness_agent.md", contains='PHASE=$(echo "$GATE"',
+         env={"GATE": "agent_state/phases/12/gate.passed"}, post='echo "PHASE=$PHASE"', same_shell=True, expect=[r"^PHASE=12$"]),
+    dict(name="pipeline_completeness: phases naming an ID", file="agents/core/pipeline_completeness_agent.md", contains='PHASES=$(grep -rl "$ID"',
+         setup="for p in 2 5; do mkdir -p docs/design/phases/$p; echo FR-9 > docs/design/phases/$p/PHASE_PLAN.md; done",
+         env={"ID": "FR-9"}, post='echo "PHASES=" $PHASES', same_shell=True, expect=[r"^PHASES= 2 5$"]),
+    dict(name="autonomous-continue hook: mtime()", file="hooks/autonomous-continue.sh", contains="mtime() {",
+         setup="touch -t 202601010000 f.txt", post='echo "M=$(mtime f.txt)"', same_shell=True, expect=[r"^M=[0-9]{9,}$"], reject=[r"File:"]),
+    dict(name="rules-board-siem: Stage 0 inventory count", file="commands/rules-board-siem.md", contains='echo "Stage 0 inventory: OK',
+         setup="echo '[1, 2, 3]' > inv.json", env={"INVENTORY": "inv.json"}, expect=[r"Stage 0 inventory: OK \(3 rules\)"]),
+]
+
 # step 6 gate fixtures: complete evidence, then one broken item per scenario
 _STEP6_BASE = (
     "R=agent_state/phases/4/reports; mkdir -p $R agent_state/reconciliation/phase-4 docs/design/phases/4/specs && "
@@ -776,6 +845,13 @@ CREATE TABLE certificates (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant
 CREATE TABLE certs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, status text, serial text, expires_at timestamptz);
 """,
     "orders_tenant": "CREATE TABLE orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, total numeric);",
+    "orders_full": "CREATE TABLE orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, status text NOT NULL,"
+                   " version integer NOT NULL DEFAULT 1, created_at timestamptz NOT NULL DEFAULT now(),"
+                   " updated_at timestamptz NOT NULL DEFAULT now(), deleted_at timestamptz);",
+    # a migration role that owns what it creates and is neither superuser nor BYPASSRLS (FORCE applies to it)
+    "app_owner_role": "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_owner') THEN"
+                      " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
+                      " GRANT CREATE ON SCHEMA public TO app_owner;",
     "resources": "CREATE TABLE resources (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, name text);",
     "unique_demo": "CREATE TABLE unique_demo (tenant_id uuid NOT NULL, serial_number text, name text, slug text);",
     "tenants": "CREATE TABLE tenants (id uuid PRIMARY KEY DEFAULT gen_random_uuid());",
@@ -785,6 +861,8 @@ CREATE TABLE users (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, email VARCHAR
 CREATE TABLE orders (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, user_id BIGINT UNSIGNED NOT NULL,
   status VARCHAR(20) NOT NULL, created_at DATETIME(6) NOT NULL DEFAULT CURRENT_TIMESTAMP(6));
 """,
+    "mysql_orders_tenant": "CREATE TABLE orders (id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY, tenant_id BIGINT UNSIGNED NOT NULL,"
+                           " status VARCHAR(20) NOT NULL);",
     "mysql_accounts": "CREATE TABLE accounts (id BIGINT UNSIGNED PRIMARY KEY, balance DECIMAL(12,2) NOT NULL);\n"
                       "INSERT INTO accounts VALUES (1, 500), (2, 0);",
     # SQLite
@@ -802,7 +880,7 @@ SELECT md5((g % 2000)::text)::uuid, CASE WHEN g % 100 = 0 THEN 'pending' ELSE 'c
 FROM generate_series(1, 200000) g;
 """
 _TENANCY_RLS = (
-    "DROP ROLE IF EXISTS app_rw; CREATE ROLE app_rw NOSUPERUSER NOBYPASSRLS;"
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_rw') THEN CREATE ROLE app_rw NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
     "CREATE TABLE resources (id serial PRIMARY KEY, tenant_id uuid NOT NULL);"
     "GRANT SELECT, INSERT ON resources TO app_rw; GRANT USAGE ON SEQUENCE resources_id_seq TO app_rw;"
     "INSERT INTO resources (tenant_id) SELECT CASE WHEN g <= 4 THEN md5('a')::uuid ELSE md5('b')::uuid END"
@@ -880,8 +958,9 @@ CLAIMS = [
                " || ' volatile rewrote=' || ((SELECT v FROM fn WHERE k='volatile') <> (SELECT v FROM fn WHERE k='constant'))",
          expect=[r"constant rewrote=false volatile rewrote=true"]),
     dict(name="RLS: the owner bypasses ENABLE alone; FORCE applies it to the owner too", block="core/shared-backend-patterns.md#sql1", at="FORCE ROW LEVEL SECURITY",
-         setup="DROP ROLE IF EXISTS app_owner; CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; GRANT CREATE ON SCHEMA public TO app_owner;"
-               "SET ROLE app_owner;"
+         setup="DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rls_owner_demo') THEN"
+               " CREATE ROLE rls_owner_demo NOSUPERUSER NOBYPASSRLS; END IF; END $$;"   # roles are cluster-wide: never DROP one
+               "GRANT CREATE ON SCHEMA public TO rls_owner_demo; SET ROLE rls_owner_demo;"
                "CREATE TABLE orders (id serial, tenant_id uuid NOT NULL);"
                "INSERT INTO orders (tenant_id) SELECT md5((g % 2)::text)::uuid FROM generate_series(1, 10) g;"
                "CREATE POLICY tenant_isolation ON orders USING (tenant_id = current_setting('app.current_tenant_id')::uuid);"
@@ -904,6 +983,36 @@ CLAIMS = [
     dict(name='tenancy RLS: WITH CHECK refuses a row for another tenant', block="infrastructure/saas-tenancy-models.md#sql1", at="WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);",
          setup=_TENANCY_RLS + "BEGIN; SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, true);",
          query="INSERT INTO resources (tenant_id) VALUES (md5('b')::uuid) RETURNING id", error='new row violates row-level security policy'),
+]
+# rust.md's migration run as app_owner, a NOSUPERUSER NOBYPASSRLS role that owns the tables, so FORCE applies to
+# it. Rows go in per tenant with the tenant set (WITH CHECK); {BLOCK} is the block's own SQL.
+_RUST_SETUP = (
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_owner') THEN"
+    " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
+    "GRANT CREATE ON SCHEMA public TO app_owner; SET ROLE app_owner;"
+    "{BLOCK}"
+    "SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);"
+    "INSERT INTO orders (tenant_id, total_cents) SELECT md5('a')::uuid, 100 FROM generate_series(1, 3);"
+    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('a')::uuid, 'sku-1', 1);"
+    "SELECT set_config('app.current_tenant_id', md5('b')::uuid::text, false);"
+    "INSERT INTO orders (tenant_id, total_cents) SELECT md5('b')::uuid, 100 FROM generate_series(1, 5);"
+    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('b')::uuid, 'sku-1', 2), (md5('b')::uuid, 'sku-2', 3);"
+    "SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);")
+CLAIMS += [
+    dict(name="rust migration: tenant A sees only its orders (owner role, FORCE RLS)", block="languages/rust.md#sql1",
+         at="ALTER TABLE orders FORCE ROW LEVEL SECURITY;", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
+         query="SELECT count(*) FROM orders", expect=[r"^3$"]),
+    dict(name="rust migration: tenant A sees only its inventory (owner role, FORCE RLS)", block="languages/rust.md#sql1",
+         at="ALTER TABLE inventory FORCE ROW LEVEL SECURITY;", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
+         query="SELECT string_agg(sku || '=' || quantity, ',') FROM inventory", expect=[r"^sku-1=1$"]),
+    dict(name="rust migration: WITH CHECK refuses another tenant's inventory row", block="languages/rust.md#sql1",
+         at="CREATE POLICY tenant_isolation ON inventory", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
+         query="INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('b')::uuid, 'sku-9', 1) RETURNING sku",
+         error=r'new row violates row-level security policy for table "inventory"'),
+    dict(name="rust migration: a reset tenant setting fails closed (owner role)", block="languages/rust.md#sql1",
+         at="app.current_tenant_id with set_config(..., true) inside each transaction", block_sql="languages/rust.md#sql1",
+         setup=_RUST_SETUP + "RESET app.current_tenant_id;", query="SELECT count(*) FROM orders",
+         error=r'invalid input syntax for type uuid: ""|unrecognized configuration parameter'),
 ]
 MYSQL_CLAIMS = [
     dict(name="InnoDB default isolation is REPEATABLE READ", block="databases/mysql.md#sql4", at="START TRANSACTION",
@@ -1172,7 +1281,7 @@ def _tsconfig(b, vals, spec):
         return []
     import tempfile
     d = Path(tempfile.mkdtemp(prefix="tsconfig-", dir=_ctx.tmp))
-    (d / "tsconfig.json").write_text(json.dumps(vals[0]))
+    (d / "tsconfig.json").write_text(b.text)
     (d / "a.ts").write_text("export const x: number = 1;\n")
     r = subprocess.run(["npx", "--yes", "-p", "typescript@5.9", "tsc", "--showConfig", "-p", str(d)], capture_output=True, text=True)
     if r.returncode:
@@ -1181,7 +1290,27 @@ def _tsconfig(b, vals, spec):
     return [(b.first_line, f"tsc dropped compilerOptions.{k}") for k in vals[0]["compilerOptions"] if k not in shown]
 
 
+def _firestore_indexes(b, vals, spec):
+    """firestore.indexes.json as the Firebase CLI reads it: indexes[] of {collectionGroup, queryScope, fields[]},
+    each field a fieldPath with order ASCENDING|DESCENDING or arrayConfig CONTAINS (Firebase docs)."""
+    errs = []
+    v = vals[0]
+    if set(v) - {"indexes", "fieldOverrides"}:
+        errs.append((b.first_line, f"firestore.indexes.json: unknown top-level keys {sorted(set(v) - {'indexes', 'fieldOverrides'})}"))
+    for i, ix in enumerate(v.get("indexes", [])):
+        if not isinstance(ix.get("collectionGroup"), str) or ix.get("queryScope") not in ("COLLECTION", "COLLECTION_GROUP"):
+            errs.append((b.first_line, f"indexes[{i}]: needs collectionGroup and queryScope COLLECTION|COLLECTION_GROUP"))
+        fields = ix.get("fields", [])
+        if len(fields) < 2:
+            errs.append((b.first_line, f"indexes[{i}]: a composite index has at least two fields"))
+        for f in fields:
+            if "fieldPath" not in f or (f.get("order") not in ("ASCENDING", "DESCENDING") and f.get("arrayConfig") != "CONTAINS"):
+                errs.append((b.first_line, f"indexes[{i}]: field {f} needs fieldPath and order ASCENDING|DESCENDING (or arrayConfig CONTAINS)"))
+    return errs
+
+
 SCHEMA_CHECKS = {
+    "firestore_indexes": _firestore_indexes,
     "envelope": _envelope, "manifest": _manifest, "manifest_test_results": _manifest_test_results,
     "gate_forced": _gate_forced, "sidecar": _sidecar, "eval_rubric": _eval_shape("rubric"),
     "eval_trajectory": _eval_shape("trajectory"), "eval_artifacts": _eval_shape("artifacts"),
@@ -1236,6 +1365,73 @@ NGQL_SETUP = {
         'VALUES "asset:10.0.0.5" -> "asset:8.8.8.8"@0:("dns", now(), now());',
         "USE threatmatrix; REBUILD TAG INDEX idx_asset_name;", "SLEEP"],
 }
+
+
+_SPRING_META = None
+
+
+def spring_metadata(ctx):
+    """{property: type} from the configuration metadata of the Spring Boot jars (pinned version) in ~/.m2;
+    with --live, missing jars are fetched from Maven Central into .cache/. None when unavailable."""
+    global _SPRING_META
+    if _SPRING_META is not None:
+        return _SPRING_META or None
+    import glob, urllib.request, zipfile
+    jars = [j for j in glob.glob(os.path.expanduser(f"~/.m2/repository/org/springframework/boot/*/{SPRING_BOOT}/*-{SPRING_BOOT}.jar"))
+            if not j.endswith(("-sources.jar", "-javadoc.jar"))]
+    if not jars and ctx is not None and ctx.live:
+        cache = HERE / ".cache" / f"spring-boot-{SPRING_BOOT}"
+        cache.mkdir(parents=True, exist_ok=True)
+        for art in ("spring-boot", "spring-boot-autoconfigure", "spring-boot-jdbc", "spring-boot-jpa", "spring-boot-hibernate",
+                    "spring-boot-cache", "spring-boot-data-redis", "spring-boot-tomcat", "spring-boot-flyway"):
+            dst = cache / f"{art}-{SPRING_BOOT}.jar"
+            if not dst.exists():
+                url = f"https://repo1.maven.org/maven2/org/springframework/boot/{art}/{SPRING_BOOT}/{art}-{SPRING_BOOT}.jar"
+                try:
+                    urllib.request.urlretrieve(url, dst)
+                except Exception:
+                    continue
+            jars.append(str(dst))
+    meta = {}
+    for j in jars:
+        try:
+            z = zipfile.ZipFile(j)
+        except zipfile.BadZipFile:
+            continue
+        for n in ("META-INF/spring-configuration-metadata.json", "META-INF/additional-spring-configuration-metadata.json"):
+            if n in z.namelist():
+                for prop in json.loads(z.read(n)).get("properties", []):
+                    meta[prop["name"]] = prop.get("type") or ""
+    _SPRING_META = meta
+    return meta or None
+
+
+def _kebab(k):
+    return re.sub(r"(?<=[a-z0-9])([A-Z])", lambda m: "-" + m.group(1).lower(), k).replace("_", "-").lower()
+
+
+def spring_unknown_keys(docs, meta, text):
+    """Leaf keys of the YAML documents that no Spring Boot property (or Map-typed property prefix) covers."""
+    maps = [k for k, t in meta.items() if t.startswith(("java.util.Map", "java.util.Properties"))]
+    lines = text.split("\n")
+    bad = {}
+
+    def walk(node, path):
+        if isinstance(node, dict):
+            for k, v in node.items():
+                walk(v, path + [str(k)])
+            return
+        full = ".".join(_kebab(p) for p in path)
+        if full in meta or any(full.startswith(m + ".") for m in maps):
+            return
+        leaf = path[-1]
+        ln = next((i for i, l in enumerate(lines, 1) if re.match(r"\s*" + re.escape(leaf) + r"\s*:", l)), 1)
+        bad[full] = (ln, "")
+
+    for d in docs:
+        if isinstance(d, dict):
+            walk(d, [])
+    return bad
 
 
 def tool_versions(ctx):

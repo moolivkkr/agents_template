@@ -41,6 +41,11 @@ class Block:
     indent: int          # columns stripped from every content line (fence indentation)
     heading: str         # nearest heading above the fence
     lines: list[str] = field(default_factory=list)
+    prefix: str = ".claude/skills/"   # what path is relative to, for messages
+
+    @property
+    def display(self) -> str:
+        return self.prefix + self.path
 
     @property
     def key(self) -> str:
@@ -60,7 +65,7 @@ class Block:
         return self.first_line + rel - 1
 
 
-def _fences(lines, offset, heading, path, out, counters):
+def _fences(lines, offset, heading, path, out, counters, untagged=None):
     i = 0
     while i < len(lines):
         line = lines[i]
@@ -83,20 +88,49 @@ def _fences(lines, offset, heading, path, out, counters):
         n = len(ind.expandtabs(4)) if "\t" in ind else len(ind)
         stripped = [b[n:] if b[:n].strip() == "" else b.lstrip() for b in body]
         fam = LANGS.get(word)
+        if word == "" and untagged is not None:
+            untagged.append(offset + i + 1)
         if fam:
             counters[fam] = counters.get(fam, 0) + 1
             out.append(Block(path, fam, word, counters[fam], offset + i + 2, n, heading, stripped))
         elif word in TEMPLATE_LANGS:
-            _fences(stripped, offset + i + 1, heading, path, out, counters)
+            _fences(stripped, offset + i + 1, heading, path, out, counters, untagged)
         i = j + 1
     return heading
 
 
-def extract(md_file: str, rel: str) -> list[Block]:
+def extract(md_file: str, rel: str, prefix: str = ".claude/skills/", untagged=None) -> list[Block]:
+    """In-scope blocks of one file; untagged, if a list, collects the lines of fences with no info string."""
     with open(md_file, encoding="utf-8") as f:
         lines = f.read().split("\n")
     out: list[Block] = []
-    _fences(lines, 0, "", rel, out, {})
+    _fences(lines, 0, "", rel, out, {}, untagged)
+    for b in out:
+        b.prefix = prefix
+    return out
+
+
+def untagged_fences(skills_dir: str) -> list[tuple[str, int]]:
+    """(path, line) of every fence without a language tag: the inventory can't tell what such a block is."""
+    found = []
+    for rel in skill_files(skills_dir):
+        lines: list[int] = []
+        extract(os.path.join(skills_dir, rel), rel, untagged=lines)
+        found += [(rel, n) for n in lines]
+    return found
+
+
+def tree_blocks(claude_dir: str, subdir: str, family: str = "sh") -> list[Block]:
+    """The `family` blocks of every markdown file under .claude/<subdir> (commands, agents)."""
+    out = []
+    base = os.path.join(claude_dir, subdir)
+    for dp, dns, fns in os.walk(base):
+        dns.sort()
+        for fn in sorted(fns):
+            if fn.endswith(".md"):
+                p = os.path.join(dp, fn)
+                rel = os.path.relpath(p, claude_dir)
+                out += [b for b in extract(p, rel, prefix=".claude/") if b.lang == family]
     return out
 
 

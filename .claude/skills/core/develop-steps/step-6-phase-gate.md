@@ -14,7 +14,7 @@ now share ONE required set (below), with the same report paths (`reports/…`, n
 what `verify-gate.sh` check (b) enforces from `roster.required`; the hook, not a duplicated array
 here, is the source of truth — see the "Gate File Precondition Check" block above):
 
-```
+```text
 Gate Item                    Source File                                          Pass Condition
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 Unit tests                   agent_state/phases/${PHASE}/reports/unit_tests.md   No FAILED tests AND total > 0
@@ -40,7 +40,7 @@ Cross-phase regression       manifest.json → cross_phase_regression           
 recorded as `not_applicable` (an explicit, auditable skip — never a silent pass). The condition is
 determined from the phase's own code/specs, not guessed:
 
-```
+```text
 Gate Item (CONDITIONAL)      Source File                                          Required WHEN … / else
 ─────────────────────────────────────────────────────────────────────────────────────────────────
 SAST + secret scanning       agent_state/phases/${PHASE}/reports/quality_gate.md     ALWAYS (code_quality_verifier Checks 3 + 9, fixed semgrep/gitleaks commands) → BLOCKING:0; a scan that did not run is itself BLOCKING (Stage 4c).
@@ -226,7 +226,7 @@ fi
 If `--force_gate` flag is set AND the gate has failures (and the breaking-change precondition above
 passed):
 1. Write `gate.passed` with a warning header:
-   ```
+   ```text
    ⚠ FORCED GATE — ${N} blockers overridden by user at ${TIMESTAMP}
    Overridden items: [list of failed gate items]
    ```
@@ -260,7 +260,7 @@ passed):
 When the NEXT phase starts (Phase N+1 Step 0):
 1. Check: `test -f agent_state/phases/$((PHASE-1))/gate.forced`
 2. If exists: read `gate.forced` and surface ALL blockers prominently:
-   ```
+   ```text
    ⛔ FORCED GATE DETECTED — Phase $((PHASE-1)) passed with N unresolved blockers:
      - [blocker 1 details]
      - [blocker 2 details]
@@ -268,7 +268,7 @@ When the NEXT phase starts (Phase N+1 Step 0):
    ```
 3. Phase N+1 audit (Step 1) MUST list each forced blocker as a **CRITICAL carried-forward item**
 4. Phase N+1 gate (Step 6) adds an extra gate check:
-   ```
+   ```text
    Forced gate resolution    agent_state/phases/$((PHASE-1))/gate.forced    All blockers resolved OR explicitly re-deferred
    ```
 5. If a blocker survives **2 consecutive forced gates**: it becomes **PERMANENTLY BLOCKING** — cannot be force-gated again. Must fix or remove from scope via BRD change request. (Today this rule is prose: `verify-gate.sh` does not yet compare consecutive `gate.forced` files, so the orchestrator must check it before writing a new override.)

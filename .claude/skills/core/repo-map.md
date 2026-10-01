@@ -128,7 +128,7 @@ low-rank files are omitted, not summarized.
 
 ### Output Shape (ranked, budgeted)
 
-```
+```text
 src/services/billing.go        rank 0.128
   func ChargeInvoice(ctx, inv *Invoice) error       ← 7 refs
   func (s *Biller) Refund(id string) error          ← 4 refs
@@ -153,7 +153,7 @@ Narrow in three levels, spending tokens only as confidence increases:
 
 Emit the localization result as `file → class/function → line`, e.g.:
 
-```
+```text
 FR-014 (add proration to refunds) localizes to:
   src/services/billing.go → (*Biller).Refund → lines 88–121   (confidence: Confirmed)
   src/domain/invoice.go   → Invoice.LineItems → lines 22–29    (confidence: Deduced)

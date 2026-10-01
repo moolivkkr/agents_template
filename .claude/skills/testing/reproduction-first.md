@@ -69,7 +69,7 @@ Accept the fix **only** when BOTH hold:
 
 Record the transition as evidence:
 
-```
+```text
 Repro test:   <test id / path>::<case>   TC-<CAT>-<NNN>
   Before fix: FAIL — <actual symptom>
   After fix:  PASS
@@ -109,7 +109,7 @@ The reproducing test is not scratch — it stays in the suite forever as a **reg
 
 ## Quick reference
 
-```
+```text
 1. RED    — write minimal test, run, confirm it FAILS
 2. REASON — confirm it fails on the real symptom, not noise
 3. LOOP   — edit code → re-run → repeat (max 3, then escalate)

@@ -357,7 +357,7 @@ Before starting the pipeline, estimate total token usage for this phase. These e
 | documentation_agent | medium | ~15K | If docs policy `developer_docs` is on (off in lean) |
 
 5. Calculate total:
-   ```
+   ```text
    TOTAL_TOKENS = sum of all applicable agent estimates
 
    Example for 3-component backend-only phase:
@@ -377,7 +377,7 @@ Before starting the pipeline, estimate total token usage for this phase. These e
    ```
 
 6. Display estimate:
-   ```
+   ```text
    Phase ${PHASE} Token Estimate
    ──────────────────────────────
    Components: ${NUM_COMPONENTS} (${HAS_UI ? "full-stack" : "backend-only"})
@@ -432,7 +432,7 @@ Log when:
 When an implementation agent intentionally deviates from a spec:
 
 1. **Log the deviation** in decision-log.md:
-   ```
+   ```text
    ## Spec Deviation: <component> — <what changed>
    - **Spec says:** <original spec behavior>
    - **Implementation does:** <actual behavior>
@@ -522,7 +522,7 @@ Prevent runaway escalation loops that consume context and time:
 
 Every agent spawned during this command MUST end by returning this exact format — nothing more — to the parent conversation:
 
-```
+```text
 ✅ <agent-name> — <status: complete | blocked | partial>
    Wrote: <output file path>
    Done:  <what was implemented in one line>
@@ -530,7 +530,7 @@ Every agent spawned during this command MUST end by returning this exact format 
 ```
 
 If the agent encountered blockers, append:
-```
+```text
    Blocker: <one-line description> → see <file path> for details
 ```
 

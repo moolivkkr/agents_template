@@ -123,7 +123,7 @@ Last updated: <timestamp>
 
 ### project_planner (during /plan)
 
-```
+```text
 When planning Phase N+1:
 1. Read agent_state/patterns.md — check Index by Category for the phase's domain
 2. If Phase N+1 is a "testing" phase → load all P-* entries tagged "testing"
@@ -133,7 +133,7 @@ When planning Phase N+1:
 
 ### fix agent (during Wave 5)
 
-```
+```text
 When fixing a failure:
 1. Read agent_state/patterns.md Index by Category
 2. Search for entries matching the failure's category (e.g., "testing" for test failure)
@@ -143,7 +143,7 @@ When fixing a failure:
 
 ### backend_developer / api_developer (during Wave 2)
 
-```
+```text
 When implementing:
 1. Read agent_state/patterns.md entries tagged with the project's language (e.g., "go")
 2. Follow patterns marked as pattern_that_worked

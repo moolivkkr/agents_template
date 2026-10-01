@@ -16,7 +16,7 @@ tags:
 
 ## Component Hierarchy (Atomic Design for shadcn)
 
-```
+```text
 Primitives (from shadcn/ui — don't rebuild):
   Button, Input, Badge, Avatar, Skeleton, Separator, Label
 
@@ -34,7 +34,7 @@ Pages (route components):
 ```
 
 ## File Organization
-```
+```text
 src/components/
   ui/           → shadcn primitives (auto-generated, minimal customization)
   common/       → app-wide molecules (SearchInput, EmptyState, StatusBadge)

@@ -1,7 +1,7 @@
 # Redis patterns for caching, sessions, and ephemeral data.
 
 ## Key Naming Convention
-```
+```text
 app:entity:id         → myapp:user:uuid-here
 app:entity:field      → myapp:user:email:alice@example.com
 app:feature:id        → myapp:session:token-here

@@ -111,7 +111,7 @@ the percentage guard but still runs Rungs 1-2.
 
 ## After Rejection
 
-```
+```text
 Edit rejected at Rung <n> (<reason>).
   → Rung 1: re-read the file, re-derive a unique search block.
   → Rung 2: fix the syntax the edit introduced; re-propose.

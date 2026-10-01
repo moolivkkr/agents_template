@@ -17,7 +17,7 @@ tags:
 > Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0 (query! macros checked against this file's own migration on Postgres 17), actix-web 4.15.0, mockall 0.15.0, testcontainers-modules 0.15.0. Run (run-tests.sh): the unit and mockall tests and the testcontainers test (a real postgres:17-alpine) pass; harness tests on top show an out-of-range `limit` is a 400, the tenant comes from the verified token, the keyset cursor neither skips nor repeats rows, short stock rolls the whole order back, and a stale version is a 409.
 
 ## Project Structure
-```
+```text
 src/
   main.rs         # binary entry point
   lib.rs          # library root (if dual crate)
@@ -1213,4 +1213,4 @@ async fn main() -> anyhow::Result<()> {
 - Use `tracing` crate for structured logging (not `log` + `env_logger`)
 - Pin dependency versions in `Cargo.lock` (commit it for binaries, not for libraries)
 
-> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 SQL block parsed with libpg_query 17.7 and executed on PostgreSQL 17.11.
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 SQL block parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 4 claims in the text proven on PostgreSQL 17.11.

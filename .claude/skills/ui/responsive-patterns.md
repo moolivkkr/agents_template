@@ -18,7 +18,7 @@ tags:
 
 Build for mobile FIRST. Add complexity at larger breakpoints.
 
-```
+```text
 Base (0-639px):   Single column, full-width, stacked layout
 sm: (640px+):     Minor adjustments (2-column where appropriate)
 md: (768px+):     Sidebar appears, 2-column grids

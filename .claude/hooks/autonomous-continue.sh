@@ -54,7 +54,8 @@ if [ -n "$SESSION" ]; then
 fi
 
 # Progress fingerprint (portable: macOS bash 3.2 / BSD tools and Linux).
-mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }
+# GNU stat first: GNU `stat -f %m` prints file-system info to stdout, so a BSD-first form yields junk on Linux
+mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }
 newest_ckpt="$(ls -t "$DIR"/agent_state/phases/*/checkpoints/*.json 2>/dev/null | head -1)"
 exec_lines="$(cat "$DIR"/agent_state/phases/*/execution.jsonl 2>/dev/null | wc -l | tr -d ' ')"
 git_state="$(git -C "$DIR" rev-parse HEAD 2>/dev/null)$(git -C "$DIR" status --porcelain 2>/dev/null | wc -l | tr -d ' ')"

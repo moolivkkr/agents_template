@@ -2,7 +2,9 @@
 # archetype-config-packs-inventory.test.sh — every non-application code block (sql, sh, yaml, json,
 # dockerfile, hcl, ngql) in .claude/skills outside backend/archetypes and ui/archetypes is either
 # checked by tests/archetype-compile/config-packs/run.sh or skipped there with a reason, and no block
-# count or first line changed since units.py was written. Needs only python3; the checks themselves
+# count or first line changed since units.py was written; no skill fence lacks a language tag; and no
+# bash block in skills/commands/agents (or .claude/hooks/*.sh) uses grep -P or BSD-first stat. Needs only
+# python3; the checks themselves
 # need the tools listed in run.sh: run `bash tests/archetype-compile/config-packs/run.sh` (and --live)
 # after editing any of those blocks.
 set -uo pipefail

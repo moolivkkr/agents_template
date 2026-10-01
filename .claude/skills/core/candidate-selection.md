@@ -109,7 +109,7 @@ tests live inside the candidate's worktree.
 
 Spawn prompt skeleton (the orchestrator fills `${STRATEGY}` per candidate):
 
-```
+```text
 [GROUND TRUTH line] You are candidate implementer c${i} for Phase ${PHASE}.
 WORKING DIRECTORY: <repo>/agent_state/phases/${PHASE}/candidates/c${i}   (your OWN git worktree — commit only here)
 STARTING STRATEGY: ${STRATEGY}   (${STRATEGY_DESC})
@@ -134,7 +134,7 @@ suites are meaningfully comparable (same public interface / same TC-* IDs). A ca
 its own tests **and** its siblings' tests is more likely correct than one that only passes the tests
 it wrote to be lenient. Build the cross-test matrix:
 
-```
+```text
              tests_c1   tests_c2   tests_c3     own   cross   VOTE
 impl_c1        PASS       PASS       FAIL       ✓     1/2     ...
 impl_c2        PASS       PASS       PASS       ✓     2/2     ...

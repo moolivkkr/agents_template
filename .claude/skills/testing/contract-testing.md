@@ -19,7 +19,7 @@ Contract testing verifies that two services (consumer and provider) agree on the
 
 ## Pact Workflow
 
-```
+```text
 1. Consumer writes a test defining expected interactions
 2. Pact generates a contract file (pact.json)
 3. Contract is published to Pact Broker

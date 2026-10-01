@@ -447,7 +447,7 @@ logged server-side under the same `request_id`.
 
 ### 4.3 Middleware Chain
 
-```
+```text
 Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → Handler
 ```
 
@@ -621,7 +621,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 
 ### 7.2 Test Naming Convention
 
-```
+```text
 {{TEST_NAMING_PATTERN}}
 ```
 
@@ -851,13 +851,13 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 **Pipeline stages:**
 
-```
+```text
 {{CI_PIPELINE_STAGES}}
 ```
 
 ### 11.4 Environment Promotion
 
-```
+```text
 {{PROMOTION_FLOW}}
 ```
 
@@ -947,7 +947,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 - **Format:** {{COMMIT_FORMAT}} (e.g., Conventional Commits)
 
-```
+```text
 {{COMMIT_TEMPLATE}}
 ```
 

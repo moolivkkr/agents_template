@@ -14,7 +14,7 @@ Run implementation in the build-steps defined in `PHASE_PLAN.md`. Each build-ste
 parallel; build-steps are sequential.
 
 **Typical build-step structure:**
-```
+```text
 Build-step B1 (parallel):
   ├─ database_agent     → schema design + docs/design/database.md
   └─ migration_agent    → migration files (up + down)
@@ -53,7 +53,7 @@ and Phase N re-development tries to add the same table again.
 - Irreversible migrations explicitly acknowledged in migration metadata
 - If any CRITICAL finding: STOP — do not apply migration until resolved
 
-```
+```text
 Build-step B2a (sequential — api_developer depends on backend service interfaces):
   └─ backend_developer  → domain models, services, repositories
        ↓ writes manifest with service method return types (list/single/none)
@@ -104,7 +104,7 @@ PHASE="${PHASE}" bash -o pipefail -c "$CMD"
 5. Do **NOT** proceed to Build-step B2b (api_developer) on broken code — api_developer will build on a broken foundation
 
 **On success:**
-```
+```text
 ✅ Build-step B2a-check — Compile/Typecheck Gate PASSED
    Language: <detected language>
    Command: <command run>
@@ -143,7 +143,7 @@ Before api_developer starts:
 
 This pattern applies to ALL wave transitions where one agent depends on another's output. The **atomic write + verified ready signal** prevents race conditions where a downstream agent reads a partial or corrupt manifest.
 
-```
+```text
 Build-step B2b (depends on B2a passing build + backend_developer ready signal):
   └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
        ↓ reads data-contracts.md from /plan as MANDATORY source of truth for response shapes
@@ -172,7 +172,7 @@ Build-step B2b-check (API LAYER COMPILE CHECK — BLOCKING):
 5. Do **NOT** proceed to Build-step B2-contract/B2-smoke/B3 on broken code
 
 **On success:**
-```
+```text
 ✅ Build-step B2b-check — API Layer Compile Check PASSED
    Language: <detected language>
    Command: <command run>
@@ -184,7 +184,7 @@ Build-step B2b-check (API LAYER COMPILE CHECK — BLOCKING):
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2b-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
-```
+```text
 Build-step B2-contract (sequential gate, UI phases only):
   └─ Contract Validation → verify api-contracts.md exists, all endpoints documented, shapes are unambiguous
 
@@ -250,7 +250,7 @@ table defines for the UI). Typical rows:
 5. Do **NOT** proceed to Build-step B4 (test agents) on broken frontend code
 
 **On success:**
-```
+```text
 ✅ Build-step B3-check — Frontend Build Check PASSED
    Framework: <detected framework>
    Build command: <command run>
@@ -264,7 +264,7 @@ table defines for the UI). Typical rows:
 echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"frontend_build_check\",\"step\":\"B3-check\",\"status\":\"passed|failed\",\"framework\":\"<framework>\",\"attempt\":${ATTEMPT:-1}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
-```
+```text
 Build-step B4 (parallel — test agents read BOTH specs AND implementation code):
   ├─ unit_test_agent     → unit tests for all new code (reads actual functions, not just specs)
   └─ integration_test_agent → integration tests for service↔infra + contract shape tests

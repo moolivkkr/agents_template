@@ -20,7 +20,7 @@ inventory (TEST-02, DEV-13, TEST-17).
 
 ## TC ID format
 
-```
+```text
 TC-<CATEGORY>-<NUMBER>
 ```
 
@@ -35,7 +35,7 @@ TC-<CATEGORY>-<NUMBER>
 `/plan` runs one `spec_writer` per component in parallel, so "take the next free number" races. The
 number encodes who allocated it instead:
 
-```
+```text
 NUMBER = P·10000 + k·100 + i
   P = phase number        k = the component's position in PHASE_PLAN.md's component list (01–99;
                               00 = the phase's threat model / cross-cutting security rows)

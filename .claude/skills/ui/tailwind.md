@@ -205,7 +205,7 @@ export default {
 ```
 
 ### Shadow Hierarchy
-```
+```text
 shadow-sm   → cards, elevated surfaces
 shadow-md   → dropdowns, popovers
 shadow-lg   → modals, dialogs, sheets

@@ -22,7 +22,7 @@ tags:
 
 ## 1. Precedence order (highest wins on ANY conflict)
 
-```
+```text
 1. docs/PROJECT_FACTS.md + docs/DECISIONS.md        ← ground truth / settled decisions (always)
 2. PROJECT DESIGN SYSTEM                             ← only if the project NAMES one
      agent_registry.json → tech_profile.frontend.design_system

@@ -42,7 +42,7 @@ git revert --no-edit "${PRE_SHA}..HEAD"   # undo the optimization commits withou
 
 ### Execution — parallel backend + UI tracks
 
-```
+```text
 Step 3f (parallel):
   ├─ code_optimizer         → backend/API dead code removal + optimization
   │                           Scope: src/domain/, src/services/, src/repositories/, src/api/, src/errors/

@@ -18,7 +18,7 @@ Before writing a single requirement, research the domain so thoroughly that the 
 
 ## The Research Framework
 
-```
+```text
 Phase 1:   Market Landscape       → Who are the players? What do they offer?
 Phase 2:   Capability Matrix      → What features exist? What's the full taxonomy?
 Phase 3:   Technical Deep Dive    → How are they built? What architectures? What data?

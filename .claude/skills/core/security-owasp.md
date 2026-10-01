@@ -93,7 +93,7 @@ if len(input.Email) > 254 || !emailRegex.MatchString(input.Email) {
 
 ## Security Headers
 
-```
+```text
 Content-Security-Policy: default-src 'self'
 X-Content-Type-Options: nosniff
 X-Frame-Options: DENY

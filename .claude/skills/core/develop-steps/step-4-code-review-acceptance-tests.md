@@ -4,7 +4,7 @@
 
 Review and acceptance testing run as **two parallel tracks** — both read the same code, neither modifies it.
 
-```
+```text
 Step 4 (PARALLEL TRACKS):
   Track A: Code Review (three stages)
   Track B: Acceptance Tests (persona-based)
@@ -66,7 +66,7 @@ COMPLIANT | N deviations | N missing implementations
 
 After spec compliance passes, run ALL remaining reviews in parallel to maximize speed:
 
-```
+```text
 Stage 4b (ALL PARALLEL):
   ├─ code_reviewer_I     → style + idioms (reads language skill pack)
   ├─ code_reviewer_II    → architecture compliance (reads IMPLEMENTATION_GUIDELINES)
@@ -149,7 +149,7 @@ For EVERY API endpoint called during acceptance testing, verify:
 
 Acceptance testing is NOT read-only. Failures drive implementation fixes:
 
-```
+```text
 Cycle 1: Run all acceptance tests
   → All PASS? → proceed to gate
   → PARTIAL or FAIL? → categorize each failure:

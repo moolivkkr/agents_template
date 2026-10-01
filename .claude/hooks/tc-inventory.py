@@ -419,6 +419,10 @@ def main():
     ap.add_argument("--spec-only", action="store_true", help="just write {id: priority} for the phase")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if a.diff_base is not None and not a.diff_base.strip():
+        # "$(cat base_sha)" on a missing file: without this the weakening check was silently skipped
+        ap.error("--diff-base is empty: the test-weakening check needs the commit the phase started from "
+                 "(agent_state/phases/N/base_sha); leave the flag out only for a source-mode inventory")
     root = os.path.abspath(a.root)
     design = os.path.join(root, "docs", "design", "phases")
     phase_dir = os.path.join(design, str(a.phase))
