@@ -94,7 +94,7 @@ with trace.get_tracer("harness").start_as_current_span("OrderService.create_orde
         except OperationalError:
             pass
 sql = [sp for sp in spans.get_finished_spans() if sp.kind == SpanKind.CLIENT]
-assert len(sql) == 2, [sp.name for sp in sql]
+assert len(sql) == 2, f"expected 2 SQL spans, got {[sp.name for sp in sql]}"
 ok, failed = sql
 assert all(sp.parent is not None and sp.parent.span_id == parent.get_span_context().span_id for sp in sql)
 assert ok.name == "SELECT" and dict(ok.attributes or {}) == {

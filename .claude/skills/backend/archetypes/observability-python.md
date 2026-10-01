@@ -19,7 +19,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `core/observability-patterns.md` (Go/TypeScript). All three produce identical metric names, span naming conventions, and required log fields so dashboards and alerts work across polyglot services.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the app run through TestClient (lifespan, middleware, metrics and spans read in-process: one http.server.request.duration source, one series per route template, a server span per request, probes excluded, log redaction). opentelemetry-sdk 1.45.0 / instrumentation 0.66b0, structlog 26.1.0, prometheus-fastapi-instrumentator 8.1.0, FastAPI 0.142.2.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and the app run through TestClient (lifespan, middleware, metrics and spans read in-process: one http.server.request.duration source, one series per route template, a server span per request, probes excluded, log redaction). `sql_spans.py` run on sqlite, and with `run.sh --live` on asyncpg against PostgreSQL 16: two interleaved requests each get their own SQL child spans, no parameter values are recorded, a failing statement records SQLSTATE 42P01; a canary confirms `opentelemetry-instrumentation-sqlalchemy` 0.66b0 records nothing on SQLAlchemy 2.1.1. opentelemetry-sdk 1.45.0 / instrumentation 0.66b0, structlog 26.1.0, prometheus-fastapi-instrumentator 8.1.0, FastAPI 0.142.2.
 
 Complete observability stack for Python backend services built on FastAPI. Every generated Python service MUST follow this pattern.
 

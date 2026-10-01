@@ -17,7 +17,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/auth-middleware.md` (Go/chi). Both implement the same auth patterns: JWT validation, RBAC, tenant context, rate limiting, CORS, and request ID tracking.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, `create_app()` driven through TestClient with real PyJWT tokens, and the doc's own tests run (10 passed: wrong/missing issuer or audience → 401, settings refuse to start outside local/dev/test, rate limit: a tenant's 2nd request with burst=1 → 429 while another tenant passes). FastAPI 0.142.2, Starlette 1.7.0, PyJWT 2.15.1, pydantic-settings 2.15.0.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, `create_app()` driven through TestClient with real PyJWT tokens, and the doc's own tests run (12 passed: wrong/missing issuer or audience → 401, settings refuse to start outside local/dev/test, rate limit: a tenant's 2nd request with burst=1 → 429 while another tenant passes, the Redis limiter failing open with Redis down, `REDIS_URL` selecting it). With `run.sh --live`, `RedisTenantRateLimiter` in two uvicorn processes sharing Redis 7.4 (burst 4): 4 of 8 alternating requests and 4 of 20 concurrent ones got through, against 8 of 8 with the in-process limiter in the same two processes. FastAPI 0.142.2, Starlette 1.7.0, PyJWT 2.15.1, pydantic-settings 2.15.0, redis 8.1.0.
 
 Complete authentication and authorization middleware for FastAPI. Every generated auth layer MUST follow this pattern.
 

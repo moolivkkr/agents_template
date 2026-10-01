@@ -32,6 +32,12 @@ MUTATIONS = [
      "crud-handler-test", "exceeds-max"),
     ("new block the config doesn't know", "worker-pattern-python.md",
      "## Critical Rules", "```python\nprint('new')\n```\n\n## Critical Rules", "worker", "EXPECTED says 8"),
+    ("WebSocket Origin check removed", "websocket-pattern-python.md",
+     "    return origin is None or origin in settings.allowed_origins", "    return True",
+     "websocket", "a foreign origin's handshake was accepted"),
+    ("SQL span hook not attached", "observability-python.md",
+     '    event.listen(target, "before_cursor_execute", _start_span)', "    pass",
+     "observability", "expected 2 SQL spans"),
 ]
 
 

@@ -16,7 +16,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, the ticket + WebSocket flow driven through TestClient and a real uvicorn server with a `websockets` 17.1 client (bad ticket → close 4001, cross-tenant room → FORBIDDEN), the Channels consumer run with WebsocketCommunicator, and RedisTicketStore run on Redis 7 (`run.sh --live`). FastAPI 0.142.2, uvicorn 0.54.0, channels 4.3.2, Django 6.1.1, redis 8.1.0.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, the ticket + WebSocket flow driven through TestClient and a real uvicorn server with a `websockets` 17.1 client (bad ticket → close 4001, cross-tenant room → FORBIDDEN, a foreign `Origin` refused before accept: HTTP 403 from uvicorn), the Channels application (`BrowserOriginValidator` + consumer) run with WebsocketCommunicator, and `RedisTicketStore` and `myapp/tickets.py` run on Redis 7 (`run.sh --live`: single use, racing redemptions, TTL and expiry, a real ticket through the Channels application). FastAPI 0.142.2, uvicorn 0.54.0, channels 4.3.2, Django 6.1.1, redis 8.1.0.
 
 Python WebSocket servers use FastAPI's built-in WebSocket support (backed by Starlette/uvicorn) or Django Channels for Django projects.
 
