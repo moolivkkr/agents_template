@@ -8,8 +8,11 @@ configMapGenerator:
 - name: app-config
   literals: [APP_ENV=qa]
 secretGenerator:
+# One secret, three Postgres roles (DB_SUPERUSER_*, DB_MIGRATOR_*, DB_APP_* user/password pairs); each
+# workload reads only its own role's keys. secrets.env is gitignored; scripts/k8s/deploy.sh creates it,
+# recovers it from the namespace on a fresh checkout, or upgrades the old DB_USER/DB_PASSWORD layout.
 - name: db-credentials
-  envs: [secrets.env]          # gitignored; created by scripts/k8s/deploy.sh if missing
+  envs: [secrets.env]
 replicas:
 - {name: api, count: 2}
 patches:

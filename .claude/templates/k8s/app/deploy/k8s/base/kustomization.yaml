@@ -9,3 +9,10 @@ resources:
 - api.yaml
 - jobs.yaml
 - ingress.yaml
+configMapGenerator:
+# db-roles.sh: Postgres runs it from /docker-entrypoint-initdb.d on an empty volume, the db-roles Job on
+# every deploy. No hash suffix: editing the script must not restart Postgres (it only matters at initdb,
+# and the Job mounts the current version each run).
+- name: db-roles
+  files: [db-roles.sh]
+  options: {disableNameSuffixHash: true}
