@@ -54,9 +54,10 @@ EXPECTED = {
     "core/change-impact-analysis.md": {"json": 1, "sh": 4},
     "core/code-quality.md": {"sh": 1},
     "core/commands-and-versions.md": {"sh": 1},
-    "core/debate-protocol.md": {"json": 1},
+    "core/child-returns.md": {"sh": 1},
+    "core/debate-protocol.md": {"json": 3, "sh": 1},
     "core/develop-steps/step-0-5-implementation-readiness-gate.md": {"sh": 1},
-    "core/develop-steps/step-0-orient.md": {"json": 3, "sh": 12},
+    "core/develop-steps/step-0-orient.md": {"json": 2, "sh": 12},
     "core/develop-steps/step-2-5-api-contract-validation.md": {"sh": 1},
     "core/develop-steps/step-2-implementation.md": {"sh": 6},
     "core/develop-steps/step-3-tests.md": {"json": 2},
@@ -120,6 +121,7 @@ EXPECTED = {
     "ui/shadcn.md": {"sh": 1},
     "ui/stitch-design.md": {"json": 1},
     "ui/structured-wireframe-format.md": {"yaml": 6},
+    "review/board-review/protocol.md": {"json": 2},
 }
 
 # shared shellcheck exclusions (each block opts in by name; the reason travels with it)
@@ -184,6 +186,14 @@ BLOCKS = {
     "core/commands-and-versions.md#sh1": dict(anchor='python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json', check="sh"),
     # ── core/debate-protocol.md
     "core/debate-protocol.md#json1": dict(anchor='{', check="json"),
+    "core/debate-protocol.md#json2": dict(anchor='{', check="json"),
+    "core/debate-protocol.md#json3": dict(anchor='{ "decisions": [', check="json"),
+    "core/debate-protocol.md#sh1": dict(anchor='python3 .claude/hooks/debate-status.py --phase N   # every topic, its status, and why it needs review', check="sh"),
+    # ── review/board-review/protocol.md
+    "review/board-review/protocol.md#json1": dict(anchor='{', check="json"),
+    "review/board-review/protocol.md#json2": dict(anchor='{', check="json"),
+    # ── core/child-returns.md
+    "core/child-returns.md#sh1": dict(anchor='python3 .claude/hooks/debate-status.py --phase "${PHASE}" --check', check="sh", sc_exclude=FRAGMENT_VARS),
     # ── core/dual-ledger-replan.md
     "core/dual-ledger-replan.md#json1": dict(anchor='{', check="json"),
     # ── core/edit-validation.md
@@ -378,10 +388,9 @@ BLOCKS = {
     "core/develop-steps/step-0-orient.md#sh11": dict(anchor='# Bring up local dev stack from IMPLEMENTATION_GUIDELINES Section 5', check="sh"),
     "core/develop-steps/step-0-orient.md#sh12": dict(anchor='echo "{\\"ts\\":\\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\\",\\"event\\":\\"estimate\\",\\"phase\\":${PHASE},\\"estimated_tokens\\":${TOTAL_TOKENS},\\"components\\":${NUM_COMPONENTS},\\"has_ui\\":${HAS_UI}}" >> "agent_state/phases/${PHASE}/execution.jsonl"',
                                                      check="sh", sc_exclude={"SC2154": FRAGMENT_VARS["SC2154"]}),
-    "core/develop-steps/step-0-orient.md#json1": dict(anchor='{ "type": "escalation", "impact": "LOW", "recommendation": "A", "continueWithDefault": true }', check="json"),
-    "core/develop-steps/step-0-orient.md#json2": dict(anchor='{', check="json"),
-    "core/develop-steps/step-0-orient.md#json3": dict(anchor='// agent_state/debates/unresolved.json', check="json", mode="jsonc",
-                                                      subst=[('"phase": N,', '"phase": 1,')]),
+    "core/develop-steps/step-0-orient.md#json1": dict(anchor='{', check="json", subst=[('"phase": <N>,', '"phase": 1,')]),
+    "core/develop-steps/step-0-orient.md#json2": dict(anchor='// agent_state/debates/unresolved.json: defaults applied without a debate (counted as resolved by',
+                                                      check="json", mode="jsonc", subst=[('"phase": N,', '"phase": 1,')]),
     # ── core/develop-steps/step-2-5-api-contract-validation.md
     "core/develop-steps/step-2-5-api-contract-validation.md#sh1": dict(anchor='CONTRACT_FILE="docs/design/phases/${PHASE}/specs/api-contracts.md"', check="sh",
                                                                        sc_exclude=FRAGMENT_VARS),
@@ -758,8 +767,8 @@ SNIPPETS = [
     dict(name="health: codebase map mtime", file="commands/health.md", contains='MAP_MTIME=$(stat -c %Y "$CODEBASE_DIR/.last-mapped"',
          setup="mkdir -p cb && touch cb/.last-mapped", env={"CODEBASE_DIR": "cb"}, post='echo "M=$MAP_MTIME"', same_shell=True,
          expect=[r"^M=[0-9]{9,}$"]),
-    dict(name="health: debate mtime", file="commands/health.md", contains='DEBATE_MTIME=$(stat -c %Y "$debate"',
-         setup="touch d.json", env={"debate": "d.json"}, post='echo "M=$DEBATE_MTIME"', same_shell=True, expect=[r"^M=[0-9]{9,}$"]),
+    # ("health: debate mtime" retired: /health 5.5d reads debates through debate-status.py, with a Python
+    #  os.path.getmtime instead of stat, since the 2026-09-30 debate review.)
     dict(name="forensics: phase of the latest gate.failed", file="commands/forensics.md", contains='PHASE=$(echo "$LATEST_FAILED"',
          env={"LATEST_FAILED": "agent_state/phases/7/gate.failed"}, post='echo "PHASE=$PHASE"', same_shell=True, expect=[r"^PHASE=7$"]),
     dict(name="pause: last passed phase", file="commands/pause.md", contains="LAST_PASSED=$(ls agent_state/phases/*/gate.passed",

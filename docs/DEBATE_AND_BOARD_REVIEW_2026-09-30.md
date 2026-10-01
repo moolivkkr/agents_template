@@ -350,3 +350,75 @@ quality matters more than speed for these reviews.
 | P2 | D8.4–D8.6: scale anchors, a Fable second opinion for close HIGH calls, decisive claims re-checked at source | small |
 | P2 | B1–B4: `/board-review` command, saved hat checklists, findings format, Fable verifiers, blind severity | medium |
 | P2 | D5, D11, B6: drop minute budgets, wording, current-year searches, resume on early hand-back | small |
+
+---
+
+## Implementation status (2026-09-30, same day)
+
+Every finding above is done. The board review was then used on the debate agents themselves, twice,
+and fixed until no verified HIGH finding was left open.
+
+| # | Status | Where |
+|---|---|---|
+| D1, D2 | **Done.** One naming contract, joined on the topic slug. `debate-status.py` is the only reader and classifies files by content, so legacy names are still found. `verify-gate.sh` check (f) blocks on a pending, invalid or stale debate, an unpromoted verdict, or a missing second opinion. Security debates count as security findings at a forced gate. | `bc62da0`, `6efcb31`, `e44c949` |
+| D3 | **Done.** Children are spawned in one message and waited for. The moderator acts on every child's first line, re-spawns a progress note at most twice, and returns BLOCKED when it lacks the Agent tool. `child-returns.md` covers fork mode, checked against the Claude Code docs. | `b3d1b46`, `699ac73`, `e44c949` |
+| D4 | **Done.** `NEEDS_DECISION <topic>` is part of the operating contract, which is synced into all 79 agents. Every command that spawns agents (24) follows `child-returns.md`. `/plan`, `/discuss` and `/design` decide their debates before they finish, and `/develop` checks again before Wave 2. The project settings set `CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2`. | `55a3bad`, `699ac73`, `e44c949` |
+| D5 | **Done.** No minute budgets and no first-option fallback. The limits are countable, including concurrency. | `b3d1b46`, `699ac73` |
+| D6 | **Done.** The arbitrator is the only writer of `sdlc.debate-verdict/v1`. `debate-status.py` recomputes totals, gap and confidence from the scores and the domain's weights, and binds the verdict to its request through `request_sha`. | `b3d1b46`, `6efcb31` |
+| D7 | **Done.** One tie chain, ending in INCOMPLETE. Under `/autonomous`, a security debate that needs a person stops the run, and the other review reasons go to `auto-resolved.jsonl`. | `699ac73`, `e44c949` |
+| D8 | **Done.** Each domain has its own rubric, weighted to 100. Security posture carries 35 in the security rubric, and every criterion has 2/5/8 anchors. Advocates don't score. The presentation order is randomized and scored one criterion at a time. The decisive claim is re-checked at its source, with a quote. A close HIGH call gets a Fable second opinion in reverse order, which never sees the first judgment, and its D-NNN is recorded only afterwards. | `b3d1b46`, `699ac73`, `e44c949` |
+| D9 | **Done.** Missing data and ambiguity return `NEEDS_INPUT`. Under `--auto`, a default is recorded with `needs_input`. | `b3d1b46` |
+| D10 | **Done, baseline pending.** `T-007-debate` has five seeded debates: the right verdict, position consistency with pinned orders, the hardened security default, a close call with its second opinion, and missing data → `NEEDS_INPUT`. Its rubric was checked against a correct (8/8) and a biased synthetic outcome. **Its baseline hasn't been measured:** run `/eval --baseline` three times. | `37e9aa8`, `699ac73`, `e44c949` |
+| D11 | **Done.** Wording, and current-year searches, in the researcher and both research packs. | `b3d1b46`, `699ac73` |
+| B1 | **Done.** `/board-review <group\|glob>`. The protocol, seven hat checklists (the original six plus an AI-engineer hat) and a verifier checklist are saved in `skills/review/board-review/`. `board-review.py` resolves targets, checks every citation against a real line, blinds and samples verification, merges, scores and compares. | `f928604` |
+| B2 | **Done.** Hats report every finding with its severity, and verification does the filtering. | `f928604` |
+| B3 | **Done.** Verifiers run on `model: fable` (sanctioned in `model-routing.md`), with per-verifier statistics and a warning when a verifier changed nothing. | `f928604`, `699ac73` |
+| B4 | **Done.** Verifier inputs have the severity removed and are shuffled. They include a deterministic sample of MEDIUM/LOW findings, plus the other verifiers' findings for marking duplicates. Every verdict needs a note. | `f928604`, `699ac73` |
+| B5 | **Done (tooling).** Target groups: `coding-testing`, `debate`, `requirements`, `reconcile`, `planning`, `review`, `ops`, `all`. Only `debate` has been run. | `f928604` |
+| B6 | **Done.** The orchestrator checks each child's first line and re-spawns at most twice. The operating contract has "finish in this run". | `f928604`, `5a4f8ba` |
+
+### The board review, used on the debate agents
+
+Two runs, each with the ai_engineer, architect and tester hats, and Fable verifiers:
+
+| Run | Commit | Findings after verification | HIGH | moderator | arbitrator | advocate | researcher |
+|---|---|---|---|---|---|---|---|
+| [round 1](board-review-2026-09-30-debate/README.md) | `77f221c` | 85 | 13 | 2.0 | 2.0 | 2.67 | 2.67 |
+| [round 2](board-review-2026-09-30-debate-2/README.md) | `95fb871` | 94 | 9 | 2.0 | 2.33 | 3.33 | 3.33 |
+
+- **What the runs found:**
+  - Round 1 found that `debate-status.py` trusted what a verdict said about itself, and that the
+    second opinion could read the first judgment.
+  - Round 2 found the seam between those fixes: the prompts read `problems` and the gate read
+    `gate`. It also found ledger and override gaps.
+- **Every verified HIGH finding from both rounds is fixed** (`6efcb31`, `699ac73`, `e44c949`). Each has
+  a test that fails on the code before its fix.
+- **Verification refuted nothing in either round.** It narrowed 16 findings, moved 27 severities
+  (including all three round-1 CRITICALs, down to HIGH), and folded duplicates across verifiers. The
+  counts above include findings nobody sampled, rated at the hat's severity (marked `*` in each
+  scorecard).
+- **The next run** should check the round-2 fixes: `/board-review debate --compare
+  docs/board-review-2026-09-30-debate-2/merged.json`.
+
+### Still open (verified MEDIUM in round 2, not yet fixed)
+
+- **AI-03:** a mis-copied `REQUEST_SHA` shows up as "stale" only after the debate.
+- **AI-12:** projects whose `.claude/settings.json` predates the depth cap don't get it. Wave 0c
+  could check `env` and warn.
+- **AI-29:** reopening a decision recorded under another topic doesn't reverse it.
+- **ARCH-05, ARCH-08:** files and overrides left from an earlier round of the same topic are still
+  read.
+- **ARCH-07, ARCH-33:** "one active decision per topic" still depends on writers passing
+  `--reverses` across topics. Re-running post-gate 4c can't tell which defaults already have a
+  D-NNN.
+- **ARCH-11:** the arbitrator's advocate-gap rule and the checker's artifact rule disagree in one
+  case.
+- **ARCH-16:** step-3/4 verdicts go to test agents that may not edit product code. The parent should
+  route them to the owning role.
+- **ARCH-24:** a HIGH call the second opinion disagreed with gets no `[provisional]` title.
+- **TEST-16:** an FR or PROJECT_FACTS change doesn't make a verdict that relied on it stale.
+- **TEST-22:** advocate self-scores aren't rejected by the gate, only by the eval.
+- **TEST-28:** T-007's position check can't fail when a MUST requirement decides the call. It needs a
+  case the bias could flip.
+- **TEST-35:** the promote step could rewrite the verdict. Nothing records the verdict's hash between
+  the steps.
