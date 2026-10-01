@@ -34,6 +34,8 @@ TODOs are NOT universally banned. The rule depends on where and why:
 
 In production source code (handlers, services, repositories, domain models, middleware, CLI entry points), **TODOs are never acceptable**. Every behavior described in the spec must be fully implemented, not deferred. A TODO in implementation code means the feature is incomplete.
 
+> Go samples: the complete examples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh); BAD/GOOD sketches with elided bodies, signature lists and naming lists are not compiled (each is listed with its reason in units.json).
+
 ```go
 // BAD — left behind after development
 // TODO: implement this later
@@ -42,7 +44,7 @@ func ProcessOrder(ctx context.Context, order Order) error {
 }
 
 // GOOD — fully implemented or explicitly errored
-func ProcessOrder(ctx context.Context, order *Order) error {
+func (s *OrderService) ProcessOrder(ctx context.Context, order *Order) error {
     if order == nil {
         return ErrNilOrder
     }
@@ -100,7 +102,7 @@ func CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) {
 }
 
 // GOOD — decomposed into focused helpers
-func CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) {
+func (s *UserService) CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) {
     if err := validateCreateUserRequest(req); err != nil {
         return nil, err
     }

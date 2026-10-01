@@ -30,12 +30,21 @@
 
 **Layer 1 — Application-Level Filtering (PRIMARY):**
 Every repository query MUST include `WHERE tenant_id = $1`:
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, x/time v0.16.0 (tests/archetype-compile/go/run.sh).
+
 ```go
 // Go example
 func (r *Repository) List(ctx context.Context) ([]*Resource, error) {
-    tenantID := tenant.IDFromContext(ctx)
-    query := `SELECT * FROM resources WHERE tenant_id = $1 AND deleted_at IS NULL`
-    return r.pool.Query(ctx, query, tenantID)
+    tenantID, err := middleware.TenantIDFromContext(ctx) // the verified token's tenant (auth-middleware-go.md)
+    if err != nil {
+        return nil, err
+    }
+    query := `SELECT id, tenant_id, name FROM resources WHERE tenant_id = $1 AND deleted_at IS NULL`
+    rows, err := r.pool.Query(ctx, query, tenantID)
+    if err != nil {
+        return nil, err
+    }
+    return pgx.CollectRows(rows, pgx.RowToAddrOfStructByName[Resource])
 }
 ```
 ```typescript
@@ -78,13 +87,13 @@ and applies to the **next request** that borrows it. Set the context inside each
 ```go
 // The middleware only puts the VERIFIED tenant (from the token, never a request header) in the context.
 func (r *Repo) WithTenantTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
-    tenantID, ok := auth.TenantID(ctx)
-    if !ok {
+    tenantID, err := middleware.TenantIDFromContext(ctx) // auth-middleware-go.md
+    if err != nil {
         return apperr.NewUnauthenticatedError()
     }
     return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
         // set_config(name, value, is_local=true) is the parameterisable, transaction-scoped form of SET LOCAL
-        if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID); err != nil {
+        if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
             return err
         }
         return fn(tx) // every query in fn runs under RLS for this tenant; the setting ends with the tx
@@ -118,7 +127,7 @@ type TenantRateLimiter struct {
 func (l *TenantRateLimiter) Allow(tenantID string, tier string) bool {
     limit := tierLimits[tier] // e.g., free=60/min, pro=600/min, enterprise=6000/min
     limiter, _ := l.limiters.LoadOrStore(tenantID,
-        rate.NewLimiter(rate.Limit(limit/60), limit))
+        rate.NewLimiter(rate.Limit(float64(limit)/60), limit)) // per second; float: 30/min is 0.5/s, not 0
     return limiter.(*rate.Limiter).Allow()
 }
 
@@ -148,6 +157,7 @@ type TenantDBRouter struct {
     dedicatedPools map[string]*pgxpool.Pool   // tenant_id → dedicated pool
     mu             sync.RWMutex              // Protects dedicatedPools map
     tenantSvc      TenantService
+    secrets        SecretStore               // per-tenant DB credentials (infrastructure/secrets-management.md)
 }
 
 func (r *TenantDBRouter) GetPool(ctx context.Context, tenantID string) (*pgxpool.Pool, error) {
@@ -176,8 +186,16 @@ func (r *TenantDBRouter) GetPool(ctx context.Context, tenantID string) (*pgxpool
         return pool, nil // Another goroutine created it
     }
 
-    dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s",
-        tenant.DBUser, tenant.DBPass, *tenant.DBHost, 5432, *tenant.DBName)
+    creds, err := r.secrets.DBCredentials(ctx, tenantID) // from the secrets manager, never the tenants table
+    if err != nil {
+        return nil, fmt.Errorf("dedicated db credentials for %s: %w", tenantID, err)
+    }
+    dsn := (&url.URL{ // url.URL escapes the user and password; Sprintf does not
+        Scheme: "postgres",
+        User:   url.UserPassword(creds.User, creds.Password),
+        Host:   net.JoinHostPort(*tenant.DBHost, "5432"),
+        Path:   "/" + *tenant.DBName,
+    }).String()
     pool, err := pgxpool.New(ctx, dsn) // MaxConns from the dedicated DB's own budget (pool_max_conns in the DSN)
     if err != nil {
         return nil, fmt.Errorf("dedicated pool for %s: %w", tenantID, err)

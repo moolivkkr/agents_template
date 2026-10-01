@@ -1,15 +1,20 @@
 # Gin framework patterns for Go HTTP APIs.
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, gin v1.12.0, and run: a smoke test drives the router (panic → INTERNAL envelope, validation and malformed body → 400, created → envelope with request_id) (tests/archetype-compile/go/run.sh).
+
 ## Router Setup
 ```go
 func NewRouter(handlers *Handlers, middleware *Middleware) *gin.Engine {
     r := gin.New()
-    r.Use(gin.Recovery())
+    r.Use(middleware.RequestID()) // validated X-Request-ID or a new one, echoed as X-Request-Id
+    r.Use(gin.CustomRecovery(func(c *gin.Context, rec any) {
+        // the INTERNAL error envelope; gin.Recovery() sends an empty 500
+        apperr.ErrorMapper(c.Writer, c.Request, fmt.Errorf("panic: %v", rec))
+    }))
     r.Use(middleware.Logger())
-    r.Use(middleware.RequestID())
 
     v1 := r.Group("/api/v1")
-    v1.Use(middleware.Auth())
+    v1.Use(middleware.Auth()) // tenant and user from the verified token only
     {
         users := v1.Group("/users")
         users.GET("", handlers.ListUsers)
@@ -28,10 +33,30 @@ func NewRouter(handlers *Handlers, middleware *Middleware) *gin.Engine {
 func (h *Handler) CreateUser(c *gin.Context) {
     var req CreateUserRequest
     if err := c.ShouldBindJSON(&req); err != nil {
-        c.JSON(http.StatusBadRequest, ErrorResponse{Error: err.Error()})
+        // the one error envelope; the binder's text (Go types, field paths) is never sent
+        apperr.ErrorMapper(c.Writer, c.Request, bindError(err))
         return
     }
-    // call service
+    user, err := h.service.Create(c.Request.Context(), req)
+    if err != nil {
+        apperr.ErrorMapper(c.Writer, c.Request, err)
+        return
+    }
+    Created(c, user)
+}
+
+// bindError: a validation failure is VALIDATION_FAILED with one detail per field (the field's json
+// name once the validator has a tag-name func); anything else is MALFORMED_REQUEST.
+func bindError(err error) error {
+    var verrs validator.ValidationErrors
+    if !errors.As(err, &verrs) {
+        return apperr.NewMalformedRequestError(err)
+    }
+    fields := make([]apperr.FieldError, 0, len(verrs))
+    for _, fe := range verrs {
+        fields = append(fields, apperr.FieldError{Field: fe.Field(), Code: fe.Tag(), Message: "This value is not valid."})
+    }
+    return apperr.NewMultiValidationError(fields)
 }
 ```
 - `ShouldBindJSON` (not `BindJSON`) — doesn't abort on error, lets you handle it
@@ -40,26 +65,27 @@ func (h *Handler) CreateUser(c *gin.Context) {
 
 ## Response Helpers
 ```go
+// The one envelope (api/response-envelope.md). Errors: apperr.ErrorMapper(c.Writer, c.Request, err).
 func Success(c *gin.Context, data any) {
-    c.JSON(http.StatusOK, gin.H{"data": data})
+    c.JSON(http.StatusOK, gin.H{"data": data, "meta": meta(c)})
 }
 func Created(c *gin.Context, data any) {
-    c.JSON(http.StatusCreated, gin.H{"data": data})
+    c.JSON(http.StatusCreated, gin.H{"data": data, "meta": meta(c)})
 }
-func ErrorJSON(c *gin.Context, status int, msg string) {
-    c.JSON(status, gin.H{"error": msg})
+func meta(c *gin.Context) gin.H {
+    return gin.H{"request_id": c.Writer.Header().Get("X-Request-Id")} // set by the RequestID middleware
 }
 ```
 Define project-wide response helpers — consistent response shape across all endpoints.
 
 ## Error Middleware
 ```go
+// ErrorHandler writes the error envelope for an error a handler recorded with c.Error(err).
 func ErrorHandler() gin.HandlerFunc {
     return func(c *gin.Context) {
         c.Next()
-        if len(c.Errors) > 0 {
-            err := c.Errors.Last()
-            // map domain error → HTTP status
+        if len(c.Errors) > 0 && !c.Writer.Written() {
+            apperr.ErrorMapper(c.Writer, c.Request, c.Errors.Last().Err) // domain error → status + envelope
         }
     }
 }
@@ -67,15 +93,22 @@ func ErrorHandler() gin.HandlerFunc {
 
 ## Graceful Shutdown
 ```go
-srv := &http.Server{Addr: ":8080", Handler: router}
-go srv.ListenAndServe()
+func serve(router http.Handler) error {
+    srv := &http.Server{Addr: ":8080", Handler: router, ReadHeaderTimeout: 5 * time.Second}
+    errc := make(chan error, 1)
+    go func() { errc <- srv.ListenAndServe() }()
 
-quit := make(chan os.Signal, 1)
-signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-<-quit
-ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-defer cancel()
-srv.Shutdown(ctx)
+    ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    defer stop()
+    select {
+    case err := <-errc:
+        return err // could not listen (port in use, ...)
+    case <-ctx.Done():
+    }
+    shutdownCtx, cancel := context.WithTimeout(context.Background(), 25*time.Second) // inside the pod's grace period
+    defer cancel()
+    return srv.Shutdown(shutdownCtx) // stop accepting; wait for in-flight requests
+}
 ```
 
 ## Rules

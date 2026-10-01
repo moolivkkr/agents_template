@@ -17,6 +17,8 @@ deleted_at  timestamptz  -- soft delete (nullable)
 - Use trigger or application code to set `updated_at` on every UPDATE
 
 ## Connection Pooling
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0 (tests/archetype-compile/go/run.sh).
+
 ```go
 // pgxpool (Go) — sized from the connection-pool budget, not a constant
 config, err := pgxpool.ParseConfig(connStr)
@@ -90,8 +92,11 @@ CREATE POLICY tenant_isolation ON certificates
   USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
 ```
 ```go
-// Set RLS context before every query
-tx.Exec(ctx, "SET LOCAL app.current_tenant_id = $1", tenantID)
+// Set RLS context before every query, inside the transaction. SET LOCAL cannot take a bind parameter
+// ("SET LOCAL ... = $1" is a syntax error); set_config(..., true) is its transaction-local form.
+if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID); err != nil {
+    return fmt.Errorf("set tenant context: %w", err)
+}
 ```
 - RLS is defense-in-depth — always ALSO use explicit `WHERE tenant_id = $1`
 - `SET LOCAL` scopes to current transaction only

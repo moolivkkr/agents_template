@@ -52,6 +52,8 @@ env:
     valueFrom:
       secretKeyRef: { name: api-db, key: password }   # populated by External Secrets Operator
 ```
+> Go sample compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh).
+
 ```go
 // App: read from env (populated at boot) or fetch directly from the manager with the pod's IAM role.
 dsn := mustGetSecret(ctx, "prod/api/database")   // AWS/GCP SDK call, uses instance identity — no static key

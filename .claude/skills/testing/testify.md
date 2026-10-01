@@ -1,5 +1,7 @@
 # testify patterns for Go testing.
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testify v1.12.1 (tests/archetype-compile/go/run.sh).
+
 ## Assert vs Require
 ```go
 // require — stops test immediately on failure (use for setup/preconditions)
@@ -46,12 +48,12 @@ type ServiceTestSuite struct {
 }
 
 func (s *ServiceTestSuite) SetupSuite() {
-    s.db = testutil.NewTestDB(s.T())
+    s.db = testutil.NewTestDB(s.T()) // testing/testcontainers.md: closes itself via t.Cleanup
     s.svc = NewCertService(s.db)
 }
 
 func (s *ServiceTestSuite) TestCreate() {
-    cert, err := s.svc.Create(ctx, req)
+    cert, err := s.svc.Create(s.T().Context(), CreateCertRequest{CommonName: "api.example.com"})
     s.Require().NoError(err)
     s.Assert().Equal("active", cert.Status)
 }
@@ -74,13 +76,21 @@ assert.NoError(t, err)                          // no error expected
 ## HTTP Handler Testing
 ```go
 func TestHandler(t *testing.T) {
+    handler := newTestRouter(t) // the app's router wired with test doubles
     req := httptest.NewRequest("GET", "/api/v1/certs", nil)
+    req.Header.Set("Authorization", "Bearer "+testToken(t)) // the API routes are behind JWTAuth
     rec := httptest.NewRecorder()
     handler.ServeHTTP(rec, req)
 
     assert.Equal(t, http.StatusOK, rec.Code)
-    var resp ApiResponse
+    var resp struct { // the one envelope (api/response-envelope.md)
+        Data []json.RawMessage `json:"data"`
+        Meta struct {
+            RequestID string `json:"request_id"`
+        } `json:"meta"`
+    }
     require.NoError(t, json.NewDecoder(rec.Body).Decode(&resp))
-    assert.NotNil(t, resp.Data)
+    assert.NotNil(t, resp.Data) // a list is always an array: [] when empty, never null
+    assert.Equal(t, rec.Header().Get("X-Request-Id"), resp.Meta.RequestID)
 }
 ```

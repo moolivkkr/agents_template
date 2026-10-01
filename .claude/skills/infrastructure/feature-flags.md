@@ -13,6 +13,8 @@ tags:
 
 # Feature flags — decouple deploy from release, and keep the flag set from becoming a swamp.
 
+> Go sample compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh).
+
 A feature flag lets code ship dark and turn on independently of the deploy. That power comes with a debt:
 every flag is a branch in production. The discipline is knowing **which kind of flag you have**, because
 each type has a different lifetime and cleanup rule.

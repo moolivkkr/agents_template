@@ -78,19 +78,41 @@ For each model/entity in the spec:
 ```
 
 **How to verify:**
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testify v1.12.1 (tests/archetype-compile/go/run.sh); the FAILS/PASSES pair that declares one method twice is not compiled.
+
 ```go
 // Compare struct fields to migration columns
 // In tests:
 func TestUserModelMatchesMigration(t *testing.T) {
     // Query information_schema for table columns
-    rows, _ := db.Query(`
-        SELECT column_name, data_type, is_nullable
+    rows, err := db.Query(`
+        SELECT column_name
         FROM information_schema.columns
         WHERE table_name = 'users'
         ORDER BY ordinal_position
     `)
-    // Compare against struct fields
-    // Flag any mismatches
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer rows.Close()
+    columns := map[string]bool{}
+    for rows.Next() {
+        var name string
+        if err := rows.Scan(&name); err != nil {
+            t.Fatal(err)
+        }
+        columns[name] = true
+    }
+    if err := rows.Err(); err != nil {
+        t.Fatal(err)
+    }
+    // Compare against struct fields: every `db` tag must be a migrated column
+    typ := reflect.TypeOf(User{})
+    for i := 0; i < typ.NumField(); i++ {
+        if col := typ.Field(i).Tag.Get("db"); col != "" && !columns[col] {
+            t.Errorf("User.%s maps to column %q, which no migration creates", typ.Field(i).Name, col)
+        }
+    }
 }
 ```
 
@@ -270,12 +292,13 @@ func TestServerWiring(t *testing.T) {
         want   int // expected status (or range)
     }{
         {"GET", "/api/v1/users", 200},
-        {"POST", "/api/v1/users", 422}, // missing body = validation error, not 500
-        {"GET", "/api/v1/users/nonexistent", 404},
+        {"POST", "/api/v1/users", 400},              // missing body = MALFORMED_REQUEST, not 500
+        {"GET", "/api/v1/users/" + uuid.NewString(), 404}, // well-formed unknown id ("nonexistent" is a 400)
     }
     for _, ep := range endpoints {
         t.Run(ep.method+" "+ep.path, func(t *testing.T) {
             req := httptest.NewRequest(ep.method, ep.path, nil)
+            req.Header.Set("Authorization", "Bearer "+testToken(t, cfg)) // signed with the test key
             rec := httptest.NewRecorder()
             router.ServeHTTP(rec, req)
             assert.Equal(t, ep.want, rec.Code, "unexpected status for %s %s", ep.method, ep.path)
@@ -312,7 +335,7 @@ func TestUserDataFlow(t *testing.T) {
     assert.Equal(t, 201, createResp.StatusCode)
 
     var created struct{ Data User }
-    json.NewDecoder(createResp.Body).Decode(&created)
+    require.NoError(t, json.NewDecoder(createResp.Body).Decode(&created))
     userID := created.Data.ID
     assert.NotEmpty(t, userID)
 
@@ -321,7 +344,7 @@ func TestUserDataFlow(t *testing.T) {
     assert.Equal(t, 200, getResp.StatusCode)
 
     var fetched struct{ Data User }
-    json.NewDecoder(getResp.Body).Decode(&fetched)
+    require.NoError(t, json.NewDecoder(getResp.Body).Decode(&fetched))
     assert.Equal(t, "test@example.com", fetched.Data.Email)
     assert.Equal(t, "Test", fetched.Data.Name)
 
@@ -331,13 +354,13 @@ func TestUserDataFlow(t *testing.T) {
 
     getResp2 := httpGet(t, "/api/v1/users/"+userID)
     var updated struct{ Data User }
-    json.NewDecoder(getResp2.Body).Decode(&updated)
+    require.NoError(t, json.NewDecoder(getResp2.Body).Decode(&updated))
     assert.Equal(t, "Updated", updated.Data.Name)
 
     // 4. List — verify appears in collection
     listResp := httpGet(t, "/api/v1/users")
     var list struct{ Data []User; Meta ListMeta }
-    json.NewDecoder(listResp.Body).Decode(&list)
+    require.NoError(t, json.NewDecoder(listResp.Body).Decode(&list))
     assert.True(t, containsID(list.Data, userID))
 
     // 5. Delete — verify removal

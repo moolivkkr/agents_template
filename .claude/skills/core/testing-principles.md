@@ -74,6 +74,8 @@ test_process_payment_when_card_declined_retries_once
 - Never rely on test execution order
 - Use dependency injection to make units testable without real infrastructure
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testify v1.12.1 (tests/archetype-compile/go/run.sh).
+
 ```go
 // Inject dependencies to enable mocking
 type OrderService struct {

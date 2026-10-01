@@ -1,19 +1,23 @@
-"""Extract fenced code blocks from the archetype markdown files.
+"""Extract fenced code blocks from the skill markdown files.
 
-A block is a fence that opens at column 0 with ```<lang> and closes at the next line that is exactly
-``` (column 0). Every Go block is numbered per file, 1-based, in document order; the number and the
-nearest preceding markdown heading identify it in units.json.
+A fence opens with 3+ backticks (indented by at most 3 spaces, as in CommonMark — e.g. inside a list
+item) followed by the language, and closes at the next line made only of at least as many backticks.
+Every block of the requested language is numbered per file, 1-based, in document order; the number
+and the nearest preceding markdown heading identify it in units.json. An indented block's
+indentation is removed. An unterminated fence of the requested language is an error; one of
+another language (a stray closing fence at the end of a doc) ends the scan.
 """
 import os
 import re
 
 HEADING_RE = re.compile(r"^#{1,6}\s+(.*?)\s*$")
 PACKAGE_RE = re.compile(r"^package\s+(\w+)\s*(//.*)?$", re.M)
+FENCE_RE = re.compile(r"^( {0,3})(`{3,})\s*([^`\s]*)[^`]*$")
 
 
 class Block:
     def __init__(self, md, index, lang, first_line, heading, text):
-        self.md = md                  # file name, e.g. "crud-handler-go.md"
+        self.md = md                  # file name relative to the scanned root, e.g. "crud-handler-go.md"
         self.index = index            # 1-based among blocks of this language in the file
         self.lang = lang
         self.first_line = first_line  # 1-based markdown line of the first code line
@@ -35,9 +39,10 @@ class Block:
         return f"{self.md}#{self.index}"
 
 
-def blocks(path, lang="go"):
-    """Return the `lang` blocks of one markdown file, in order."""
-    name = os.path.basename(path)
+def blocks(path, lang="go", name=None):
+    """Return the `lang` blocks of one markdown file, in order. `name` is how the file is referred to
+    (default: its base name)."""
+    name = name or os.path.basename(path)
     with open(path, encoding="utf-8") as f:
         lines = f.read().split("\n")
     out, heading, i, n = [], "", 0, 0
@@ -46,16 +51,25 @@ def blocks(path, lang="go"):
         m = HEADING_RE.match(line)
         if m:
             heading = m.group(1)
-        if line.startswith("```"):
-            fence_lang = line[3:].strip().split()[0] if line[3:].strip() else ""
+        f = FENCE_RE.match(line)
+        if f:
+            indent, ticks, fence_lang = len(f.group(1)), len(f.group(2)), f.group(3)
             j = i + 1
-            while j < len(lines) and lines[j] != "```":
+            while j < len(lines):
+                c = lines[j].strip()
+                if c and set(c) == {"`"} and len(c) >= ticks and len(lines[j]) - len(lines[j].lstrip()) <= 3:
+                    break
                 j += 1
             if j >= len(lines):
-                raise SystemExit(f"{name}:{i + 1}: unterminated code fence")
+                if fence_lang == lang:
+                    raise SystemExit(f"{name}:{i + 1}: unterminated {lang} code fence")
+                break  # a stray fence of another language: nothing more to find
             if fence_lang == lang:
+                body = lines[i + 1:j]
+                if indent:
+                    body = [l[indent:] if l[:indent].strip() == "" else l for l in body]
                 n += 1
-                out.append(Block(name, n, lang, i + 2, heading, "\n".join(lines[i + 1:j]) + "\n"))
+                out.append(Block(name, n, lang, i + 2, heading, "\n".join(body) + "\n"))
             i = j + 1
             continue
         i += 1

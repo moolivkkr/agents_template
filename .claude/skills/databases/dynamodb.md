@@ -251,22 +251,35 @@ table.put_item(
 ```
 
 ### Go (aws-sdk-go-v2)
+> Go sample compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, aws-sdk-go-v2 dynamodb v1.70.0 (tests/archetype-compile/go/run.sh).
+
 ```go
 import (
-    "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+    "github.com/aws/aws-sdk-go-v2/aws"
     "github.com/aws/aws-sdk-go-v2/feature/dynamodb/attributevalue"
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb"
+    "github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 input := &dynamodb.QueryInput{
     TableName:              aws.String("Widgets"),
     KeyConditionExpression: aws.String("PK = :pk AND begins_with(SK, :prefix)"),
     ExpressionAttributeValues: map[string]types.AttributeValue{
-        ":pk":     &types.AttributeValueMemberS{Value: "TENANT#" + tenantID},
+        ":pk":     &types.AttributeValueMemberS{Value: "TENANT#" + tenantID}, // the verified tenant
         ":prefix": &types.AttributeValueMemberS{Value: "WIDGET#"},
     },
-    Limit: aws.Int32(21),
+    Limit:             aws.Int32(21),
+    ExclusiveStartKey: startKey, // decoded from the client's opaque cursor; nil on the first page
 }
 result, err := client.Query(ctx, input)
+if err != nil {
+    return nil, fmt.Errorf("query widgets: %w", err)
+}
+var widgets []Widget
+if err := attributevalue.UnmarshalListOfMaps(result.Items, &widgets); err != nil {
+    return nil, fmt.Errorf("unmarshal widgets: %w", err)
+}
+// result.LastEvaluatedKey (nil on the last page) is encoded into the next opaque cursor — never sent raw
 ```
 
 ## Rules

@@ -147,6 +147,8 @@ export const stripeHandlers = [
 
 ### Go (httptest)
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-jwt v5.3.1, and run: TestCreatePayment against the Stripe fake (tests/archetype-compile/go/run.sh).
+
 ```go
 func newStripeServer(t *testing.T) *httptest.Server {
     mux := http.NewServeMux()
@@ -158,7 +160,11 @@ func newStripeServer(t *testing.T) *httptest.Server {
         }
 
         r.ParseForm()
-        amount := r.FormValue("amount")
+        amount, err := strconv.ParseInt(r.FormValue("amount"), 10, 64) // Stripe's amount is an integer
+        if err != nil {
+            http.Error(w, "invalid amount", http.StatusBadRequest)
+            return
+        }
 
         w.Header().Set("Content-Type", "application/json")
         json.NewEncoder(w).Encode(map[string]any{
@@ -190,11 +196,16 @@ func newStripeServer(t *testing.T) *httptest.Server {
     return srv
 }
 
-// Usage: override Stripe base URL in test
+// Usage: the app's payments client takes the Stripe API base URL from config; the test points it
+// at the fake
 func TestCreatePayment(t *testing.T) {
     srv := newStripeServer(t)
-    stripeClient := stripe.New("sk_test_fake", stripe.WithBaseURL(srv.URL))
-    // ... test with stripeClient
+    payments := NewPaymentsClient(srv.URL, "sk_test_fake")
+
+    intent, err := payments.CreateIntent(t.Context(), 1999, "usd")
+    require.NoError(t, err)
+    assert.Equal(t, int64(1999), intent.Amount)
+    assert.Equal(t, "requires_payment_method", intent.Status)
 }
 ```
 
@@ -367,13 +378,20 @@ export async function createTestJwt(claims: Record<string, unknown> = {}) {
 ```go
 // Go — generate test JWTs for httptest
 import (
-    "crypto/rsa"
     "crypto/rand"
+    "crypto/rsa"
+    "testing"
+    "time"
+
     "github.com/golang-jwt/jwt/v5"
 )
 
 func generateTestJWT(t *testing.T) (string, *rsa.PublicKey) {
-    privKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+    t.Helper()
+    privKey, err := rsa.GenerateKey(rand.Reader, 2048)
+    if err != nil {
+        t.Fatal(err)
+    }
 
     claims := jwt.MapClaims{
         "sub":       "user-123",
@@ -389,7 +407,10 @@ func generateTestJWT(t *testing.T) (string, *rsa.PublicKey) {
     token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
     token.Header["kid"] = "test-key-id"
 
-    signed, _ := token.SignedString(privKey)
+    signed, err := token.SignedString(privKey)
+    if err != nil {
+        t.Fatal(err)
+    }
     return signed, &privKey.PublicKey
 }
 ```
@@ -566,11 +587,14 @@ const s3Handlers = [
 ```go
 func newS3Server(t *testing.T) *httptest.Server {
     storage := make(map[string][]byte)
+    var mu sync.Mutex // the server runs each request on its own goroutine
 
     mux := http.NewServeMux()
 
     // Upload
     mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        mu.Lock()
+        defer mu.Unlock()
         switch r.Method {
         case http.MethodPut:
             body, _ := io.ReadAll(r.Body)
@@ -949,6 +973,7 @@ func TestStripeWebhookVerification(t *testing.T) {
     req.Header.Set("Stripe-Signature", sig)
     req.Header.Set("Content-Type", "application/json")
 
+    handler := NewStripeWebhookHandler(secret) // the app's webhook endpoint, built with the signing secret
     w := httptest.NewRecorder()
     handler.ServeHTTP(w, req)
 

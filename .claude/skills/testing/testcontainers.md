@@ -1,5 +1,7 @@
 # testcontainers-go patterns for container-based integration testing.
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testcontainers-go v0.44.0 (compiled; not run here, they start containers) (tests/archetype-compile/go/run.sh).
+
 ## Install
 ```bash
 go get github.com/testcontainers/testcontainers-go
@@ -119,8 +121,10 @@ container, err := testcontainers.GenericContainer(ctx, testcontainers.GenericCon
 require.NoError(t, err)
 t.Cleanup(func() { _ = container.Terminate(ctx) })
 
-host, _ := container.Host(ctx)
-port, _ := container.MappedPort(ctx, "4566")
+host, err := container.Host(ctx)
+require.NoError(t, err)
+port, err := container.MappedPort(ctx, "4566")
+require.NoError(t, err)
 endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
 ```
 

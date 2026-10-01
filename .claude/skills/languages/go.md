@@ -14,6 +14,8 @@ tags:
 
 # Go Language Patterns
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, sqlx v1.4.0, x/sync v0.23.0, testify v1.12.1, testcontainers-go v0.44.0 (tests/archetype-compile/go/run.sh); the two ✅/❌ contrasts that declare one function twice are not compiled.
+
 Idiomatic Go for production services. Prioritize clarity, explicit error handling, and composability.
 
 ## Project Structure
@@ -59,8 +61,8 @@ var (
     ErrForbidden  = errors.New("forbidden")
 )
 
-// Wrap with context, unwrap with errors.Is / errors.As
-if errors.Is(err, ErrNotFound) { ... }
+// Wrap with context, unwrap with errors.Is / errors.As:
+//     if errors.Is(err, ErrNotFound) { ... }
 ```
 
 - Panic only in `main()` for unrecoverable startup failure; never in library code
@@ -150,8 +152,7 @@ func processItems(ctx context.Context, items []Item, concurrency int) error {
     errs := make(chan error, len(items))
     var wg sync.WaitGroup
 
-    for _, item := range items {
-        item := item // capture loop variable (Go <1.22)
+    for _, item := range items { // Go 1.22+: each iteration has its own item
         sem <- struct{}{}
         wg.Add(1)
         go func() {
@@ -362,15 +363,16 @@ func (s *OrderService) GetOrder(ctx context.Context, id string) (*Order, error) 
     return order, nil
 }
 
-// Checking wrapped errors
-if errors.Is(err, ErrNotFound) {
-    // handle not found
-}
-
-var valErr *ValidationError
-if errors.As(err, &valErr) {
-    // access valErr.Field, valErr.Message
-}
+// Checking wrapped errors:
+//
+//     if errors.Is(err, ErrNotFound) {
+//         // handle not found
+//     }
+//
+//     var valErr *ValidationError
+//     if errors.As(err, &valErr) {
+//         // access valErr.Field, valErr.Message
+//     }
 ```
 
 - Sentinel errors (`var Err... = errors.New(...)`) for expected cases callers can handle
@@ -387,8 +389,7 @@ func fetchAll(ctx context.Context, ids []string) ([]*Item, error) {
     g, ctx := errgroup.WithContext(ctx)
     results := make([]*Item, len(ids))
 
-    for i, id := range ids {
-        i, id := i, id // capture (Go <1.22)
+    for i, id := range ids { // Go 1.22+: each iteration has its own i and id
         g.Go(func() error {
             item, err := fetch(ctx, id)
             if err != nil {
@@ -491,29 +492,38 @@ func TestUserRepo_Integration(t *testing.T) {
         t.Skip("skipping integration test")
     }
     ctx := context.Background()
-    pgContainer, err := postgres.RunContainer(ctx,
-        testcontainers.WithImage("postgres:16-alpine"),
+    pgContainer, err := postgres.Run(ctx, "postgres:16-alpine",
         postgres.WithDatabase("testdb"),
+        postgres.BasicWaitStrategies(),
     )
     require.NoError(t, err)
     t.Cleanup(func() { _ = pgContainer.Terminate(ctx) })
 
-    connStr, _ := pgContainer.ConnectionString(ctx, "sslmode=disable")
-    db := sqlx.MustConnect("pgx", connStr)
+    connStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+    require.NoError(t, err)
+    db := sqlx.MustConnect("pgx", connStr) // driver: import _ "github.com/jackc/pgx/v5/stdlib"
+    applyMigrations(t, db)                 // the project's migrations (backend/archetypes/migration-pattern-go.md)
     repo := NewUserRepository(db)
 
     // ... test against real PostgreSQL
+    user := createTestUser(t, db)
+    got, err := repo.FindByID(ctx, user.ID)
+    require.NoError(t, err)
+    assert.Equal(t, user.Email, got.Email)
 }
 
 // Golden files for complex/snapshot outputs
+var update = flag.Bool("update", false, "rewrite the golden files") // go test ./... -update
+
 func TestRenderTemplate(t *testing.T) {
     got := renderTemplate(data)
     golden := filepath.Join("testdata", t.Name()+".golden")
 
-    if *update { // -update flag to regenerate golden files
-        os.WriteFile(golden, []byte(got), 0644)
+    if *update {
+        require.NoError(t, os.WriteFile(golden, []byte(got), 0o644))
     }
-    want, _ := os.ReadFile(golden)
+    want, err := os.ReadFile(golden)
+    require.NoError(t, err)
     assert.Equal(t, string(want), got)
 }
 ```
@@ -555,8 +565,17 @@ func (r *OrderRepo) FindByID(id string) (*Order, error) // missing context entir
 // Handler layer — receives context from the HTTP framework
 func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
     ctx := r.Context() // framework-provided context with request deadline
+    req, err := decodeCreateOrder(r) // body → CreateOrderRequest; a bad body is a 400 AppError
+    if err != nil {
+        apperr.ErrorMapper(w, r, err) // the one error envelope (backend/archetypes/error-handling-go.md)
+        return
+    }
     order, err := h.service.CreateOrder(ctx, req)
-    // ...
+    if err != nil {
+        apperr.ErrorMapper(w, r, err)
+        return
+    }
+    respondJSON(w, r, http.StatusCreated, order) // {"data": ..., "meta": {"request_id": ...}}
 }
 
 // Service layer — passes context through, may add business-level timeout
@@ -605,13 +624,18 @@ const (
     authUserKey  contextKey = "auth_user"
 )
 
-// Setting values (in middleware)
+// Setting values (in middleware). The project's own is middleware.RequestID
+// (backend/archetypes/auth-middleware-go.md); tenantIDKey / authUserKey are set only by the auth
+// middleware, from the verified token — never from a request header.
+var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
+
 func RequestIDMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         reqID := r.Header.Get("X-Request-ID")
-        if reqID == "" {
+        if !validRequestID.MatchString(reqID) { // bounded charset and length: no log injection
             reqID = uuid.New().String()
         }
+        w.Header().Set("X-Request-ID", reqID)
         ctx := context.WithValue(r.Context(), requestIDKey, reqID)
         next.ServeHTTP(w, r.WithContext(ctx))
     })
@@ -622,7 +646,7 @@ func RequestIDFromContext(ctx context.Context) string {
     if v, ok := ctx.Value(requestIDKey).(string); ok {
         return v
     }
-    return "unknown"
+    return ""
 }
 
 // ❌ NEVER store in context:
@@ -641,10 +665,19 @@ func RequestIDFromContext(ctx context.Context) string {
 func (h *OrderHandler) Create(w http.ResponseWriter, r *http.Request) {
     // HTTP server sets an overall request deadline (e.g., 30s)
     ctx := r.Context()
+    req, err := decodeCreateOrder(r)
+    if err != nil {
+        apperr.ErrorMapper(w, r, err)
+        return
+    }
 
     // Service adds a tighter timeout for just the DB + event operations
     order, err := h.service.CreateOrder(ctx, req) // inherits 30s deadline
-    // ...
+    if err != nil {
+        apperr.ErrorMapper(w, r, err)
+        return
+    }
+    respondJSON(w, r, http.StatusCreated, order)
 }
 
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
@@ -660,7 +693,10 @@ func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) 
     ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
     defer cancel()
 
-    // ... perform work ...
+    order, err := s.repo.Create(ctx, req) // every downstream call gets the tightened ctx
+    if err != nil {
+        return nil, fmt.Errorf("create order: %w", err)
+    }
     return order, nil
 }
 ```
@@ -784,25 +820,29 @@ log.Info("order created",
 // Child loggers carry common attributes — add them once, log them everywhere.
 
 // Base logger with service identity
-baseLog := slog.New(handler).With(
-    slog.String("service", "order-service"),
-    slog.String("version", buildVersion),
-)
+func NewServiceLogger(handler slog.Handler, buildVersion string) *slog.Logger {
+    return slog.New(handler).With(
+        slog.String("service", "order-service"),
+        slog.String("version", buildVersion),
+    )
+}
 
 // Create scoped child loggers for subsystems
-repoLog := baseLog.WithGroup("repository")
-repoLog.Info("query executed",
-    slog.String("table", "orders"),
-    slog.Duration("latency", elapsed),
-)
-// Output: {"msg":"query executed","repository":{"table":"orders","latency":"2.3ms"}}
+func logQuery(baseLog *slog.Logger, elapsed time.Duration) {
+    repoLog := baseLog.WithGroup("repository")
+    repoLog.Info("query executed",
+        slog.String("table", "orders"),
+        slog.Duration("latency", elapsed),
+    )
+    // Output: {"msg":"query executed","repository":{"table":"orders","latency":"2.3ms"}}
+}
 
 // Per-request child logger with request-scoped attributes
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
     reqLog := h.log.With(
         slog.String("request_id", RequestIDFromContext(r.Context())),
         slog.String("method", r.Method),
-        slog.String("path", r.URL.Path),
+        slog.String("route", r.Pattern), // the route template; the raw path is unbounded and can carry IDs
     )
     reqLog.Info("request started")
     // Pass reqLog to service layer or store in context
@@ -847,7 +887,11 @@ func LoggingMiddleware(baseLog *slog.Logger) func(http.Handler) http.Handler {
 func (s *OrderService) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
     log := LoggerFromContext(ctx)
     log.Info("creating order", slog.String("customer_id", req.CustomerID))
-    // ...
+    order, err := s.repo.Create(ctx, req)
+    if err != nil {
+        return nil, fmt.Errorf("create order: %w", err) // logged once, where it is handled
+    }
+    return order, nil
 }
 ```
 
@@ -897,9 +941,9 @@ func Filter[T any](items []T, predicate func(T) bool) []T {
     return result
 }
 
-// Usage — type is inferred
-activeUsers := Filter(users, func(u User) bool { return u.IsActive })
-recentOrders := Filter(orders, func(o Order) bool { return o.CreatedAt.After(cutoff) })
+// Usage — type is inferred:
+//     activeUsers := Filter(users, func(u User) bool { return u.IsActive })
+//     recentOrders := Filter(orders, func(o Order) bool { return o.CreatedAt.After(cutoff) })
 
 // Generic type — a type-safe set
 type Set[T comparable] struct {
@@ -922,6 +966,8 @@ func (s *Set[T]) Len() int             { return len(s.items) }
 ### Constraints
 
 ```go
+import "cmp" // for cmp.Ordered below
+
 // Built-in constraints
 // - any             — no restriction (equivalent to interface{})
 // - comparable      — supports == and != (required for map keys)
@@ -957,8 +1003,6 @@ func IndexByID[T Identifiable](items []T) map[string]T {
 
 // Use golang.org/x/exp/constraints for standard numeric/ordered constraints
 // or the built-in cmp.Ordered (Go 1.21+)
-import "cmp"
-
 func Clamp[T cmp.Ordered](val, minVal, maxVal T) T {
     return max(minVal, min(val, maxVal))
 }
@@ -990,19 +1034,35 @@ func (r *Repository[T]) FindByID(ctx context.Context, id string) (*T, error) {
     return &entity, nil
 }
 
-func (r *Repository[T]) FindAll(ctx context.Context, limit, offset int) ([]T, error) {
+// Cursor is the decoded opaque page cursor: the sort key of the last row of the previous page.
+type Cursor struct {
+    CreatedAt time.Time
+    ID        string
+}
+
+// FindPage returns up to limit+1 rows after the cursor (the extra row tells has_more): keyset
+// pagination, never OFFSET. limit is 1..100, validated by the handler (never clamped); after is nil
+// on the first page.
+func (r *Repository[T]) FindPage(ctx context.Context, after *Cursor, limit int) ([]T, error) {
     var entities []T
-    query := fmt.Sprintf("SELECT * FROM %s WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT $1 OFFSET $2", r.tableName)
-    if err := r.db.SelectContext(ctx, &entities, query, limit, offset); err != nil {
-        return nil, fmt.Errorf("find all %s: %w", r.tableName, err)
+    query := fmt.Sprintf("SELECT * FROM %s WHERE deleted_at IS NULL", r.tableName)
+    var args []any
+    if after != nil {
+        query += " AND (created_at, id) < ($1, $2)"
+        args = append(args, after.CreatedAt, after.ID)
+    }
+    query += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT %d", limit+1)
+    if err := r.db.SelectContext(ctx, &entities, query, args...); err != nil {
+        return nil, fmt.Errorf("find page %s: %w", r.tableName, err)
     }
     return entities, nil
 }
 
 // Usage
 type UserRepo = Repository[User]
-userRepo := NewRepository[User](db, "users", log)
-user, err := userRepo.FindByID(ctx, "abc-123")
+
+//     userRepo := NewRepository[User](db, "users", log)
+//     user, err := userRepo.FindByID(ctx, "abc-123")
 ```
 
 ### Generic Result/Option Types
@@ -1050,9 +1110,9 @@ func Reduce[T, U any](items []T, initial U, fn func(U, T) U) U {
     return acc
 }
 
-// Usage
-ids := Map(users, func(u User) string { return u.ID })
-total := Reduce(orders, 0.0, func(sum float64, o Order) float64 { return sum + o.Total })
+// Usage:
+//     ids := Map(users, func(u User) string { return u.ID })
+//     total := Reduce(orders, int64(0), func(sum int64, o Order) int64 { return sum + o.TotalCents })
 ```
 
 ### When to Use Generics vs Interfaces
@@ -1130,15 +1190,17 @@ func (s *OrderService) GetOrder(ctx context.Context, id string) (*Order, error) 
 // errors.Is walks the entire error chain looking for a match.
 // Use it for sentinel errors (specific error values).
 
+// (Every response below is the one error envelope, written by apperr.ErrorMapper —
+// backend/archetypes/error-handling-go.md; never http.Error's plain text.)
 if errors.Is(err, ErrNotFound) {
     // Handle not found — works even if err is wrapped multiple times
-    http.Error(w, "not found", http.StatusNotFound)
+    apperr.ErrorMapper(w, r, apperr.NewNotFoundError("Order"))
     return
 }
 
 if errors.Is(err, context.DeadlineExceeded) {
-    // The request timed out somewhere in the chain
-    http.Error(w, "request timed out", http.StatusGatewayTimeout)
+    // The request timed out somewhere in the chain: 503 UNAVAILABLE, retryable
+    apperr.ErrorMapper(w, r, apperr.NewUnavailableError("orders-db", err))
     return
 }
 
@@ -1152,7 +1214,7 @@ if errors.As(err, &valErr) {
         slog.String("field", valErr.Field),
         slog.String("message", valErr.Message),
     )
-    respondJSON(w, http.StatusBadRequest, valErr)
+    apperr.ErrorMapper(w, r, apperr.NewValidationError(valErr.Field, "invalid", valErr.Message))
     return
 }
 ```
@@ -1248,14 +1310,14 @@ func (e *ServiceError) Unwrap() error {
     return e.Err // allows errors.Is/errors.As to walk through to the cause
 }
 
-// Usage
-err := &ServiceError{
-    Op:   "CreateOrder",
-    Kind: "conflict",
-    Err:  fmt.Errorf("duplicate order number: %w", ErrConflict),
-}
-
-errors.Is(err, ErrConflict) // true — walks through ServiceError.Unwrap() → inner error → ErrConflict
+// Usage:
+//
+//     err := &ServiceError{
+//         Op:   "CreateOrder",
+//         Kind: "conflict",
+//         Err:  fmt.Errorf("duplicate order number: %w", ErrConflict),
+//     }
+//     errors.Is(err, ErrConflict) // true — walks through ServiceError.Unwrap() → inner error → ErrConflict
 
 // For errors that wrap multiple causes (Go 1.20+), implement Unwrap() []error
 type MultiError struct {
@@ -1412,9 +1474,9 @@ func (m *MockMailer) Send(ctx context.Context, to, subject, body string) error {
 // Test
 func TestUserService_WelcomeEmail(t *testing.T) {
     mock := &MockMailer{}
-    svc := NewUserService(repo, mock, log)
+    svc := NewUserService(newFakeUserRepo(), mock, slog.New(slog.DiscardHandler))
 
-    _, err := svc.CreateUser(ctx, CreateUserRequest{Email: "new@example.com"})
+    _, err := svc.CreateUser(t.Context(), CreateUserRequest{Email: "new@example.com"})
     require.NoError(t, err)
 
     require.Len(t, mock.Calls, 1)
@@ -1548,17 +1610,17 @@ func (p *WorkerPool[T]) Run(ctx context.Context) error {
     return g.Wait()
 }
 
-// Usage
-pool := NewWorkerPool[Order](10, 100, processOrder, log)
-go func() {
-    if err := pool.Run(ctx); err != nil {
-        log.Error("worker pool stopped", slog.String("error", err.Error()))
-    }
-}()
-
-for _, order := range orders {
-    pool.Submit(order)
-}
+// Usage:
+//
+//     pool := NewWorkerPool[Order](10, 100, processOrder, log)
+//     go func() {
+//         if err := pool.Run(ctx); err != nil {
+//             log.Error("worker pool stopped", slog.String("error", err.Error()))
+//         }
+//     }()
+//     for _, order := range orders {
+//         pool.Submit(order)
+//     }
 ```
 
 ### Fan-Out / Fan-In with Channels
@@ -1653,8 +1715,7 @@ func (s *BulkService) ProcessAll(ctx context.Context, items []Item) error {
     g, ctx := errgroup.WithContext(ctx)
     g.SetLimit(20) // max 20 concurrent goroutines
 
-    for _, item := range items {
-        item := item // capture (Go <1.22)
+    for _, item := range items { // Go 1.22+: each iteration has its own item
         g.Go(func() error {
             return s.process(ctx, item)
         })

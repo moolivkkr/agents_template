@@ -9,6 +9,7 @@
     "units[].stubs: harness-only files for types the archetypes leave to the project (testdata/stubs)."
   ],
   "archetypes_dir": ".claude/skills/backend/archetypes",
+  "skills_dir": ".claude/skills",
   "files": {
     "auth-middleware-go.md": [
       "Context Key Types",
@@ -189,6 +190,198 @@
       "Health Check Endpoint",
       "Main Entrypoint with Signal Handling",
       "Example: Email Send Handler"
+    ],
+    "api/response-envelope.md": ["Types"],
+    "core/api-excellence.md": [
+      "OpenAPI-First Development",
+      "Response Envelope",
+      "Cursor Pagination",
+      "Domain Error Codes",
+      "API Versioning",
+      "Idempotency",
+      "HATEOAS Links"
+    ],
+    "core/code-quality.md": [
+      "IMPLEMENTATION CODE — No TODOs Allowed",
+      "TEST CODE & DOCUMENTATION — TODOs Acceptable for Future Work",
+      "Function Size — 40 Lines Max",
+      "Parameter Count — 4 Max",
+      "Nesting Depth — 2 Levels Max",
+      "Early Returns",
+      "KISS Enforcement",
+      "DRY With Judgment",
+      "Functions — verb + noun",
+      "Booleans — is/has/can/should prefix",
+      "No abbreviations"
+    ],
+    "core/observability-patterns.md": [
+      "tenant_id on every log line and span — never on a metric",
+      "Go — use slog",
+      "OpenTelemetry Metrics at Every Boundary",
+      "Distributed Tracing",
+      "Log Levels",
+      "Redaction is enforced at the logger, not remembered per call site",
+      "Correlation IDs"
+    ],
+    "core/resiliency-patterns.md": [
+      "Circuit Breakers on ALL External Calls",
+      "Retry with Exponential Backoff",
+      "Timeouts at Every Boundary",
+      "Graceful Degradation",
+      "Health Checks",
+      "Bulkhead Pattern",
+      "Rate Limiting",
+      "Graceful Shutdown"
+    ],
+    "core/security-owasp.md": ["Input Validation"],
+    "core/software-architecture.md": [
+      "S — Single Responsibility",
+      "O — Open/Closed",
+      "L — Liskov Substitution",
+      "I — Interface Segregation",
+      "D — Dependency Inversion",
+      "1. Repository Pattern — Data Access Abstraction",
+      "2. Service Pattern — Business Logic Orchestration",
+      "3. Strategy Pattern — Interchangeable Algorithms",
+      "4. Factory Pattern — Complex Object Creation",
+      "5. Observer Pattern — Event-Driven Decoupling",
+      "6. Circuit Breaker — External Call Protection",
+      "7. Decorator Pattern — Behavior Extension Without Modification",
+      "8. Builder Pattern — Complex Object Construction",
+      "Interface-Based Development",
+      "DI Constructor Convention",
+      "Layer Boundaries"
+    ],
+    "core/testing-principles.md": ["Test Isolation", "Go Test Factory Pattern", "When to Test Private Functions"],
+    "core/verification-protocol.md": [
+      "3. Data Model Completeness",
+      "Level 2: Substance",
+      "Level 3: Wiring",
+      "Level 4: Data Flow"
+    ],
+    "databases/dynamodb.md": ["Go (aws-sdk-go-v2)"],
+    "databases/postgres.md": ["Connection Pooling", "Row-Level Security (Multi-Tenancy)"],
+    "databases/query-optimization.md": [
+      "Identifying N+1 in Code",
+      "Fix 1: JOIN Query",
+      "Fix 2: Batch Loading (DataLoader Pattern)",
+      "Go (pgxpool)",
+      "Prepared Statements",
+      "Bulk Inserts with COPY",
+      "Batch Parameter Binding with unnest()",
+      "Batch Size Limits",
+      "Alerting Thresholds"
+    ],
+    "frameworks/chi.md": [
+      "Router Setup",
+      "URL Parameters",
+      "Middleware Pattern",
+      "Response Pattern",
+      "Subrouters and Mounting",
+      "Testing"
+    ],
+    "frameworks/echo.md": ["Router Setup", "Handlers", "Custom Error Handler"],
+    "frameworks/gin.md": [
+      "Router Setup",
+      "Request Binding",
+      "Response Helpers",
+      "Error Middleware",
+      "Graceful Shutdown"
+    ],
+    "frameworks/graphql.md": ["Go (gqlgen)"],
+    "infrastructure/caching-strategies.md": [
+      "Cache-aside (lazy — the default)",
+      "TTL + invalidation",
+      "Stampede / thundering-herd protection"
+    ],
+    "infrastructure/feature-flags.md": ["Evaluation"],
+    "infrastructure/localstack-aws-local.md": ["SDK Configuration", "Integration Test Setup"],
+    "infrastructure/saas-tenancy-models.md": [
+      "Database Isolation: Three-Layer Defense",
+      "Database Isolation: Three-Layer Defense",
+      "Noisy Neighbor Protection",
+      "Database Routing",
+      "Tenant Configuration Model"
+    ],
+    "infrastructure/secrets-management.md": ["Runtime injection"],
+    "languages/go.md": [
+      "Error Handling",
+      "Interfaces",
+      "Struct Embedding and Composition",
+      "Context Propagation",
+      "Goroutines and Channels",
+      "Table-Driven Tests",
+      "Dependency Injection",
+      "Performance Optimization",
+      "Interface Patterns",
+      "Error Patterns",
+      "Concurrency",
+      "Testing Patterns",
+      "`context.Context` as First Parameter",
+      "Context Propagation Through Layers",
+      "Context Values — When to Use, When NOT to Use",
+      "Timeout and Deadline Propagation",
+      "Cancellation Handling",
+      "Logger Setup",
+      "Adding Attributes",
+      "Logger Groups and Child Loggers",
+      "Request-Scoped Logging via Context",
+      "Log Levels Best Practices",
+      "Type Parameters on Functions and Types",
+      "Constraints",
+      "Generic Repository Pattern",
+      "Generic Result/Option Types",
+      "When to Use Generics vs Interfaces",
+      "fmt.Errorf Wrapping with %w",
+      "errors.Is() and errors.As() for Unwrapping",
+      "Sentinel Errors vs Typed Errors",
+      "Error Chains — When to Wrap vs Return Directly",
+      "Custom Error Types with Unwrap()",
+      "Accept Interfaces, Return Structs",
+      "Small Interfaces (1-3 Methods)",
+      "Interface Composition",
+      "Testing with Interfaces (Dependency Injection)",
+      "Common Interface Patterns",
+      "Worker Pool Pattern",
+      "Fan-Out / Fan-In with Channels",
+      "errgroup.Group for Parallel Tasks with Error Propagation",
+      "sync.Once for Lazy Initialization",
+      "sync.Map vs Mutex-Guarded Map",
+      "Channel Direction"
+    ],
+    "testing/contract-testing.md": ["Go (pact-go v2)", "Go Provider Verification"],
+    "testing/external-service-mocks.md": [
+      "Go (httptest)",
+      "Token Generation for Tests",
+      "Go (httptest)",
+      "Go (httptest)",
+      "Go (httptest)",
+      "Go Webhook Verification"
+    ],
+    "testing/gomock.md": [
+      "Basic Mock Setup",
+      "EXPECT Patterns",
+      "Call Count Controls",
+      "Ordered Calls",
+      "Do / DoAndReturn"
+    ],
+    "testing/property-based.md": ["testing/quick (stdlib — simple cases)", "gopter (full-featured)"],
+    "testing/test-case-traceability.md": [
+      "How tests carry TC IDs: in the test NAME",
+      "Changing an existing test: TEST-CHANGE comments (why and when)"
+    ],
+    "testing/testcontainers.md": [
+      "PostgreSQL Container",
+      "Redis Container",
+      "Shared Test Helper",
+      "Custom Container (Generic)"
+    ],
+    "testing/testify.md": [
+      "Assert vs Require",
+      "Table-Driven Tests",
+      "Suite Pattern",
+      "Error Testing",
+      "HTTP Handler Testing"
     ]
   },
   "skip": {
@@ -196,7 +389,25 @@
     "observability-go.md#21": "comment-only: note on Prometheus exemplars",
     "performance-go.md#11": "comment-only: channel buffer sizing guidance",
     "performance-go.md#17": "comment-only: sync.Map vs sharded map decision matrix",
-    "performance-go.md#19": "comment-only: JSON library comparison"
+    "performance-go.md#19": "comment-only: JSON library comparison",
+    "core/code-quality.md#3": "BAD/GOOD contrast whose bodies are elided (`// 80 lines of …`, `/* 10 lines */`): illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/code-quality.md#4": "signature-only illustration (function declarations without bodies)",
+    "core/code-quality.md#5": "BAD and GOOD versions of the same function (ProcessItem declared twice by design)",
+    "core/code-quality.md#7": "BAD/GOOD contrast; notifyUserByEmail's body is elided: illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/code-quality.md#8": "DRY illustration whose bodies end in `// ...`: illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/code-quality.md#9": "naming illustration: signatures without bodies",
+    "core/code-quality.md#10": "naming list of identifiers, not Go code",
+    "core/code-quality.md#11": "naming list of identifiers, not Go code",
+    "core/software-architecture.md#1": "BAD/GOOD versions of UserService (declared twice by design); illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/software-architecture.md#2": "BAD/GOOD contrast; illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/software-architecture.md#3": "BAD/GOOD versions of ReadOnlyRepo (declared twice by design); illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/software-architecture.md#5": "BAD/GOOD versions of UserService (declared twice by design); the BAD body is elided",
+    "core/software-architecture.md#8": "strategy outline: illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/software-architecture.md#11": "abridged breaker (allowRequest/recordFailure/recordSuccess elided); the full one is core/resiliency-patterns.md#1, compiled in skills-resiliency",
+    "core/software-architecture.md#14": "three-step outline; Send's body is elided: illustration with elided bodies (`/* ... */` or comment-only bodies of functions that return values), which is not compilable Go by design",
+    "core/verification-protocol.md#2": "FAILS/PASSES versions of the same method (CalculateTotal declared twice by design)",
+    "languages/go.md#13": "✅/❌ signature-only contrast (declares CreateOrder and FindByID twice by design, no bodies)",
+    "languages/go.md#33": "✅/❌ contrast that declares NewUserService twice by design"
   },
   "units": [
     {
@@ -431,6 +642,508 @@
         "internal/domain/stub_job.go": "testdata/stubs/domain_job.go",
         "cmd/worker/stub_wiring.go": "testdata/stubs/worker_wiring.go"
       }
+    },
+    {
+      "name": "skills-api",
+      "doc": "api/response-envelope.md's Go types, and api-excellence.md compiled against the archetype middleware and apperr packages (request ID and verified identity accessors)",
+      "imports": ["yourapp/internal/middleware", "github.com/google/uuid"],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/envelope/types.go", "blocks": ["api/response-envelope.md#1"], "package": "envelope"},
+        {"path": "internal/api/openapi.go", "blocks": ["core/api-excellence.md#1"], "package": "api"},
+        {"path": "internal/api/envelope.go", "blocks": ["core/api-excellence.md#2"], "package": "api"},
+        {"path": "internal/api/cursor.go", "blocks": ["core/api-excellence.md#3"], "package": "api"},
+        {"path": "internal/api/errors.go", "blocks": ["core/api-excellence.md#4"], "package": "api"},
+        {"path": "internal/api/versioning.go", "blocks": ["core/api-excellence.md#5"], "package": "api"},
+        {"path": "internal/api/idempotency.go", "blocks": ["core/api-excellence.md#6"], "package": "api"},
+        {"path": "internal/api/links.go", "blocks": ["core/api-excellence.md#7"], "package": "api"},
+        {"path": "internal/api/stub_app.go", "package": "api", "code": "// App-level names api-excellence.md uses without defining: the user row, the idempotency store\n// behind IdempotencyMiddleware, and the response-capturing writer.\ntype User struct {\n\tID        string\n\tEmail     string\n\tCreatedAt time.Time\n}\n\ntype UserRepo struct{ db *sql.DB }\n\ntype ClaimState int\n\nconst (\n\tClaimNew ClaimState = iota\n\tClaimReplay\n\tClaimInFlight\n)\n\ntype CachedResponse struct {\n\tRequestHash []byte\n\tStatusCode  int\n\tBody        []byte\n}\n\ntype IdempotencyStore interface {\n\tClaim(ctx context.Context, key string, hash []byte, lockTTL time.Duration) (*CachedResponse, ClaimState, error)\n\tRelease(ctx context.Context, key string) error\n\tComplete(ctx context.Context, key string, resp CachedResponse, ttl time.Duration) error\n}\n\ntype captureWriter struct {\n\thttp.ResponseWriter\n\tstatus int\n\tbody   bytes.Buffer\n}\n\nfunc newCaptureWriter(w http.ResponseWriter) *captureWriter {\n\treturn &captureWriter{ResponseWriter: w, status: http.StatusOK}\n}"}
+      ]
+    },
+    {
+      "name": "skills-observability-patterns",
+      "doc": "core/observability-patterns.md: tenant/log/trace correlation and tracing (one package, statement snippets wrapped) and the metrics middleware (its own package)",
+      "imports": [
+        "yourapp/internal/middleware",
+        "go.opentelemetry.io/otel/trace",
+        "go.opentelemetry.io/otel/attribute",
+        "go.opentelemetry.io/otel/codes",
+        "go.opentelemetry.io/otel/metric",
+        "github.com/google/uuid"
+      ],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/obs/tenant.go", "blocks": ["core/observability-patterns.md#1"], "package": "obs"},
+        {"path": "internal/obs/setup.go", "blocks": ["core/observability-patterns.md#2"], "package": "obs", "wrap": "func _(ctx context.Context, tenantID string, order *Order, buildVersion string)"},
+        {"path": "internal/obs/tracing.go", "blocks": ["core/observability-patterns.md#4"], "package": "obs"},
+        {"path": "internal/obs/levels.go", "blocks": ["core/observability-patterns.md#5"], "package": "obs", "wrap": "func _(ctx context.Context, logger *slog.Logger, tenantID, orderID, method string, err error, cb *CircuitBreaker, order *Order)"},
+        {"path": "internal/obs/redaction.go", "blocks": ["core/observability-patterns.md#6"], "package": "obs"},
+        {"path": "internal/obs/correlation.go", "blocks": ["core/observability-patterns.md#7"], "package": "obs"},
+        {"path": "internal/obs/stub_app.go", "package": "obs", "code": "// App-level names observability-patterns.md's examples instrument: the order service, handler and\n// repository, their request/response helpers, and a circuit breaker to log about.\ntype Order struct {\n\tID         string\n\tTenantID   string\n\tTotalCents int64\n\tTotal      decimal.Decimal\n\tItems      []string\n}\n\ntype Service struct{ logger *slog.Logger }\n\ntype CreateOrderReq struct{ Items []string }\n\nfunc (r CreateOrderReq) Validate() error { return nil }\n\nfunc NewOrder(req CreateOrderReq) *Order { return &Order{Items: req.Items} }\n\ntype orderSaver interface {\n\tSave(ctx context.Context, order *Order) error\n}\n\ntype OrderService struct{ repo orderSaver }\n\ntype OrderHandler struct{ service *OrderService }\n\ntype postgresOrderRepo struct{ pool *pgxpool.Pool }\n\nfunc parseRequest(r *http.Request) CreateOrderReq           { return CreateOrderReq{} }\nfunc respondError(w http.ResponseWriter, err error)          {}\nfunc respondJSON(w http.ResponseWriter, status int, v any)   {}\n\ntype CircuitBreaker struct{}\n\nfunc (cb *CircuitBreaker) Failures() int               { return 0 }\nfunc (cb *CircuitBreaker) ResetTimeout() time.Duration { return 0 }\n\ntype httpClient struct{ client *http.Client }"},
+        {"path": "internal/obsmetrics/metrics.go", "blocks": ["core/observability-patterns.md#3"], "package": "obsmetrics"},
+        {"path": "internal/obsmetrics/stub_app.go", "package": "obsmetrics", "code": "// observability-patterns.md's metrics example uses the archetype's helpers (observability-go.md\n// 2.2: statusRecorder, scheme, routePattern) and an app-level order service.\ntype statusRecorder struct {\n\thttp.ResponseWriter\n\tstatusCode int\n}\n\nfunc (r *statusRecorder) WriteHeader(code int) { r.statusCode = code; r.ResponseWriter.WriteHeader(code) }\n\nfunc scheme(r *http.Request) string {\n\tif r.TLS != nil {\n\t\treturn \"https\"\n\t}\n\treturn \"http\"\n}\n\nfunc routePattern(r *http.Request) string { return r.Pattern }\n\ntype PaymentMethod string\n\ntype Order struct {\n\tID            string\n\tPaymentMethod PaymentMethod\n}\n\ntype CreateOrderReq struct{}\n\ntype OrderService struct{}\n\nfunc (s *OrderService) processOrder(ctx context.Context, req CreateOrderReq) (*Order, error) {\n\treturn &Order{}, nil\n}"}
+      ]
+    },
+    {
+      "name": "skills-resiliency",
+      "doc": "core/resiliency-patterns.md: every block in one main package, on the archetype apperr and middleware packages; app wiring (pool, router, workers, providers) stubbed",
+      "imports": [
+        "yourapp/internal/middleware",
+        "yourapp/internal/apperr",
+        "lru \"github.com/hashicorp/golang-lru/v2\"",
+        "golang.org/x/sync/semaphore",
+        "golang.org/x/time/rate",
+        "github.com/redis/go-redis/v9",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "sdkmetric \"go.opentelemetry.io/otel/sdk/metric\"",
+        "sdktrace \"go.opentelemetry.io/otel/sdk/trace\""
+      ],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "cmd/server/res1.go", "blocks": ["core/resiliency-patterns.md#1"], "package": "main"},
+        {"path": "cmd/server/res2.go", "blocks": ["core/resiliency-patterns.md#2"], "package": "main"},
+        {"path": "cmd/server/res3.go", "blocks": ["core/resiliency-patterns.md#3"], "package": "main"},
+        {"path": "cmd/server/res4.go", "blocks": ["core/resiliency-patterns.md#4"], "package": "main"},
+        {"path": "cmd/server/res5.go", "blocks": ["core/resiliency-patterns.md#5"], "package": "main"},
+        {"path": "cmd/server/res6.go", "blocks": ["core/resiliency-patterns.md#6"], "package": "main"},
+        {"path": "cmd/server/res7.go", "blocks": ["core/resiliency-patterns.md#7"], "package": "main"},
+        {"path": "cmd/server/res8.go", "blocks": ["core/resiliency-patterns.md#8"], "package": "main"},
+        {"path": "cmd/server/stub_app.go", "package": "main", "code": "// App wiring and app-level types core/resiliency-patterns.md's examples reference.\nimport (\n\tsdkmetric \"go.opentelemetry.io/otel/sdk/metric\"\n\tsdktrace \"go.opentelemetry.io/otel/sdk/trace\"\n)\n\nvar (\n\tpool                   *pgxpool.Pool\n\tlogger                 *slog.Logger\n\trouter                 http.Handler\n\tredisClient            *redis.Client\n\tpreStopSleepConfigured bool\n\tdrainDelay             = 5 * time.Second\n\tshutdownTimeout        = 25 * time.Second\n\tworkers                interface{ Stop(ctx context.Context) }\n\tmeterProvider          *sdkmetric.MeterProvider\n\ttracerProvider         *sdktrace.TracerProvider\n)\n\ntype Entity struct{ ID, Name string }\n\ntype repo struct{ pool *pgxpool.Pool }\n\ntype redisCache struct{ client *redis.Client }\n\ntype Review struct{ Stars int }\n\ntype Product struct {\n\tID          string\n\tPrice       int64\n\tCachedPrice int64\n\tPriceStale  bool\n\tReviews     []Review\n}\n\ntype ProductService struct {\n\trepo           interface{ FindByID(ctx context.Context, id string) (*Product, error) }\n\tpricingService interface{ GetPrice(ctx context.Context, id string) (int64, error) }\n\treviewsService interface{ GetReviews(ctx context.Context, id string) ([]Review, error) }\n\tlogger         *slog.Logger\n}\n\nconst RequiredSchemaVersion = 7\n\nfunc schemaVersion(ctx context.Context, db *pgxpool.Pool) (int, error) { return RequiredSchemaVersion, nil }"}
+      ]
+    },
+    {
+      "name": "skills-code-quality",
+      "doc": "core/code-quality.md: the complete GOOD examples (a method on its service) and the test-TODO example",
+      "files": [
+        {"path": "internal/quality/quality.go", "blocks": ["core/code-quality.md#1", "core/code-quality.md#6"], "package": "quality"},
+        {"path": "internal/quality/quality_test.go", "blocks": ["core/code-quality.md#2"], "package": "quality"},
+        {"path": "internal/quality/stub_app.go", "package": "quality", "code": "// App-level names core/code-quality.md's examples use.\ntype Order struct{ ID string }\n\nfunc (o *Order) Validate() error { return nil }\n\ntype OrderService struct {\n\trepo interface {\n\t\tSave(ctx context.Context, o *Order) error\n\t}\n}\n\ntype Profile struct{ Name string }\n\ntype UpdateProfileRequest struct{ Name string }\n\nfunc (r UpdateProfileRequest) Validate() error { return nil }\n\nfunc (p *Profile) Apply(req UpdateProfileRequest) { p.Name = req.Name }\n\ntype Service struct {\n\trepo interface {\n\t\tFindByID(ctx context.Context, id string) (*Profile, error)\n\t\tSave(ctx context.Context, p *Profile) error\n\t}\n\tauthz interface {\n\t\tCanUpdate(ctx context.Context, p *Profile) bool\n\t}\n}\n\nvar (\n\tErrNilOrder        = errors.New(\"nil order\")\n\tErrEmptyID         = errors.New(\"empty id\")\n\tErrProfileNotFound = errors.New(\"profile not found\")\n\tErrForbidden       = errors.New(\"forbidden\")\n)"}
+      ],
+      "tests": true
+    },
+    {
+      "name": "skills-architecture",
+      "doc": "core/software-architecture.md: the complete pattern examples, one package each (orders: repository + service + factory)",
+      "imports": [
+        "yourapp/internal/apperr",
+        "github.com/go-chi/chi/v5",
+        "github.com/google/uuid",
+        "github.com/jackc/pgx/v5",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "github.com/shopspring/decimal"
+      ],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/users/users.go", "blocks": ["core/software-architecture.md#4"], "package": "users"},
+        {"path": "internal/users/stub_app.go", "package": "users", "code": "// App-level names core/software-architecture.md's interface example uses.\ntype User struct{ ID, TenantID, Email string }\n\ntype UserFilter struct {\n\tCursor string\n\tLimit  int\n}"},
+        {"path": "internal/orders/repository.go", "blocks": ["core/software-architecture.md#6"], "package": "orders"},
+        {"path": "internal/orders/service.go", "blocks": ["core/software-architecture.md#7"], "package": "orders"},
+        {"path": "internal/orders/factory.go", "blocks": ["core/software-architecture.md#9"], "package": "orders"},
+        {"path": "internal/orders/stub_app.go", "package": "orders", "code": "// App-level names core/software-architecture.md's order examples use.\ntype Item struct {\n\tSKU      string\n\tQuantity int\n\tPrice    decimal.Decimal\n}\n\ntype Order struct {\n\tID        string\n\tTenantID  string\n\tStatus    string\n\tItems     []Item\n\tTotal     decimal.Decimal\n\tCreatedAt time.Time\n\tUpdatedAt time.Time\n}\n\nconst OrderStatusPending = \"pending\"\n\ntype OrderCursor struct {\n\tCreatedAt time.Time\n\tID        string\n}\n\ntype OrderFilter struct {\n\tAfter *OrderCursor\n\tLimit int\n}\n\nvar ErrOrderNotFound = errors.New(\"order not found\")\n\ntype PlaceOrderRequest struct{ Items []Item }\n\ntype OrderPlacedEvent struct{ OrderID string }\n\ntype InventoryService interface {\n\tReserve(ctx context.Context, items []Item) error\n}\n\ntype PaymentService interface {\n\tCharge(ctx context.Context, orderID string, amount decimal.Decimal) error\n}\n\ntype EventPublisher interface {\n\tPublish(ctx context.Context, event any)\n}\n\nfunc calculateTotal(items []Item) decimal.Decimal {\n\ttotal := decimal.Zero\n\tfor _, it := range items {\n\t\ttotal = total.Add(it.Price.Mul(decimal.NewFromInt(int64(it.Quantity))))\n\t}\n\treturn total\n}"},
+        {"path": "internal/events/bus.go", "blocks": ["core/software-architecture.md#10"], "package": "events"},
+        {"path": "internal/decorators/repo.go", "blocks": ["core/software-architecture.md#12"], "package": "decorators"},
+        {"path": "internal/decorators/stub_app.go", "package": "decorators", "code": "// App-level names core/software-architecture.md's decorator example uses.\ntype User struct{ ID, TenantID, Email string }\n\ntype Cache interface {\n\tGet(ctx context.Context, key string) (any, bool)\n\tSet(ctx context.Context, key string, value any, ttl time.Duration)\n}\n\ntype postgresUserRepo struct{ pool *pgxpool.Pool }\n\nfunc (r *postgresUserRepo) FindByID(ctx context.Context, tenantID, id string) (*User, error) {\n\treturn nil, errors.New(\"stub\")\n}\n\nfunc NewPostgresUserRepo(pool *pgxpool.Pool) UserRepository { return &postgresUserRepo{pool: pool} }"},
+        {"path": "internal/query/builder.go", "blocks": ["core/software-architecture.md#13"], "package": "query"},
+        {"path": "internal/di/service.go", "blocks": ["core/software-architecture.md#15"], "package": "di"},
+        {"path": "internal/di/stub_app.go", "package": "di", "code": "// App-level names core/software-architecture.md's constructor convention uses.\ntype Repository interface{ Ping(ctx context.Context) error }\n\ntype Cache interface{ Get(ctx context.Context, key string) (string, bool) }\n\ntype Service struct {\n\trepo   Repository\n\tcache  Cache\n\tlogger *slog.Logger\n}"},
+        {"path": "internal/handlers/orders.go", "blocks": ["core/software-architecture.md#16"], "package": "handlers"},
+        {"path": "internal/handlers/stub_app.go", "package": "handlers", "code": "// App-level names core/software-architecture.md's layer-boundary handler uses.\ntype Order struct{ ID string }\n\ntype OrderHandler struct {\n\tservice interface {\n\t\tGetOrder(ctx context.Context, id string) (*Order, error)\n\t}\n}\n\nvar (\n\tErrOrderNotFound = errors.New(\"order not found\")\n\tErrForbidden     = errors.New(\"forbidden\")\n)\n\nfunc respondJSON(w http.ResponseWriter, status int, v any) {}"}
+      ]
+    },
+    {
+      "name": "skills-testing-principles",
+      "doc": "core/testing-principles.md: injected-interface service, the test factory, the public-API test",
+      "imports": ["github.com/google/uuid", "github.com/stretchr/testify/assert"],
+      "files": [
+        {"path": "internal/orders/service.go", "blocks": ["core/testing-principles.md#1"], "package": "orders"},
+        {"path": "internal/orders/stub_app.go", "package": "orders", "code": "// App-level interfaces core/testing-principles.md's isolation example injects.\ntype OrderRepository interface{ Ping(ctx context.Context) error }\n\ntype Mailer interface {\n\tSend(ctx context.Context, to, subject, body string) error\n}\n\ntype PaymentGateway interface {\n\tCharge(ctx context.Context, cents int64) error\n}"},
+        {"path": "internal/users/factory_test.go", "blocks": ["core/testing-principles.md#2"], "package": "users"},
+        {"path": "internal/users/stub_app.go", "package": "users", "code": "// The user model core/testing-principles.md's factory builds.\nimport \"github.com/google/uuid\"\n\ntype User struct {\n\tID       uuid.UUID\n\tTenantID uuid.UUID\n\tEmail    string\n\tName     string\n\tRole     string\n\tVersion  int\n}"},
+        {"path": "internal/pricing/discount_test.go", "blocks": ["core/testing-principles.md#3"], "package": "pricing"},
+        {"path": "internal/pricing/stub_app.go", "package": "pricing", "code": "// App-level names core/testing-principles.md's public-API test uses.\ntype Order struct {\n\tQuantity  int\n\tUnitPrice float64\n}\n\ntype Quote struct{ Total float64 }\n\ntype PricingService struct{}\n\nfunc (s *PricingService) CalculateDiscount(o Order) Quote { return Quote{} }\n\nvar svc = &PricingService{}"}
+      ],
+      "tests": true
+    },
+    {
+      "name": "skills-verification-protocol",
+      "doc": "core/verification-protocol.md: model-vs-migration test, wiring smoke test, data-flow test (app packages stubbed)",
+      "imports": [
+        "yourapp/internal/config",
+        "yourapp/internal/postgres",
+        "yourapp/internal/repository",
+        "yourapp/internal/service",
+        "yourapp/internal/handler",
+        "yourapp/internal/server",
+        "github.com/google/uuid",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require"
+      ],
+      "files": [
+        {"path": "internal/config/config.go", "package": "config", "code": "type Config struct{ DSN string }\n\nfunc LoadTest() Config { return Config{} }"},
+        {"path": "internal/postgres/postgres.go", "package": "postgres", "code": "func ConnectTest(t *testing.T, dsn string) *pgxpool.Pool { return nil }"},
+        {"path": "internal/repository/repository.go", "package": "repository", "code": "type UserRepository struct{ db *pgxpool.Pool }\n\nfunc NewUserRepository(db *pgxpool.Pool) *UserRepository { return &UserRepository{db: db} }"},
+        {"path": "internal/service/service.go", "package": "service", "code": "import \"yourapp/internal/repository\"\n\ntype UserService struct{ repo *repository.UserRepository }\n\nfunc NewUserService(r *repository.UserRepository) *UserService { return &UserService{repo: r} }"},
+        {"path": "internal/handler/handler.go", "package": "handler", "code": "import \"yourapp/internal/service\"\n\ntype UserHandler struct{ svc *service.UserService }\n\nfunc NewUserHandler(s *service.UserService) *UserHandler { return &UserHandler{svc: s} }"},
+        {"path": "internal/server/server.go", "package": "server", "code": "import \"yourapp/internal/handler\"\n\nfunc NewRouter(h *handler.UserHandler) http.Handler { return http.NewServeMux() }"},
+        {"path": "internal/users/model_test.go", "blocks": ["core/verification-protocol.md#1"], "package": "users"},
+        {"path": "internal/users/stub_app.go", "package": "users", "code": "// App-level names core/verification-protocol.md's model test uses.\ntype User struct {\n\tID       string `db:\"id\"`\n\tTenantID string `db:\"tenant_id\"`\n\tEmail    string `db:\"email\"`\n}\n\nvar db *sql.DB"},
+        {"path": "internal/wiring/wiring_test.go", "blocks": ["core/verification-protocol.md#3"], "package": "wiring"},
+        {"path": "internal/wiring/dataflow_test.go", "blocks": ["core/verification-protocol.md#4"], "package": "wiring"},
+        {"path": "internal/wiring/stub_test.go", "package": "wiring", "code": "// Test helpers core/verification-protocol.md's wiring and data-flow tests call (app-level).\nimport \"yourapp/internal/config\"\n\ntype User struct {\n\tID    string\n\tEmail string\n\tName  string\n}\n\ntype ListMeta struct {\n\tRequestID string\n}\n\nfunc testToken(t *testing.T, cfg config.Config) string { return \"\" }\n\nfunc httpPost(t *testing.T, path, body string) *http.Response  { return nil }\nfunc httpGet(t *testing.T, path string) *http.Response          { return nil }\nfunc httpPatch(t *testing.T, path, body string) *http.Response { return nil }\nfunc httpDelete(t *testing.T, path string) *http.Response       { return nil }\n\nfunc containsID(users []User, id string) bool { return false }"}
+      ],
+      "tests": true
+    },
+    {
+      "name": "skills-security-owasp",
+      "doc": "core/security-owasp.md: the input-validation snippet, wrapped in a handler-shaped function",
+      "files": [
+        {"path": "internal/owasp/validate.go", "blocks": ["core/security-owasp.md#1"], "package": "owasp", "wrap": "func _(input struct{ Email string }, emailRegex *regexp.Regexp) (any, error)", "postlude": "\treturn input, nil"},
+        {"path": "internal/owasp/stub_app.go", "package": "owasp", "code": "var ErrInvalidEmail = errors.New(\"invalid email\")"}
+      ]
+    },
+    {
+      "name": "skills-databases",
+      "doc": "databases/postgres.md and dynamodb.md snippets (wrapped: pool setup, the RLS tenant context, a DynamoDB page query) and every query-optimization.md example, one package per example",
+      "imports": [
+        "github.com/jackc/pgx/v5",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "github.com/lib/pq",
+        "github.com/jmoiron/sqlx"
+      ],
+      "files": [
+        {"path": "internal/pg/pool.go", "blocks": ["databases/postgres.md#1"], "package": "pg", "wrap": "func _(ctx context.Context, connStr string, cfg struct{ DBMaxConns int }) (*pgxpool.Pool, error)", "postlude": "\treturn pool, err"},
+        {"path": "internal/pg/rls.go", "blocks": ["databases/postgres.md#2"], "package": "pg", "wrap": "func _(ctx context.Context, tx pgx.Tx, tenantID string) error", "postlude": "\treturn nil"},
+        {"path": "internal/ddb/query.go", "blocks": ["databases/dynamodb.md#1"], "package": "ddb", "wrap": "func _(ctx context.Context, client *dynamodb.Client, tenantID string, startKey map[string]types.AttributeValue) ([]Widget, error)", "postlude": "\treturn widgets, nil"},
+        {"path": "internal/ddb/stub_app.go", "package": "ddb", "code": "type Widget struct {\n\tPK   string `dynamodbav:\"PK\"`\n\tSK   string `dynamodbav:\"SK\"`\n\tName string `dynamodbav:\"name\"`\n}"},
+        {"path": "internal/nplus1/handler.go", "blocks": ["databases/query-optimization.md#1"], "package": "nplus1"},
+        {"path": "internal/nplus1/stub_app.go", "package": "nplus1", "code": "// App-level model types databases/query-optimization.md's examples use.\ntype User struct{ ID, Email, Name string }\n\ntype Order struct {\n\tID        string\n\tTotal     float64\n\tStatus    string\n\tCreatedAt time.Time\n}\n\ntype UserWithOrders struct {\n\tUser   User\n\tOrders []Order\n}\n\ntype userLister interface {\n\tListAll(ctx context.Context) ([]User, error)\n}\n\ntype Handler struct {\n\tuserRepo  userLister\n\torderRepo interface {\n\t\tFindByUserID(ctx context.Context, userID string) ([]Order, error)\n\t}\n}"},
+        {"path": "internal/join/repo.go", "blocks": ["databases/query-optimization.md#2"], "package": "join"},
+        {"path": "internal/join/stub_app.go", "package": "join", "code": "// App-level model types databases/query-optimization.md's examples use.\ntype User struct{ ID, Email, Name string }\n\ntype Order struct {\n\tID        string\n\tTotal     float64\n\tStatus    string\n\tCreatedAt time.Time\n}\n\ntype UserWithOrders struct {\n\tUser   User\n\tOrders []Order\n}\n\ntype userLister interface {\n\tListAll(ctx context.Context) ([]User, error)\n}\n\ntype UserRepo struct{ db *sql.DB }"},
+        {"path": "internal/batch/repo.go", "blocks": ["databases/query-optimization.md#3"], "package": "batch"},
+        {"path": "internal/batch/stub_app.go", "package": "batch", "code": "// App-level model types databases/query-optimization.md's examples use.\ntype User struct{ ID, Email, Name string }\n\ntype Order struct {\n\tID        string\n\tTotal     float64\n\tStatus    string\n\tCreatedAt time.Time\n}\n\ntype UserWithOrders struct {\n\tUser   User\n\tOrders []Order\n}\n\ntype userLister interface {\n\tListAll(ctx context.Context) ([]User, error)\n}\n\ntype OrderRepo struct{ db *sql.DB }\n\ntype Handler struct {\n\tuserRepo  userLister\n\torderRepo *OrderRepo\n}"},
+        {"path": "internal/pool/pool.go", "blocks": ["databases/query-optimization.md#4"], "package": "pool"},
+        {"path": "internal/prepared/repo.go", "blocks": ["databases/query-optimization.md#5"], "package": "prepared"},
+        {"path": "internal/prepared/stub_app.go", "package": "prepared", "code": "type User struct {\n\tID, Email, Name string\n\tCreatedAt       time.Time\n}\n\ntype UserRepo struct {\n\tdb                            *sql.DB\n\tstmtFindByID, stmtFindByEmail *sql.Stmt\n}\n\nvar ErrNotFound = errors.New(\"not found\")"},
+        {"path": "internal/bulk/copy.go", "blocks": ["databases/query-optimization.md#6"], "package": "bulk"},
+        {"path": "internal/bulk/batched.go", "blocks": ["databases/query-optimization.md#8"], "package": "bulk"},
+        {"path": "internal/bulk/stub_app.go", "package": "bulk", "code": "import \"github.com/jackc/pgx/v5/pgxpool\"\n\ntype Event struct {\n\tID, Type  string\n\tPayload   []byte\n\tCreatedAt time.Time\n}\n\ntype EventRepo struct{ pool *pgxpool.Pool }"},
+        {"path": "internal/unnest/tags.go", "blocks": ["databases/query-optimization.md#7"], "package": "unnest"},
+        {"path": "internal/unnest/stub_app.go", "package": "unnest", "code": "type Tag struct{ Name, Category string }\n\ntype TagRepo struct{ db *sql.DB }"},
+        {"path": "internal/monitor/monitor.go", "blocks": ["databases/query-optimization.md#9"], "package": "monitor"},
+        {"path": "internal/monitor/stub_app.go", "package": "monitor", "code": "import \"github.com/jmoiron/sqlx\"\n\ntype User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\ntype UserRepo struct {\n\tdb      *sqlx.DB\n\tmonitor *QueryMonitor\n}"}
+      ]
+    },
+    {
+      "name": "skills-lang-go",
+      "doc": "languages/go.md: every compilable block, grouped into packages that can share a namespace (the pack reuses names like ErrNotFound, OrderService and UserRepository across sections)",
+      "imports": [
+        "github.com/jmoiron/sqlx",
+        "github.com/google/uuid",
+        "golang.org/x/sync/errgroup",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require",
+        "yourapp/internal/apperr"
+      ],
+      "files": [
+        {"path": "internal/config/config.go", "package": "config", "code": "type Config struct {\n\tDSN, Env, SMTPAddr string\n\tPort     int\n}\n\nfunc Load() Config { return Config{} }"},
+        {"path": "internal/postgres/postgres.go", "package": "postgres", "code": "import \"github.com/jmoiron/sqlx\"\n\nfunc Connect(dsn string) *sqlx.DB { return nil }"},
+        {"path": "internal/logger/logger.go", "package": "logger", "code": "func New(env string) *slog.Logger { return slog.Default() }"},
+        {"path": "internal/repository/repository.go", "package": "repository", "code": "import \"github.com/jmoiron/sqlx\"\n\ntype UserRepository struct{ db *sqlx.DB }\n\nfunc NewUserRepository(db *sqlx.DB, log *slog.Logger) *UserRepository { return &UserRepository{db: db} }"},
+        {"path": "internal/smtp/smtp.go", "package": "smtp", "code": "type Mailer struct{ addr string }\n\nfunc NewMailer(addr string) *Mailer { return &Mailer{addr: addr} }"},
+        {"path": "internal/service/service.go", "package": "service", "code": "import (\n\t\"yourapp/internal/repository\"\n\t\"yourapp/internal/smtp\"\n)\n\ntype UserService struct{}\n\nfunc NewUserService(r *repository.UserRepository, m *smtp.Mailer, log *slog.Logger) *UserService { return &UserService{} }"},
+        {"path": "internal/handler/handler.go", "package": "handler", "code": "import \"yourapp/internal/service\"\n\ntype UserHandler struct{}\n\nfunc NewUserHandler(s *service.UserService, log *slog.Logger) *UserHandler { return &UserHandler{} }"},
+        {"path": "internal/server/server.go", "package": "server", "code": "import \"yourapp/internal/handler\"\n\ntype Server struct{}\n\nfunc New(h *handler.UserHandler, port int) *Server { return &Server{} }\n\nfunc (s *Server) Run() error { return nil }"},
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/lang/errs/errors.go", "blocks": ["languages/go.md#1"], "package": "errs"},
+        {"path": "internal/lang/errs/stub_app.go", "package": "errs", "code": "type User struct{ ID string }\n\ntype UserService struct {\n\trepo interface {\n\t\tFindByID(ctx context.Context, id string) (*User, error)\n\t}\n}"},
+        {"path": "internal/lang/ifaces/ifaces.go", "blocks": ["languages/go.md#2"], "package": "ifaces"},
+        {"path": "internal/lang/ifaces/stub_app.go", "package": "ifaces", "code": "type User struct{ ID string }\n\ntype Message struct{ To, Body string }\n\ntype CreateOrderRequest struct {\n\tCustomerID string\n\tItems      []string\n}\n\ntype Order struct {\n\tID     string\n\tStatus string\n}"},
+        {"path": "internal/lang/embed/embed.go", "blocks": ["languages/go.md#3"], "package": "embed"},
+        {"path": "internal/lang/ctxprop/repo.go", "blocks": ["languages/go.md#4"], "package": "ctxprop"},
+        {"path": "internal/lang/ctxprop/stub_app.go", "package": "ctxprop", "code": "import \"github.com/jmoiron/sqlx\"\n\ntype User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\ntype UserRepo struct{ db *sqlx.DB }"},
+        {"path": "internal/lang/pool/pool.go", "blocks": ["languages/go.md#5"], "package": "pool"},
+        {"path": "internal/lang/pool/stub_app.go", "package": "pool", "code": "type Item struct{ ID string }\n\nfunc process(ctx context.Context, item Item) error { return nil }"},
+        {"path": "internal/lang/tables/discount_test.go", "blocks": ["languages/go.md#6"], "package": "tables"},
+        {"path": "internal/lang/tables/stub_app.go", "package": "tables", "code": "func ApplyDiscount(subtotal float64, percent int) float64 { return 0 }"},
+        {"path": "cmd/server/main.go", "blocks": ["languages/go.md#7"], "package": "main", "imports": ["yourapp/internal/config", "yourapp/internal/postgres", "yourapp/internal/logger", "yourapp/internal/repository", "yourapp/internal/smtp", "yourapp/internal/service", "yourapp/internal/handler", "yourapp/internal/server"]},
+        {"path": "internal/lang/perf/perf.go", "blocks": ["languages/go.md#8"], "package": "perf"},
+        {"path": "internal/lang/perf/stub_app.go", "package": "perf", "code": "type User struct{ ID string }"},
+        {"path": "internal/lang/ifpatterns/ifpatterns.go", "blocks": ["languages/go.md#9"], "package": "ifpatterns"},
+        {"path": "internal/lang/ifpatterns/stub_app.go", "package": "ifpatterns", "code": "type Entity struct{ ID string }\n\ntype SlackNotifier struct{}\n\nfunc (n *SlackNotifier) Notify(ctx context.Context, msg string) error { return nil }\n\ntype EmailNotifier struct{}\n\nfunc (n *EmailNotifier) Notify(ctx context.Context, msg string) error { return nil }"},
+        {"path": "internal/lang/errpat/errpat.go", "blocks": ["languages/go.md#10"], "package": "errpat"},
+        {"path": "internal/lang/errpat/stub_app.go", "package": "errpat", "code": "type Order struct{ ID string }\n\ntype OrderService struct {\n\trepo interface {\n\t\tFindByID(ctx context.Context, id string) (*Order, error)\n\t}\n}"},
+        {"path": "internal/lang/conc/conc.go", "blocks": ["languages/go.md#11"], "package": "conc"},
+        {"path": "internal/lang/conc/stub_app.go", "package": "conc", "code": "type Item struct{ ID string }\n\ntype Job struct{ ID string }\n\ntype Result struct{ JobID string }\n\nfunc fetch(ctx context.Context, id string) (*Item, error) { return &Item{ID: id}, nil }\n\nfunc process(j Job) Result { return Result{JobID: j.ID} }"},
+        {"path": "internal/lang/testpat/patterns_test.go", "blocks": ["languages/go.md#12"], "package": "testpat", "imports": ["github.com/testcontainers/testcontainers-go/modules/postgres"]},
+        {"path": "internal/lang/testpat/stub_app.go", "package": "testpat", "code": "import \"github.com/jmoiron/sqlx\"\n\nfunc ParseAmount(s string) (int64, error) { return 0, nil }\n\ntype User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\ntype UserRepository struct{ db *sqlx.DB }\n\nfunc NewUserRepository(db *sqlx.DB) *UserRepository { return &UserRepository{db: db} }\n\nfunc (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error) { return &User{}, nil }\n\nfunc applyMigrations(t *testing.T, db *sqlx.DB) {}\n\nfunc renderTemplate(data any) string { return \"\" }\n\nvar data = map[string]string{\"name\": \"golden\"}"},
+        {"path": "internal/lang/layers/layers.go", "blocks": ["languages/go.md#14"], "package": "layers"},
+        {"path": "internal/lang/layers/stub_app.go", "package": "layers", "code": "type CreateOrderRequest struct {\n\tCustomerID string\n\tItems      []string\n}\n\ntype Order struct {\n\tID     string\n\tStatus string\n}\n\ntype OrderHandler struct{ service *OrderService }\n\ntype OrderService struct {\n\trepo interface {\n\t\tSave(ctx context.Context, o *Order) error\n\t}\n\tevents interface {\n\t\tPublish(ctx context.Context, topic string, payload any) error\n\t}\n}\n\ntype OrderRepo struct{ db *sql.DB }\n\nfunc decodeCreateOrder(r *http.Request) (CreateOrderRequest, error) { return CreateOrderRequest{}, nil }\n\nfunc respondJSON(w http.ResponseWriter, r *http.Request, status int, data any) {}"},
+        {"path": "internal/lang/ctxlog/values.go", "blocks": ["languages/go.md#15"], "package": "ctxlog"},
+        {"path": "internal/lang/ctxlog/children.go", "blocks": ["languages/go.md#20"], "package": "ctxlog"},
+        {"path": "internal/lang/ctxlog/logger.go", "blocks": ["languages/go.md#21"], "package": "ctxlog"},
+        {"path": "internal/lang/ctxlog/stub_app.go", "package": "ctxlog", "code": "type CreateOrderRequest struct {\n\tCustomerID string\n\tItems      []string\n}\n\ntype Order struct {\n\tID     string\n\tStatus string\n}\n\ntype Handler struct{ log *slog.Logger }\n\ntype OrderService struct {\n\trepo interface {\n\t\tCreate(ctx context.Context, req CreateOrderRequest) (*Order, error)\n\t}\n}"},
+        {"path": "internal/lang/deadline/deadline.go", "blocks": ["languages/go.md#16"], "package": "deadline"},
+        {"path": "internal/lang/deadline/stub_app.go", "package": "deadline", "code": "type CreateOrderRequest struct {\n\tCustomerID string\n\tItems      []string\n}\n\ntype Order struct {\n\tID     string\n\tStatus string\n}\n\ntype OrderHandler struct{ service *OrderService }\n\ntype OrderService struct {\n\trepo interface {\n\t\tCreate(ctx context.Context, req CreateOrderRequest) (*Order, error)\n\t}\n}\n\nfunc decodeCreateOrder(r *http.Request) (CreateOrderRequest, error) { return CreateOrderRequest{}, nil }\n\nfunc respondJSON(w http.ResponseWriter, r *http.Request, status int, data any) {}"},
+        {"path": "internal/lang/cancel/cancel.go", "blocks": ["languages/go.md#17"], "package": "cancel"},
+        {"path": "internal/lang/cancel/stub_app.go", "package": "cancel", "code": "type Item struct{ ID string }\n\ntype Event struct{ Name string }\n\ntype Worker struct{}\n\nfunc (w *Worker) process(ctx context.Context, item Item) error { return nil }\n\ntype Stream struct{ source chan Event }"},
+        {"path": "internal/lang/logsetup/logger.go", "blocks": ["languages/go.md#18"], "package": "logsetup"},
+        {"path": "internal/lang/logattrs/attrs.go", "blocks": ["languages/go.md#19"], "package": "logattrs", "wrap": "func _(log *slog.Logger, order *Order, tenantID string, elapsed time.Duration)"},
+        {"path": "internal/lang/logattrs/levels.go", "blocks": ["languages/go.md#22"], "package": "logattrs", "wrap": "func _(log *slog.Logger, key string, hit bool, id string, count, maxCount int, err error)"},
+        {"path": "internal/lang/logattrs/stub_app.go", "package": "logattrs", "code": "type Order struct {\n\tID        string\n\tItems     []string\n\tTotal     float64\n\tIsExpress bool\n\tCreatedAt time.Time\n\tMetadata  map[string]string\n}"},
+        {"path": "internal/lang/generics/filter.go", "blocks": ["languages/go.md#23"], "package": "generics"},
+        {"path": "internal/lang/generics/constraints.go", "blocks": ["languages/go.md#24"], "package": "generics"},
+        {"path": "internal/lang/generics/result.go", "blocks": ["languages/go.md#26"], "package": "generics"},
+        {"path": "internal/lang/generics/when.go", "blocks": ["languages/go.md#27"], "package": "generics"},
+        {"path": "internal/lang/generics/fanout.go", "blocks": ["languages/go.md#39"], "package": "generics"},
+        {"path": "internal/lang/genrepo/repo.go", "blocks": ["languages/go.md#25"], "package": "genrepo"},
+        {"path": "internal/lang/genrepo/stub_app.go", "package": "genrepo", "code": "type User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\nvar ErrNotFound = errors.New(\"not found\")"},
+        {"path": "internal/lang/wrapping/wrapping.go", "blocks": ["languages/go.md#28"], "package": "wrapping"},
+        {"path": "internal/lang/wrapping/stub_app.go", "package": "wrapping", "code": "type Order struct{ ID string }\n\ntype OrderService struct {\n\trepo interface {\n\t\tFindByID(ctx context.Context, id string) (*Order, error)\n\t}\n}"},
+        {"path": "internal/lang/errtypes/handling.go", "blocks": ["languages/go.md#29"], "package": "errtypes", "wrap": "func _(w http.ResponseWriter, r *http.Request, err error, log *slog.Logger)"},
+        {"path": "internal/lang/errtypes/kinds.go", "blocks": ["languages/go.md#30"], "package": "errtypes"},
+        {"path": "internal/lang/errtypes/chains.go", "blocks": ["languages/go.md#31"], "package": "errtypes"},
+        {"path": "internal/lang/errtypes/unwrap.go", "blocks": ["languages/go.md#32"], "package": "errtypes"},
+        {"path": "internal/lang/errtypes/stub_app.go", "package": "errtypes", "code": "import \"github.com/jmoiron/sqlx\"\n\ntype User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\ntype UserService struct {\n\trepo interface {\n\t\tFindByID(ctx context.Context, id string) (*User, error)\n\t}\n}\n\ntype UserRepo struct{ db *sqlx.DB }"},
+        {"path": "internal/lang/small/small.go", "blocks": ["languages/go.md#34"], "package": "small"},
+        {"path": "internal/lang/small/stub_app.go", "package": "small", "code": "type User struct{ ID string }\n\ntype Message struct{ Body string }"},
+        {"path": "internal/lang/compose/compose.go", "blocks": ["languages/go.md#35"], "package": "compose"},
+        {"path": "internal/lang/compose/stub_app.go", "package": "compose", "code": "type Entity struct{ ID string }\n\ntype Filter struct{ Cursor string }"},
+        {"path": "internal/lang/mailer/mailer_test.go", "blocks": ["languages/go.md#36"], "package": "mailer"},
+        {"path": "internal/lang/mailer/stub_app_test.go", "package": "mailer", "code": "type CreateUserRequest struct{ Email string }\n\ntype User struct{ ID, Email string }\n\ntype userRepo interface {\n\tSave(ctx context.Context, u *User) error\n}\n\ntype UserService struct{}\n\nfunc NewUserService(repo userRepo, mailer Mailer, log *slog.Logger) *UserService { return &UserService{} }\n\nfunc (s *UserService) CreateUser(ctx context.Context, req CreateUserRequest) (*User, error) { return nil, nil }"},
+        {"path": "internal/lang/mailer/stub_fake_test.go", "package": "mailer", "code": "type fakeUserRepo struct{}\n\nfunc (fakeUserRepo) Save(ctx context.Context, u *User) error { return nil }\n\nfunc newFakeUserRepo() fakeUserRepo { return fakeUserRepo{} }"},
+        {"path": "internal/lang/stdifaces/stdifaces.go", "blocks": ["languages/go.md#37"], "package": "stdifaces"},
+        {"path": "internal/lang/stdifaces/stub_app.go", "package": "stdifaces", "code": "type Report struct{ Name string }\n\ntype Row []any\n\ntype OrderStatus int\n\nconst (\n\tOrderPending OrderStatus = iota\n\tOrderConfirmed\n)\n\ntype Order struct{ CreatedAt time.Time }"},
+        {"path": "internal/lang/workerpool/workerpool.go", "blocks": ["languages/go.md#38"], "package": "workerpool"},
+        {"path": "internal/lang/dashboard/dashboard.go", "blocks": ["languages/go.md#40"], "package": "dashboard"},
+        {"path": "internal/lang/dashboard/stub_app.go", "package": "dashboard", "code": "type Stats struct{ Orders int }\n\ntype Order struct{ ID string }\n\ntype Notification struct{ ID string }\n\ntype Item struct{ ID string }\n\ntype Dashboard struct {\n\tStats         *Stats\n\tOrders        []*Order\n\tNotifications []*Notification\n}\n\ntype DashboardService struct {\n\tstatsRepo interface {\n\t\tGetByUser(ctx context.Context, userID string) (*Stats, error)\n\t}\n\torderRepo interface {\n\t\tRecentByUser(ctx context.Context, userID string, n int) ([]*Order, error)\n\t}\n\tnotifRepo interface {\n\t\tUnreadByUser(ctx context.Context, userID string) ([]*Notification, error)\n\t}\n}\n\ntype BulkService struct{}\n\nfunc (s *BulkService) process(ctx context.Context, item Item) error { return nil }"},
+        {"path": "internal/lang/once/once.go", "blocks": ["languages/go.md#41"], "package": "once"},
+        {"path": "internal/lang/once/stub_app.go", "package": "once", "code": "type Config struct{ Env string }\n\nfunc parseConfig(path string) (*Config, error) { return &Config{}, nil }"},
+        {"path": "internal/lang/syncmap/syncmap.go", "blocks": ["languages/go.md#42"], "package": "syncmap"},
+        {"path": "internal/lang/chandir/chandir.go", "blocks": ["languages/go.md#43"], "package": "chandir"},
+        {"path": "internal/lang/chandir/stub_app.go", "package": "chandir", "code": "type Item struct{ ID string }\n\ntype Result struct{ ID string }\n\nfunc process(item Item) error { return nil }\n\nfunc transform(item Item) Result { return Result{ID: item.ID} }"}
+      ],
+      "tests": true
+    },
+    {
+      "name": "skills-frameworks",
+      "doc": "frameworks/chi.md, gin.md, echo.md (Echo v5) and graphql.md's gqlgen resolvers, each in its own package on the archetype apperr + middleware packages; harness smoke tests drive the chi, gin and echo routers",
+      "imports": [
+        "yourapp/internal/apperr",
+        "yourapp/internal/middleware",
+        "github.com/go-chi/chi/v5",
+        "github.com/google/uuid",
+        "github.com/gin-gonic/gin",
+        "github.com/go-playground/validator/v10",
+        "github.com/labstack/echo/v5",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require",
+        "yourapp/graph/model",
+        "github.com/graph-gophers/dataloader/v7",
+        "yourapp/internal/apperr",
+        "github.com/99designs/gqlgen/graphql",
+        "github.com/vektah/gqlparser/v2/gqlerror"
+      ],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/chiapp/router.go", "blocks": ["frameworks/chi.md#1"], "package": "chiapp"},
+        {"path": "internal/chiapp/params.go", "blocks": ["frameworks/chi.md#2"], "package": "chiapp"},
+        {"path": "internal/chiapp/tenant.go", "blocks": ["frameworks/chi.md#3"], "package": "chiapp"},
+        {"path": "internal/chiapp/respond.go", "blocks": ["frameworks/chi.md#4"], "package": "chiapp"},
+        {"path": "internal/chiapp/mount.go", "blocks": ["frameworks/chi.md#5"], "package": "chiapp", "wrap": "func _(mainRouter *chi.Mux, handlers *Handlers)"},
+        {"path": "internal/chiapp/router_test.go", "blocks": ["frameworks/chi.md#6"], "package": "chiapp", "wrap": "func _(t *testing.T, router http.Handler, token string)"},
+        {"path": "internal/chiapp/stub_app.go", "package": "chiapp", "code": "// App-level names frameworks/chi.md's examples use.\nimport \"github.com/google/uuid\"\n\ntype User struct {\n\tID    uuid.UUID `json:\"id\"`\n\tEmail string    `json:\"email\"`\n}\n\ntype Handler struct {\n\tservice interface {\n\t\tGet(ctx context.Context, id uuid.UUID) (*User, error)\n\t}\n}\n\ntype Handlers struct{ h *Handler }\n\nfunc (hs *Handlers) ListUsers(w http.ResponseWriter, r *http.Request)  {}\nfunc (hs *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {}\nfunc (hs *Handlers) GetUser(w http.ResponseWriter, r *http.Request)    { hs.h.GetUser(w, r) }\nfunc (hs *Handlers) UpdateUser(w http.ResponseWriter, r *http.Request) {}\nfunc (hs *Handlers) DeleteUser(w http.ResponseWriter, r *http.Request) {}\nfunc (hs *Handlers) OCSP(w http.ResponseWriter, r *http.Request)       {}\nfunc (hs *Handlers) CRL(w http.ResponseWriter, r *http.Request)        {}\n\ntype Middleware struct {\n\tLogger func(http.Handler) http.Handler\n\tAuth   func(http.Handler) http.Handler\n}\n\nfunc (m *Middleware) Timeout(d time.Duration) func(http.Handler) http.Handler {\n\treturn func(next http.Handler) http.Handler { return http.TimeoutHandler(next, d, \"\") }\n}"},
+        {"path": "internal/chiapp/smoke_test.go", "package": "chiapp", "code": "// HARNESS SMOKE TEST — drives frameworks/chi.md's router: a malformed id is a 400 envelope, a\n// found user is the {data, meta.request_id} envelope, and RequireTenant without a verified identity\n// is a 401 envelope.\nimport (\n\t\"github.com/google/uuid\"\n\n\t\"yourapp/internal/middleware\"\n)\n\ntype fakeUsers struct{}\n\nfunc (fakeUsers) Get(ctx context.Context, id uuid.UUID) (*User, error) {\n\treturn &User{ID: id, Email: \"a@example.com\"}, nil\n}\n\nfunc passthrough(next http.Handler) http.Handler { return next }\n\nfunc decode(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {\n\tt.Helper()\n\tvar m map[string]any\n\tif err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {\n\t\tt.Fatalf(\"body %q: %v\", rec.Body.String(), err)\n\t}\n\treturn m\n}\n\nfunc TestChiRouterEnvelopes(t *testing.T) {\n\tr := NewRouter(&Handlers{h: &Handler{service: fakeUsers{}}},\n\t\t&Middleware{Logger: passthrough, Auth: passthrough}, slog.New(slog.DiscardHandler))\n\n\trec := httptest.NewRecorder()\n\tr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, \"/api/v1/users/not-a-uuid/\", nil))\n\tbody := decode(t, rec)\n\terrObj, _ := body[\"error\"].(map[string]any)\n\tif rec.Code != http.StatusBadRequest || errObj[\"code\"] != \"VALIDATION_FAILED\" {\n\t\tt.Fatalf(\"malformed id: %d %v\", rec.Code, body)\n\t}\n\n\tid := uuid.New()\n\trec = httptest.NewRecorder()\n\tr.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, \"/api/v1/users/\"+id.String()+\"/\", nil))\n\tbody = decode(t, rec)\n\tdata, _ := body[\"data\"].(map[string]any)\n\tmeta, _ := body[\"meta\"].(map[string]any)\n\tif rec.Code != http.StatusOK || data[\"id\"] != id.String() || meta[\"request_id\"] != rec.Header().Get(\"X-Request-Id\") || meta[\"request_id\"] == \"\" {\n\t\tt.Fatalf(\"found user: %d %v (X-Request-Id %q)\", rec.Code, body, rec.Header().Get(\"X-Request-Id\"))\n\t}\n}\n\nfunc TestRequireTenant(t *testing.T) {\n\tok := RequireTenant(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }))\n\trec := httptest.NewRecorder()\n\tok.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, \"/\", nil))\n\terrObj, _ := decode(t, rec)[\"error\"].(map[string]any)\n\tif rec.Code != http.StatusUnauthorized || errObj[\"code\"] != \"UNAUTHENTICATED\" {\n\t\tt.Fatalf(\"no identity: %d %v\", rec.Code, errObj)\n\t}\n\treq := httptest.NewRequest(http.MethodGet, \"/\", nil)\n\treq = req.WithContext(middleware.WithIdentity(req.Context(), uuid.New(), uuid.New()))\n\trec = httptest.NewRecorder()\n\tok.ServeHTTP(rec, req)\n\tif rec.Code != http.StatusNoContent {\n\t\tt.Fatalf(\"verified identity: %d\", rec.Code)\n\t}\n}"},
+        {"path": "internal/ginapp/router.go", "blocks": ["frameworks/gin.md#1"], "package": "ginapp"},
+        {"path": "internal/ginapp/binding.go", "blocks": ["frameworks/gin.md#2"], "package": "ginapp"},
+        {"path": "internal/ginapp/respond.go", "blocks": ["frameworks/gin.md#3"], "package": "ginapp"},
+        {"path": "internal/ginapp/errors.go", "blocks": ["frameworks/gin.md#4"], "package": "ginapp"},
+        {"path": "internal/ginapp/serve.go", "blocks": ["frameworks/gin.md#5"], "package": "ginapp"},
+        {"path": "internal/ginapp/stub_app.go", "package": "ginapp", "code": "import \"github.com/gin-gonic/gin\"\n\n// App-level names frameworks/gin.md's examples use.\ntype CreateUserRequest struct {\n\tEmail string `json:\"email\" binding:\"required,email\"`\n}\n\ntype User struct {\n\tID    string `json:\"id\"`\n\tEmail string `json:\"email\"`\n}\n\ntype Handler struct {\n\tservice interface {\n\t\tCreate(ctx context.Context, req CreateUserRequest) (*User, error)\n\t}\n}\n\ntype Handlers struct{ h *Handler }\n\nfunc (hs *Handlers) ListUsers(c *gin.Context)  {}\nfunc (hs *Handlers) CreateUser(c *gin.Context) { hs.h.CreateUser(c) }\nfunc (hs *Handlers) GetUser(c *gin.Context)    {}\n\n// Middleware stands in for the project's gin middleware: RequestID echoes a fixed, valid ID.\ntype Middleware struct{}\n\nfunc (m *Middleware) Logger() gin.HandlerFunc { return func(c *gin.Context) { c.Next() } }\nfunc (m *Middleware) Auth() gin.HandlerFunc   { return func(c *gin.Context) { c.Next() } }\nfunc (m *Middleware) RequestID() gin.HandlerFunc {\n\treturn func(c *gin.Context) { c.Header(\"X-Request-Id\", \"req-0123456789\"); c.Next() }\n}"},
+        {"path": "internal/ginapp/smoke_test.go", "package": "ginapp", "code": "import \"github.com/gin-gonic/gin\"\n\n// HARNESS SMOKE TEST — drives frameworks/gin.md: a panic, a binding failure and a created user all\n// leave in the one envelope, with request_id == X-Request-Id.\ntype fakeCreator struct{}\n\nfunc (fakeCreator) Create(ctx context.Context, req CreateUserRequest) (*User, error) {\n\treturn &User{ID: \"u1\", Email: req.Email}, nil\n}\n\nfunc do(t *testing.T, r http.Handler, method, path, body string) (*httptest.ResponseRecorder, map[string]any) {\n\tt.Helper()\n\trec := httptest.NewRecorder()\n\treq := httptest.NewRequest(method, path, strings.NewReader(body))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tr.ServeHTTP(rec, req)\n\tvar m map[string]any\n\tif err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {\n\t\tt.Fatalf(\"%s %s: body %q: %v\", method, path, rec.Body.String(), err)\n\t}\n\treturn rec, m\n}\n\nfunc TestGinEnvelopes(t *testing.T) {\n\tgin.SetMode(gin.TestMode)\n\tr := NewRouter(&Handlers{h: &Handler{service: fakeCreator{}}}, &Middleware{})\n\tr.GET(\"/boom\", func(c *gin.Context) { panic(\"boom\") })\n\n\trec, body := do(t, r, http.MethodGet, \"/boom\", \"\")\n\te, _ := body[\"error\"].(map[string]any)\n\tif rec.Code != 500 || e[\"code\"] != \"INTERNAL\" || e[\"request_id\"] != \"req-0123456789\" {\n\t\tt.Fatalf(\"panic: %d %v\", rec.Code, body)\n\t}\n\n\trec, body = do(t, r, http.MethodPost, \"/api/v1/users\", `{\"email\":\"not-an-email\"}`)\n\te, _ = body[\"error\"].(map[string]any)\n\tdetails, _ := e[\"details\"].([]any)\n\tif rec.Code != 400 || e[\"code\"] != \"VALIDATION_FAILED\" || len(details) != 1 {\n\t\tt.Fatalf(\"validation: %d %v\", rec.Code, body)\n\t}\n\n\trec, body = do(t, r, http.MethodPost, \"/api/v1/users\", `{\"email\":`)\n\te, _ = body[\"error\"].(map[string]any)\n\tif rec.Code != 400 || e[\"code\"] != \"MALFORMED_REQUEST\" {\n\t\tt.Fatalf(\"malformed: %d %v\", rec.Code, body)\n\t}\n\n\trec, body = do(t, r, http.MethodPost, \"/api/v1/users\", `{\"email\":\"a@example.com\"}`)\n\tmeta, _ := body[\"meta\"].(map[string]any)\n\tif rec.Code != 201 || body[\"data\"] == nil || meta[\"request_id\"] != \"req-0123456789\" {\n\t\tt.Fatalf(\"created: %d %v\", rec.Code, body)\n\t}\n}"},
+        {"path": "internal/echoapp/router.go", "blocks": ["frameworks/echo.md#1"], "package": "echoapp"},
+        {"path": "internal/echoapp/handlers.go", "blocks": ["frameworks/echo.md#2"], "package": "echoapp"},
+        {"path": "internal/echoapp/errors.go", "blocks": ["frameworks/echo.md#3"], "package": "echoapp"},
+        {"path": "internal/echoapp/stub_app.go", "package": "echoapp", "code": "import \"github.com/labstack/echo/v5\"\n\n// App-level names frameworks/echo.md's examples use.\ntype CreateUserRequest struct {\n\tEmail string `json:\"email\" validate:\"required,email\"`\n}\n\ntype User struct {\n\tID    string `json:\"id\"`\n\tEmail string `json:\"email\"`\n}\n\ntype Handler struct {\n\tservice interface {\n\t\tCreate(ctx context.Context, req CreateUserRequest) (*User, error)\n\t}\n}\n\ntype Handlers struct{ h *Handler }\n\nfunc (hs *Handlers) ListUsers(c *echo.Context) error  { return c.NoContent(http.StatusNoContent) }\nfunc (hs *Handlers) CreateUser(c *echo.Context) error { return hs.h.CreateUser(c) }\nfunc (hs *Handlers) GetUser(c *echo.Context) error    { return c.NoContent(http.StatusNoContent) }"},
+        {"path": "internal/echoapp/smoke_test.go", "package": "echoapp", "code": "// HARNESS SMOKE TEST — drives frameworks/echo.md on Echo v5 with the archetype middleware: an\n// unknown route, a missing token, a validation failure (json field name) and a created user all use\n// the one envelope; a malformed inbound X-Request-ID is replaced.\nimport (\n\t\"time\"\n\n\t\"github.com/golang-jwt/jwt/v5\"\n\t\"github.com/google/uuid\"\n\n\t\"yourapp/internal/middleware\"\n)\n\nvar echoCfg = middleware.JWTConfig{VerifyKey: []byte(\"test-only-hmac-key-0123456789abcdef\"),\n\tIssuer: \"https://auth.example.com\", Audience: \"widgets-api\", SigningMethod: \"HS256\"}\n\ntype fakeCreator struct{}\n\nfunc (fakeCreator) Create(ctx context.Context, req CreateUserRequest) (*User, error) {\n\treturn &User{ID: \"u1\", Email: req.Email}, nil\n}\n\nfunc token(t *testing.T) string {\n\tt.Helper()\n\ts, err := jwt.NewWithClaims(jwt.SigningMethodHS256, &middleware.CustomClaims{\n\t\tRegisteredClaims: jwt.RegisteredClaims{Subject: uuid.NewString(), Issuer: echoCfg.Issuer,\n\t\t\tAudience: jwt.ClaimStrings{echoCfg.Audience}, ExpiresAt: jwt.NewNumericDate(time.Now().Add(time.Hour))},\n\t\tTenantID: uuid.NewString(),\n\t}).SignedString(echoCfg.VerifyKey)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\treturn s\n}\n\nfunc call(t *testing.T, e http.Handler, method, path, body string, hdr map[string]string) (*httptest.ResponseRecorder, map[string]any) {\n\tt.Helper()\n\treq := httptest.NewRequest(method, path, strings.NewReader(body))\n\treq.Header.Set(\"Content-Type\", \"application/json\")\n\tfor k, v := range hdr {\n\t\treq.Header.Set(k, v)\n\t}\n\trec := httptest.NewRecorder()\n\te.ServeHTTP(rec, req)\n\tvar m map[string]any\n\tif err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {\n\t\tt.Fatalf(\"%s %s: body %q: %v\", method, path, rec.Body.String(), err)\n\t}\n\treturn rec, m\n}\n\nfunc TestEchoEnvelopes(t *testing.T) {\n\te := NewRouter(&Handlers{h: &Handler{service: fakeCreator{}}}, echoCfg)\n\tauth := map[string]string{\"Authorization\": \"Bearer \" + token(t)}\n\n\trec, body := call(t, e, http.MethodGet, \"/nope\", \"\", map[string]string{\"X-Request-ID\": \"bad id\"})\n\ter, _ := body[\"error\"].(map[string]any)\n\tif rec.Code != 404 || er[\"code\"] != \"NOT_FOUND\" {\n\t\tt.Fatalf(\"unknown route: %d %v\", rec.Code, body)\n\t}\n\tif rid := rec.Header().Get(\"X-Request-Id\"); rid == \"bad id\" || rid == \"\" || er[\"request_id\"] != rid {\n\t\tt.Fatalf(\"request id: header %q body %v\", rid, er[\"request_id\"])\n\t}\n\n\trec, body = call(t, e, http.MethodPost, \"/api/v1/users\", `{\"email\":\"a@example.com\"}`, nil)\n\ter, _ = body[\"error\"].(map[string]any)\n\tif rec.Code != 401 || er[\"code\"] != \"UNAUTHENTICATED\" {\n\t\tt.Fatalf(\"no token: %d %v\", rec.Code, body)\n\t}\n\n\trec, body = call(t, e, http.MethodPost, \"/api/v1/users\", `{\"email\":\"nope\"}`, auth)\n\ter, _ = body[\"error\"].(map[string]any)\n\tdetails, _ := er[\"details\"].([]any)\n\tif rec.Code != 400 || er[\"code\"] != \"VALIDATION_FAILED\" || len(details) != 1 || details[0].(map[string]any)[\"field\"] != \"email\" {\n\t\tt.Fatalf(\"validation: %d %v\", rec.Code, body)\n\t}\n\n\trec, body = call(t, e, http.MethodPost, \"/api/v1/users\", `{\"email\":`, auth)\n\ter, _ = body[\"error\"].(map[string]any)\n\tif rec.Code != 400 || er[\"code\"] != \"MALFORMED_REQUEST\" {\n\t\tt.Fatalf(\"malformed: %d %v\", rec.Code, body)\n\t}\n\n\trec, body = call(t, e, http.MethodPost, \"/api/v1/users\", `{\"email\":\"a@example.com\"}`, auth)\n\tmeta, _ := body[\"meta\"].(map[string]any)\n\tif rec.Code != 201 || body[\"data\"] == nil || meta[\"request_id\"] != rec.Header().Get(\"X-Request-Id\") {\n\t\tt.Fatalf(\"created: %d %v\", rec.Code, body)\n\t}\n}"},
+        {"path": "graph/resolver.go", "blocks": ["frameworks/graphql.md#1"], "package": "graph"},
+        {"path": "graph/stub_generated.go", "package": "graph", "code": "// gqlgen-generated resolver types (graph/generated.go) and the app's widget service.\nimport (\n\t\"github.com/google/uuid\"\n\n\t\"yourapp/graph/model\"\n)\n\ntype queryResolver struct{ *Resolver }\n\ntype widgetResolver struct{ *Resolver }\n\ntype WidgetService interface {\n\tGet(ctx context.Context, tenantID uuid.UUID, id string) (*model.Widget, error)\n\tList(ctx context.Context, tenantID uuid.UUID, first int, after *string, filter *model.WidgetFilter, orderBy *model.WidgetOrderBy) (*model.WidgetConnection, error)\n}"},
+        {"path": "graph/model/models_gen.go", "package": "model", "code": "// gqlgen-generated models (graph/model/models_gen.go), reduced to what the resolvers touch.\ntype Widget struct {\n\tID          string\n\tCreatedByID string\n}\n\ntype User struct{ ID string }\n\ntype Tag struct{ ID string }\n\ntype WidgetFilter struct{ Status *string }\n\ntype WidgetOrderBy struct{ Field string }\n\ntype WidgetConnection struct{ TotalCount int }"},
+        {"path": "graph/smoke_test.go", "package": "graph", "code": "// HARNESS SMOKE TEST — drives frameworks/graphql.md's Go resolvers and error presenter: `first`\n// outside 1..100 is a VALIDATION_FAILED GraphQL error (never clamped), a missing `first` is 20, 100 is\n// passed through, and presentError never sends an unknown error's text.\nimport (\n\t\"github.com/google/uuid\"\n\t\"github.com/vektah/gqlparser/v2/gqlerror\"\n\n\t\"yourapp/graph/model\"\n\t\"yourapp/internal/apperr\"\n\t\"yourapp/internal/middleware\"\n)\n\ntype recordingSvc struct{ gotFirst int }\n\nfunc (s *recordingSvc) Get(ctx context.Context, tenantID uuid.UUID, id string) (*model.Widget, error) {\n\treturn nil, apperr.NewNotFoundError(\"Widget\")\n}\n\nfunc (s *recordingSvc) List(ctx context.Context, tenantID uuid.UUID, first int, after *string, f *model.WidgetFilter, o *model.WidgetOrderBy) (*model.WidgetConnection, error) {\n\ts.gotFirst = first\n\treturn &model.WidgetConnection{}, nil\n}\n\nfunc TestWidgetsFirstIsValidatedNotClamped(t *testing.T) {\n\tctx := middleware.WithIdentity(context.Background(), uuid.New(), uuid.New())\n\tfor _, bad := range []int{0, -1, 101, 500} {\n\t\tsvc := &recordingSvc{}\n\t\tq := &queryResolver{&Resolver{widgetSvc: svc}}\n\t\t_, err := q.Widgets(ctx, &bad, nil, nil, nil)\n\t\tvar gqlErr *gqlerror.Error\n\t\tif !errors.As(err, &gqlErr) || gqlErr.Extensions[\"code\"] != \"VALIDATION_FAILED\" || gqlErr.Extensions[\"field\"] != \"first\" {\n\t\t\tt.Fatalf(\"first=%d: err = %#v\", bad, err)\n\t\t}\n\t\tif svc.gotFirst != 0 {\n\t\t\tt.Fatalf(\"first=%d reached the service as %d\", bad, svc.gotFirst)\n\t\t}\n\t}\n\tfor _, tc := range []struct {\n\t\tfirst *int\n\t\twant  int\n\t}{{nil, 20}, {ptr(1), 1}, {ptr(100), 100}} {\n\t\tsvc := &recordingSvc{}\n\t\tq := &queryResolver{&Resolver{widgetSvc: svc}}\n\t\tif _, err := q.Widgets(ctx, tc.first, nil, nil, nil); err != nil || svc.gotFirst != tc.want {\n\t\t\tt.Fatalf(\"first=%v: err %v, service got %d, want %d\", tc.first, err, svc.gotFirst, tc.want)\n\t\t}\n\t}\n}\n\nfunc TestPresentErrorHidesInternals(t *testing.T) {\n\tctx := context.Background()\n\tif e := presentError(ctx, errors.New(\"pq: password authentication failed for user app\")); e.Message != \"Something went wrong.\" || e.Extensions[\"code\"] != \"INTERNAL\" {\n\t\tt.Fatalf(\"unknown error presented as %#v\", e)\n\t}\n\tq := &queryResolver{&Resolver{widgetSvc: &recordingSvc{}}}\n\t_, err := q.Widget(middleware.WithIdentity(ctx, uuid.New(), uuid.New()), \"w1\")\n\tif e := presentError(ctx, err); e.Message != \"Widget not found.\" || e.Extensions[\"code\"] != \"NOT_FOUND\" {\n\t\tt.Fatalf(\"not found presented as %#v\", e)\n\t}\n\tbad := 0\n\t_, err = q.Widgets(middleware.WithIdentity(ctx, uuid.New(), uuid.New()), &bad, nil, nil, nil)\n\tif e := presentError(ctx, err); e.Extensions[\"code\"] != \"VALIDATION_FAILED\" {\n\t\tt.Fatalf(\"validation error presented as %#v\", e)\n\t}\n}\n\nfunc ptr(i int) *int { return &i }"}
+      ],
+      "tests": true,
+      "run_tests": ["./internal/chiapp/", "./internal/ginapp/", "./internal/echoapp/", "./graph/"]
+    },
+    {
+      "name": "skills-infrastructure",
+      "doc": "infrastructure/*.md: caching, feature-flag evaluation, the LocalStack config (its test run against a fake S3), tenancy isolation/routing, secrets snippet",
+      "imports": [
+        "yourapp/internal/apperr",
+        "yourapp/internal/middleware",
+        "github.com/redis/go-redis/v9",
+        "github.com/jackc/pgx/v5",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "golang.org/x/time/rate",
+        "github.com/aws/aws-sdk-go-v2/aws",
+        "github.com/aws/aws-sdk-go-v2/config",
+        "github.com/aws/aws-sdk-go-v2/credentials",
+        "github.com/aws/aws-sdk-go-v2/service/s3",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require",
+        "github.com/google/uuid"
+      ],
+      "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/middleware.go", "blocks": ["auth-middleware-go.md#1-11"]},
+        {"path": "internal/cache/aside.go", "blocks": ["infrastructure/caching-strategies.md#1"], "package": "cache"},
+        {"path": "internal/cache/invalidate.go", "blocks": ["infrastructure/caching-strategies.md#2"], "package": "cache"},
+        {"path": "internal/cache/jitter.go", "blocks": ["infrastructure/caching-strategies.md#3"], "package": "cache"},
+        {"path": "internal/cache/stub_app.go", "package": "cache", "code": "// App-level names infrastructure/caching-strategies.md's examples use.\nimport \"github.com/redis/go-redis/v9\"\n\ntype Item struct{ ID, Name string }\n\ntype Patch struct{ Name *string }\n\ntype Service struct {\n\trdb  *redis.Client\n\trepo interface {\n\t\tGet(ctx context.Context, id string) (*Item, error)\n\t\tUpdate(ctx context.Context, id string, p Patch) error\n\t}\n}\n\nfunc cacheKey(ctx context.Context, kind, id string) string { return \"v3:tenant:\" + kind + \":\" + id }\n\nfunc encode(it *Item) []byte { b, _ := json.Marshal(it); return b }\n\nfunc decode(b []byte) (*Item, error) {\n\tvar it Item\n\treturn &it, json.Unmarshal(b, &it)\n}"},
+        {"path": "internal/flags/eval.go", "blocks": ["infrastructure/feature-flags.md#1"], "package": "flags"},
+        {"path": "internal/flags/stub_app.go", "package": "flags", "code": "// The flag store and rule types infrastructure/feature-flags.md's Enabled evaluates against.\ntype EvalContext struct{ StableID, TenantID, Plan string }\n\ntype Rule struct {\n\tKillSwitch bool\n\tRolloutPct int\n\tPlans      []string\n}\n\nfunc (r Rule) matchesTargeting(ctx EvalContext) bool { return slices.Contains(r.Plans, ctx.Plan) }\n\ntype Flags struct {\n\tsnapshot interface{ Get(key string) (Rule, bool) }\n}\n\nfunc bucket(stableID, key string) int {\n\th := fnv.New32a()\n\th.Write([]byte(stableID + key))\n\treturn int(h.Sum32() % 100)\n}"},
+        {"path": "internal/awslocal/config.go", "blocks": ["infrastructure/localstack-aws-local.md#1"], "package": "awslocal"},
+        {"path": "internal/awslocal/s3_test.go", "blocks": ["infrastructure/localstack-aws-local.md#2"], "package": "awslocal"},
+        {"path": "internal/awslocal/smoke_test.go", "package": "awslocal", "code": "// HARNESS SMOKE TEST — runs localstack-aws-local.md's TestWithLocalStack against a fake S3 endpoint\n// (an httptest server set as AWS_ENDPOINT_URL), proving config.WithBaseEndpoint + UsePathStyle send\n// the PutObject to <endpoint>/app-uploads/test/file.txt. (Go runs s3_test.go's test before this\n// file's, in file-name order.)\nvar (\n\tseenMu sync.Mutex\n\tseen   []string\n)\n\nfunc TestMain(m *testing.M) {\n\tsrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {\n\t\t_, _ = io.Copy(io.Discard, r.Body)\n\t\tseenMu.Lock()\n\t\tseen = append(seen, r.Method+\" \"+r.URL.Path)\n\t\tseenMu.Unlock()\n\t\tw.Header().Set(\"ETag\", `\"fake-etag\"`)\n\t\tw.WriteHeader(http.StatusOK)\n\t}))\n\tos.Setenv(\"AWS_ENDPOINT_URL\", srv.URL)\n\tos.Setenv(\"AWS_DEFAULT_REGION\", \"us-east-1\")\n\tcode := m.Run()\n\tsrv.Close()\n\tos.Exit(code)\n}\n\nfunc TestZZFakeS3SawThePut(t *testing.T) {\n\tseenMu.Lock()\n\tdefer seenMu.Unlock()\n\tif len(seen) != 1 || seen[0] != \"PUT /app-uploads/test/file.txt\" {\n\t\tt.Fatalf(\"fake S3 saw %q, want [PUT /app-uploads/test/file.txt]\", seen)\n\t}\n}"},
+        {"path": "internal/tenancy/list.go", "blocks": ["infrastructure/saas-tenancy-models.md#1"], "package": "tenancy"},
+        {"path": "internal/tenancy/rls.go", "blocks": ["infrastructure/saas-tenancy-models.md#2"], "package": "tenancy"},
+        {"path": "internal/tenancy/limits.go", "blocks": ["infrastructure/saas-tenancy-models.md#3"], "package": "tenancy"},
+        {"path": "internal/tenancy/router.go", "blocks": ["infrastructure/saas-tenancy-models.md#4"], "package": "tenancy"},
+        {"path": "internal/tenancy/tenant.go", "blocks": ["infrastructure/saas-tenancy-models.md#5"], "package": "tenancy"},
+        {"path": "internal/tenancy/stub_app.go", "package": "tenancy", "code": "// App-level names infrastructure/saas-tenancy-models.md's examples use.\nimport (\n\t\"github.com/google/uuid\"\n\t\"github.com/jackc/pgx/v5/pgxpool\"\n)\n\ntype Resource struct {\n\tID       uuid.UUID `db:\"id\"`\n\tTenantID uuid.UUID `db:\"tenant_id\"`\n\tName     string    `db:\"name\"`\n}\n\ntype Repository struct{ pool *pgxpool.Pool }\n\ntype Repo struct{ pool *pgxpool.Pool }\n\nvar tierLimits = map[string]int{\"free\": 60, \"pro\": 600, \"enterprise\": 6000}\n\ntype TenantService interface {\n\tGet(ctx context.Context, tenantID string) (*Tenant, error)\n}\n\ntype DBCredentials struct{ User, Password string }\n\ntype SecretStore interface {\n\tDBCredentials(ctx context.Context, tenantID string) (DBCredentials, error)\n}\n\ntype JSONB map[string]any"},
+        {"path": "internal/secrets/inject.go", "blocks": ["infrastructure/secrets-management.md#1"], "package": "secrets", "wrap": "func _(ctx context.Context)", "postlude": "\t_ = dsn"},
+        {"path": "internal/secrets/stub_app.go", "package": "secrets", "code": "func mustGetSecret(ctx context.Context, name string) string { return \"\" }"}
+      ],
+      "tests": true,
+      "run_tests": ["./internal/awslocal/"]
+    },
+    {
+      "name": "skills-testify",
+      "doc": "testing/testify.md: assertion snippets (wrapped), table test, suite, handler test",
+      "imports": [
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require",
+        "github.com/stretchr/testify/suite",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "yourapp/internal/testutil"
+      ],
+      "files": [
+        {"path": "internal/testutil/containers.go", "package": "testutil", "code": "import \"github.com/jackc/pgx/v5/pgxpool\"\n\n// NewTestDB: testing/testcontainers.md's shared helper (compiled in skills-testcontainers).\nfunc NewTestDB(t *testing.T) *pgxpool.Pool { return nil }"},
+        {"path": "internal/certs/assert_test.go", "blocks": ["testing/testify.md#1"], "package": "certs", "wrap": "func _(t *testing.T, err error, result any, expected, actual any, list []string, item string)"},
+        {"path": "internal/certs/table_test.go", "blocks": ["testing/testify.md#2"], "package": "certs"},
+        {"path": "internal/certs/suite_test.go", "blocks": ["testing/testify.md#3"], "package": "certs"},
+        {"path": "internal/certs/errors_test.go", "blocks": ["testing/testify.md#4"], "package": "certs", "wrap": "func _(t *testing.T, err error, domainErr *DomainError)"},
+        {"path": "internal/certs/handler_test.go", "blocks": ["testing/testify.md#5"], "package": "certs"},
+        {"path": "internal/certs/stub_app.go", "package": "certs", "code": "// App-level names testing/testify.md's examples use.\nimport (\n\t\"github.com/jackc/pgx/v5/pgxpool\"\n)\n\nvar ErrNotFound = errors.New(\"not found\")\n\ntype DomainError struct{ Code string }\n\nfunc (e *DomainError) Error() string { return e.Code }\n\nfunc ValidateEmail(s string) bool { return strings.Contains(s, \"@\") }\n\ntype CreateCertRequest struct{ CommonName string }\n\ntype Cert struct{ Status string }\n\ntype CertService struct{ db *pgxpool.Pool }\n\nfunc NewCertService(db *pgxpool.Pool) *CertService { return &CertService{db: db} }\n\nfunc (s *CertService) Create(ctx context.Context, req CreateCertRequest) (*Cert, error) {\n\treturn &Cert{Status: \"active\"}, nil\n}"},
+        {"path": "internal/certs/stub_helpers_test.go", "package": "certs", "code": "// App-level test helpers testing/testify.md's handler test calls.\nfunc newTestRouter(t *testing.T) http.Handler { return http.NewServeMux() }\n\nfunc testToken(t *testing.T) string { return \"\" }"}
+      ],
+      "tests": true
+    },
+    {
+      "name": "skills-gomock",
+      "doc": "testing/gomock.md against mocks generated by the pinned mockgen from the (stubbed) service ports; the basic test runs",
+      "imports": [
+        "go.uber.org/mock/gomock",
+        "github.com/stretchr/testify/assert",
+        "yourapp/internal/domain",
+        "yourapp/internal/service",
+        "yourapp/internal/service/mocks"
+      ],
+      "files": [
+        {"path": "internal/domain/user.go", "package": "domain", "code": "type User struct{ ID, Name, Email string }"},
+        {"path": "internal/service/ports.go", "package": "service", "code": "// The app's service package testing/gomock.md mocks: its ports (interfaces mockgen reads), and a\n// minimal UserService that saves the user, then sends the welcome mail.\nimport \"yourapp/internal/domain\"\n\ntype Message struct{ To, Subject string }\n\ntype Tx interface {\n\tRollback(ctx context.Context) error\n}\n\ntype UserRepository interface {\n\tSave(ctx context.Context, u *domain.User) error\n\tFindByID(ctx context.Context, id string) (*domain.User, error)\n\tPing(ctx context.Context) error\n\tLog(msg string)\n\tBeginTx(ctx context.Context) (Tx, error)\n\tCommitTx(ctx context.Context) error\n}\n\ntype Mailer interface {\n\tSend(ctx context.Context, msg Message) error\n}\n\nvar ErrNotFound = errors.New(\"not found\")\n\ntype UserService struct {\n\trepo   UserRepository\n\tmailer Mailer\n}\n\nfunc NewUserService(repo UserRepository, mailer Mailer) *UserService {\n\treturn &UserService{repo: repo, mailer: mailer}\n}\n\nfunc (s *UserService) CreateUser(ctx context.Context, name string) error {\n\tif err := s.repo.Save(ctx, &domain.User{Name: name}); err != nil {\n\t\treturn err\n\t}\n\treturn s.mailer.Send(ctx, Message{To: name, Subject: \"Welcome\"})\n}"},
+        {"path": "internal/service/user_test.go", "blocks": ["testing/gomock.md#1"], "package": "service_test"},
+        {"path": "internal/service/expect_test.go", "blocks": ["testing/gomock.md#2", "testing/gomock.md#3", "testing/gomock.md#4", "testing/gomock.md#5"], "package": "service_test", "wrap": "func _(t *testing.T, mockRepo *mocks.MockUserRepository, user domain.User, tx service.Tx)"}
+      ],
+      "mockgen": [
+        {
+          "source": "internal/service/ports.go",
+          "destination": "internal/service/mocks/mock_ports.go",
+          "package": "mocks"
+        }
+      ],
+      "tests": true,
+      "run_tests": ["./internal/service/"]
+    },
+    {
+      "name": "skills-testcontainers",
+      "doc": "testing/testcontainers.md: postgres/redis module tests, the shared NewTestDB helper, a generic container (wrapped); compiled, not run (they start containers around stubbed app code)",
+      "imports": [
+        "github.com/testcontainers/testcontainers-go",
+        "github.com/testcontainers/testcontainers-go/wait",
+        "github.com/testcontainers/testcontainers-go/modules/postgres",
+        "github.com/testcontainers/testcontainers-go/modules/redis",
+        "goredis \"github.com/redis/go-redis/v9\"",
+        "github.com/jackc/pgx/v5/pgxpool",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require",
+        "yourapp/internal/repository",
+        "yourapp/internal/domain",
+        "yourapp/internal/cache"
+      ],
+      "files": [
+        {"path": "internal/domain/user.go", "package": "domain", "code": "type User struct{ Name string }"},
+        {"path": "internal/repository/user.go", "package": "repository", "code": "import (\n\t\"github.com/jackc/pgx/v5/pgxpool\"\n\n\t\"yourapp/internal/domain\"\n)\n\ntype UserRepository struct{ db *pgxpool.Pool }\n\nfunc NewUserRepository(db *pgxpool.Pool) *UserRepository { return &UserRepository{db: db} }\n\nfunc (r *UserRepository) Save(ctx context.Context, u *domain.User) error { return nil }"},
+        {"path": "internal/cache/redis.go", "package": "cache", "code": "import goredis \"github.com/redis/go-redis/v9\"\n\ntype RedisCache struct{ c *goredis.Client }\n\nfunc NewRedisCache(c *goredis.Client) *RedisCache { return &RedisCache{c: c} }\n\nfunc (r *RedisCache) Set(ctx context.Context, key, value string, ttl time.Duration) error { return nil }"},
+        {"path": "internal/it/postgres_test.go", "blocks": ["testing/testcontainers.md#1"], "package": "it"},
+        {"path": "internal/it/redis_test.go", "blocks": ["testing/testcontainers.md#2"], "package": "it"},
+        {"path": "internal/it/generic_test.go", "blocks": ["testing/testcontainers.md#4"], "package": "it", "wrap": "func _(ctx context.Context, t *testing.T)", "postlude": "\t_ = endpoint"},
+        {"path": "internal/it/stub_test.go", "package": "it", "code": "func runMigrations(t *testing.T, connStr string) {}"},
+        {"path": "internal/testutil/containers.go", "blocks": ["testing/testcontainers.md#3"], "package": "testutil"}
+      ],
+      "tests": true
+    },
+    {
+      "name": "skills-testing-misc",
+      "doc": "testing/property-based.md, test-case-traceability.md and external-service-mocks.md; runs the JSON round-trip property and the Stripe fake test",
+      "imports": [
+        "github.com/leanovate/gopter",
+        "github.com/leanovate/gopter/gen",
+        "github.com/leanovate/gopter/prop",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require",
+        "github.com/google/uuid",
+        "github.com/golang-jwt/jwt/v5"
+      ],
+      "files": [
+        {"path": "internal/props/quick_test.go", "blocks": ["testing/property-based.md#1"], "package": "props"},
+        {"path": "internal/props/gopter_test.go", "blocks": ["testing/property-based.md#2"], "package": "props"},
+        {"path": "internal/props/stub_app.go", "package": "props", "code": "// App-level names testing/property-based.md's properties exercise.\ntype User struct {\n\tName string `json:\"name\"`\n\tAge  int    `json:\"age\"`\n}\n\ntype Item struct{ ID int }\n\ntype Page struct {\n\tItems   []Item\n\tHasMore bool\n\tCursor  string\n}\n\nfunc Sort(in []int) []int { out := slices.Clone(in); slices.Sort(out); return out }\n\nfunc makeItems(n int) []Item { return make([]Item, n) }\n\nfunc paginate(items []Item, cursor string, size int) Page { return Page{Items: items} }"},
+        {"path": "internal/trace/total_test.go", "blocks": ["testing/test-case-traceability.md#1"], "package": "trace"},
+        {"path": "internal/trace/change_test.go", "blocks": ["testing/test-case-traceability.md#2"], "package": "trace", "wrap": "func _(t *testing.T, order Order)"},
+        {"path": "internal/trace/stub_app.go", "package": "trace", "code": "type Line struct {\n\tQty       int\n\tUnitCents int64\n}\n\ntype Order struct{ Lines []Line }\n\nvar ErrValidation = errors.New(\"validation\")\n\nfunc OrderTotal(lines []Line) (int64, error) { return 0, nil }\n\nfunc Total(o Order) int64 { return 0 }"},
+        {"path": "internal/fakes/stripe_test.go", "blocks": ["testing/external-service-mocks.md#1"], "package": "fakes"},
+        {"path": "internal/fakes/jwt_test.go", "blocks": ["testing/external-service-mocks.md#2"], "package": "fakes"},
+        {"path": "internal/fakes/sendgrid_test.go", "blocks": ["testing/external-service-mocks.md#3"], "package": "fakes"},
+        {"path": "internal/fakes/s3_test.go", "blocks": ["testing/external-service-mocks.md#4"], "package": "fakes"},
+        {"path": "internal/fakes/openai_test.go", "blocks": ["testing/external-service-mocks.md#5"], "package": "fakes"},
+        {"path": "internal/fakes/webhook_test.go", "blocks": ["testing/external-service-mocks.md#6"], "package": "fakes"},
+        {"path": "internal/fakes/stub_app.go", "package": "fakes", "code": "// App-level code testing/external-service-mocks.md's tests call: the app's Stripe client (a\n// minimal one: form-encoded POST, JSON decode into Stripe's types) and its webhook handler.\ntype PaymentIntent struct {\n\tID     string `json:\"id\"`\n\tAmount int64  `json:\"amount\"`\n\tStatus string `json:\"status\"`\n}\n\ntype PaymentsClient struct{ baseURL, key string }\n\nfunc NewPaymentsClient(baseURL, key string) *PaymentsClient { return &PaymentsClient{baseURL: baseURL, key: key} }\n\nfunc (c *PaymentsClient) CreateIntent(ctx context.Context, amount int64, currency string) (*PaymentIntent, error) {\n\tform := url.Values{\"amount\": {strconv.FormatInt(amount, 10)}, \"currency\": {currency}}\n\treq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+\"/v1/payment_intents\", strings.NewReader(form.Encode()))\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treq.Header.Set(\"Content-Type\", \"application/x-www-form-urlencoded\")\n\treq.Header.Set(\"Authorization\", \"Bearer \"+c.key)\n\tresp, err := http.DefaultClient.Do(req)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tdefer resp.Body.Close()\n\tif resp.StatusCode != http.StatusOK {\n\t\treturn nil, fmt.Errorf(\"stripe: status %d\", resp.StatusCode)\n\t}\n\tvar pi PaymentIntent\n\treturn &pi, json.NewDecoder(resp.Body).Decode(&pi)\n}\n\nfunc NewStripeWebhookHandler(secret string) http.Handler { return http.NotFoundHandler() }"}
+      ],
+      "tests": true,
+      "run_tests": [
+        ["./internal/props/", "-run", "^TestEncodeDecodeRoundtrip$", "-v"],
+        ["./internal/fakes/", "-run", "^TestCreatePayment$", "-v"]
+      ]
+    },
+    {
+      "name": "skills-contract-testing",
+      "doc": "testing/contract-testing.md: pact-go v2 consumer + provider tests, type-checked with go vet (pact-go links libpact_ffi through cgo)",
+      "imports": [
+        "github.com/pact-foundation/pact-go/v2/provider",
+        "github.com/pact-foundation/pact-go/v2/models",
+        "github.com/stretchr/testify/assert",
+        "github.com/stretchr/testify/require"
+      ],
+      "files": [
+        {"path": "internal/contract/consumer_test.go", "blocks": ["testing/contract-testing.md#1"], "package": "contract"},
+        {"path": "internal/contract/provider_test.go", "blocks": ["testing/contract-testing.md#2"], "package": "contract"},
+        {"path": "internal/contract/stub_app.go", "package": "contract", "code": "// App-level names testing/contract-testing.md's consumer and provider tests use.\ntype Widget struct{ ID, Name, Status string }\n\ntype WidgetClient struct{ baseURL string }\n\nfunc NewWidgetClient(baseURL string) *WidgetClient { return &WidgetClient{baseURL: baseURL} }\n\nfunc (c *WidgetClient) GetWidget(id string) (*Widget, error) { return &Widget{}, nil }\n\nfunc startTestServer() *httptest.Server { return httptest.NewServer(http.NotFoundHandler()) }\n\nfunc seedWidget(id, name, status string) {}"}
+      ],
+      "cgo_typecheck_only": true
     }
   ]
 }

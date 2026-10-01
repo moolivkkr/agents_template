@@ -21,6 +21,8 @@ The most common performance killer in ORM-heavy codebases. One query for the lis
 
 ### Identifying N+1 in Code
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, sqlx v1.4.0, lib/pq v1.12.3 (tests/archetype-compile/go/run.sh).
+
 ```go
 // BAD — N+1: 1 query for users + N queries for orders
 func (h *Handler) ListUsersWithOrders(ctx context.Context) ([]UserWithOrders, error) {
@@ -81,6 +83,9 @@ func (r *UserRepo) ListWithOrders(ctx context.Context) ([]UserWithOrders, error)
             })
         }
     }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("list users with orders: %w", err)
+    }
     result := make([]UserWithOrders, 0, len(order))
     for _, id := range order {
         result = append(result, *usersMap[id])
@@ -114,6 +119,9 @@ func (r *OrderRepo) FindByUserIDs(ctx context.Context, userIDs []string) (map[st
             return nil, err
         }
         result[userID] = append(result[userID], o)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, fmt.Errorf("batch load orders: %w", err)
     }
     return result, nil
 }
@@ -269,7 +277,7 @@ func NewPool(dsn string) (*pgxpool.Pool, error) {
     }
 
     config.MinConns = 2              // keep 2 warm connections
-    config.MaxConns = 20             // max 20 per service instance
+    config.MaxConns = 20             // per instance: size it from the connection-pool budget (core/resiliency-patterns.md)
     config.MaxConnIdleTime = 5 * time.Minute  // close idle connections after 5m
     config.MaxConnLifetime = 30 * time.Minute // recycle connections after 30m
     config.HealthCheckPeriod = 30 * time.Second
@@ -281,10 +289,16 @@ func NewPool(dsn string) (*pgxpool.Pool, error) {
     return pool, nil
 }
 
-// Monitor pool health
-func MonitorPool(pool *pgxpool.Pool, logger *slog.Logger) {
+// Monitor pool health until ctx is cancelled (run it in a goroutine; cancel on shutdown)
+func MonitorPool(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger) {
     ticker := time.NewTicker(30 * time.Second)
-    for range ticker.C {
+    defer ticker.Stop()
+    for {
+        select {
+        case <-ctx.Done():
+            return
+        case <-ticker.C:
+        }
         stat := pool.Stat()
         logger.Info("pool_stats",
             "total_conns", stat.TotalConns(),

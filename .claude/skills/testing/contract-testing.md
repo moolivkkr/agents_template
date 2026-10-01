@@ -30,11 +30,17 @@ Contract testing verifies that two services (consumer and provider) agree on the
 ## Consumer Side (Define Expectations)
 
 ### Go (pact-go v2)
+> Go samples type-checked (go vet, cgo) 2026-09-30 with Go 1.27.1, pact-go v2.8.0 — not linked or run: pact-go links the native libpact_ffi, which the harness does not install (tests/archetype-compile/go/run.sh).
+
 ```go
 import (
+    "fmt"
     "testing"
+
     "github.com/pact-foundation/pact-go/v2/consumer"
     "github.com/pact-foundation/pact-go/v2/matchers"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
 )
 
 func TestWidgetConsumer(t *testing.T) {
@@ -53,21 +59,21 @@ func TestWidgetConsumer(t *testing.T) {
             b.Header("Authorization", matchers.Like("Bearer token"))
         }).
         WillRespondWith(200, func(b *consumer.V4ResponseBuilder) {
-            b.Header("Content-Type", "application/json")
+            b.Header("Content-Type", matchers.S("application/json"))
             b.JSONBody(matchers.Map{
-                "data": matchers.Map{
+                "data": matchers.StructMatcher{ // a nested object; matchers.Map is not a Matcher
                     "id":     matchers.Like("abc-123"),
                     "name":   matchers.Like("My Widget"),
                     "status": matchers.Like("active"),
                 },
-                "meta": matchers.Map{
+                "meta": matchers.StructMatcher{
                     "request_id": matchers.Like("req-123"),
                 },
             })
         }).
         ExecuteTest(t, func(config consumer.MockServerConfig) error {
             // Test your client against the mock provider
-            client := NewWidgetClient(config.URL)
+            client := NewWidgetClient(fmt.Sprintf("http://%s:%d", config.Host, config.Port))
             widget, err := client.GetWidget("abc-123")
             assert.NoError(t, err)
             assert.Equal(t, "My Widget", widget.Name)
@@ -203,7 +209,7 @@ func TestWidgetProvider(t *testing.T) {
         // Pull contracts from Pact Broker
         BrokerURL:       "https://pact-broker.example.com",
         BrokerToken:     os.Getenv("PACT_BROKER_TOKEN"),
-        PublishVerificationResults: true,
+        PublishVerificationResults: os.Getenv("CI") == "true", // only CI publishes to the broker
         ProviderVersion: os.Getenv("GIT_SHA"),
         // State handlers set up test data for provider states
         StateHandlers: map[string]models.StateHandler{

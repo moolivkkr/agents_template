@@ -25,6 +25,8 @@ Every HTTP client, database connection, cache, and message queue call must be wr
 - **Open** — too many failures. Reject requests immediately without calling the dependency. Return fallback or error.
 - **Half-Open** — after a timeout, allow one probe request. If it succeeds, close the circuit. If it fails, reopen.
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-lru v2.0.7, x/sync v0.23.0, x/time v0.16.0, go-redis v9.22.0, pgx v5.11.0 (tests/archetype-compile/go/run.sh).
+
 ```go
 type CircuitState int
 
@@ -158,6 +160,14 @@ type RetryConfig struct {
     AttemptTimeout time.Duration // per-attempt cap; never longer than what's left of the caller's deadline
 }
 
+// HTTPError is what the HTTP client wrapper returns for a non-2xx response.
+type HTTPError struct {
+    StatusCode int
+    RetryAfter time.Duration // parsed from Retry-After; 0 when absent
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("http status %d", e.StatusCode) }
+
 // Operation describes the call being retried.
 type Operation struct {
     Name       string // bounded metric/log label: "payments.charge"
@@ -257,9 +267,10 @@ func (b *RetryBudget) TryRetry() bool {
 }
 
 // Usage — a charge is a POST: retried safely only because it carries a stable Idempotency-Key.
-key := order.PaymentIdempotencyKey // generated once when the order was created, stored with it
-err := Retry(ctx, cfg, Operation{Name: "payments.charge", Idempotent: key != ""}, paymentsBudget,
-    func(ctx context.Context) error { return payments.Charge(ctx, order, key) })
+//
+//     key := order.PaymentIdempotencyKey // generated once when the order was created, stored with it
+//     err := Retry(ctx, cfg, Operation{Name: "payments.charge", Idempotent: key != ""}, paymentsBudget,
+//         func(ctx context.Context) error { return payments.Charge(ctx, order, key) })
 ```
 
 ```typescript
@@ -315,13 +326,15 @@ inherit**. Without it, "3 retries × 5 s" compounds at every hop.
 
 ```go
 // Inbound: server timeouts + a per-request deadline every downstream call inherits
-srv := &http.Server{
-    Addr:              ":8080",
-    Handler:           requestDeadline(10*time.Second, router),
-    ReadHeaderTimeout: 5 * time.Second,   // slowloris protection
-    ReadTimeout:       15 * time.Second,
-    WriteTimeout:      30 * time.Second,  // > the request deadline, so the handler can still write its 503
-    IdleTimeout:       120 * time.Second,
+func newServer(router http.Handler) *http.Server {
+    return &http.Server{
+        Addr:              ":8080",
+        Handler:           requestDeadline(10*time.Second, router),
+        ReadHeaderTimeout: 5 * time.Second,  // slowloris protection
+        ReadTimeout:       15 * time.Second,
+        WriteTimeout:      30 * time.Second, // > the request deadline, so the handler can still write its 503
+        IdleTimeout:       120 * time.Second,
+    }
 }
 
 func requestDeadline(d time.Duration, next http.Handler) http.Handler {
@@ -333,23 +346,29 @@ func requestDeadline(d time.Duration, next http.Handler) http.Handler {
 }
 
 // Outbound HTTP client — connection-level timeouts; the per-call deadline comes from ctx
-httpClient := &http.Client{
-    Timeout: 5 * time.Second, // hard cap; the request ctx is usually tighter
-    Transport: &http.Transport{
-        DialContext:           (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
-        TLSHandshakeTimeout:   2 * time.Second,
-        ResponseHeaderTimeout: 3 * time.Second,
-        IdleConnTimeout:       90 * time.Second,
-        MaxIdleConns:          100,
-        MaxIdleConnsPerHost:   10,
-    },
+func newHTTPClient() *http.Client {
+    return &http.Client{
+        Timeout: 5 * time.Second, // hard cap; the request ctx is usually tighter
+        Transport: &http.Transport{
+            DialContext:           (&net.Dialer{Timeout: 2 * time.Second}).DialContext,
+            TLSHandshakeTimeout:   2 * time.Second,
+            ResponseHeaderTimeout: 3 * time.Second,
+            IdleConnTimeout:       90 * time.Second,
+            MaxIdleConns:          100,
+            MaxIdleConnsPerHost:   10,
+        },
+    }
 }
 
 // Database queries — always pass context with deadline (pool acquisition waits count against it too)
 func (r *repo) FindByID(ctx context.Context, id string) (*Entity, error) {
     ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
     defer cancel()
-    return r.pool.QueryRow(ctx, "SELECT * FROM entities WHERE id = $1", id).Scan(...)
+    var e Entity
+    if err := r.pool.QueryRow(ctx, "SELECT id, name FROM entities WHERE id = $1", id).Scan(&e.ID, &e.Name); err != nil {
+        return nil, err
+    }
+    return &e, nil
 }
 
 // Cache — optional dependency: short timeout, and a timeout is a miss, never a failed request
@@ -673,12 +692,20 @@ Protect services from abuse and ensure fair resource allocation.
 ```go
 // Token bucket per (authenticated tenant, route template). The key space is bounded: the tenant ID
 // comes from the verified token (never a client header such as X-Tenant-ID), the route is the
-// template (r.Pattern), not the raw path, and the map is LRU-bounded.
+// registered pattern, not the raw path, and the map is LRU-bounded.
 type RateLimiter struct {
     mu       sync.Mutex
     limiters *lru.Cache[string, *rate.Limiter]
     rate     rate.Limit
     burst    int
+}
+
+func NewRateLimiter(r rate.Limit, burst, maxKeys int) (*RateLimiter, error) {
+    c, err := lru.New[string, *rate.Limiter](maxKeys)
+    if err != nil {
+        return nil, err
+    }
+    return &RateLimiter{limiters: c, rate: r, burst: burst}, nil
 }
 
 func (rl *RateLimiter) Allow(key string) bool {
@@ -692,10 +719,18 @@ func (rl *RateLimiter) Allow(key string) bool {
     return limiter.Allow()
 }
 
-func RateLimitMiddleware(limiter *RateLimiter) func(http.Handler) http.Handler {
+// RateLimitMiddleware runs before routing, where r.Pattern is still empty, so it asks the mux which
+// pattern will match ("GET /api/v1/orders/{id}"). Place it after the auth middleware.
+func RateLimitMiddleware(limiter *RateLimiter, mux *http.ServeMux) func(http.Handler) http.Handler {
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            key := auth.TenantID(r.Context()) + ":" + r.Pattern
+            tenantID, err := middleware.TenantIDFromContext(r.Context()) // auth-middleware-go.md
+            if err != nil {
+                apperr.ErrorMapper(w, r, apperr.NewUnauthenticatedError())
+                return
+            }
+            _, pattern := mux.Handler(r) // "" for an unmatched path: one shared bucket per tenant
+            key := tenantID.String() + ":" + pattern
             if !limiter.Allow(key) {
                 apperr.ErrorMapper(w, r, apperr.NewRateLimitError(1)) // 429 envelope + Retry-After
                 return

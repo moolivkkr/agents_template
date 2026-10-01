@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Compile-check every Go block in .claude/skills/backend/archetypes/*.md.
+"""Compile-check every Go block in .claude/skills/** — the backend archetypes and every other pack.
 
 Driven by units.json. For each unit it assembles a throwaway Go module (module path `yourapp`, the
 path the samples import) from the markdown blocks, as they are in the .md files right now, plus the
 stubs listed for the unit, then runs:
 
-    go vet ./...                         (type-checks packages and their tests)
-    go build ./...
-    go test -count=1 -run '^$' ./...     (compiles and links the test binaries)
-    go test -count=1 <pkgs>              (only for units that list "run_tests": mock-based, no DB)
+    go build ./...                       (with -gcflags=-e: every type error, not the first ten)
+    go test -count=1 -run '^$' ./...     (compiles and links the test binaries; units with "tests")
+    go vet ./...
+    go test -count=1 <pkgs>              (units that list "run_tests": no external service needed)
+
+Files are named by key: an archetype by its base name ("crud-handler-go.md"), any other skill file
+by its path under .claude/skills ("languages/go.md").
 
 Block assembly:
   * A file whose first block starts with a `package` clause is written verbatim (blocks after it are
@@ -16,10 +19,15 @@ Block assembly:
   * A file whose first block has no package clause is a fragment. The unit gives its package; the
     import block is computed with goimports (pinned in go.mod) from the unit's candidate list, and
     the code is written exactly as in the markdown.
+  * A "wrap" file puts a statement-level snippet inside the function the unit names, e.g.
+    `func _(ctx context.Context, tx pgx.Tx)`: its parameters declare what the snippet assumes, so
+    every call is still type-checked against the real API. Import lines at the top of the snippet are
+    hoisted to the file. "prelude"/"postlude" add harness lines before/after the snippet (e.g. the
+    `return` a snippet that ends mid-function leaves out).
   * Every block is preceded by a `//line <file>.md:<line>` directive, so compiler and vet messages
     point at the markdown line.
 
-Inventory: every ```go block in every archetype must be claimed by a unit or listed in "skip" with a
+Inventory: every ```go block in .claude/skills/** must be claimed by a unit or listed in "skip" with a
 reason, the block count and headings per file must match units.json (so an inserted or reordered
 block fails loudly instead of compiling the wrong code), and a "comment-only" skip must really be
 comment-only.
@@ -42,8 +50,11 @@ REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 sys.path.insert(0, HERE)
 import mdblocks  # noqa: E402
 
-REF_RE = re.compile(r"^(?P<md>[\w.-]+\.md)#(?P<a>\d+)(?:-(?P<b>\d+))?$")
-IMPORT_BLOCK_RE = re.compile(r"^import \((.*?)^\)\n|^import (\"[^\"]+\"|\w+ \"[^\"]+\")\n", re.S | re.M)
+REF_RE = re.compile(r"^(?P<md>[\w./-]+\.md)#(?P<a>\d+)(?:-(?P<b>\d+))?$")
+IMPORT_BLOCK_RE = re.compile(r"^import \((.*?)^\)\n|^import (\"[^\"]+\"|\w+ \"[^\"]+\")[ \t]*(//[^\n]*)?\n", re.S | re.M)
+STUB_HEADER = "// HARNESS STUB (tests/archetype-compile/go, units.json) — not skill-pack code.\n"
+
+ARCH_DIR = SKILLS_DIR = None  # set in main()
 
 
 def fail(msg):
@@ -53,6 +64,11 @@ def fail(msg):
 def load_config():
     with open(os.path.join(HERE, "units.json"), encoding="utf-8") as f:
         return json.load(f)
+
+
+def path_of(key):
+    """An archetype key is a base name; any other skill file is keyed by its path under skills/."""
+    return os.path.join(SKILLS_DIR if "/" in key else ARCH_DIR, key)
 
 
 def expand(ref):
@@ -68,15 +84,30 @@ def is_comment_only(block):
     return all(not l.strip() or l.strip().startswith("//") for l in block.text.split("\n"))
 
 
-def inventory(cfg):
-    """Check the archetype Go blocks against units.json. Returns (blocks_by_ref, problems)."""
-    arch = os.path.join(REPO, cfg["archetypes_dir"])
+def scan():
+    """Every markdown file under .claude/skills with Go blocks, keyed as in units.json."""
     found = {}
-    for name in sorted(os.listdir(arch)):
+    for name in sorted(os.listdir(ARCH_DIR)):
         if name.endswith(".md"):
-            bs = mdblocks.blocks(os.path.join(arch, name))
+            bs = mdblocks.blocks(os.path.join(ARCH_DIR, name), name=name)
             if bs:
                 found[name] = bs
+    for root, dirs, files in os.walk(SKILLS_DIR):
+        dirs.sort()
+        if os.path.abspath(root).startswith(os.path.abspath(ARCH_DIR)):
+            continue
+        for name in sorted(files):
+            if name.endswith(".md"):
+                key = os.path.relpath(os.path.join(root, name), SKILLS_DIR)
+                bs = mdblocks.blocks(os.path.join(root, name), name=key)
+                if bs:
+                    found[key] = bs
+    return found
+
+
+def inventory(cfg):
+    """Check every skill-pack Go block against units.json. Returns (blocks_by_ref, problems)."""
+    found = scan()
     problems = []
     files = cfg["files"]
     for name, bs in found.items():
@@ -100,7 +131,7 @@ def inventory(cfg):
     claimed = {}
     for unit in cfg["units"]:
         for fe in unit["files"]:
-            for ref in fe["blocks"]:
+            for ref in fe.get("blocks", []):
                 for md, i in expand(ref):
                     key = f"{md}#{i}"
                     if key not in by_ref:
@@ -128,33 +159,79 @@ def run(cmd, cwd, env=None):
     return p.returncode, (p.stdout + p.stderr).strip()
 
 
-ARCH_DIR = None  # set in main(): absolute archetypes dir, so //line paths resolve from any unit dir
-
-
 def line_directive(b):
-    return f"//line {os.path.join(ARCH_DIR, b.md)}:{b.first_line}\n"
+    return f"//line {path_of(b.md)}:{b.first_line}\n"
 
 
 def shorten(text):
-    """Print markdown positions as `file.md:line` instead of the absolute path."""
-    return text.replace(ARCH_DIR + os.sep, "")
+    """Print markdown positions as `file.md:line` / `dir/file.md:line` instead of absolute paths."""
+    return text.replace(ARCH_DIR + os.sep, "").replace(SKILLS_DIR + os.sep, "")
+
+
+def hoist_imports(text):
+    """Split leading import declarations off a snippet. The removed lines become blank lines, so the
+    //line mapping of the remaining code is unchanged."""
+    lines = text.split("\n")
+    hoisted, i = [], 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if not s or s.startswith("//"):
+            i += 1
+            continue
+        if s.startswith("import ("):
+            j = i
+            while j < len(lines) and lines[j].strip() != ")":
+                j += 1
+            hoisted.extend(lines[i:j + 1])
+            for k in range(i, j + 1):
+                lines[k] = ""
+            i = j + 1
+            continue
+        if s.startswith("import "):
+            hoisted.append(lines[i])
+            lines[i] = ""
+            i += 1
+            continue
+        break
+    return "\n".join(hoisted), "\n".join(lines)
 
 
 def assemble(unit, by_ref, root, tools_env):
     """Write one unit's module under root. Returns (fragment_files, error)."""
     for f in ("go.mod", "go.sum"):
         shutil.copy(os.path.join(HERE, f), os.path.join(root, f))
-    fragments = []
+    fragments, stubs = [], []
     for fe in unit["files"]:
-        blocks = [by_ref[f"{md}#{i}"] for ref in fe["blocks"] for md, i in expand(ref)]
         path = os.path.join(root, fe["path"])
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if "code" in fe:  # an inline harness stub
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(f"{STUB_HEADER}\npackage {fe['package']}\n\n{fe['code']}\n")
+            stubs.append(path)
+            continue
+        blocks = [by_ref[f"{md}#{i}"] for ref in fe["blocks"] for md, i in expand(ref)]
         head = blocks[0]
         for b in blocks[1:]:
             if b.package:
                 return None, f"{fe['path']}: {b.ref()} has its own package clause; give it its own file"
-        body = "".join(line_directive(b) + b.text for b in blocks)
-        if head.package:
+        if fe.get("wrap") or not head.package:
+            # A fragment's own import lines move to the file header (goimports then sees one import
+            # area); their lines stay as blanks so the //line mapping is unchanged.
+            hoisted, parts = [], []
+            for b in blocks:
+                imp, code = hoist_imports(b.text)
+                hoisted.append(imp)
+                parts.append(line_directive(b) + code)
+            extra = "\n".join(h for h in hoisted if h)
+            if fe.get("wrap"):
+                body = (f"{fe['wrap']} {{\n{fe.get('prelude', '')}\n" + "".join(parts)
+                        + f"{fe.get('postlude', '')}\n}}\n")
+            else:
+                body = "".join(parts)
+        else:
+            body = "".join(line_directive(b) + b.text for b in blocks)
+            extra = ""
+        if head.package and not fe.get("wrap"):
             if fe.get("package") and fe["package"] != head.package:
                 return None, f"{fe['path']}: {head.ref()} declares package {head.package}, units.json says {fe['package']}"
             with open(path, "w", encoding="utf-8") as f:
@@ -162,15 +239,23 @@ def assemble(unit, by_ref, root, tools_env):
         else:
             if not fe.get("package"):
                 return None, f"{fe['path']}: {head.ref()} is a fragment (no package clause); units.json must give 'package'"
-            cands = unit.get("imports", []) + fe.get("imports", [])
+            # a candidate the fragment imports itself would be declared twice
+            cands = [c for c in unit.get("imports", []) + fe.get("imports", [])
+                     if f'"{c.split()[-1].strip(chr(34))}"' not in extra]
             imp = "import (\n" + "".join(f"\t{c}\n" if " " in c else f"\t\"{c}\"\n" for c in cands) + ")\n" if cands else ""
             with open(path, "w", encoding="utf-8") as f:
-                f.write(f"package {fe['package']}\n\n{imp}\n{body}")
+                f.write(f"package {fe['package']}\n\n{imp}{extra}\n{body}")
             fragments.append((path, fe["package"], body))
     for dst, src in unit.get("stubs", {}).items():
         d = os.path.join(root, dst)
         os.makedirs(os.path.dirname(d), exist_ok=True)
-        shutil.copy(os.path.join(HERE, src), d)
+        if isinstance(src, dict):  # a stub template: `package PKG` becomes the given package
+            text = open(os.path.join(HERE, src["from"]), encoding="utf-8").read()
+            text = re.sub(r"^package PKG$", f"package {src['package']}", text, count=1, flags=re.M)
+            with open(d, "w", encoding="utf-8") as f:
+                f.write(text)
+        else:
+            shutil.copy(os.path.join(HERE, src), d)
     if unit.get("protoc"):
         err = protoc(unit["protoc"], root, tools_env)
         if err:
@@ -179,16 +264,35 @@ def assemble(unit, by_ref, root, tools_env):
         err = sql_migrations(unit["sql_migrations"], root)
         if err:
             return None, err
+    if stubs:
+        rc, out = run(["go", "tool", "goimports", "-w"] + stubs, root, tools_env)
+        if rc != 0:
+            return None, "goimports failed on an inline stub:\n" + out
+    for spec in unit.get("mockgen", []):  # mocks generated from the (stubbed) interfaces, as a project would
+        dst = os.path.join(root, spec["destination"])
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        rc, out = run(["go", "tool", "mockgen", f"-source={spec['source']}", f"-destination={spec['destination']}",
+                       f"-package={spec['package']}"], root, tools_env)
+        if rc != 0:
+            return None, f"mockgen {spec['source']} failed:\n{out}"
     if fragments:
         # goimports computes each fragment's import block; the code itself is written back untouched
         # so the //line mapping stays exact.
         rc, out = run(["go", "tool", "goimports", "-w"] + [p for p, _, _ in fragments], root, tools_env)
         if rc != 0:
-            return None, "goimports failed (usually a syntax error in a fragment):\n" + out
+            return None, "goimports failed (usually a syntax error in a fragment):\n" + shorten(out)
         for path, pkg, body in fragments:
             with open(path, encoding="utf-8") as f:
                 formatted = f.read()
-            imports = "".join(m.group(0) for m in IMPORT_BLOCK_RE.finditer(formatted.split("//line ", 1)[0]))
+            # The import declarations come before the first top-level declaration. go/printer can
+            # pull a //line directive (and a comment after it) into the import block when the
+            # snippet starts with a comment; those lines belong to the body, which is written back
+            # as-is, so they are dropped here.
+            first_decl = re.search(r"^(func|type|var|const)\b", formatted, re.M)
+            header = formatted[:first_decl.start()] if first_decl else formatted.split("//line ", 1)[0]
+            imports = "".join(m.group(0) for m in IMPORT_BLOCK_RE.finditer(header))
+            imports = "\n".join(re.sub(r"\s*//line .*$", "", l) for l in imports.split("\n")
+                                if not l.strip().startswith("//"))
             with open(path, "w", encoding="utf-8") as f:
                 f.write(f"package {pkg}\n\n{imports}\n{body}")
     return fragments, None
@@ -249,13 +353,19 @@ def check_unit(unit, by_ref, workdir, env):
     _, err = assemble(unit, by_ref, root, env)
     if err:
         return False, err
-    # -gcflags=-e: report every type error, not the first ten.
-    steps = [["go", "build", "-gcflags=-e", "./..."]]
-    if unit.get("tests", False):
-        steps.append(["go", "test", "-count=1", "-run", "^$", "-gcflags=-e", "./..."])
-    steps.append(["go", "vet", "./..."])
-    for pkgs in unit.get("run_tests", []):
-        steps.append(["go", "test", "-count=1", pkgs])
+    if unit.get("cgo_typecheck_only"):
+        # The package links a native library through cgo (pact-go: libpact_ffi), which this harness
+        # neither installs nor links. `go vet` runs cgo and type-checks every file, tests included,
+        # without linking — so the API use is still checked against the pinned module.
+        env = dict(env, CGO_ENABLED="1")
+        steps = [["go", "vet", "./..."]]
+    else:
+        steps = [["go", "build", "-gcflags=-e", "./..."]]
+        if unit.get("tests", False):
+            steps.append(["go", "test", "-count=1", "-run", "^$", "-gcflags=-e", "./..."])
+        steps.append(["go", "vet", "./..."])
+    for pkgs in unit.get("run_tests", []):  # "./pkg/" or ["./pkg/", "-run", "^TestX$"]
+        steps.append(["go", "test", "-count=1"] + (pkgs if isinstance(pkgs, list) else [pkgs]))
     for pkgs in unit.get("bench_once", []):  # run each benchmark body once: it must not fail
         steps.append(["go", "test", "-count=1", "-run", "^$", "-bench", ".", "-benchtime", "1x", pkgs])
     if os.environ.get("ARCHETYPE_DB_TESTS") == "1":
@@ -273,18 +383,21 @@ def main():
     ap.add_argument("--keep", action="store_true", help="keep the assembled units (path is printed)")
     ap.add_argument("--only", nargs="*", help="check only these units")
     ap.add_argument("--inventory-only", action="store_true", help="check block coverage, compile nothing")
+    ap.add_argument("--partial", action="store_true", help=argparse.SUPPRESS)  # development: warn, don't stop
     args = ap.parse_args()
 
     cfg = load_config()
-    global ARCH_DIR
+    global ARCH_DIR, SKILLS_DIR
     ARCH_DIR = os.path.join(REPO, cfg["archetypes_dir"])
+    SKILLS_DIR = os.path.join(REPO, cfg["skills_dir"])
     by_ref, problems = inventory(cfg)
-    total = sum(len(v) for v in cfg["files"].values())
-    print(f"Inventory: {len(by_ref)} Go blocks in {len(cfg['files'])} archetype files; "
+    n_arch = sum(1 for k in cfg["files"] if "/" not in k)
+    print(f"Inventory: {len(by_ref)} Go blocks in {len(cfg['files'])} skill files "
+          f"({n_arch} backend archetypes + {len(cfg['files']) - n_arch} other packs); "
           f"{len(cfg['skip'])} skipped with a reason")
     for p in problems:
         fail(f"inventory: {p}")
-    if problems:
+    if problems and not args.partial:
         print(f"\nInventory incomplete ({len(problems)} problem(s)) — nothing compiled.")
         return 1
     for key, reason in sorted(cfg["skip"].items()):
@@ -312,7 +425,10 @@ def main():
         ok, out = check_unit(unit, by_ref, workdir, env)
         if ok:
             passed += 1
-            ran_pkgs = unit.get("run_tests", []) + [f"bench {p}" for p in unit.get("bench_once", [])]
+            ran_pkgs = [" ".join(p) if isinstance(p, list) else p for p in unit.get("run_tests", [])]
+            ran_pkgs += [f"bench {p}" for p in unit.get("bench_once", [])]
+            if unit.get("cgo_typecheck_only"):
+                ran_pkgs.append("type-check only: cgo")
             if os.environ.get("ARCHETYPE_DB_TESTS") == "1":
                 ran_pkgs += [f"DB {p}" for p in unit.get("db_tests", [])]
             ran = f" (+ ran {', '.join(ran_pkgs)})" if ran_pkgs else ""
@@ -321,7 +437,7 @@ def main():
             failed += 1
             print(f"FAIL  {unit['name']}\n" + "\n".join("      " + l for l in out.split("\n")))
     print(f"\n{passed} PASS / {failed} FAIL / {len(cfg['skip'])} blocks skipped "
-          f"({total} Go blocks, Go {subprocess.run(['go', 'env', 'GOVERSION'], capture_output=True, text=True).stdout.strip()})")
+          f"({len(by_ref)} Go blocks, Go {subprocess.run(['go', 'env', 'GOVERSION'], capture_output=True, text=True).stdout.strip()})")
     if args.keep or failed:
         print(f"Assembled units kept in {workdir}")
     else:

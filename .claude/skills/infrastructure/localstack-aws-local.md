@@ -89,6 +89,8 @@ SECRETS_MANAGER_ENDPOINT=http://localhost:4566
 ### SDK Configuration
 
 **Go (aws-sdk-go-v2):**
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, aws-sdk-go-v2 config v1.33.6 / s3 v1.114.0, and run: the integration test, against a fake S3 endpoint, sends PUT /app-uploads/test/file.txt (tests/archetype-compile/go/run.sh).
+
 ```go
 func NewLocalAWSConfig(ctx context.Context) (aws.Config, error) {
     endpoint := os.Getenv("AWS_ENDPOINT_URL")
@@ -97,19 +99,10 @@ func NewLocalAWSConfig(ctx context.Context) (aws.Config, error) {
         return config.LoadDefaultConfig(ctx)
     }
 
-    // LocalStack: custom endpoint resolver
-    resolver := aws.EndpointResolverWithOptionsFunc(
-        func(service, region string, options ...interface{}) (aws.Endpoint, error) {
-            return aws.Endpoint{
-                URL:               endpoint,
-                HostnameImmutable: true,
-                SigningRegion:     region,
-            }, nil
-        },
-    )
-
+    // LocalStack: one base endpoint for every client (the global EndpointResolverWithOptions is
+    // deprecated). S3 clients also set o.UsePathStyle = true (see the test below).
     return config.LoadDefaultConfig(ctx,
-        config.WithEndpointResolverWithOptions(resolver),
+        config.WithBaseEndpoint(endpoint),
         config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider("test", "test", "")),
         config.WithRegion(os.Getenv("AWS_DEFAULT_REGION")),
     )
