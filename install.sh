@@ -78,7 +78,7 @@ done
 echo "  ✅ _sync-deps.py + _add-packs.py installed (dependency-graph maintenance)"
 # ── Hooks (copied into each project by new-project.sh / /autonomous Step 0; settings reference $CLAUDE_PROJECT_DIR/.claude/hooks) ──
 mkdir -p "$CLAUDE_DIR/hooks/startup"
-cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$CLAUDE_DIR/hooks/startup/" && chmod +x "$CLAUDE_DIR/hooks/startup/"*.sh "$CLAUDE_DIR/hooks/startup/"*.py
+cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$REPO_DIR/.claude/hooks/"*.mjs "$CLAUDE_DIR/hooks/startup/" && chmod +x "$CLAUDE_DIR/hooks/startup/"*.sh "$CLAUDE_DIR/hooks/startup/"*.py
 install -m 755 "$REPO_DIR/.claude/guard/vet-package.py" "$CLAUDE_DIR/hooks/vet-package.py"   # agents call ~/.claude/hooks/vet-package.py
 cp "$REPO_DIR/.claude/settings.json" "$CLAUDE_DIR/hooks/startup/project-settings.json"
 echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by new-project.sh / /autonomous)"

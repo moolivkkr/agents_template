@@ -23,6 +23,9 @@ Subcommands
   deviation KEY --id DEV-N-NNN --phase N --what W --why Y --source S [--resolution fixed|accepted]
                                            record or resolve a developer deviation from the render
   status-set KEY STATUS                     set conformant / drift / design_gap / orphan (ui_standards_auditor results)
+  ready [KEY ...] [--phase N]              /develop pre-Wave-2 check: each key (or every key in
+                                           docs/design/phases/N/stitch-baseline.md) is approved/conformant at its
+                                           latest revision with an intact render; exit 2 otherwise
   review-list                              screens approved by design_quality_reviewer awaiting the owner
   hash FILE                                sha256 of a file
 
@@ -606,6 +609,44 @@ def cmd_status_set(a, path):
     print(f"{a.key}: {a.status}")
 
 
+def cmd_ready(a, path, root):
+    keys = list(a.keys)
+    if a.phase:
+        bl = os.path.join(root, "docs", "design", "phases", str(a.phase), "stitch-baseline.md")
+        if not os.path.isfile(bl):
+            print(f"NOT READY: {os.path.relpath(bl, root)} is missing — /design (Stitch) never listed this phase's screens")
+            return 2
+        for line in open(bl):
+            if line.lstrip().startswith("|"):
+                cell = line.strip().strip("|").split("|")[0].strip().strip("`")
+                if KEY_RE.match(cell):
+                    keys.append(cell)
+    if not keys:
+        print("ready: no screen keys given (pass KEYs or --phase N)")
+        return 3
+    if not os.path.isfile(path):
+        print(f"NOT READY: {os.path.relpath(path, root)} is missing")
+        return 2
+    state = load(path)
+    screens = state.get("screens", {})
+    bad = 0
+    for key in dict.fromkeys(keys):
+        s = screens.get(key)
+        errs = validate_screen(key, s, root, True) if isinstance(s, dict) else [f"{key}: not in stitch.json"]
+        st = s.get("status") if isinstance(s, dict) else None
+        deferred = isinstance(s, dict) and st == "no_baseline" and isinstance(s.get("deferred"), dict)
+        if isinstance(s, dict) and st in APPROVED and not errs:
+            print(f"READY      {key}: rev {s.get('approved_rev')} approved by {s.get('approved_by')} "
+                  f"→ {s['render']['screenshot']}")
+        elif deferred:
+            print(f"DEFERRED   {key}: Stitch was unavailable ({s['deferred'].get('detail')}) — build from the wireframe; queued")
+        else:
+            bad += 1
+            why = "; ".join(errs[:2]) if errs else f"status {st}"
+            print(f"NOT READY  {key}: {why}")
+    return 2 if bad else 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--root", default=".")
@@ -658,6 +699,9 @@ def main(argv=None):
     ss = sub.add_parser("status-set")
     ss.add_argument("key")
     ss.add_argument("status")
+    rdy = sub.add_parser("ready")
+    rdy.add_argument("keys", nargs="*")
+    rdy.add_argument("--phase")
     sub.add_parser("review-list")
     h = sub.add_parser("hash")
     h.add_argument("path")
@@ -694,6 +738,8 @@ def main(argv=None):
         for b in blocking:
             print(f"BLOCKING: {b}")
         return 2 if blocking else 0
+    if a.cmd == "ready":
+        return cmd_ready(a, path, root)
     if a.cmd == "review-list":
         state = load(path)
         rows = [(k, s) for k, s in sorted(state.get("screens", {}).items())

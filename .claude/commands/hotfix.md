@@ -126,6 +126,23 @@ Apply the targeted fix. Rules:
 3. Apply the minimal fix — no refactoring, no feature additions, no "while I'm here" changes
 4. Do NOT commit yet — the commit happens in Step 4 once the repro test goes fail→pass
 
+### UI changes go through Stitch first (projects with `docs/design/stitch.json`)
+
+Stitch is the core designer (`~/.claude/skills/ui/stitch-design.md` §7). Classify the fix before
+touching a screen:
+- **Restores the approved render** (the page drifted from its Stitch baseline): no Stitch change.
+  Fix the code to match `docs/design/stitch/<key>/screenshot.png`.
+- **Changes what a user sees** (a new message, a moved control, a new field or state): send it to
+  Stitch FIRST with `/stitch request <key> "<the change and why: hotfix <slug>>"`. Interactive: the
+  owner approves the render (or edits it in the loop). `--auto`: `design_quality_reviewer` approves and
+  the screen joins the owner-review list. Only then implement it, against the new approved render.
+- **Can't match the render for a real reason** (accessibility, component constraint, data reality):
+  implement it, and record a `stitch_deviations[]` entry (`{id, screen, what, why}`) in the owning
+  developer's manifest for the phase; `ui_standards_auditor` resolves it and `/stitch sync-back`
+  pushes an accepted one to Stitch before the gate.
+Stitch unreachable: interactive → `NEEDS_INPUT` "connect Stitch"; auto → `stitch-state.py defer` the
+screen and continue (the gate reports it).
+
 ### Fix Scope Violation
 
 If during investigation the fix clearly requires changes outside `${COMPONENT}`:

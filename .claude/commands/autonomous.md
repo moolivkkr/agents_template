@@ -31,7 +31,7 @@ Phase 1:  /init --auto (research all decisions)
 Phase 1b: /map (persistent codebase knowledge base)
 Phase 2:  /discuss --auto --phase=1 (surface assumptions)
 Phase 2b: /plan --auto --phase=1 (PHASE_PLAN + specs + data-contracts)
-Phase 2c: /design --phase=1 --source=stitch --auto (UI/mobile phases only; needs 2b's PHASE_PLAN + data-contracts; falls back to pure-agent if Stitch is absent)
+Phase 2c: /design --phase=1 --auto (UI/mobile phases only; Stitch designs every screen, design_quality_reviewer approves, owner reviews at the checkpoint; Stitch absent → screens deferred + wireframe path)
 Phase 3:  🛑 HUMAN CHECKPOINT (review all decisions + assumptions + UI designs)
 Phase 4:  /develop --auto --phase=1 (includes Wave 3.5: local deploy + health check)
 Phase 5:  Repeat discuss→plan→design→develop for remaining phases
@@ -122,7 +122,7 @@ fi
 
 # 5. Framework hooks present in THIS project (Stop hook keeps the run going; SessionStart injects facts)
 if [ ! -x ".claude/hooks/autonomous-continue.sh" ] && [ -d "$HOME/.claude/hooks/startup" ]; then
-  mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/"*.sh "$HOME/.claude/hooks/startup/"*.py .claude/hooks/ && chmod +x .claude/hooks/*.sh .claude/hooks/*.py
+  mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/"*.sh "$HOME/.claude/hooks/startup/"*.py "$HOME/.claude/hooks/startup/"*.mjs .claude/hooks/ && chmod +x .claude/hooks/*.sh .claude/hooks/*.py
   [ -f .claude/settings.json ] || cp "$HOME/.claude/hooks/startup/project-settings.json" .claude/settings.json
   echo "✅ Installed framework hooks into .claude/ (takes effect for Stop checks from the next turn)"
 fi
@@ -217,18 +217,18 @@ grep -qiE "screen|page|UI|interface|dashboard|form|component|mobile|app" "docs/d
 
 **If frontend phase detected (`HAS_UI == 0`):**
 
-Run `/design --phase=N --source=stitch --auto` to produce the UI design contract. `/develop`'s `ui_developer` / `mobile_developer` build from it. The command:
+Run `/design --phase=N --auto` to produce the UI design contract. Google Stitch is the designer by default (`~/.claude/skills/ui/stitch-design.md`); `/develop`'s `ui_developer` / `mobile_developer` build against the approved renders and the wireframes. The command:
 
 1. `wireframe_generator` maps each screen to a page archetype (`specs/archetype-mapping.md`)
 2. `ux_designer` produces the per-screen wireframe contract — `<screen>.wireframe.html` (self-contained visual reference, both themes + breakpoints, all 4 states) + `<screen>.wireframe.md` (component/API bindings against `data-contracts.md`, design tokens, accessibility, `TC-UI-*` inventory)
-3. **`--source=stitch` (enrichment):** when the Stitch MCP is available, `/design` drives it directly per `~/.claude/skills/ui/stitch-design.md`: reuse or create the product's Stitch project (`docs/design/stitch.json`), set up the house-style design system once, and generate each screen with `deviceType` (MOBILE for React Native, DESKTOP for web) and `designSystem`, polling rather than retrying. `ux_designer` then normalizes each render back into the SAME two-file wireframe contract, so `ui_developer` / `mobile_developer` consume one format regardless of source
+3. **Stitch first (default):** `/design` drives the Stitch MCP directly per `~/.claude/skills/ui/stitch-design.md`: reuse or create the product's Stitch project (`docs/design/stitch.json`; an app with existing pages and no project runs `/stitch import --auto` first, so every page gets a scored baseline), set up the house-style design system once, and generate (new) or edit (changed) each screen with `deviceType` (MOBILE for React Native, DESKTOP for web) and `designSystem`, polling rather than retrying. **Autonomous approval:** `design_quality_reviewer` approves each render in render-approval mode (`stitch-state.py approve <key> --by design_quality_reviewer`); a BLOCK fix list goes back to `edit_screens` (max 2 cycles). Every autonomously approved screen is on the **owner-review list** (`stitch-state.py review-list`); low-fidelity imports are never approved autonomously and wait for the owner. `ux_designer` then normalizes each approved render into the two-file wireframe contract
 4. **`design_quality_reviewer` runs the BLOCKING 11-dimension design gate** (`DESIGN_REVIEW.md`) — `ui_developer` must not start until this is PASS/FLAG
 
-**Fallback (no Stitch):** `/design` probes the Stitch MCP only because `--source=stitch` was passed. If the MCP is unavailable, times out, or errors, `/design` auto-falls back to the pure-agent path (`ux_designer` + `wireframe_generator`, HTML wireframes) — it never blocks on the external MCP. The fallback is logged to `agent_state/autonomous/auto-resolved.jsonl` (`"category":"ux"`).
+**Stitch unavailable:** if the MCP is not connected, times out, or errors, `/design` records every in-scope screen as `no_baseline` with a `deferred` record and a queue entry (`stitch-state.py defer`), designs it on the wireframe path (`wireframe_generator` + `ux_designer`), and logs it to `agent_state/autonomous/auto-resolved.jsonl` (`"category":"ux"`). It never blocks on the external MCP; the phase gate reports the deferred screens as WARNINGs and the final report lists the queue for Stitch.
 
 **`--auto` design gate:** in auto mode, a BLOCK verdict triggers `/design`'s own auto-fix loop (route gaps to `ux_designer`, max 2 cycles). If still BLOCK, `/design` downgrades to WARN, logs it, and surfaces it at the next HUMAN CHECKPOINT — the pipeline does not halt here.
 
-**Checkpoint:** Write checkpoint with wireframe count, design-gate verdict, design source (agent vs stitch), and any Stitch fallback.
+**Checkpoint:** Write checkpoint with wireframe count, design-gate verdict, design source (stitch / deferred), the owner-review list and the Stitch queue.
 
 ---
 
@@ -261,6 +261,15 @@ Present a structured review document:
 - Components: [list]
 - Data contracts: [N endpoints typed]
 - UI specs: [N screens]
+
+## UI Designs for Your Review (Google Stitch)
+Approved autonomously by design_quality_reviewer — from `python3 .claude/hooks/stitch-state.py review-list`:
+| Screen | Route | Approved | Render (open locally) |
+|--------|-------|----------|-----------------------|
+[one row per screen; low-fidelity imports (`import_low_fidelity`) listed separately — they wait for you]
+Stitch queue (screens deferred because Stitch was unavailable): [keys, or "none"]
+Reply "approve designs" to accept them all (`stitch-state.py owner-review <key> --decision accepted`),
+or give a change per screen: it becomes `/stitch request <key> "<change>"` before implementation.
 
 ## Tech Stack
 [from IMPLEMENTATION_GUIDELINES]
@@ -305,6 +314,9 @@ After approval (set `run.json` back to `status: running` and continue in the sam
 - Lock all decisions as APPROVED
 - Any LOW confidence items the user didn't modify: mark as "USER_ACCEPTED"
 - Write `agent_state/autonomous/approved.json` with timestamp
+- Stitch designs: for each screen the user accepted, `stitch-state.py owner-review <key> --decision accepted`;
+  for each change, `/stitch request <key> "<change>"` (owner approves interactively now that the user is
+  here), and re-run `/design` normalization for those screens before `/develop`
 
 ---
 
@@ -441,7 +453,7 @@ For each phase N (2, 3, ... max_phases):
   1. /map --incremental (update codebase knowledge with changes from previous phase)
   2. /discuss --auto --phase=N (surface assumptions for THIS phase)
   3. /plan --auto --phase=N
-  3a. /design --phase=N --source=stitch --auto (UI/mobile phases only, per Step 2c; BLOCKING design gate; pure-agent fallback if Stitch is absent)
+  3a. /design --phase=N --auto (UI/mobile phases only, per Step 2c: Stitch edits changed screens and generates new ones, design_quality_reviewer approves, owner-review list grows; BLOCKING design gate; Stitch absent → deferred + wireframe path)
   4. If --confirm_each_phase: 🛑 HUMAN CHECKPOINT (same format as Step 3; run.json → awaiting_human)
   5. /develop --auto --phase=N   (via /develop-orchestrator wave pattern — see Step 4 MANDATORY note)
   6. plan_goal_verifier: goal-level verification (VERIFICATION.md)
@@ -596,6 +608,11 @@ Traceability matrix: agent_state/accept/traceability_matrix.md
 | Phase | Finding | Severity | Approved by | Reason |
 |-------|---------|----------|-------------|--------|
 [from each phase's gate.forced.security_acknowledged[]; "none" if empty]
+
+## Designs Awaiting Your Review (Google Stitch)
+[`stitch-state.py review-list`: every screen design_quality_reviewer approved after the checkpoint, with
+its route and local render path, plus low-fidelity imports; and the Stitch queue — screens deferred
+because Stitch was unavailable, and sync-backs not yet pushed. "none" if all empty.]
 
 ## Known Issues
 [carried-forward items, forced gate items, deferred features]

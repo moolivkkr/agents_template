@@ -144,6 +144,26 @@ that has none, and retires the working phase's own rows and tests for FRs the BR
 through steps 1–3 above.
 The tests for the catch-up work are written by `/develop`'s acceptance agent when it builds the gap.
 
+## UI drift and Google Stitch (projects with `docs/design/stitch.json`)
+
+Stitch is the core designer (`~/.claude/skills/ui/stitch-design.md` §7), so the design plane is part
+of every recon: each screen's approved Stitch render ↔ its wireframe ↔ the built page.
+`ui_standards_auditor` (as in `/ui-audit`, report-only) lists each built page that differs from its
+approved render, plus pages with no Stitch screen.
+- **Bare `/recon`:** the drift report gets a `## Design (Stitch)` table: page, screen key, what
+  differs, and which way it would resolve. Nothing is sent to Stitch.
+- **`--fix=code`** (spec wins): the approved render is the spec. Each drifted page becomes a catch-up
+  task for `ui_developer` / `mobile_developer`, built against the render. A requirement change found
+  here that alters a screen goes to Stitch FIRST (`/stitch request <key> "<change, citing the FR>"`,
+  approval loop), and the catch-up task is built from the newly approved render.
+- **`--fix=docs`** (as-built wins): for each page whose as-built UI is right, Stitch is updated before
+  the docs: record the difference as an accepted deviation (`stitch-state.py deviation … --resolution
+  accepted`), then `/stitch sync-back` (as-built `edit_screens` prompt → re-fetch → approval →
+  `--synced-rev`). Only then are the wireframe and the BRD/TRD rewritten. Stitch never ends a recon
+  disagreeing with the shipped UI.
+- Stitch unreachable: interactive → `NEEDS_INPUT` "connect Stitch"; `--auto` → each Stitch step is
+  queued (`stitch-state.py defer` / the sync-back queue) and listed in the report.
+
 ## Where each path starts
 
 | Situation | Start with |

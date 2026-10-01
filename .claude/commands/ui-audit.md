@@ -13,7 +13,7 @@ arguments:
     description: "Restrict to one route (e.g. /orders). Default: every page — the point is whole-app coverage."
   - name: approve
     required: false
-    description: "Comma-separated page keys whose 'reconstructed' Stitch baselines you approve; recorded in docs/DECISIONS.md so code may be fixed to match them."
+    description: "Comma-separated screen keys (e.g. settings.desktop) whose Stitch renders the owner approves now: pending_approval, low-fidelity imports, or autonomous approvals on the owner-review list. Recorded via stitch-state.py approve/owner-review, so code may be fixed to match them."
 ---
 
 # /ui-audit — Design standards + Stitch baseline audit for every page
@@ -25,8 +25,10 @@ Nothing checked the **built** pages against the standards afterwards, and nothin
 holding the design for **every** page. Pages built outside `/design`, or touched by shared-component
 and theme changes, drifted unseen. `/ui-audit` closes that loop across the whole app.
 
-Read first: `~/.claude/skills/ui/stitch-design.md` (§1 who calls Stitch, §5–§7 generate/edit/normalize,
-§8 the all-pages baseline). Then `docs/PROJECT_FACTS.md` and `docs/DECISIONS.md`.
+Read first: `~/.claude/skills/ui/stitch-design.md` (§1 who calls Stitch, §6 request → approve →
+normalize, §7 deviations and sync-back, §8 the all-pages baseline). Then `docs/PROJECT_FACTS.md` and
+`docs/DECISIONS.md`. Stitch is the core designer: every page has a screen in `stitch.json`, and only
+an **approved** render (latest revision) is a baseline code may be fixed to.
 
 ---
 
@@ -41,10 +43,12 @@ mkdir -p "agent_state/phases/${PHASE}/reports" "agent_state/ui-audit/phase-${PHA
   `/develop` Wave 3.5); mobile binaries on a booted simulator and emulator for mobile pages. If
   it isn't running, start it, or accept a static-only audit, which the report marks explicitly.
 - **Stitch:** if `docs/design/stitch.json` is missing and `--fix` includes `design`, run
-  `/stitch init` first; there is no baseline to write into without it. Probe per skill §1 (never
+  `/stitch import` first (existing app: every page captured, recreated and scored) or `/stitch init`
+  (greenfield); there is no baseline to write into without it. Probe per skill §1 (never
   `list_projects` output into context).
-- **`--approve`:** append a DECISIONS.md entry *"Approved reconstructed Stitch baselines: <keys>"*
-  and set those pages' `baseline` to `"approved"` in `stitch.json`.
+- **`--approve`:** for each key, `stitch-state.py approve <key> --by owner` (pending_approval or
+  import_low_fidelity) or `stitch-state.py owner-review <key> --decision accepted` (autonomous
+  approvals), and append a DECISIONS.md entry *"Owner approved Stitch renders: <keys>"*.
 
 ## Step 1 — Audit  (`subagent_type: ui_standards_auditor`)
 
@@ -66,25 +70,26 @@ The **parent** executes `ui_standards_stitch_requests.json`, following the skill
 - `apply_design_system`: `apply_design_system` with `assetId` and the listed instances, then mark every affected page `stale`.
 - `refresh`: `get_screen` to renew the download URLs.
 
-After each request, update `stitch.json` (`screens` plus `pages[key]` with `screenKey`, `baseline`
-type and status `pending_sync`) and append a log entry. Run at most 3 generations in flight. A
+After each request, record it with `stitch-state.py revise` (the new screen id, the prompt, source
+`audit`) and fetch + `render`; the screen is `pending_approval` until it goes through the approval
+loop in `/stitch` (owner interactively; `design_quality_reviewer` under `--auto`, owner-review list). Run at most 3 generations in flight. A
 failed request is reported for that page, and the others continue.
 
 Then normalize (skill §7): spawn `ux_designer` once over the new or changed renders, to write or
 update each page's wireframe pair (mobile pages get testIDs and Tier 4M TCs). Run the design gate
 exactly as `/design` Step 3 does (`design_quality_reviewer`, max 2 cycles; a visual BLOCK goes back
-to `edit_screens`). Only pages whose wireframe passes the gate move to `baseline` = `spec` /
-`reconstructed` in `stitch.json`.
+to `edit_screens`). Only approved renders whose wireframe passes the gate are baselines.
 
 ## Step 3 — Code fixes  (`--fix=code|all`)
 
-For every `drift` finding whose baseline is `spec` or `approved`:
+For every `drift` finding whose Stitch screen is approved at its latest revision:
 - web pages → `ui_developer` (`subagent_type: ui_developer`);
 - React Native pages → `mobile_developer` (`subagent_type: mobile_developer`).
 
 Each developer gets its findings (page, `file:line`, fix) plus the page's wireframe pair. Findings
-against **`reconstructed`** baselines are **not** code-fixed: list them with
-`▶ approve with /ui-audit --approve=<keys>`. Then run `test_runner` for the affected Node tiers,
+against a render that is **not approved** (pending_approval, import_low_fidelity) are **not**
+code-fixed: list them with `▶ approve with /ui-audit --approve=<keys>`. Deviations the auditor
+**accepted** are not code-fixed either: they go to `/stitch sync-back`. Then run `test_runner` for the affected Node tiers,
 so a visual fix can't silently break behaviour.
 
 ## Step 4 — Re-audit and report
@@ -95,15 +100,15 @@ rounds while BLOCKING findings remain. Then report:
 ```
 UI audit — <app scope> — N pages
   Stitch baseline coverage: before NN% → after NN%
-  conformant N · drift N · design_gap N · no_baseline N · orphan N
+  conformant N · drift N · design_gap N · no_baseline N · import_low_fidelity N · sync_back_pending N · orphan N
   Stitch: N generated · N edited · N theme-applied   Code fixes: N files
-  Awaiting approval (reconstructed baselines): <keys>
+  Awaiting the owner: <pending_approval / low-fidelity / owner-review keys>   Sync-backs queued: <keys>
   BLOCKING:N WARNING:N INFO:N   → agent_state/phases/N/reports/ui_standards_audit.md
 ```
 
 ## Definition of Done
 - [ ] The audit covered every page in the inventory (or the single `--page`), and anything not rendered is marked SKIPPED with the reason.
 - [ ] Every Stitch mutation is recorded in `stitch.json` (the new id after each edit), and none is left only in the conversation.
-- [ ] No page's code was changed to match an unapproved `reconstructed` baseline.
+- [ ] No page's code was changed to match a render that isn't approved at its latest revision.
 - [ ] Wireframes created or changed from Stitch passed the design gate before becoming a baseline.
 - [ ] Coverage is reported before and after; failures are reported per page, never summarized away.

@@ -33,6 +33,7 @@ skill_packs:
   - "~/.claude/skills/requirements/persona-definition.md"
   - "~/.claude/skills/requirements/conflict-detection.md"
   - "~/.claude/skills/requirements/business-objectives.md"
+  - "~/.claude/skills/ui/stitch-design.md"
 ---
 
 # Agent: Product Manager
@@ -208,6 +209,23 @@ Format:
 <PROCEED | DEFER | MODIFY_SCOPE>
 <reasoning>
 ```
+
+### Step 3b — UI impact goes to Google Stitch first
+
+When the project designs in Stitch (`docs/design/stitch.json` exists; `~/.claude/skills/ui/stitch-design.md`
+§7), a change that alters what a user sees is designed in Stitch BEFORE anyone implements it. In
+`CR-<N>-impact.md`, add a **UI impact (Stitch)** table:
+
+| Screen key | Route | Change for Stitch (the edit or new-screen prompt) | Requirement |
+|---|---|---|---|
+| orders-list.desktop | /orders | Add a "Refund" action to each paid order row; keep every other element | FR-012 (CR-4) |
+| refunds.desktop (new) | /refunds | Refund list for finance admins: order, amount, reason, status; filter by status | FR-031 (CR-4) |
+
+Screen keys come from `stitch.json` (`<slug>.<desktop|mobile>`; React Native screens are `.mobile`).
+You don't call Stitch (subagents never do). After PROCEED, the session that launched you runs
+`/stitch request <key> "<prompt>"` for each row (owner approval loop; `design_quality_reviewer` under
+`--auto`), and the phase plan builds against the approved renders. Leave the table out when the
+change has no visible UI effect, and say so.
 
 ### Step 4 — User Decision Gate
 Present impact report to user. Do NOT modify BRD until user confirms:

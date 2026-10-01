@@ -227,7 +227,7 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 
 ```bash
 # 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
-for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py debate-status.py remember.sh; do
+for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py debate-status.py remember.sh stitch-state.py stitch-capture.mjs stitch-fidelity.py; do
   [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
@@ -402,6 +402,36 @@ for k in build typecheck lint; do
   PHASE="${PHASE}" bash -o pipefail -c "$CMD" >"agent_state/phases/${PHASE}/junit/2A-$k.log" 2>&1 \
     || { echo "⛔ BLOCKED after 2A.<n>: $k failed (exit $?) — respawn the same role with the log; do not start the next step"; tail -20 "agent_state/phases/${PHASE}/junit/2A-$k.log"; }
 done
+```
+
+### Wave 2-UI pre-check — approved, current Stitch baseline (BEFORE 2A.5 / 2A.6)
+
+Google Stitch is the core designer (`~/.claude/skills/ui/stitch-design.md`). When
+`docs/design/stitch.json` exists, no UI or mobile screen is implemented until every screen this phase
+touches has an **approved render at its latest revision** whose stored files still match their hashes:
+```bash
+if [ -f docs/design/stitch.json ]; then
+  python3 .claude/hooks/stitch-state.py validate --check-files \
+    && python3 .claude/hooks/stitch-state.py ready --phase "${PHASE}" \
+    || echo "⛔ BLOCKED before 2A.5/2A.6: a screen this phase touches has no approved, current Stitch render — run /design --phase=${PHASE} (or /stitch request <key> \"<change>\") and approve it first"
+fi
+```
+- `ready --phase N` reads `docs/design/phases/N/stitch-baseline.md` (written by `/design`). A missing
+  file means the phase was never designed in Stitch: run `/design` first.
+- `pending_approval` → the approval loop (owner; `design_quality_reviewer` under `--auto`).
+- `DEFERRED` (Stitch was unavailable during an `/autonomous` run) is not a blocker: the screen is built
+  from the wireframe and stays queued; the gate reports it as a WARNING.
+- A UI change discovered during the phase that isn't in the approved render goes to Stitch first
+  (`/stitch request`), never straight into code.
+
+Both UI roles get these extra RULES in their spawn prompt:
+```
+STITCH (when docs/design/stitch.json exists): build each screen against BOTH its approved render
+(docs/design/stitch/<key>/screenshot.png + screen.html: layout, spacing, hierarchy, density) and its
+wireframe pair (bindings, the 4 states, testIDs, TC IDs). Use the project's components and tokens;
+never paste Stitch's HTML or Tailwind classes. Each manifest screen names "stitch_screen" and
+"stitch_rev". Every deliberate difference from the render goes in your manifest's
+stitch_deviations[] ({id: DEV-<phase>-<nnn>, screen, what, why}); an unrecorded difference is drift.
 ```
 
 > **Mobile app code (2A.6):** `mobile_developer` builds the React Native screens from the screen specs,
@@ -1018,6 +1048,25 @@ done
 [ "$WAVE4_BLOCKED" = true ] && echo "⛔ DO NOT PROCEED — re-spawn the missing Wave-4 agents."
 ```
 
+### Wave 4s — Stitch deviations and sync-back (UI phases with docs/design/stitch.json)
+
+`ui_standards_auditor` resolves every `stitch_deviations[]` entry in the phase's UI manifests
+(stitch-design.md §7) and records each with `stitch-state.py deviation`:
+- **fixed (drift)** → a code finding for `ui_developer` / `mobile_developer` in the fix loop below; the
+  screen returns to `conformant` on re-audit.
+- **accepted** → the screen becomes `sync_back_pending`. After the review loop, the **parent** runs
+  `/stitch sync-back` (the MCP calls are the parent's): an as-built `edit_screens` prompt, re-fetch,
+  approval (owner interactively; `design_quality_reviewer` under `--auto`, listed for the owner), then
+  `deviation --synced-rev`, and `ux_designer` re-normalizes the wireframe.
+Stitch unavailable: interactive → `NEEDS_INPUT` "connect Stitch"; `--auto` → the sync-back stays
+queued and the gate blocks on `sync_back_pending` (an accepted deviation must reach Stitch before the
+phase passes; record it as a forced-gate blocker only with the owner's approval).
+```bash
+# screens waiting for /stitch sync-back (must be empty before Wave 5v)
+[ -f docs/design/stitch.json ] \
+  && jq -r '.screens | to_entries[] | select(.value.status=="sync_back_pending") | .key' docs/design/stitch.json
+```
+
 ### Track A/C Fix → Re-Review Loop (do NOT defer all fixes to Wave 5)
 
 BLOCKING findings from a reviewer/reconciler must be fixed and **re-verified by re-running only that
@@ -1194,6 +1243,10 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
     - **Freshness:** evidence `code_sha` equals the current code commit, and the tree is clean.
     - **Commands:** `verify-commands.json` typecheck/lint/test really run.
     - **Security:** security findings can't be forced without per-finding acknowledgements.
+    - **Stitch (check g):** with `docs/design/stitch.json`, every UI route in this phase's
+      `ui_developer` / `mobile_developer` manifests has an approved/conformant Stitch screen at its
+      latest revision whose render still matches its sha256; nothing is `pending_approval`,
+      `sync_back_pending` or `drift`; every `stitch_deviations[]` entry is fixed or accepted + synced.
 
 0b. **Agent-roster completeness (execution guarantee) — run FIRST, via the shared hook.** The single
     source of truth for this check is `.claude/hooks/verify-gate.sh`. It passes iff (1) every

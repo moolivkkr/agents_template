@@ -160,7 +160,8 @@ What changes in the steps below:
 - **Step 2b:** data-contracts.md is extracted from the real handlers and response types.
 - **Step 3 (UI):** `ux_designer` documents the existing screens (component tree, bindings, states)
   instead of designing new ones. `design_quality_reviewer` findings on existing screens are WARN
-  (they go to the backlog), not BLOCK.
+  (they go to the backlog), not BLOCK. When Stitch is configured and has no project yet, run
+  `/stitch import` here, so every existing page gets its Stitch baseline (scored for fidelity).
 - **Steps 3b–4b:** unchanged.
 
 Then `/develop --phase=N` runs audit → gap work only → every test tier → acceptance → gate. When the
@@ -336,6 +337,25 @@ type CreateUserResponse = {
 **Depends on:** Step 2b (data-contracts.md must exist before UI specs)
 
 Reads: ALL Step 0 context + `data-contracts.md` + page archetypes from `~/.claude/skills/ui/archetypes/`
+
+**Stitch first (default).** This step runs `/design --phase=${PHASE}` (with `--auto` in auto mode),
+so Google Stitch designs every screen the phase adds or changes before any wireframe is final
+(`~/.claude/skills/ui/stitch-design.md` §6–7):
+- **List the phase's screens against `docs/design/stitch.json`:** each in-scope screen is **new** (no
+  key), **changed** (an existing key whose layout, fields or actions this phase's FRs change) or
+  **unchanged**. A later phase that changes an existing screen sends an `edit_screens` prompt for it,
+  naming the FR; it never re-designs from scratch, and never edits only the wireframe.
+- New and changed screens go through the approval loop (owner interactively;
+  `design_quality_reviewer` under `--auto`, listed for the owner's later review). Then `ux_designer`
+  normalizes the approved render into the wireframe pair.
+- Write `docs/design/phases/${PHASE}/stitch-baseline.md`: one row per screen this phase touches
+  (key, route, device, new/changed/unchanged, approved rev, approved by). `/develop` checks every row
+  before Wave 2 UI work starts.
+- No `stitch.json` yet and the app already has pages → `/stitch import` first, so every existing page
+  has a baseline before a later phase changes it.
+- Stitch unreachable: interactive → `NEEDS_INPUT` ("connect Stitch", or the owner answers
+  "wireframe"); auto → the screens are deferred in `stitch.json` and designed on the wireframe path.
+- `--as-built` phases don't send anything to Stitch: existing pages are bootstrapped by `/stitch import`.
 
 Produces component-level UI spec files in `docs/design/phases/${PHASE}/specs/`:
 

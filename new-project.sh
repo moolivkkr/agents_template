@@ -37,7 +37,7 @@ mkdir -p "$PROJECT_DIR/.claude/agents/generated"
 # Hooks + project settings: ground-truth injection (SessionStart), gate verification and
 # /autonomous continuation (Stop). Paths in settings.json resolve via $CLAUDE_PROJECT_DIR.
 mkdir -p "$PROJECT_DIR/.claude/hooks"
-cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$PROJECT_DIR/.claude/hooks/" && chmod +x "$PROJECT_DIR/.claude/hooks/"*.sh "$PROJECT_DIR/.claude/hooks/"*.py
+cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$REPO_DIR/.claude/hooks/"*.mjs "$PROJECT_DIR/.claude/hooks/" && chmod +x "$PROJECT_DIR/.claude/hooks/"*.sh "$PROJECT_DIR/.claude/hooks/"*.py
 if [ -f "$PROJECT_DIR/.claude/settings.json" ]; then
   # Existing settings: add the spawn-depth cap if missing (keeps everything else as it is). The debate
   # protocol relies on it: this session -> debate_moderator -> its children, and no deeper.
