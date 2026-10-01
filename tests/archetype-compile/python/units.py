@@ -96,7 +96,7 @@ WK = "worker-pattern-python.md"
 
 EXPECTED = {
     AM: 11, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
-    EH: 7, GR: 5, MG: 10, OB: 23, PF: 28, WS: 8, WK: 8,
+    EH: 7, GR: 5, MG: 10, OB: 23, PF: 28, WS: 10, WK: 8,
 }
 
 # Blocks that hold only comments. The harness verifies that; code added to one fails until it gets a unit.
@@ -663,24 +663,37 @@ UNITS.append(Unit(
         "app/ws/tickets.py": [B(WS, 1, "# app/ws/tickets.py")],
         "app/ws/endpoint.py": [B(WS, 2, "# app/ws/endpoint.py")],
         "app/ws/handlers.py": [B(WS, 3, "# app/ws/handlers.py")],
-        "app/ws/heartbeat.py": [B(WS, 6, "# app/ws/heartbeat.py")],
-        "app/main.py": [B(WS, 7, "# app/main.py")],
-        "myapp/tickets.py": [S("myapp_tickets.py")],
-        "myapp/consumers.py": [B(WS, 4, "# myapp/consumers.py")],
-        "myapp/routing.py": [B(WS, 5, "# myapp/routing.py")],
+        "app/ws/heartbeat.py": [B(WS, 8, "# app/ws/heartbeat.py")],
+        "app/main.py": [B(WS, 9, "# app/main.py")],
+        "myapp/tickets.py": [B(WS, 4, "# myapp/tickets.py")],
+        "myapp/consumers.py": [B(WS, 5, "# myapp/consumers.py")],
+        "myapp/routing.py": [B(WS, 6, "# myapp/routing.py")],
+        "myapp/asgi.py": [B(WS, 7, "# myapp/asgi.py")],
         "harness_django_settings.py": [S("django_settings.py")],
-        "tests/test_ws_tickets_live.py": [S("test_ws_tickets_live.py")],  # --live: RedisTicketStore
+        # --live: RedisTicketStore and myapp/tickets.py on Redis 7, through the Channels application
+        "tests/test_ws_tickets_live.py": [S("test_ws_tickets_live.py")],
     },
     typecheck=["app/ws/manager.py", "app/ws/tickets.py", "app/ws/endpoint.py", "app/ws/handlers.py",
-               "app/ws/heartbeat.py", "app/main.py", "myapp/consumers.py", "myapp/routing.py"],
+               "app/ws/heartbeat.py", "app/main.py", "myapp/tickets.py", "myapp/consumers.py",
+               "myapp/routing.py", "myapp/asgi.py"],
     imports=["app.ws.manager", "app.ws.tickets", "app.ws.endpoint", "app.ws.handlers", "app.ws.heartbeat",
              "app.main"],
     # REDIS_URL: the lifespan builds the client (lazy; nothing connects); the smoke overrides the store
+    # ALLOWED_ORIGINS for the Django settings; the FastAPI Settings gets the same list from its APP_ENV=test
+    # default
     env={"DJANGO_SETTINGS_MODULE": "harness_django_settings", "APP_ENV": "test",
-         "REDIS_URL": "redis://127.0.0.1:1/0"},
+         "REDIS_URL": "redis://127.0.0.1:1/0", "ALLOWED_ORIGINS": '["http://localhost:3000"]'},
     live="run",
     pytest_args=["tests/test_ws_tickets_live.py"],
     smoke=smoke("smoke_websocket.py"),
+    pyright_ignore=[(
+        WS, 'Argument of type "list[URLResolver | URLPattern]" cannot be assigned to parameter "routes"',
+        '"websocket": BrowserOriginValidator(URLRouter(websocket_urlpatterns), settings.ALLOWED_ORIGINS),',
+        "Channels' documented routing (URLRouter over re_path() patterns). pyright's bundled typeshed stub "
+        "for channels types `routes` as list[_ExtendedURLPattern | URLRouter], a type_check_only subclass "
+        "re_path() can't return. smoke_websocket.py and the --live test route handshakes through this "
+        "URLRouter to the consumer.",
+    )],
 ))
 
 # ── worker (Celery task applied in-process, dramatiq actor fn, asyncio worker, APScheduler, health) ──
