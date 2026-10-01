@@ -218,15 +218,12 @@ WHERE tenant_id = $2 AND id = $3 AND version = $4
 
 ### Cursor-Based Pagination
 ```text
--- Cursor-based (scalable, consistent with concurrent writes)
+-- Cursor-based (scalable, consistent with concurrent writes). The cursor carries (created_at, id):
+-- the id tiebreak means rows with equal created_at are neither skipped nor repeated.
 SELECT * FROM orders
-WHERE tenant_id = $1 AND created_at < $2
-ORDER BY created_at DESC
-LIMIT $3
-
--- Fetch limit + 1 rows: the extra row tells you has_more without a COUNT
--- Tiebreak on id so rows with equal created_at are neither skipped nor repeated:
---   WHERE tenant_id = $1 AND (created_at, id) < ($2, $3) ORDER BY created_at DESC, id DESC LIMIT $4
+WHERE tenant_id = $1 AND (created_at, id) < ($2, $3)
+ORDER BY created_at DESC, id DESC
+LIMIT $4   -- limit + 1: the extra row tells you has_more without a COUNT
 
 response = { data: rows[:limit],
              meta: { request_id,
