@@ -316,7 +316,7 @@ impl AppError {
         let mut details = Vec::new();
         for (field, errors) in err.field_errors() {
             for e in errors {
-                details.push(field_error(&field, &e.code));
+                details.push(field_error(&field, e));
             }
         }
         Self::Validation { details }
@@ -353,20 +353,41 @@ impl AppError {
     }
 }
 
-/// validator codes → (stable lower_snake code, fixed user-safe message).
-fn field_error(field: &str, validator_code: &str) -> FieldError {
-    let (code, message) = match validator_code {
+/// validator codes → (code from the closed details[].code set in api/response-envelope.md, fixed
+/// user-safe message).
+fn field_error(field: &str, e: &validator::ValidationError) -> FieldError {
+    let (code, message) = match e.code.as_ref() {
         "required" => ("required", "This field is required."),
-        "length" => ("invalid_length", "This value is too short or too long."),
+        "length" => length_side(e),
         "range" => ("out_of_range", "This value is out of range."),
         "email" => ("invalid_format", "Enter a valid email address."),
         "url" | "regex" => ("invalid_format", "This value has the wrong format."),
-        _ => ("invalid", "This value is invalid."),
+        _ => ("invalid_value", "This value is invalid."),
     };
     FieldError {
         field: field.to_owned(),
         code: code.to_owned(),
         message: message.to_owned(),
+    }
+}
+
+/// validator reports both sides of `length` as "length": the side comes from its params — the
+/// bound (`min` / `max` / `equal`) against the checked `value`, measured as validator does (chars of
+/// a string, items of a list). The value itself is only measured here, never sent or logged.
+fn length_side(e: &validator::ValidationError) -> (&'static str, &'static str) {
+    const TOO_SHORT: (&str, &str) = ("too_short", "This value is too short.");
+    const TOO_LONG: (&str, &str) = ("too_long", "This value is too long.");
+    let bound = |name: &str| e.params.get(name).and_then(serde_json::Value::as_u64);
+    let len = match e.params.get("value") {
+        Some(serde_json::Value::String(s)) => s.chars().count() as u64,
+        Some(serde_json::Value::Array(items)) => items.len() as u64,
+        Some(serde_json::Value::Object(map)) => map.len() as u64,
+        // no measurable value: only a lower bound can have failed if there is no upper one
+        _ => return if bound("max").is_none() && bound("equal").is_none() { TOO_SHORT } else { TOO_LONG },
+    };
+    match bound("min").or(bound("equal")) {
+        Some(lower) if len < lower => TOO_SHORT,
+        _ => TOO_LONG,
     }
 }
 ```
@@ -540,7 +561,7 @@ The HTTP status carries the class; `X-Request-Id` header = `request_id`.
     "code": "VALIDATION_FAILED",
     "message": "Some fields are invalid.",
     "details": [
-      { "field": "name", "code": "invalid_length", "message": "This value is too short or too long." },
+      { "field": "name", "code": "too_long", "message": "This value is too long." },
       { "field": "email", "code": "invalid_format", "message": "Enter a valid email address." }
     ],
     "request_id": "b7e1c2…",
@@ -663,6 +684,36 @@ mod tests {
         assert_eq!(err.error_code(), "VALIDATION_FAILED");
         assert_eq!(err.details()[0].field, "email");
         assert_eq!(err.details()[0].code, "invalid_format");
+    }
+
+    #[test]
+    fn test_validator_length_is_too_short_or_too_long() {
+        use validator::Validate;
+
+        #[derive(Validate)]
+        struct Input {
+            #[validate(length(min = 3, max = 5))]
+            name: String,
+            #[validate(length(equal = 4))]
+            pin: String,
+            #[validate(contains(pattern = "@"))]
+            handle: String,
+        }
+        let code_of = |input: Input, field: &str| {
+            let err = AppError::validation_from_validator(input.validate().unwrap_err());
+            let detail = err.details().iter().find(|d| d.field == field).expect("a detail for the field");
+            detail.code.clone()
+        };
+        let ok = || Input { name: "abcd".into(), pin: "1234".into(), handle: "@me".into() };
+
+        assert_eq!(code_of(Input { name: "ab".into(), ..ok() }, "name"), "too_short");
+        assert_eq!(code_of(Input { name: "abcdef".into(), ..ok() }, "name"), "too_long");
+        assert_eq!(code_of(Input { pin: "123".into(), ..ok() }, "pin"), "too_short");
+        assert_eq!(code_of(Input { pin: "12345".into(), ..ok() }, "pin"), "too_long");
+        // characters, not bytes: three 2-byte characters are long enough
+        assert!(Input { name: "äöü".into(), ..ok() }.validate().is_ok());
+        // a validator rule with no closer code in the set
+        assert_eq!(code_of(Input { handle: "me".into(), ..ok() }, "handle"), "invalid_value");
     }
 
     #[test]

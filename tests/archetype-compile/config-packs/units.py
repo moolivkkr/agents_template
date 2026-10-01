@@ -97,7 +97,7 @@ EXPECTED = {
     "infrastructure/terraform.md": {"hcl": 2, "sh": 1},
     "languages/go.md": {"yaml": 1},
     "languages/java.md": {"yaml": 1},
-    "languages/rust.md": {"sh": 2, "sql": 1},
+    "languages/rust.md": {"sh": 1, "sql": 1},
     "languages/typescript.md": {"json": 1},
     "testing/appium-mobile.md": {"sh": 1},
     "testing/contract-testing.md": {"sh": 1, "yaml": 1},
@@ -634,9 +634,8 @@ BLOCKS = {
     # ── languages/java.md
     "languages/java.md#yaml1": dict(anchor='spring:', check="yaml"),
     # ── languages/rust.md
-    "languages/rust.md#sh1": dict(anchor='# Create migration (writes migrations/<YYYYMMDDHHMMSS>_create_orders_table.sql)', check="sh"),
-    "languages/rust.md#sql1": dict(anchor='-- migrations/20240115093000_create_orders_table.sql', check="pg", fixture="tenants"),
-    "languages/rust.md#sh2": dict(anchor='# Run migrations', check="sh"),
+    "languages/rust.md#sh1": dict(anchor='sqlx migrate add create_orders   # writes migrations/<timestamp>_create_orders.sql', check="sh"),
+    "languages/rust.md#sql1": dict(anchor='-- migrations/20240115000000_create_orders.sql', check="pg"),
     # ── languages/typescript.md
     "languages/typescript.md#json1": dict(anchor='{', check="json", schema="tsconfig"),
     # ── testing/appium-mobile.md

@@ -373,6 +373,9 @@ def unit_database_url(base_url, unit):
     return base_url.rsplit("/", 1)[0] + f"/archetype_{unit.schema}"
 
 
+TEST_TIMEOUT_SECS = int(os.environ.get("ARCHETYPE_TEST_TIMEOUT", "900"))
+
+
 def docker_available():
     try:
         return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode == 0
@@ -386,8 +389,12 @@ def run_unit_tests(unit, database_url):
     env = cargo_env()
     if database_url:
         env["DATABASE_URL"] = database_url
-    proc = subprocess.run(["cargo", "test", "-p", unit.package, "--all-features", "--no-fail-fast"] + unit.test_args,
-                          cwd=WORK, env=env, capture_output=True, text=True)
+    try:  # a hung test (a pool waiting on a leaked connection, say) is a failure, not a stuck run
+        proc = subprocess.run(["cargo", "test", "-p", unit.package, "--all-features", "--no-fail-fast"] + unit.test_args,
+                              cwd=WORK, env=env, capture_output=True, text=True, timeout=TEST_TIMEOUT_SECS)
+    except subprocess.TimeoutExpired as e:
+        out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        return False, f"timed out after {TEST_TIMEOUT_SECS}s", out + "\nerror: cargo test timed out"
     out = proc.stdout + proc.stderr
     passed = sum(int(n) for n in re.findall(r"test result: \w+\. (\d+) passed", out))
     failed = sum(int(n) for n in re.findall(r"(\d+) failed;", out))
