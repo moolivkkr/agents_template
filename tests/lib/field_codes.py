@@ -55,7 +55,10 @@ for f in sorted(files):
     for i, lang, line in blocks(open(f, encoding="utf-8").read()):
         if lang in NON_CODE or not lang:
             continue
-        if a.lang and lang not in LANGS[a.lang]:
+        if a.lang == "ui":  # UI = the files UI agents copy from, whatever the fence language
+            if not re.match(r"\.claude/(skills/(ui/|frameworks/(react|nextjs|vue|svelte|angular|tanstack-query|react-native)|testing/(msw|playwright|react-native-testing-library|detox|appium-mobile))|agents/templates/(ui_|mobile_))", rel):
+                continue
+        elif a.lang and lang not in LANGS[a.lang]:
             continue
         s = line.strip()
         if s.startswith(("//", "#", "*", "--", "/*")) or SKIP_LINE.search(line):
