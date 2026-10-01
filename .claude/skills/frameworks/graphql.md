@@ -354,13 +354,13 @@ class Widget:
 
 import { GraphQLError } from 'graphql';
 import type { Context } from '../context'; // tenantId/userId from the verified token, per-request loaders
-import { toUserError } from '../errors'; // domain error → UserError; null for anything else
+import { toUserError, type FieldCode } from '../errors'; // FieldCode: the closed details[].code set
 import type { CreateWidgetInput, Widget, WidgetFilter } from '../types';
 
 // A bad argument is a GraphQL error carrying the envelope's VALIDATION_FAILED code and details[]
-function invalidArgument(field: string, message: string): GraphQLError {
+function invalidArgument(field: string, code: FieldCode, message: string): GraphQLError {
   return new GraphQLError('Some fields are invalid.', {
-    extensions: { code: 'VALIDATION_FAILED', details: [{ field, code: 'invalid_value', message }] },
+    extensions: { code: 'VALIDATION_FAILED', details: [{ field, code, message }] },
   });
 }
 
@@ -377,9 +377,8 @@ export const widgetResolvers = {
     ) => {
       // Reject, never clamp: a client asking for 500 must not silently get 100 and think it has everything
       const first = args.first ?? 20;
-      if (!Number.isInteger(first) || first < 1 || first > 100) {
-        throw invalidArgument('first', 'Must be a whole number from 1 to 100.');
-      }
+      if (!Number.isInteger(first)) throw invalidArgument('first', 'invalid_type', 'Must be a whole number.');
+      if (first < 1 || first > 100) throw invalidArgument('first', 'out_of_range', 'Must be from 1 to 100.');
       return ctx.widgetService.list(ctx.tenantId, first, args.after, args.filter);
     },
   },

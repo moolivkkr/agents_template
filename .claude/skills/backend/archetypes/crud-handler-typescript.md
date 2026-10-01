@@ -292,17 +292,23 @@ function toFieldErrors(error: ZodError): FieldError[] {
   });
 }
 
-// Zod 4 issue codes (Zod 3's invalid_string / invalid_enum_value / issue.received / issue.type are gone).
+// Zod 4 issue codes (Zod 3's invalid_string / invalid_enum_value / issue.received / issue.type are gone),
+// mapped onto the closed details[].code set: Zod's too_small/too_big never reach the wire.
+const SIZED = new Set(["string", "array", "set"]); // a length: too_short / too_long; else a value: out_of_range
+
 function fieldCode(issue: ZodIssue): FieldCode {
   switch (issue.code) {
-    case "invalid_type": // a missing key arrives as input === undefined
+    case "invalid_type": // a missing key arrives as input === undefined (reportInput above)
       return issue.input === undefined ? "required" : "invalid_type";
     case "too_small":
-      return issue.origin === "string" && issue.minimum === 1 ? "required" : "too_small";
+      if (issue.origin === "string" && issue.minimum === 1) return "required"; // "" for a required string
+      return SIZED.has(issue.origin) ? "too_short" : "out_of_range"; // number, int, bigint, date …
     case "too_big":
-      return issue.origin === "string" ? "too_long" : "too_big";
+      return SIZED.has(issue.origin) ? "too_long" : "out_of_range";
     case "invalid_format": // uuid, email, url, regex …
       return "invalid_format";
+    case "unrecognized_keys": // a strict object got a key it doesn't accept
+      return "unknown_field";
     default: // invalid_value (enum), custom, …
       return "invalid_value";
   }

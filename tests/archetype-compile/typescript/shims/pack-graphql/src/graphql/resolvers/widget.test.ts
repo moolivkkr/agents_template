@@ -18,13 +18,19 @@ function makeCtx() {
 }
 
 describe("widgets(first): reject, never clamp", () => {
-  it.each([0, -1, 101, 500, 2.5])("first = %s → VALIDATION_FAILED, the service is not called", async (first) => {
+  it.each([
+    [0, "out_of_range", "Must be from 1 to 100."],
+    [-1, "out_of_range", "Must be from 1 to 100."],
+    [101, "out_of_range", "Must be from 1 to 100."],
+    [500, "out_of_range", "Must be from 1 to 100."],
+    [2.5, "invalid_type", "Must be a whole number."],
+  ])("first = %s → VALIDATION_FAILED %s, the service is not called", async (first, code, message) => {
     const { ctx, list } = makeCtx();
     const err = await widgetResolvers.Query.widgets(undefined, { first }, ctx).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(GraphQLError);
     expect((err as GraphQLError).extensions).toEqual({
       code: "VALIDATION_FAILED",
-      details: [{ field: "first", code: "invalid_value", message: "Must be a whole number from 1 to 100." }],
+      details: [{ field: "first", code, message }],
     });
     expect(list).not.toHaveBeenCalled();
   });
@@ -55,6 +61,9 @@ describe("widgets(first): reject, never clamp", () => {
     const res = await graphql({ schema, source: "{ widgets(first: 500) { pageInfo { hasNextPage } } }", contextValue: ctx });
     expect(res.data).toEqual({ widgets: null });
     expect(res.errors?.[0]?.extensions?.code).toBe("VALIDATION_FAILED");
+    expect(res.errors?.[0]?.extensions?.details).toEqual([
+      { field: "first", code: "out_of_range", message: "Must be from 1 to 100." },
+    ]);
     expect(res.errors?.[0]?.path).toEqual(["widgets"]);
     expect(list).not.toHaveBeenCalled();
 

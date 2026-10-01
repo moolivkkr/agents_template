@@ -490,7 +490,7 @@ describe("OrderList", () => {
 describe("OrderForm", () => {
   it("TC-FORM-20113 puts the server's details[] on the field and focuses it", async () => {
     server.use(http.post(ORDERS, () => apiError(400, "VALIDATION_FAILED", "Some fields are invalid.",
-      { details: [{ field: "customer_email", code: "taken", message: "That email already has an open order." }] })))
+      { details: [{ field: "customer_email", code: "already_exists", message: "That email already has an open order." }] })))
     await render(OrderForm, { providers })
     const email = screen.getByLabelText("Customer email")
     expect(email).not.toHaveAttribute("aria-invalid") // undefined removes the attribute
