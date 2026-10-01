@@ -175,6 +175,7 @@ Cycle 2: Re-run failed tests
                        {"id":"C","label":"Defer to a later phase with a documented workaround"},
                        {"id":"D","label":"The test misreads the criterion: correct the test"} ] }
       → return NEEDS_DECISION acc_<fr>_<persona>; the parent runs debate_moderator and relaunches you
+      (a verdict that changes product code goes to the owning role agent first; you only fix tests)
       → implement the verdict → final re-test
       (a verdict of B or C changes what the product owner agreed to: the parent takes it to the user,
        through product_manager for B, before acting. Under --auto it is carried to the checkpoint.)

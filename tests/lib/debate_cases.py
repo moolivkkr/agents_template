@@ -109,7 +109,7 @@ def debate(topic, verdict="A", values=None, phase=1, promote=True, artifacts=Tru
          "status": "RESOLVED", "verdict": verdict, "verdict_label": next(o["label"] for o in r["options"] if o["id"] == verdict),
          "confidence": ds.band(gap), "rubric": domain, "presentation_order": list(reversed(ids)), "scores": sc, "gap": gap,
          "decisive_factor": "x", "claims_checked": [{"claim": "c", "source": "https://example.org", "result": "confirmed"}],
-         "rationale": "r", "request_sha": ds.request_sha(r), "decision_id": did}
+         "rationale": "r", "request_sha": ds.request_sha(r, W), "decision_id": did}
     if domain == "security":
         v["hardened_default"] = verdict
     v.update(kw)
@@ -117,9 +117,14 @@ def debate(topic, verdict="A", values=None, phase=1, promote=True, artifacts=Tru
     if second is not None:
         put(f"{topic}.second-opinion.json", dict({"schema": "sdlc.debate-second-opinion/v1", "topic": topic, "model": "claude-fable-5-1",
                                                   "verdict": verdict, "presentation_order": ids, "scores": sc,
-                                                  "request_sha": ds.request_sha(r)}, **second))
+                                                  "request_sha": ds.request_sha(r, W)}, **second))
+    if second is not None:
+        with open(os.path.join(W, "agent_state", "debates", f"{topic}.transcript.md"), "a") as fh:
+            fh.write(f"VERDICT_SHA: {ds.verdict_sha(v)}\n")
+    soft = (v.get("confidence") == "LOW" or v.get("status") == "INCOMPLETE" or v.get("kind") == "assumption"
+            or (second is not None and second.get("verdict", verdict) != verdict))
     if promote:
-        add_decision(did, topic, decision=v["verdict_label"])
+        add_decision(did, topic + (" [provisional]" if soft else ""), link=f"agent_state/debates/{topic}.verdict.json", decision=v["verdict_label"])
     if apply:
         r2 = load_req(topic); r2["applied"] = verdict; put(f"{topic}.request.json", r2)
     return v
@@ -242,7 +247,7 @@ check("DS-27", (0, True), (rc, any("must_override" in r for r in T["tokens"]["re
 fresh(); req("tokens", domain="security"); debate("tokens", verdict="B", values={"A": 7, "B": (7, {"operability": 6})}, hardened_default="B", second={"verdict": "A", "scores": scores_for("security", {"A": 8, "B": 6})})
 rc, rep, T = status("--check")
 check("DS-28", (2, True), (rc, any("second opinion disagrees" in b and b.startswith("security debate") for b in rep["blocking"])), "a security call where the second opinion disagrees waits for a person")
-put("tokens.override.json", {"topic": "tokens", "user_override": "B", "user_rationale": "keep the hardened cookie", "original_verdict": "B"})
+put("tokens.override.json", {"topic": "tokens", "request_sha": ds.request_sha(load_req("tokens"), W), "user_override": "B", "user_rationale": "keep the hardened cookie", "original_verdict": "B"})
 d = load_ver("tokens")["decision_id"]; reverse_decision(d)
 add_decision("D-990", "tokens override", link="agent_state/debates/tokens.override.json", decision="b")
 rc, rep, T = status("--check")
@@ -285,15 +290,15 @@ check("DS-40", ("invalid", 2), (T["old"]["status"], rc), "withdrawing with no re
 req("old", status="withdrawn", withdrawn_reason="superseded by D-004, which chose the queue design")
 rc, rep, T = status("--check")
 check("DS-41", ("withdrawn", 0), (T["old"]["status"], rc), "a withdrawn request with a reason doesn't block")
-fresh(); req("auth"); put("auth.override.json", {"topic": "auth", "user_override": "A"})
+fresh(); req("auth"); put("auth.override.json", {"topic": "auth", "request_sha": ds.request_sha(load_req("auth"), W), "user_override": "A"})
 rc, rep, T = status("--check")
 check("DS-42", ("invalid", 2), (T["auth"]["status"], rc), "an override with no rationale doesn't silence a request")
-put("auth.override.json", {"topic": "auth", "user_override": "A", "user_rationale": "owner chose sessions for the admin app"})
+put("auth.override.json", {"topic": "auth", "request_sha": ds.request_sha(load_req("auth"), W), "user_override": "A", "user_rationale": "owner chose sessions for the admin app"})
 add_decision("D-991", "auth override", link="agent_state/debates/auth.override.json", decision="a")
 r2 = load_req("auth"); r2["applied"] = "A"; put("auth.request.json", r2)
 rc, rep, T = status("--check")
 check("DS-43", ("overridden", 0), (T["auth"]["status"], rc), "a complete override records the person's decision")
-fresh(); req("auth", options=[{"id": "A", "label": "a"}]); put("auth.override.json", {"topic": "auth", "user_override": "A", "user_rationale": "owner chose sessions"})
+fresh(); req("auth", options=[{"id": "A", "label": "a"}]); put("auth.override.json", {"topic": "auth", "request_sha": ds.request_sha(load_req("auth"), W), "user_override": "A", "user_rationale": "owner chose sessions"})
 rc, rep, T = status("--check")
 check("DS-44", ("invalid", 2), (T["auth"]["status"], rc), "an override can't clear a request that breaks the contract")
 fresh(); req("x", phase=None)
@@ -323,7 +328,7 @@ rc, rep, T = status("--json")
 check("DS-52", True, {"agent_state/debates/db.request.json", "agent_state/debates/db.verdict.json", "agent_state/debates/db.research-A.md", "agent_state/debates/db.transcript.md"} <= set(T["db"]["files"]),
       "--json lists each topic's files (what /reset-phase archives)")
 p = subprocess.run([sys.executable, DS, "--root", W, "--request-sha", "db"], capture_output=True, text=True)
-check("DS-53", (0, ds.request_sha(load_req("db"))), (p.returncode, p.stdout.strip()), "--request-sha prints the hash the arbitrator copies into the verdict")
+check("DS-53", (0, ds.request_sha(load_req("db"), W)), (p.returncode, p.stdout.strip()), "--request-sha prints the hash the arbitrator copies into the verdict")
 p = subprocess.run([sys.executable, DS, "--root", W], capture_output=True, text=True)
 check("DS-54", (0, True), (p.returncode, "RESOLVED" in p.stdout), "the human-readable listing renders")
 
@@ -347,7 +352,7 @@ check("DS-59", (2, True), (rc, any("2 active D-NNN entries" in b for b in rep["b
 fresh(); req("db"); v = debate("db", promote=False); add_decision(v["decision_id"], "db", decision="option b, the old choice")
 rc, rep, T = status("--check")
 check("DS-60", (2, True), (rc, any("not the verdict" in b for b in rep["blocking"])), "a ledger entry that records another option blocks")
-fresh(); req("auth"); debate("auth"); put("auth.override.json", {"topic": "auth", "user_override": "B", "user_rationale": "owner wants sessions"})
+fresh(); req("auth"); debate("auth"); put("auth.override.json", {"topic": "auth", "request_sha": ds.request_sha(load_req("auth"), W), "user_override": "B", "user_rationale": "owner wants sessions"})
 r2 = load_req("auth"); r2["applied"] = "B"; put("auth.request.json", r2)
 rc, rep, T = status("--check")
 check("DS-61", (2, True), (rc, any("never reached docs/DECISIONS.md" in b for b in rep["blocking"])), "an override that never reached the ledger blocks")
@@ -375,6 +380,59 @@ check("DS-68", (2, True), (rc, any("too thin" in p for p in T["db"]["problems"])
 fresh(); req("db"); debate("db", apply=False)
 rc, rep, T = status("--check")
 check("DS-69", (2, True), (rc, any("hasn't applied it yet" in b for b in rep["blocking"])), "a blocking request whose requester was never relaunched with the verdict blocks")
+
+# open MEDIUMs from round 2
+def brd(rows):
+    os.makedirs(os.path.join(W, "docs"), exist_ok=True)
+    open(os.path.join(W, "docs", "BRD.md"), "w").write("| ID | Requirement | Priority |\n|---|---|---|\n" + "".join(f"| {i} | {t} | Must |\n" for i, t in rows))
+fresh(); brd([("FR-020", "orders and line items save together"), ("FR-021", "reports join by id")])
+req("db", context="FR-020 needs atomic writes"); debate("db")
+rc, rep, T = status("--check")
+check("DS-70", ("resolved", 0), (T["db"]["status"], rc), "a debate citing FR-020 is resolved while FR-020 is unchanged")
+brd([("FR-020", "orders save line items eventually"), ("FR-021", "reports join by id")])
+rc, rep, T = status("--check")
+check("DS-71", ("stale", 2, True), (T["db"]["status"], rc, any("a requirement it cites changed" in b for b in rep["blocking"])),
+      "changing a requirement the request cites makes the verdict stale (TEST-16)")
+brd([("FR-020", "orders and line items save together"), ("FR-021", "reports join by id")])
+rc, rep, T = status("--check")
+check("DS-72", 0, rc, "…and restoring it un-stales it")
+brd([("FR-021", "reports join by id")])
+rc, rep, T = status("--check")
+check("DS-73", ("stale", 2), (T["db"]["status"], rc), "retiring the cited requirement makes the verdict stale")
+fresh(); req("auth"); debate("auth")
+put("auth.override.json", {"topic": "auth", "request_sha": ds.request_sha(load_req("auth"), W), "user_override": "A", "user_rationale": "owner chose sessions"})
+add_decision("D-880", "auth override", link="agent_state/debates/auth.override.json", decision="a"); reverse_decision(load_ver("auth")["decision_id"])
+rc, rep, T = status("--check")
+check("DS-74", ("overridden", 0), (T["auth"]["status"], rc), "an override naming the current request version holds")
+req("auth", options=[{"id": "A", "label": "a"}, {"id": "B", "label": "b"}, {"id": "C", "label": "c"}], applied="A")
+rc, rep, T = status("--check")
+check("DS-75", ("stale", 2, True), (T["auth"]["status"], rc, any("override answers an earlier version" in b for b in rep["blocking"])),
+      "a later change to the request isn't hidden by an old override (ARCH-08)")
+fresh(); req("auth"); debate("auth"); put("auth.override.json", {"topic": "auth", "user_override": "A", "user_rationale": "owner chose sessions"})
+rc, rep, T = status("--check")
+check("DS-76", ("invalid", True), (T["auth"]["status"], any("no request_sha" in p for p in T["auth"]["problems"])), "an override must record the request version it answers")
+fresh(); req("db"); debate("db", values={"A": 8, "B": 5}, confidence="MEDIUM", second={})
+os.remove(os.path.join(W, "agent_state/debates/db.argument-B.md"))
+with open(os.path.join(W, "agent_state/debates/db.transcript.md"), "a") as fh:
+    fh.write("EVIDENCE INCOMPLETE: B: advocate returned PARTIAL\n")
+rc, rep, T = status("--check")
+check("DS-77", (0, []), (rc, T["db"]["problems"]), "a missing argument recorded as an evidence gap isn't also 'no debate behind the verdict' (ARCH-11)")
+fresh(); req("db"); debate("db"); put("db.argument-A.md", open(os.path.join(W, "agent_state/debates/db.argument-A.md")).read() + "\n| **Weighted total** | 7.6 |\n")
+rc, rep, T = status("--check")
+check("DS-78", (2, True), (rc, any("scores its own option" in p for p in T["db"]["problems"])), "an advocate's self-score is rejected by the gate, not only the eval (TEST-22)")
+fresh(); req("db"); v = debate("db", values={"A": 7, "B": (7, {"brd_alignment": 6})}, second={})
+v["rationale"] = "rewritten after reading the second opinion"; put("db.verdict.json", v)
+rc, rep, T = status("--check")
+check("DS-79", (2, True), (rc, any("changed after the primary arbitration" in p for p in T["db"]["problems"])), "promote can't rewrite the verdict (TEST-35)")
+tp = os.path.join(W, "agent_state/debates/db.transcript.md"); open(tp, "w").write("".join(l for l in open(tp) if not l.startswith("VERDICT_SHA")))
+rc, rep, T = status("--check")
+check("DS-80", True, any("no VERDICT_SHA" in p for p in T["db"]["problems"]), "a debate with a second opinion must record VERDICT_SHA")
+p_ = subprocess.run([sys.executable, DS, "--root", W, "--verdict-sha", "db"], capture_output=True, text=True)
+check("DS-81", (0, ds.verdict_sha(load_ver("db"))), (p_.returncode, p_.stdout.strip()), "--verdict-sha prints the hash the moderator records")
+fresh(); req("db", impact="MEDIUM"); v = debate("db", values={"A": 7, "B": (7, {"ecosystem": 6})}, promote=False)
+add_decision(v["decision_id"], "db", link="agent_state/debates/db.verdict.json", decision=v["verdict_label"])
+rc, rep, T = status("--check")
+check("DS-82", (2, True), (rc, any("[provisional" in b for b in rep["blocking"])), "a LOW-confidence verdict needs a [provisional] ledger title (ARCH-24, TEST-17)")
 
 # ---------------------------------------------------------------- DL: prompt and wiring lint
 OLD = re.compile(r"-verdict\.json|-request\.json|<step>-<topic>\.json|\{topic\}-(?:research|argument|transcript|verdict)")
@@ -448,6 +506,17 @@ check("DL-26", True, all(k in cr for k in ('"applied"', "needs a person", "Befor
       "child-returns sets applied, routes needs-a-person, closes open debates before a command ends, guards withdrawals and records overrides")
 check("DL-27", [], [c for c in ("plan", "discuss", "design") if "Before a command finishes" not in read(f".claude/commands/{c}.md")],
       "/plan, /discuss and /design decide their debates before /develop builds on them")
+mod = read(".claude/agents/core/debate_moderator.md"); arb = read(".claude/agents/core/debate_arbitrator.md"); cr = read(".claude/skills/core/child-returns.md")
+check("DL-28", True, all(k in mod for k in ("VERDICT_SHA", "archived-<UTC timestamp>", "copied `REQUEST_SHA` wrong", "pass that entry as `PRIOR DECISION")),
+      "the moderator seals the primary verdict, archives an old round, catches a mis-copied hash, reverses a decision reopened under another topic")
+check("DL-29", True, "[provisional: second\n    disagreed]" in arb or "[provisional: second opinion\n    disagreed]" in arb or "provisional: second opinion" in arb.replace("\n    ", " "),
+      "a disputed close call gets a provisional ledger title")
+check("DL-30", True, "owning role agent" in cr and "request_sha, original_verdict" in cr, "child-returns routes code changes to the owning role and records the request version in overrides")
+orch2 = read(".claude/commands/develop-orchestrator.md")
+check("DL-31", True, "unresolved.json#<topic>" in orch2 and "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH" in orch2 and "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH" in read("new-project.sh"),
+      "recorded defaults link per topic (idempotent 4c); old projects get the depth cap or a warning")
+t7 = json.loads(read("agent_state/eval/suite/T-007-debate/rubric.json"))
+check("DL-32", True, any("search_debounce_reversed" in r["cmd"] for r in t7["rubric"]), "T-007 checks position consistency on a close call, the case bias can flip")
 routing = read(".claude/skills/core/model-routing.md")
 check("DL-23", True, "second opinion on a close HIGH-impact debate" in routing and "/board-review` verifiers" in routing,
       "model-routing.md sanctions the debate second opinion and the board verifiers on Fable")

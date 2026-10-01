@@ -8,7 +8,7 @@
       "desc": "the parent finds pending debates through the one reader, not a glob"
     },
     {
-      "step": "debate_moderator x5, waited for (run_in_background:false where offered)",
+      "step": "debate_moderator x6, waited for (run_in_background:false where offered)",
       "must": true,
       "desc": "one moderator per request, spawned by the parent"
     },
@@ -28,12 +28,12 @@
       "desc": "sole verdict writer; neutral request view, briefs + arguments, REQUEST_SHA"
     },
     {
-      "step": "debate_arbitrator MODE second-opinion (model: fable) for search_debounce",
+      "step": "debate_arbitrator MODE second-opinion (model: fable) for search_debounce and search_debounce_reversed",
       "must": true,
       "desc": "close HIGH call: reverse order, never sees the first judgment"
     },
     {
-      "step": "debate_arbitrator MODE promote for search_debounce",
+      "step": "debate_arbitrator MODE promote for search_debounce and search_debounce_reversed",
       "must": true,
       "desc": "the D-NNN is recorded only after the second opinion"
     },

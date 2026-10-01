@@ -64,7 +64,7 @@ handles it and relaunches you.
 
    | Moderator returns | What you do |
    |---|---|
-   | `COMPLETE <topic>: <label> (<confidence>)` | Relaunch the requesting agent with its original prompt plus `DECISION <topic>: <label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.` Then set the request's `"applied"` to the verdict's option; the gate checks the decision was applied, not just made. In an interactive run, first show the user any review reasons the moderator listed. Under `--auto` they go to the review list below. |
+   | `COMPLETE <topic>: <label> (<confidence>)` | Relaunch the requesting agent with its original prompt plus `DECISION <topic>: <label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.` If the decision needs work the requester's role may not do (a test agent's debate decided to change product code, or to amend the BRD), first launch the owning role agent (or `product_manager` for the BRD) with the decision, then relaunch the requester. Then set the request's `"applied"` to the verdict's option; the gate checks the decision was applied, not just made. In an interactive run, first show the user any review reasons the moderator listed. Under `--auto` they go to the review list below. |
    | `PARTIAL <topic>: needs a person: …` (a security debate that is INCOMPLETE, or whose second opinion disagrees) | Ask the person. Their choice goes in `<topic>.override.json` (§ "When the user overrides a verdict"), even when they confirm the verdict. Under `/autonomous` the run stops (`awaiting_human`, `reason: "security_debate"`). |
    | `PARTIAL` (INCOMPLETE verdict, or the second opinion couldn't run) | Interactive: show the user and ask whether to accept the verdict or decide themselves. `--auto`: a non-security topic continues with the verdict (relaunch, set `applied`) and goes to the review list. A security topic stops the run for the user (`/autonomous`: `awaiting_human`). |
    | `BLOCKED <topic>: already decided by D-NNN` | Relaunch the requester with `DECISION <topic>: see D-NNN`, then withdraw the request (`"status": "withdrawn"`, a `withdrawn_reason` that cites the D-NNN). |
@@ -132,8 +132,11 @@ How each kind of run surfaces them:
 
 ## When the user overrides a verdict
 
-1. Write `agent_state/debates/<topic>.override.json`: `{topic, original_verdict, user_override,
-   user_rationale, overridden_at, phase}`.
+1. Write `agent_state/debates/<topic>.override.json`: `{topic, request_sha, original_verdict,
+   user_override, user_rationale, overridden_at, phase}`. `request_sha` comes from
+   `debate-status.py --request-sha <topic>`. It names the version of the request the person decided,
+   so a later change to the request (or to a requirement it cites) reopens the decision instead of
+   hiding behind the override.
 2. Append the same record to `overrides.jsonl`.
 3. Record the reversal: `remember.sh decide … --link agent_state/debates/<topic>.override.json
    --reverses <the verdict's D-NNN>`. The gate checks the override reached the ledger and the old

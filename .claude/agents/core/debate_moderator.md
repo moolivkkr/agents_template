@@ -86,10 +86,17 @@ python3 .claude/hooks/debate-status.py --request-sha <topic>     # REQUEST_SHA f
   re-running the debate. Read the `gate` list as well as `problems`: several states block the gate
   without being a problem in the verdict itself (board review 2026-09-30-debate-2, TEST-14).
 - **An active `docs/DECISIONS.md` entry already decides it** under another topic: return `BLOCKED
-  <topic>: already decided by D-NNN`, unless the request cites new evidence against it.
-- **A stale verdict** (the request changed since it was judged): run the debate. Pass the old
-  verdict's `decision_id` to the arbitrator as `PRIOR DECISION: D-NNN`, so the new entry reverses
-  it.
+  <topic>: already decided by D-NNN`, unless the request cites new evidence against it. With new
+  evidence, run the debate and pass that entry as `PRIOR DECISION: D-NNN`. The new entry then
+  reverses it, and the ledger doesn't hold two live answers under two topics.
+- **A stale verdict or override:** the request changed since it was judged, or a BRD row or fact it
+  cites changed. `request_sha` covers both. Run the debate again:
+  1. Archive the old round first. Move every `agent_state/debates/<topic>.*` file except
+     `<topic>.request.json` into `agent_state/debates/archived-<UTC timestamp>/`.
+     `debate-status.py` ignores subdirectories. Otherwise an old second opinion, brief or override
+     is read as part of the new round.
+  2. Pass the old verdict's `decision_id` (or the override's entry) to the arbitrator as
+     `PRIOR DECISION: D-NNN`, so the new entry reverses it.
 
 ### 2. Fix the presentation order
 
@@ -166,6 +173,13 @@ Give it:
 
 It writes `<topic>.verdict.json` and `<topic>.verdict-detailed.md`. For a clear-cut call it records
 the `D-NNN` too. Check its return as in step 4.
+
+Then:
+- **Seal the primary verdict:** append `VERDICT_SHA: <python3 .claude/hooks/debate-status.py
+  --verdict-sha <topic>>` to the transcript. The gate compares it with the verdict after promote,
+  which may only add `decision_id`.
+- **Check the request hash:** if `debate-status.py` now shows the topic as `stale`, the arbitrator
+  copied `REQUEST_SHA` wrong. Re-spawn it with the hash, once.
 
 ### 7. Second opinion (HIGH impact, confidence below HIGH)
 

@@ -55,7 +55,9 @@ The moderator's prompt sets one. You are the only writer of `<topic>.verdict.jso
 - **`MODE: promote`**: after the second opinion, read `<topic>.second-opinion.json` and record the
   `D-NNN` (step 8).
   - Say in the rationale whether the second opinion agreed. If it didn't, add
-    `(second opinion chose <X>: for review)`.
+    `(second opinion chose <X>: for review)`, and end the title with `[provisional: second opinion
+    disagreed]`. A disputed close call mustn't read as settled to later sessions; the gate checks
+    the marker.
   - Then write the id into the verdict as `decision_id`. Change nothing else in the verdict.
 
 ## Shortcuts that look safe here, and why they aren't
@@ -201,6 +203,9 @@ Decision: <label>. Confidence: <HIGH|MEDIUM|LOW>. Rubric: <domain>. Presentation
 ```
 
 Then check it: `python3 .claude/hooks/debate-status.py --json | jq '.topics[] | select(.topic=="<topic>") | .problems'`.
+- **If the topic shows as `stale`** right after you wrote it, you copied `REQUEST_SHA` wrong. Run
+  `python3 .claude/hooks/debate-status.py --request-sha <topic>` and copy the hash exactly.
+  `REQUEST_SHA` covers the request and the BRD rows and facts it cites.
 - **Fix each problem it lists in what you wrote:** arithmetic, missing criteria, `request_sha`,
   `rubric`, `presentation_order`. That's an external signal, not a second guess.
 - **Don't change a score to make a problem go away.** A problem about the winner or the confidence

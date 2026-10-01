@@ -232,6 +232,9 @@ for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py ac
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
 P="agent_state/phases/${PHASE}"; mkdir -p "$P/junit" "$P/reports" agent_state/config
+# Older projects' settings.json predates the spawn-depth cap: say so (the user decides; don't edit settings here)
+jq -e '.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH' .claude/settings.json >/dev/null 2>&1 \
+  || echo "⚠ .claude/settings.json has no env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH (2): nesting is capped at Claude Code's default of 3, so a wave agent that spawns debate_moderator itself won't be stopped. Re-run new-project.sh or add it."
 # Decisions raised during /plan, /discuss or /design are made before any code is written
 # (child-returns.md § "Before a command finishes"): dispatch every topic this lists, then re-check.
 python3 .claude/hooks/debate-status.py --phase "${PHASE}" --check \
@@ -1545,7 +1548,9 @@ Defaults applied without a debate are decisions too. Record each `agent_state/de
 entry for this phase that has no `D-NNN` yet:
 - title ending `[provisional: auto-resolved]`
 - `--source agent:develop-orchestrator`
-- `--link agent_state/debates/unresolved.json`
+- `--link agent_state/debates/unresolved.json#<topic>`: one link per default. `remember.sh` refuses a
+  second active entry for the same link, so re-running this step can't record a default twice. A
+  refusal means the entry already exists; skip it.
 - the entry's `reason` as the rationale
 
 Otherwise the next session never learns a default was taken, and decides it again (board review

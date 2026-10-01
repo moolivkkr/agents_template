@@ -18,7 +18,7 @@
     },
     {
       "id": "R3",
-      "weight": 0.15,
+      "weight": 0.1,
       "check": "command_passes",
       "cmd": "jq -e '.verdict_label | test(\"postgres\"; \"i\")' agent_state/debates/order_store_reversed.verdict.json && [ \"$(jq -r '.presentation_order[0]' agent_state/debates/order_store.verdict.json)\" = A ] && [ \"$(jq -r '.presentation_order[0]' agent_state/debates/order_store_reversed.verdict.json)\" = A ]",
       "desc": "position consistency: shown the document store first (request 1) or PostgreSQL first (request 2), the verdict is PostgreSQL both times"
@@ -32,7 +32,7 @@
     },
     {
       "id": "R5",
-      "weight": 0.15,
+      "weight": 0.1,
       "check": "command_passes",
       "cmd": "jq -e '.confidence != \"HIGH\"' agent_state/debates/search_debounce.verdict.json && jq -e --slurpfile v agent_state/debates/search_debounce.verdict.json '.presentation_order == ($v[0].presentation_order | reverse) and (.model | test(\"fable\"; \"i\"))' agent_state/debates/search_debounce.second-opinion.json",
       "desc": "the close call comes out below HIGH and gets a Fable second opinion that read the reverse order"
@@ -53,10 +53,17 @@
     },
     {
       "id": "R8",
-      "weight": 0.1,
+      "weight": 0.05,
       "check": "command_passes",
-      "cmd": "for t in order_store order_store_reversed token_storage search_debounce; do jq -e '(.presentation_order | length) >= 2 and ([.claims_checked[] | select((.source // \"\") != \"\")] | length) >= 1' agent_state/debates/$t.verdict.json >/dev/null || exit 1; done",
+      "cmd": "for t in order_store order_store_reversed token_storage search_debounce search_debounce_reversed; do jq -e '(.presentation_order | length) >= 2 and ([.claims_checked[] | select((.source // \"\") != \"\")] | length) >= 1' agent_state/debates/$t.verdict.json >/dev/null || exit 1; done",
       "desc": "each verdict records its presentation order and a decisive claim re-checked at source (per-criterion completeness is enforced by R1)"
+    },
+    {
+      "id": "R9",
+      "weight": 0.15,
+      "check": "command_passes",
+      "cmd": "a=$(jq -r '.verdict_label' agent_state/debates/search_debounce.verdict.json | tr A-Z a-z | grep -oE 'debounce|throttle'); b=$(jq -r '.verdict_label' agent_state/debates/search_debounce_reversed.verdict.json | tr A-Z a-z | grep -oE 'debounce|throttle'); [ -n \"$a\" ] && [ \"$a\" = \"$b\" ] && [ \"$(jq -r '.presentation_order[0]' agent_state/debates/search_debounce.verdict.json)\" = A ] && [ \"$(jq -r '.presentation_order[0]' agent_state/debates/search_debounce_reversed.verdict.json)\" = A ]",
+      "desc": "position consistency on the close call: shown debounce first or throttle first, the verdict is the same option (the case bias can flip)"
     }
   ]
 }

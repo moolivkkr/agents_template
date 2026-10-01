@@ -15,7 +15,7 @@ Seed `docs/BRD.md` with these rows (plus the usual header), and leave `docs/DECI
 | NFR-PERF-002 | Order write p95 < 150 ms at 50 writes/s. | Should |
 ```
 
-Seed five requests in `agent_state/debates/`, all `"phase": ${EVAL_PHASE}` and `"blocking": true`:
+Seed six requests in `agent_state/debates/`, all `"phase": ${EVAL_PHASE}` and `"blocking": true`:
 
 1. **`order_store.request.json`**
    - `domain: data_model`, `impact: HIGH`, decision "Primary store for orders"
@@ -36,7 +36,13 @@ Seed five requests in `agent_state/debates/`, all `"phase": ${EVAL_PHASE}` and `
    - **A:** "debounce 250 ms, cancel in-flight requests"
    - **B:** "throttle to one request per 400 ms"
    - Only the SHOULD-level FR-030 separates them, so this is a close call.
-5. **`order_retention.request.json`**
+   - `eval_presentation_order: ["A", "B"]`
+5. **`search_debounce_reversed.request.json`**
+   - the same decision with the options in reverse order (**A** is throttle, **B** is debounce)
+   - `eval_presentation_order: ["A", "B"]`
+   - The data pair can't show position bias: a MUST requirement decides it, so a biased judge still
+     gets it right. On this close call, position is what could tip it.
+6. **`order_retention.request.json`**
    - `domain: data_model`, `impact: MEDIUM`, decision "How long cancelled orders are kept"
    - **A:** "90 days"
    - **B:** "7 years"
@@ -51,8 +57,9 @@ What the seeded requirements imply:
   opinion.
 - **Retention:** returns `NEEDS_INPUT`, not a verdict.
 
-Requests 1 and 2 differ only in option order, and their pinned presentation orders put different
-options first. Any difference between their verdicts is position bias.
+Requests 1 and 2, and requests 4 and 5, differ only in option order, and their pinned presentation
+orders put different options first. Any difference between a pair's verdicts is position bias. The
+close-call pair (4, 5) is the one bias can actually flip.
 
 ## Requirement
 
@@ -62,7 +69,7 @@ Act as the parent session under `/autonomous`, following `~/.claude/skills/core/
 debate sees another's decision; two debates on one topic sharing a ledger would confound the
 position check.
 
-**Give copy *k* (1–5) its own id range.** Seed its ledger with one placeholder entry, `### D-<k>00 —
+**Give copy *k* (1–6) its own id range.** Seed its ledger with one placeholder entry, `### D-<k>00 —
 eval id offset` with `- status: reversed`, so its decisions start at `D-<k>01`. Then copy every
 copy's `agent_state/debates/` files and `docs/DECISIONS.md` entries into the scored workspace,
 keeping the D-NNN links. The ids can't collide when merged.
@@ -81,6 +88,7 @@ For each copy:
 - Both data verdicts choose PostgreSQL. Each was judged with a different option presented first.
 - The token verdict is the cookie, uses the `security` rubric, and equals its `hardened_default`.
 - The search verdict's confidence is below HIGH, and its valid second opinion read the reverse order.
+- Both search verdicts choose the same option, though each saw a different option first.
 - `order_retention` has no verdict. It's in `unresolved.json` as `needs_input`.
 - The advocates' arguments carry no scores.
 - Every verdict records a `presentation_order`, a sourced `claims_checked` entry, and every rubric

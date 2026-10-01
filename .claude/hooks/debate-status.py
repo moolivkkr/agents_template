@@ -44,6 +44,9 @@ security findings (a forced gate needs one acknowledgement each).
 Usage:
   debate-status.py [--root DIR] [--phase N] [--json] [--check]
   debate-status.py --request-sha <topic>     the hash the arbitrator copies into the verdict's request_sha
+                                             (covers the request and the BRD rows / facts it cites)
+  debate-status.py --verdict-sha <topic>     the hash the moderator records in the transcript after the
+                                             primary arbitration (VERDICT_SHA: …); promote mustn't change it
 Exit codes: 0 ok, 2 check failed, 3 usage error.
 """
 import argparse
@@ -74,6 +77,7 @@ DOMAINS = set(RUBRICS)
 CLAIM_RESULTS = {"confirmed", "contradicted", "unverifiable"}
 SECURITY_TERMS = re.compile(r"\b(auth\w*|token\w*|passwords?|credentials?|secrets?|crypt\w*|encrypt\w*|pii|cors|csrf|xss|"
                             r"sessions?|tenant\w*|permissions?|rbac|acl|rate[ -]?limit\w*|oauth|jwt|cookies?|idor)\b", re.I)
+SELF_SCORE = re.compile(r"weighted total|score\s*\(1-10\)|self-assessed|\b\d{1,2}(?:\.\d)?\s*/\s*10\b", re.I)
 WITHDRAWN_OK = re.compile(r"\bD-\d+\b|raised inside debate [a-z0-9_-]+")
 NAMED = (".request.json", ".verdict.json", ".second-opinion.json", ".override.json")
 
@@ -105,10 +109,48 @@ def band(gap):
     return "HIGH" if gap > 1.0 else ("MEDIUM" if gap >= 0.3 else "LOW")
 
 
-def request_sha(req):
+REQ_ID = re.compile(r"\b(?:FR|NFR|OBJ)-[A-Z0-9]+(?:-[A-Z0-9]+)*\b|\bF-\d+\b")
+
+
+def basis(req, root):
+    """The text of every BRD row and PROJECT_FACTS entry the request cites. A verdict relies on them, so
+    request_sha covers them: change or retire FR-020 and every verdict that cited it goes stale
+    (board review 2026-09-30-debate-2, TEST-16). Empty when the project has neither file."""
+    if not root:
+        return []
+    brd_p, facts_p = os.path.join(root, "docs", "BRD.md"), os.path.join(root, "docs", "PROJECT_FACTS.md")
+    if not os.path.isfile(brd_p) and not os.path.isfile(facts_p):
+        return []
+    text = " ".join([req.get("decision") or "", req.get("context") or ""] +
+                    [f"{o.get('label', '')} {o.get('initial_reasoning', '')}" for o in req.get("options") or [] if isinstance(o, dict)])
+    ids = sorted(set(REQ_ID.findall(text)))
+    brd = open(brd_p, errors="replace").read().splitlines() if os.path.isfile(brd_p) else []
+    facts = open(facts_p, errors="replace").read() if os.path.isfile(facts_p) else ""
+    out = []
+    for i in ids:
+        if i.startswith("F-"):
+            m = re.search(r"^###\s+" + re.escape(i) + r"\b.*?(?=^###\s|\Z)", facts, re.M | re.S)
+            out.append(f"{i}={m.group(0).strip() if m else '<absent>'}")
+        else:
+            rows = [ln.strip() for ln in brd if re.match(r"^\|\s*" + re.escape(i) + r"\s*\|", ln)]
+            out.append(f"{i}={' / '.join(rows) if rows else '<absent>'}")
+    return out
+
+
+def request_sha(req, root=None):
     keys = ("topic", "phase", "decision", "options", "impact", "domain", "kind")
-    canon = json.dumps({k: req.get(k) for k in keys}, sort_keys=True, separators=(",", ":"))
+    d = {k: req.get(k) for k in keys}
+    b = basis(req, root)
+    if b:
+        d["basis"] = b
+    canon = json.dumps(d, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canon.encode()).hexdigest()[:16]
+
+
+def verdict_sha(ver):
+    """Hash of the verdict as the primary arbitrator wrote it (decision_id is added later by promote)."""
+    d = {k: v for k, v in ver.items() if k != "decision_id"}
+    return hashlib.sha256(json.dumps(d, sort_keys=True, separators=(",", ":")).encode()).hexdigest()[:16]
 
 
 def option_ids(req):
@@ -300,9 +342,13 @@ def verdict_problems(ver, req, rel, root):
     if ver.get("status") == "RESOLVED" and ids:
         topic = ver.get("topic")
         ddir = os.path.join(root, "agent_state", "debates")
+        tpath = os.path.join(ddir, f"{topic}.transcript.md")
+        ttext = open(tpath, errors="replace").read() if os.path.isfile(tpath) else ""
+        # an option whose child returned PARTIAL/BLOCKED is a recorded gap (it caps confidence instead)
+        gap_opts = set(re.findall(r"^EVIDENCE INCOMPLETE:\s*([A-Za-z0-9_-]+)\s*:", ttext, re.M))
         need = [f"{topic}.research-{i}.md" for i in ids] + [f"{topic}.transcript.md"]
         if ((req or {}).get("impact") or ver.get("impact") or "").upper() == "HIGH":
-            need += [f"{topic}.argument-{i}.md" for i in ids]
+            need += [f"{topic}.argument-{i}.md" for i in ids if i not in gap_opts]
         missing = [n for n in need if not os.path.isfile(os.path.join(ddir, n)) or os.path.getsize(os.path.join(ddir, n)) == 0]
         if missing:
             p.append("no debate behind the verdict: missing " + ", ".join(missing))
@@ -316,17 +362,26 @@ def verdict_problems(ver, req, rel, root):
                 thin.append(n + " (a brief needs findings with a URL or file:line source)")
             elif ".argument-" in n and len(text) < 200:
                 thin.append(n + " (an argument needs its evidence and weaknesses)")
+            elif ".argument-" in n and SELF_SCORE.search(text):
+                thin.append(n + f" (scores its own option: '{SELF_SCORE.search(text).group(0)}'; only the arbitrator scores)")
             elif n.endswith(".transcript.md") and not all(f"research-{i}" in text for i in ids):
                 thin.append(n + " (the transcript must list every child and its file)")
         if thin:
             p.append("debate artifacts too thin to be a debate: " + "; ".join(thin))
+        shas = re.findall(r"^VERDICT_SHA:\s*([0-9a-f]{16})\s*$", ttext, re.M)
+        if os.path.isfile(os.path.join(ddir, f"{topic}.second-opinion.json")):
+            if not shas:
+                p.append("the transcript records no VERDICT_SHA after the primary arbitration (moderator step 6)")
+            elif shas[-1] != verdict_sha(ver):
+                p.append("the verdict changed after the primary arbitration (VERDICT_SHA in the transcript differs): "
+                         "promote may only add decision_id")
     return p, derived
 
 
-def second_problems(sec, ver, req, domain):
+def second_problems(sec, ver, req, domain, root=None):
     p = []
     ids = option_ids(req)
-    if req is not None and sec.get("request_sha") != request_sha(req):
+    if req is not None and sec.get("request_sha") != request_sha(req, root):
         p.append("second opinion is from an earlier version of the request (request_sha differs)")
     if sec.get("schema") != SECOND_SCHEMA:
         p.append(f"second opinion is not {SECOND_SCHEMA}")
@@ -364,7 +419,7 @@ def linked(blocks, rel, active_only=True):
     return {d: b for d, b in blocks.items() if link.search(b) and (not active_only or re.search(r"^- status:\s*active\b", b, re.M))}
 
 
-def ledger_problems(ver, blocks, rel):
+def ledger_problems(ver, blocks, rel, soft=None):
     """Why the ledger doesn't (correctly) record this verdict, or [] when it does."""
     act = linked(blocks, rel)
     if not act:
@@ -379,6 +434,9 @@ def ledger_problems(ver, blocks, rel):
     label = str(ver.get("verdict_label") or "").strip().lower()
     if m and label and label not in m.group(1).lower():
         out.append(f"{did} records '{m.group(1).strip()}', not the verdict '{ver.get('verdict_label')}' (re-run left the old decision active?)")
+    heading = block.splitlines()[0] if block else ""
+    if soft and "[provisional" not in heading:
+        out.append(f"{did} is {soft}, so its title needs a [provisional: …] marker: sessions see ledger headings, not rationales")
     return out
 
 
@@ -448,7 +506,7 @@ def build(root, phase=None):
             item["problems"] += ["request: " + x for x in request_problems(req, req_rel)]
         derived = None
         stale = req is not None and ver is not None and ver.get("schema") == VERDICT_SCHEMA \
-            and ver.get("request_sha") != request_sha(req)
+            and ver.get("request_sha") != request_sha(req, root)
         if ver is not None:
             # a stale verdict answers another request: its content checks would only describe that mismatch
             vp, derived = ([], None) if stale else verdict_problems(ver, req, ver_rel, root)
@@ -464,6 +522,10 @@ def build(root, phase=None):
                 item["problems"].append(f"override: user_override {o.get('user_override')!r} is not one of the options")
             if not str(o.get("user_rationale") or "").strip():
                 item["problems"].append("override: no user_rationale")
+            if req is not None and req.get("schema") == REQ_SCHEMA and not o.get("request_sha"):
+                item["problems"].append("override: no request_sha (the person's choice must name the version of the request it answers)")
+        ov_stale = ov is not None and req is not None and bool(ov[0].get("request_sha")) \
+            and ov[0].get("request_sha") != request_sha(req, root)
 
         # status
         if req is not None and req.get("status") == "withdrawn":
@@ -480,6 +542,8 @@ def build(root, phase=None):
                     item["gate"].append(f"{tag} '{t}' was withdrawn without a person (withdrawn_by: human:<name>) or a D-NNN that decides it")
         elif item["problems"]:
             item["status"] = "invalid"
+        elif ov is not None and ov_stale:
+            item["status"] = "stale"
         elif ov is not None:
             item["status"] = "overridden"
             item["override"] = {"file": ov[1], "user_override": ov[0].get("user_override")}
@@ -541,7 +605,7 @@ def build(root, phase=None):
                 item["review"].append("confidence capped at MEDIUM: " + "; ".join(derived["cap_reasons"]))
             disagrees = False
             if sec is not None:
-                sp = second_problems(sec, ver, req, domain or "architecture")
+                sp = second_problems(sec, ver, req, domain or "architecture", root)
                 if sp and needs_second:
                     item["gate"] += [f"{sec_tag} '{t}': " + x for x in sp]
                 elif sp:
@@ -557,7 +621,11 @@ def build(root, phase=None):
                 if item["status"] == "resolved":
                     item["gate"].append(f"{sec_tag} '{t}' is a close HIGH-impact call with no second opinion ({t}.second-opinion.json)")
             if item["status"] == "resolved":
-                lp = ledger_problems(ver, blocks, ver_rel) if v1 else []
+                soft = ("LOW confidence" if (item["confidence"] or "") == "LOW" else
+                        "INCOMPLETE" if ver.get("status") == "INCOMPLETE" else
+                        "an assumption" if (ver.get("kind") == "assumption" or (req or {}).get("kind") == "assumption") else
+                        "disputed by its second opinion" if disagrees else None)
+                lp = ledger_problems(ver, blocks, ver_rel, soft) if v1 else []
                 if lp:
                     item["review"].append("not promoted to docs/DECISIONS.md")
                     item["gate"] += [f"{sec_tag} '{t}' verdict " + x for x in lp]
@@ -572,8 +640,12 @@ def build(root, phase=None):
             item["gate"].insert(0, f"{sec_tag} '{t}' is pending, {what}: {req_rel} has no verdict (run debate_moderator, record a default in unresolved.json, or withdraw it with a reason)")
         elif item["status"] == "invalid":
             item["gate"].insert(0, f"{sec_tag} '{t}' breaks the debate contract: " + "; ".join(item["problems"]))
+        elif item["status"] == "stale" and ov is not None and ov_stale:
+            item["gate"].insert(0, f"{sec_tag} '{t}': the person's override answers an earlier version of {req_rel} "
+                                   "(the request or a requirement it cites changed): ask them again, or re-run the debate")
         elif item["status"] == "stale":
-            item["gate"].insert(0, f"{sec_tag} '{t}' verdict answers an earlier version of {req_rel} (request_sha differs): re-run the debate")
+            item["gate"].insert(0, f"{sec_tag} '{t}' verdict answers an earlier version of {req_rel} (request_sha differs: "
+                                   "the request or a requirement it cites changed): re-run the debate")
         topics.append(item)
 
     blocking = [g for i in topics for g in i["gate"]] + [f"debate file unreadable: {u}" for u in unreadable]
@@ -620,6 +692,7 @@ def main(argv=None):
     ap.add_argument("--json", action="store_true")
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--request-sha", metavar="TOPIC")
+    ap.add_argument("--verdict-sha", metavar="TOPIC", help="hash the moderator records as VERDICT_SHA after the primary arbitration")
     a = ap.parse_args(argv)
     if not os.path.isdir(a.root):
         print(f"debate-status: no such directory {a.root}", file=sys.stderr)
@@ -629,7 +702,14 @@ def main(argv=None):
         if not isinstance(req, dict):
             print(f"debate-status: no readable agent_state/debates/{a.request_sha}.request.json", file=sys.stderr)
             return 3
-        print(request_sha(req))
+        print(request_sha(req, a.root))
+        return 0
+    if a.verdict_sha:
+        ver = load(os.path.join(a.root, "agent_state", "debates", f"{a.verdict_sha}.verdict.json"))
+        if not isinstance(ver, dict):
+            print(f"debate-status: no readable agent_state/debates/{a.verdict_sha}.verdict.json", file=sys.stderr)
+            return 3
+        print(verdict_sha(ver))
         return 0
     rep = build(a.root, a.phase)
     print(json.dumps(rep, indent=2) if a.json else render(rep))

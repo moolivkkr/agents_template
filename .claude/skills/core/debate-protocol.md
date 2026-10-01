@@ -152,8 +152,10 @@ checkpoint all use it; none of them glob file names.
 
 - `status`: `RESOLVED`, or `INCOMPLETE` with a `reason` when the arbitrator decided on evidence it
   knows is incomplete. `INCOMPLETE` always has `confidence: LOW`.
-- `request_sha`: ties the verdict to the request it answered. If the request changes afterwards, the
-  verdict is stale and the gate blocks until the debate runs again.
+- `request_sha`: ties the verdict to the request it answered, including the text of every BRD row
+  (`FR-…`, `NFR-…`, `OBJ-…`) and `PROJECT_FACTS` entry (`F-…`) the request cites. If the request or
+  one of those requirements changes or is retired afterwards, the verdict is stale. The gate blocks
+  until the debate runs again, and the old round is archived first. Overrides carry it too.
 - **What the gate recomputes, rather than trusting the verdict's own claims** (`debate-status.py
   --check`):
   - every option's total, from its per-criterion `scores` and the domain's weights
@@ -184,6 +186,10 @@ confidence, is below HIGH.
 **It must belong to this request:** it carries the same `request_sha` as the verdict. A second
 opinion left from an earlier version of the request doesn't count. Its verdict must be its own
 highest total, with the same exceptions as the primary's.
+
+**The primary can't be rewritten after it:** the moderator records `VERDICT_SHA` in the transcript
+after the primary arbitration. The gate rejects a verdict that changed afterwards; `promote` adds
+only `decision_id`.
 
 **How it stays independent:**
 - It reads the options in the reverse presentation order.

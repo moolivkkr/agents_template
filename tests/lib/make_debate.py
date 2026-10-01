@@ -57,7 +57,7 @@ ver = {"schema": "sdlc.debate-verdict/v1", "topic": a.topic, "phase": a.phase, "
        "status": "RESOLVED", "verdict": a.verdict, "verdict_label": f"option {a.verdict}", "confidence": "HIGH",
        "rubric": a.domain, "presentation_order": ["B", "A"], "scores": scores, "gap": 3.0, "decisive_factor": "brd_alignment",
        "claims_checked": [{"claim": "c", "source": "https://example.org", "result": "confirmed"}], "rationale": "r",
-       "request_sha": ds.request_sha(req), "decision_id": did}
+       "request_sha": ds.request_sha(req, a.root), "decision_id": did}
 if a.domain == "security":
     ver["hardened_default"] = a.verdict
 put(f"{a.topic}.verdict.json", ver)

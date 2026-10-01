@@ -151,6 +151,7 @@ Cycle 3: Final attempt
                      {"id":"C","label":"Known issue with a workaround, carried forward"},
                      {"id":"D","label":"The test expectation contradicts the spec: correct the test"} ] }
     → return NEEDS_DECISION e2e_<test-slug>; the parent runs debate_moderator and relaunches you
+      (a verdict that changes product code goes to the owning role agent first; you only fix tests)
     → implement the verdict → re-run E2E → still failing: BLOCK the gate
     (option D still goes through spec_test_reconciler's weakening check: a corrected expectation
      needs the spec row that justifies it)

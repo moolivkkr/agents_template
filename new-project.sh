@@ -38,7 +38,16 @@ mkdir -p "$PROJECT_DIR/.claude/agents/generated"
 # /autonomous continuation (Stop). Paths in settings.json resolve via $CLAUDE_PROJECT_DIR.
 mkdir -p "$PROJECT_DIR/.claude/hooks"
 cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$PROJECT_DIR/.claude/hooks/" && chmod +x "$PROJECT_DIR/.claude/hooks/"*.sh "$PROJECT_DIR/.claude/hooks/"*.py
-[ -f "$PROJECT_DIR/.claude/settings.json" ] || cp "$REPO_DIR/.claude/settings.json" "$PROJECT_DIR/.claude/settings.json"
+if [ -f "$PROJECT_DIR/.claude/settings.json" ]; then
+  # Existing settings: add the spawn-depth cap if missing (keeps everything else as it is). The debate
+  # protocol relies on it: this session -> debate_moderator -> its children, and no deeper.
+  if command -v jq >/dev/null 2>&1 && ! jq -e '.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH' "$PROJECT_DIR/.claude/settings.json" >/dev/null 2>&1; then
+    tmp="$(mktemp)" && jq '.env = ((.env // {}) + {"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "2"})' "$PROJECT_DIR/.claude/settings.json" > "$tmp" \
+      && mv "$tmp" "$PROJECT_DIR/.claude/settings.json" && echo "  added env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2 to existing .claude/settings.json"
+  fi
+else
+  cp "$REPO_DIR/.claude/settings.json" "$PROJECT_DIR/.claude/settings.json"
+fi
 
 # Rule board specialists (vertix security-rule boards) — only when asked for with --rule-board;
 # the /rules-board* commands read these project-relative

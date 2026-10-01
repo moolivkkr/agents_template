@@ -400,25 +400,24 @@ Two runs, each with the ai_engineer, architect and tester hats, and Fable verifi
 - **The next run** should check the round-2 fixes: `/board-review debate --compare
   docs/board-review-2026-09-30-debate-2/merged.json`.
 
-### Still open (verified MEDIUM in round 2, not yet fixed)
+### Round-2 verified MEDIUMs (fixed 2026-10-01)
 
-- **AI-03:** a mis-copied `REQUEST_SHA` shows up as "stale" only after the debate.
-- **AI-12:** projects whose `.claude/settings.json` predates the depth cap don't get it. Wave 0c
-  could check `env` and warn.
-- **AI-29:** reopening a decision recorded under another topic doesn't reverse it.
-- **ARCH-05, ARCH-08:** files and overrides left from an earlier round of the same topic are still
-  read.
-- **ARCH-07, ARCH-33:** "one active decision per topic" still depends on writers passing
-  `--reverses` across topics. Re-running post-gate 4c can't tell which defaults already have a
-  D-NNN.
-- **ARCH-11:** the arbitrator's advocate-gap rule and the checker's artifact rule disagree in one
-  case.
-- **ARCH-16:** step-3/4 verdicts go to test agents that may not edit product code. The parent should
-  route them to the owning role.
-- **ARCH-24:** a HIGH call the second opinion disagreed with gets no `[provisional]` title.
-- **TEST-16:** an FR or PROJECT_FACTS change doesn't make a verdict that relied on it stale.
-- **TEST-22:** advocate self-scores aren't rejected by the gate, only by the eval.
-- **TEST-28:** T-007's position check can't fail when a MUST requirement decides the call. It needs a
-  case the bias could flip.
-- **TEST-35:** the promote step could rewrite the verdict. Nothing records the verdict's hash between
-  the steps.
+| Finding | Fix |
+|---|---|
+| TEST-16 | `request_sha` covers the text of every BRD row (`FR-`/`NFR-`/`OBJ-`) and `PROJECT_FACTS` entry the request cites. Changing or retiring one makes the verdict stale. |
+| ARCH-08 | Overrides record `request_sha`. A later change to the request or a cited requirement reopens the decision. |
+| ARCH-05 | Re-running a stale topic first archives the old round (`archived-<timestamp>/`), so an old second opinion, brief or override isn't read as part of the new one. |
+| TEST-35 | The moderator records `VERDICT_SHA` after the primary arbitration. The gate rejects a verdict changed afterwards; promote may only add `decision_id`. |
+| ARCH-24 (+ TEST-17) | LOW, INCOMPLETE, assumption and disputed verdicts need a `[provisional: …]` ledger title, and the gate checks it. |
+| TEST-22 | A self-score in an advocate's argument is rejected by the gate, not just the eval. |
+| ARCH-11 | A missing argument recorded as an `EVIDENCE INCOMPLETE` gap isn't also reported as "no debate behind the verdict". |
+| AI-03 | A `stale` status right after the arbitrator means `REQUEST_SHA` was mis-copied. The moderator re-spawns it once. |
+| AI-29 | A decision reopened under another topic is passed as `PRIOR DECISION`, so the new entry reverses it. |
+| ARCH-07, ARCH-33 | Recorded defaults link `unresolved.json#<topic>`. `remember.sh` refuses a second active entry for a link, so post-gate 4c can be re-run safely. |
+| ARCH-16 | A verdict that changes product code goes to the owning role agent (or `product_manager` for the BRD) before the requesting test agent is relaunched. |
+| AI-12 | `new-project.sh` adds the depth cap to an existing `settings.json`. `/develop` Wave 0c warns when it's missing. |
+| TEST-28 | T-007 adds a reversed copy of the close call. Its R9 fails a position-biased judge that the MUST-decided pair (R3) can't catch, checked on synthetic data. |
+
+The LOW findings and the unverified MEDIUMs from both rounds are in the run READMEs. The next
+`/board-review debate --compare docs/board-review-2026-09-30-debate-2/merged.json` measures all of
+this.
