@@ -96,7 +96,7 @@ WK = "worker-pattern-python.md"
 
 EXPECTED = {
     AM: 10, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
-    EH: 7, GR: 5, MG: 10, OB: 22, PF: 28, WS: 8, WK: 8,
+    EH: 7, GR: 5, MG: 10, OB: 23, PF: 28, WS: 8, WK: 8,
 }
 
 # Blocks that hold only comments. The harness verifies that; code added to one fails until it gets a unit.
@@ -493,61 +493,68 @@ UNITS.append(Unit(
     own=[OB],
     files={
         "harness_stubs/orders.py": [S("orders.py")],
-        "app/config.py": [B(OB, 19, "# app/config.py")],
-        "app/context.py": [B(OB, 20, "# app/context.py")],
-        "app/dependencies.py": [B(OB, 21, "# app/dependencies.py")],
+        "app/config.py": [B(OB, 20, "# app/config.py")],
+        "app/context.py": [B(OB, 21, "# app/context.py")],
+        "app/dependencies.py": [B(OB, 22, "# app/dependencies.py")],
         "app/db.py": [S("obs_db.py")],
         "app/middleware/auth_middleware.py": [S("obs_auth_middleware.py")],
         "app/observability/tracing.py": [B(OB, 0, "# app/observability/tracing.py")],
         "app/observability/instruments.py": [B(OB, 1, "# app/observability/instruments.py")],
-        "app/observability/metrics.py": [B(OB, 5, "# app/observability/metrics.py")],
-        "app/observability/app_metrics.py": [B(OB, 6, "# app/observability/app_metrics.py")],
+        "app/observability/sql_spans.py": [B(OB, 2, "# app/observability/sql_spans.py")],
+        # --live: sql_spans.py on asyncpg against PostgreSQL (pg_url from the repository tests' conftest)
+        "app/models/widget.py": [B(CR, 0, "# app/models/widget.py")],
+        "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py")],
+        "tests/test_sql_spans_live.py": [S("test_sql_spans_live.py")],
+        "app/observability/metrics.py": [B(OB, 6, "# app/observability/metrics.py")],
+        "app/observability/app_metrics.py": [B(OB, 7, "# app/observability/app_metrics.py")],
         "app/observability/logging.py": [
-            B(OB, 11, "# app/observability/logging.py"),
-            B(OB, 12, "# app/observability/logging.py  (additional processor)"),
+            B(OB, 12, "# app/observability/logging.py"),
+            B(OB, 13, "# app/observability/logging.py  (additional processor)"),
         ],
-        "app/observability/logging_stdlib.py": [B(OB, 16, "# app/observability/logging_stdlib.py")],
-        "app/observability/__init__.py": [B(OB, 17, "# app/observability/__init__.py")],
-        "app/middleware/metrics_middleware.py": [B(OB, 7, "# app/middleware/metrics_middleware.py")],
-        "app/middleware/db_metrics.py": [B(OB, 9, "# app/middleware/db_metrics.py")],
-        "app/middleware/logging_middleware.py": [B(OB, 13, "# app/middleware/logging_middleware.py")],
-        "app/main.py": [B(OB, 18, "# app/main.py")],
-        "app/repositories/order_repository.py": [OBS_PRELUDE, B(OB, 3, "# app/repositories/order_repository.py")],
+        "app/observability/logging_stdlib.py": [B(OB, 17, "# app/observability/logging_stdlib.py")],
+        "app/observability/__init__.py": [B(OB, 18, "# app/observability/__init__.py")],
+        "app/middleware/metrics_middleware.py": [B(OB, 8, "# app/middleware/metrics_middleware.py")],
+        "app/middleware/db_metrics.py": [B(OB, 10, "# app/middleware/db_metrics.py")],
+        "app/middleware/logging_middleware.py": [B(OB, 14, "# app/middleware/logging_middleware.py")],
+        "app/main.py": [B(OB, 19, "# app/main.py")],
+        "app/repositories/order_repository.py": [OBS_PRELUDE, B(OB, 4, "# app/repositories/order_repository.py")],
         "app/services/order_service.py": [
             OBS_PRELUDE,
             T("from app.repositories.order_repository import OrderRepository"),
-            B(OB, 2, "# app/services/order_service.py"),
+            B(OB, 3, "# app/services/order_service.py"),
         ],
         "docs_fragments/propagation.py": [
-            OBS_PRELUDE, B(OB, 4, "# OpenTelemetry handles context propagation within the same process via")],
+            OBS_PRELUDE, B(OB, 5, "# OpenTelemetry handles context propagation within the same process via")],
         "docs_fragments/business_metrics.py": [
             OBS_PRELUDE,
             T("class _OrderServiceParts:  # harness: what the fragment's class has beyond this method\n"
               "    async def _process_order(self, ctx: RequestContext, req: CreateOrderRequest) -> Order: ..."),
-            B(OB, 8, "# Inside service methods — record business-level metrics",
+            B(OB, 9, "# Inside service methods — record business-level metrics",
               subs=(("class OrderService:", "class OrderService(_OrderServiceParts):"),)),
         ],
         "docs_fragments/prometheus.py": [
             T("from fastapi import FastAPI  # harness: the app the fragment instruments\napp = FastAPI()"),
-            B(OB, 10, "# app/main.py"),
+            B(OB, 11, "# app/main.py"),
         ],
         "docs_fragments/order_service_logging.py": [
             OBS_PRELUDE,
             T("from app.repositories.order_repository import OrderRepository\n"
               "class _OrderServiceParts:  # harness: the collaborator the fragment's class uses\n"
               "    _repo: OrderRepository"),
-            B(OB, 14, "# app/services/order_service.py",
+            B(OB, 15, "# app/services/order_service.py",
               subs=(("class OrderService:", "class OrderService(_OrderServiceParts):"),)),
         ],
         "docs_fragments/log_levels.py": [
             OBS_PRELUDE,
             T("import structlog\nlogger = structlog.get_logger()\norder: Order\nexc: Exception\n"
               "cb: CircuitBreaker\norder_id: str"),
-            B(OB, 15, "# ERROR — actionable, needs investigation", wrap="def _fragment() -> None:"),
+            B(OB, 16, "# ERROR — actionable, needs investigation", wrap="def _fragment() -> None:"),
         ],
     },
     env={"DATABASE_URL": "postgresql+asyncpg://harness@localhost:5432/harness", "ENVIRONMENT": "local"},
     smoke=smoke("smoke_observability.py"),
+    live="run",
+    pytest_args=["tests/test_sql_spans_live.py"],
 ))
 
 # ── performance (mostly fragments: each gets the app-level names it assumes from stubs/perf.py) ──────

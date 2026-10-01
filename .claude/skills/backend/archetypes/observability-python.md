@@ -1,6 +1,6 @@
 ---
 skill: observability-python
-description: Python observability archetype — OpenTelemetry traces/metrics/logs for FastAPI, structlog JSON pipeline, auto-instrumentation (SQLAlchemy, Redis, httpx), Prometheus endpoint, tenant-aware context propagation
+description: Python observability archetype — OpenTelemetry traces/metrics/logs for FastAPI, structlog JSON pipeline, SQL spans from SQLAlchemy events, auto-instrumentation (Redis, httpx), Prometheus endpoint, tenant-aware context propagation
 version: "1.0"
 tags:
   - python
@@ -38,7 +38,10 @@ dependencies = [
 
     # Auto-instrumentation
     "opentelemetry-instrumentation-fastapi>=0.46b0",
-    "opentelemetry-instrumentation-sqlalchemy>=0.46b0",
+    # NOT opentelemetry-instrumentation-sqlalchemy: its newest release (0.66b0, 2026-09-25; checked
+    # 2026-09-30) requires sqlalchemy>=1.0.0,<2.1.0, and these archetypes use SQLAlchemy 2.1. SQL spans
+    # come from SQLAlchemy's events instead (app/observability/sql_spans.py, section 1.2).
+    "sqlalchemy[asyncio]>=2.1",
     "opentelemetry-instrumentation-redis>=0.46b0",
     "opentelemetry-instrumentation-httpx>=0.46b0",
     "opentelemetry-instrumentation-logging>=0.46b0",
@@ -109,10 +112,13 @@ def configure_tracing() -> TracerProvider:
 # app/observability/instruments.py
 
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.metrics import NoOpMeterProvider
+from sqlalchemy import Engine
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+from app.observability.sql_spans import instrument_sql
 
 
 def instrument_fastapi(app):
@@ -130,24 +136,120 @@ def instrument_fastapi(app):
     )
 
 
-def instrument_auto(engine=None):
+def instrument_auto(engine: Engine | AsyncEngine | None = None) -> None:
     """
-    Enable auto-instrumentation for SQLAlchemy, Redis, and httpx.
+    Enable instrumentation for SQL, Redis, and httpx.
 
     Call after configure_tracing() in the FastAPI lifespan.
     """
-    # SQLAlchemy — wraps every query in a child span
+    # SQL — a child span per statement, from SQLAlchemy's events (sql_spans.py below)
     if engine is not None:
-        SQLAlchemyInstrumentor().instrument(
-            engine=engine,
-            enable_commenter=True,  # adds /*traceparent=...*/ SQL comment
-        )
+        instrument_sql(engine)
 
     # Redis — wraps every command in a child span
     RedisInstrumentor().instrument()
 
     # httpx — wraps outbound HTTP calls and propagates trace context
     HTTPXClientInstrumentor().instrument()
+```
+
+**SQL spans without the OpenTelemetry SQLAlchemy instrumentor (checked 2026-09-30).** The newest
+`opentelemetry-instrumentation-sqlalchemy` (0.66b0, released 2026-09-25) declares `sqlalchemy>=1.0.0,<2.1.0`.
+With SQLAlchemy 2.1, `SQLAlchemyInstrumentor().instrument()` logs an error and records nothing; the
+import still works, so nothing else tells you the spans are gone. Until a release covers your SQLAlchemy
+(look at the `instruments` extra on its PyPI page), these SQLAlchemy event hooks record a client span
+per statement, with the stable database semantic-convention attributes (`db.system.name`,
+`db.query.text`, ...; the instrumentor still emitted the older `db.system` / `db.statement`). They
+don't add the sqlcommenter `/*traceparent=...*/` comment the instrumentor's `enable_commenter` did.
+
+```python
+# app/observability/sql_spans.py
+
+from __future__ import annotations
+
+from typing import Any
+
+from opentelemetry import trace
+from opentelemetry.semconv.attributes.db_attributes import (
+    DB_NAMESPACE,
+    DB_OPERATION_NAME,
+    DB_QUERY_TEXT,
+    DB_RESPONSE_STATUS_CODE,
+    DB_SYSTEM_NAME,
+)
+from opentelemetry.semconv.attributes.error_attributes import ERROR_TYPE
+from opentelemetry.semconv.attributes.server_attributes import SERVER_ADDRESS, SERVER_PORT
+from opentelemetry.trace import Span, SpanKind, StatusCode
+from sqlalchemy import Engine, event
+from sqlalchemy.engine import Connection, ExceptionContext
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+_tracer = trace.get_tracer("app.db")
+_OPEN_SPANS = "otel_sql_spans"  # Connection.info key: spans of statements still running, innermost last
+
+
+def instrument_sql(engine: Engine | AsyncEngine) -> None:
+    """A CLIENT span per SQL statement, child of the span current where the query was awaited.
+
+    An AsyncEngine's events are registered on its sync_engine; SQLAlchemy runs them in the caller's
+    context, so the parent is the request's or the service method's span. Safe to call twice.
+    """
+    target = engine.sync_engine if isinstance(engine, AsyncEngine) else engine
+    if event.contains(target, "before_cursor_execute", _start_span):
+        return
+    event.listen(target, "before_cursor_execute", _start_span)
+    event.listen(target, "after_cursor_execute", _end_span)
+    event.listen(target, "handle_error", _fail_span)
+
+
+def _start_span(
+    conn: Connection, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
+) -> None:
+    operation = statement.split(None, 1)[0].upper() if statement.strip() else "SQL"
+    url = conn.engine.url
+    attributes: dict[str, str | int] = {
+        DB_SYSTEM_NAME: conn.dialect.name,  # "postgresql"
+        DB_OPERATION_NAME: operation,
+        # The statement with its placeholders ($1, :name): parameter values are sent separately and
+        # never recorded. Don't inline user input into SQL text; it would land here.
+        DB_QUERY_TEXT: statement,
+    }
+    if url.database:
+        attributes[DB_NAMESPACE] = url.database
+    if url.host:
+        attributes[SERVER_ADDRESS] = url.host
+    if url.port:
+        attributes[SERVER_PORT] = url.port
+    span = _tracer.start_span(
+        f"{operation} {url.database}" if url.database else operation,
+        kind=SpanKind.CLIENT,
+        attributes=attributes,
+    )
+    conn.info.setdefault(_OPEN_SPANS, []).append(span)
+
+
+def _end_span(
+    conn: Connection, cursor: Any, statement: str, parameters: Any, context: Any, executemany: bool
+) -> None:
+    open_spans: list[Span] = conn.info.get(_OPEN_SPANS, [])
+    if open_spans:
+        open_spans.pop().end()
+
+
+def _fail_span(ctx: ExceptionContext) -> None:
+    open_spans: list[Span] = ctx.connection.info.get(_OPEN_SPANS, []) if ctx.connection is not None else []
+    if not open_spans:
+        return  # failed before a statement started (while connecting, say): no span to close
+    span = open_spans.pop()
+    exc = ctx.sqlalchemy_exception or ctx.original_exception  # sqlalchemy.exc.*, not the driver adapter's class
+    # PostgreSQL's SQLSTATE (42P01 = undefined table) when the driver gives one: low-cardinality and exact
+    sqlstate = getattr(ctx.original_exception, "sqlstate", None)
+    if isinstance(sqlstate, str):
+        span.set_attribute(DB_RESPONSE_STATUS_CODE, sqlstate)
+    span.record_exception(exc)
+    span.set_status(StatusCode.ERROR, type(exc).__name__)
+    span.set_attribute(ERROR_TYPE, sqlstate if isinstance(sqlstate, str) else type(exc).__qualname__)
+    span.end()
 ```
 
 ### 1.3 Manual Spans in Services and Repositories
@@ -977,7 +1079,7 @@ def instrument_app(engine=None):
     # 3. Metrics
     meter_provider = configure_metrics()
 
-    # 4. Auto-instrumentation (SQLAlchemy, Redis, httpx)
+    # 4. Instrumentation (SQL spans, Redis, httpx)
     instrument_auto(engine=engine)
 
     return tracer_provider, meter_provider
@@ -1174,3 +1276,4 @@ services:
 9. **Clean shutdown** — call `force_flush()` and `shutdown()` on both providers in the FastAPI lifespan teardown
 10. **Use contextvars.** Bind request_id (validated) in LoggingMiddleware, and tenant_id in the auth middleware, once each. Never pass them manually to every log call.
 11. **SLIs come from the histogram at query time.** No in-process SLA gauges. Alert on multi-window burn rates (see 2.8).
+12. **SQL spans come from `sql_spans.py`** (SQLAlchemy events) while `opentelemetry-instrumentation-sqlalchemy` doesn't support SQLAlchemy 2.1 (0.66b0, checked 2026-09-30). Before switching to the instrumentor, check that its `instruments` range includes your SQLAlchemy and that spans actually appear: out of range it only logs an error.

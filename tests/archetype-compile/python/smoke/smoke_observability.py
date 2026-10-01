@@ -73,3 +73,44 @@ assert len(server) == 3, [sp.name for sp in server]  # the three order requests;
 
 assert redact_sensitive({"password": "p", "nested": {"api_key": "k"}, "rows": [{"token": "t"}], "ok": 1}) == {
     "password": "[REDACTED]", "nested": {"api_key": "[REDACTED]"}, "rows": [{"token": "[REDACTED]"}], "ok": 1}
+
+# SQL spans (sql_spans.py) on a sync engine: one CLIENT span per statement, child of the caller's span,
+# no parameter values; a failing statement's span is an error with the exception recorded.
+from opentelemetry.trace import StatusCode  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
+from sqlalchemy.exc import OperationalError  # noqa: E402
+
+from app.observability.sql_spans import instrument_sql  # noqa: E402
+
+sqlite = create_engine("sqlite://")
+instrument_sql(sqlite)
+instrument_sql(sqlite)  # idempotent
+spans.clear()
+with trace.get_tracer("harness").start_as_current_span("OrderService.create_order") as parent:
+    with sqlite.connect() as conn:
+        conn.execute(text("SELECT :x"), {"x": "secret-value"})
+        try:
+            conn.execute(text("SELECT * FROM missing_table"))
+        except OperationalError:
+            pass
+sql = [sp for sp in spans.get_finished_spans() if sp.kind == SpanKind.CLIENT]
+assert len(sql) == 2, [sp.name for sp in sql]
+ok, failed = sql
+assert all(sp.parent is not None and sp.parent.span_id == parent.get_span_context().span_id for sp in sql)
+assert ok.name == "SELECT" and dict(ok.attributes or {}) == {
+    "db.system.name": "sqlite", "db.operation.name": "SELECT", "db.query.text": "SELECT ?"}, ok.attributes
+assert failed.status.status_code == StatusCode.ERROR and any(e.name == "exception" for e in failed.events)
+assert (failed.attributes or {}).get("error.type") == "OperationalError", failed.attributes
+
+# Canary for the dated note in observability-python.md 1.2: the pinned opentelemetry-instrumentation-
+# sqlalchemy (0.66b0) declares sqlalchemy<2.1 and records nothing on SQLAlchemy 2.1. When a pin bump
+# makes this fail, the instrumentor works again: update the note, the toml and critical rule 12.
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor  # noqa: E402
+
+canary = create_engine("sqlite://")
+SQLAlchemyInstrumentor().instrument(engine=canary)
+spans.clear()
+with canary.connect() as conn:
+    conn.execute(text("SELECT 1"))
+assert not spans.get_finished_spans(), "SQLAlchemyInstrumentor now records spans on this SQLAlchemy"
+print("sql spans: sqlite CLIENT spans ok; SQLAlchemyInstrumentor 0.66b0 records nothing on SQLAlchemy 2.1")
