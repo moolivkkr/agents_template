@@ -26,34 +26,58 @@ Complete error handling system for Spring Boot services. Every generated service
 ```java
 package com.example.app.exception;
 
+import jakarta.validation.ConstraintViolation;
 import org.springframework.http.HttpStatus;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
 /**
  * One entry of error.details[] — field-level problems for VALIDATION_FAILED.
- * `code` is a stable lower_snake identifier; `message` comes from a fixed catalog,
+ * `code` is one of the closed set in api/response-envelope.md; `message` comes from a fixed catalog,
  * never from a validator's or an exception's text.
  */
 public record FieldError(String field, String code, String message) {
 
-    // Jakarta constraint name (Spring's FieldError#getCode(), e.g. "NotBlank") → stable code
-    private static final Map<String, String> CODES = Map.of(
-        "NotNull", "required", "NotBlank", "required", "NotEmpty", "required",
-        "Size", "invalid_length", "Email", "invalid_format", "Pattern", "invalid_format",
-        "Min", "out_of_range", "Max", "out_of_range");
-
     private static final Map<String, String> MESSAGES = Map.of(
         "required", "This field is required.",
-        "invalid_length", "This value is too short or too long.",
+        "too_short", "This value is too short.",
+        "too_long", "This value is too long.",
         "invalid_format", "This value has the wrong format.",
         "out_of_range", "This value is out of range.",
-        "invalid", "This value is invalid.");
+        "invalid_value", "This value is invalid.");
 
-    public static FieldError fromConstraint(String field, String constraint) {
-        var code = CODES.getOrDefault(constraint, "invalid");
-        return new FieldError(field, code, MESSAGES.get(code));
+    /**
+     * A Jakarta constraint failure as Spring reports it (MethodArgumentNotValidException) → a stable code.
+     * @Size only says "wrong length": too_short or too_long comes from the rejected value's length against the
+     * constraint's min, read from the ConstraintViolation behind Spring's FieldError.
+     */
+    public static FieldError fromConstraint(org.springframework.validation.FieldError error) {
+        var code = switch (String.valueOf(error.getCode())) { // the constraint's simple name, e.g. "NotBlank"
+            case "NotNull", "NotBlank", "NotEmpty" -> "required";
+            case "Size" -> length(error.getRejectedValue()) < sizeMin(error) ? "too_short" : "too_long";
+            case "Email", "Pattern" -> "invalid_format";
+            case "Min", "Max", "DecimalMin", "DecimalMax", "Positive", "PositiveOrZero" -> "out_of_range";
+            default -> "invalid_value"; // a rule with no closer code
+        };
+        return new FieldError(error.getField(), code, MESSAGES.get(code));
+    }
+
+    private static int sizeMin(org.springframework.validation.FieldError error) {
+        return error.contains(ConstraintViolation.class)
+            ? (Integer) error.unwrap(ConstraintViolation.class).getConstraintDescriptor().getAttributes().get("min")
+            : 0;
+    }
+
+    private static int length(Object value) { // what @Size measures: characters, elements, entries
+        return switch (value) {
+            case CharSequence s -> s.length();
+            case Collection<?> c -> c.size();
+            case Map<?, ?> m -> m.size();
+            case Object[] a -> a.length;
+            case null, default -> 0;
+        };
     }
 }
 
@@ -237,6 +261,7 @@ import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.orm.ObjectOptimisticLockingFailureException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.core.AuthenticationException;
+import org.springframework.util.ClassUtils;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -289,7 +314,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorBody> handleValidation(MethodArgumentNotValidException ex) {
         var details = ex.getBindingResult().getFieldErrors().stream()
-            .map(fe -> FieldError.fromConstraint(fe.getField(), fe.getCode()))
+            .map(FieldError::fromConstraint)
             .toList();
         return write(new ValidationException(details));
     }
@@ -298,8 +323,13 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(MethodArgumentTypeMismatchException.class)
     public ResponseEntity<ErrorBody> handleTypeMismatch(MethodArgumentTypeMismatchException ex) {
+        // "abc" where a number goes → invalid_type; a malformed UUID or date → invalid_format.
         // The rejected value is raw user input: it is not echoed back
-        return write(new ValidationException(ex.getName(), "invalid_format", "This value has the wrong format."));
+        var type = ex.getRequiredType();
+        boolean number = type != null && Number.class.isAssignableFrom(ClassUtils.resolvePrimitiveIfNecessary(type));
+        return write(number
+            ? new ValidationException(ex.getName(), "invalid_type", "This value must be a number.")
+            : new ValidationException(ex.getName(), "invalid_format", "This value has the wrong format."));
     }
 
     // --- Unknown route → 404 NOT_FOUND (instead of falling through to the catch-all 500) ---
@@ -448,7 +478,7 @@ The HTTP status carries the class; the `X-Request-Id` header equals `error.reque
     "message": "Some fields are invalid.",
     "details": [
       { "field": "name", "code": "required", "message": "This field is required." },
-      { "field": "description", "code": "invalid_length", "message": "This value is too short or too long." }
+      { "field": "description", "code": "too_long", "message": "This value is too long." }
     ],
     "request_id": "b7e1c2…",
     "retryable": false

@@ -476,7 +476,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
         MethodArgumentNotValidException ex, HttpHeaders headers, HttpStatusCode status, WebRequest request
     ) {
         var details = ex.getBindingResult().getFieldErrors().stream()
-            .map(e -> FieldErrorCatalog.of(e.getField(), e.getCode())) // "NotBlank" → required, "Email" → invalid_format
+            .map(FieldErrorCatalog::of) // "NotBlank" → required, "Size" → too_short / too_long
             .toList();
         return ResponseEntity.badRequest()
             .body(ErrorResponse.of("VALIDATION_FAILED", "Some fields are invalid.", details, false));
@@ -510,7 +510,8 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     }
 }
 
-// Constraint → stable lower_snake code + fixed catalog message (document the codes in data-contracts.md).
+// Constraint → a code from the closed set in api/response-envelope.md + a fixed catalog message (document them
+// in data-contracts.md). @Size becomes too_short or too_long: the rejected value's length against its min.
 // e.getField() is the Java property path — make it the JSON field name if your naming strategy differs.
 final class FieldErrorCatalog {
     private record Entry(String code, String message) {}
@@ -519,13 +520,35 @@ final class FieldErrorCatalog {
         "NotNull",  new Entry("required", "This field is required."),
         "NotBlank", new Entry("required", "This field is required."),
         "Email",    new Entry("invalid_format", "Enter a valid email address."),
-        "Size",     new Entry("invalid_length", "This value is too short or too long."),
-        "Pattern",  new Entry("invalid_format", "This value has the wrong format."));
-    private static final Entry FALLBACK = new Entry("invalid", "This value is invalid.");
+        "Pattern",  new Entry("invalid_format", "This value has the wrong format."),
+        "Min",      new Entry("out_of_range", "This value is out of range."),
+        "Max",      new Entry("out_of_range", "This value is out of range."));
+    private static final Entry TOO_SHORT = new Entry("too_short", "This value is too short.");
+    private static final Entry TOO_LONG = new Entry("too_long", "This value is too long.");
+    private static final Entry FALLBACK = new Entry("invalid_value", "This value is invalid.");
 
-    static ErrorResponse.FieldError of(String field, String constraint) {
-        var entry = BY_CONSTRAINT.getOrDefault(constraint, FALLBACK);
-        return new ErrorResponse.FieldError(field, entry.code(), entry.message());
+    static ErrorResponse.FieldError of(FieldError e) { // org.springframework.validation.FieldError
+        var entry = "Size".equals(e.getCode())
+            ? (length(e.getRejectedValue()) < sizeMin(e) ? TOO_SHORT : TOO_LONG)
+            : BY_CONSTRAINT.getOrDefault(e.getCode(), FALLBACK);
+        return new ErrorResponse.FieldError(e.getField(), entry.code(), entry.message());
+    }
+
+    // @Size's min, from the Bean Validation violation behind Spring's FieldError
+    private static int sizeMin(FieldError e) {
+        return e.contains(ConstraintViolation.class)
+            ? (Integer) e.unwrap(ConstraintViolation.class).getConstraintDescriptor().getAttributes().get("min")
+            : 0;
+    }
+
+    private static int length(Object value) { // what @Size measures: characters, elements, entries
+        return switch (value) {
+            case CharSequence s -> s.length();
+            case Collection<?> c -> c.size();
+            case Map<?, ?> m -> m.size();
+            case Object[] a -> a.length;
+            case null, default -> 0;
+        };
     }
 }
 ```

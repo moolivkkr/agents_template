@@ -209,7 +209,7 @@ class CreateWidgetTests {
     @ParameterizedTest(name = "400 Validation — {0}")
     @MethodSource("com.example.app.controller.WidgetControllerTest#invalidCreateRequests")
     @DisplayName("400 VALIDATION_FAILED — validation failures")
-    void create_ValidationFailures_Returns400(String scenario, String body) throws Exception {
+    void create_ValidationFailures_Returns400(String scenario, String body, String field, String code) throws Exception {
         mockMvc.perform(post(BASE_URL)
                 .with(user(testPrincipal()))
                 .contentType(MediaType.APPLICATION_JSON)
@@ -217,8 +217,8 @@ class CreateWidgetTests {
             .andExpect(status().isBadRequest())
             .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
             .andExpect(jsonPath("$.error.message").isNotEmpty())
-            .andExpect(jsonPath("$.error.details[0].field").isNotEmpty())
-            .andExpect(jsonPath("$.error.details[0].code").isNotEmpty());
+            .andExpect(jsonPath("$.error.details[0].field").value(field))
+            .andExpect(jsonPath("$.error.details[0].code").value(code)); // closed set: api/response-envelope.md
 
         verifyNoInteractions(widgetService);
     }
@@ -241,19 +241,19 @@ class CreateWidgetTests {
     }
 }
 
-// Parameterized test data: invalid create requests
+// Parameterized test data: invalid create requests → the field and code in details[0]
 static Stream<Arguments> invalidCreateRequests() {
     return Stream.of(
         Arguments.of("blank name", """
-            {"name": "", "description": "desc"}"""),
+            {"name": "", "description": "desc"}""", "name", "required"),
         Arguments.of("null name", """
-            {"name": null, "description": "desc"}"""),
+            {"name": null, "description": "desc"}""", "name", "required"),
         Arguments.of("name too long (256 chars)", """
             {"name": "%s", "description": "desc"}"""
-            .formatted("A".repeat(256))),
+            .formatted("A".repeat(256)), "name", "too_long"),
         Arguments.of("description too long (2001 chars)", """
             {"name": "Valid", "description": "%s"}"""
-            .formatted("D".repeat(2001)))
+            .formatted("D".repeat(2001)), "description", "too_long")
     );
 }
 ```
@@ -620,7 +620,7 @@ class PaginationTests {
         "-5, out_of_range",
         "101, out_of_range",
         "500, out_of_range",       // never clamped to 100: the client would not know it got fewer
-        "abc, invalid_format",     // not a number
+        "abc, invalid_type",       // not a number
     })
     @DisplayName("limit outside 1..100 is rejected, never clamped")
     void list_LimitOutOfRange_Returns400(String limit, String code) throws Exception {
@@ -832,7 +832,7 @@ static Stream<Arguments> serviceErrorMappings() {
         Arguments.of("BusinessRule", 422, "BUSINESS_RULE_VIOLATION",
             new BusinessRuleException("widget", "You've reached the limit of 50 widgets.")),
         Arguments.of("Validation", 400, "VALIDATION_FAILED",
-            new ValidationException("name", "reserved", "This name is reserved.")),
+            new ValidationException("name", "invalid_value", "This name can't be used.")),
         Arguments.of("RateLimited", 429, "RATE_LIMITED",
             new RateLimitException(30)),
         Arguments.of("UpstreamService", 503, "UNAVAILABLE",
