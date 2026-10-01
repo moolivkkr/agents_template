@@ -53,7 +53,7 @@ PT = "testing/pytest.md"
 TT = "testing/test-case-traceability.md"
 
 EXPECTED = {
-    SO: 1, TP: 2, DD: 1, RD: 3, SQ: 1, DJ: 4, DR: 9, FA: 5, GQ: 1, LS: 1, ST: 1, PY: 28,
+    SO: 1, TP: 2, DD: 1, RD: 3, SQ: 1, DJ: 4, DR: 10, FA: 5, GQ: 1, LS: 1, ST: 1, PY: 28,
     CT: 1, EM: 3, LT: 1, PB: 1, PT: 6, TT: 2,
 }
 
@@ -424,4 +424,85 @@ UNITS.append(Unit(
     env={"DJANGO_SETTINGS_MODULE": "harness_django_settings"},
     pyright_ignore=django_ignores(DJ, "smoke_django.py"),
     smoke=smoke("smoke_django.py"),
+))
+
+# ── frameworks/drf.md: every block in one Django project on SQLite; the doc's APITestCase suite and the
+# harness's request tests run under Django's own test runner (post step) ─────────────────────────────
+DRF_SERVICE_SUBS = (("class WidgetService:", "class WidgetService(_WidgetServiceParts):"),)
+UNITS.append(Unit(
+    name="pack-drf",
+    own=[DR],
+    files={
+        "config/settings.py": [stub("drf_settings_base.py"), B(DR, 4, "# settings.py")],
+        "config/urls.py": [stub("drf_urls.py")],
+        "config/middleware.py": [stub("drf_middleware.py")],
+        "apps/users/models.py": [stub("drf_users_models.py")],
+        "apps/users/serializers.py": [
+            B(DR, 5, "# apps/users/serializers.py — custom JWT claims (never import DRF serializers from settings.py)")],
+        "apps/widgets/models.py": [stub("drf_widgets_models.py")],
+        "apps/core/exceptions.py": [B(DR, 6, "# apps/core/exceptions.py")],
+        "apps/core/renderers.py": [
+            B(DR, 7, '# apps/core/renderers.py — wraps every success body as {"data": ..., "meta": {"request_id": ...}}.')],
+        "apps/widgets/filters.py": [
+            T("from apps.widgets.models import Widget  # harness: the app's model"),
+            B(DR, 3, "from urllib.parse import parse_qs, urlparse"),
+        ],
+        # the doc's block holds the FilterSet and apps/core/pagination.py's paginator together
+        "apps/core/pagination.py": [T("from apps.widgets.filters import EnvelopeCursorPagination  # noqa: F401")],
+        "apps/widgets/serializers.py": [B(DR, 0, "from rest_framework import serializers")],
+        "apps/widgets/permissions.py": [B(DR, 2, "from rest_framework.permissions import BasePermission")],
+        "apps/widgets/service_parts.py": [stub("drf_service_parts.py")],
+        "apps/widgets/services.py": [
+            T("from apps.widgets.models import AuditLog, Widget\n"
+              "from apps.widgets.service_parts import NotificationService, _WidgetServiceParts  # harness"),
+            B(DR, 9, "# PREFER: Explicit service calls — predictable, testable, traceable", subs=DRF_SERVICE_SUBS),
+        ],
+        "apps/widgets/views.py": [
+            T("from rest_framework.permissions import IsAuthenticated\n\n"
+              "from apps.core.pagination import EnvelopeCursorPagination\n"
+              "from apps.widgets.filters import WidgetFilterSet\n"
+              "from apps.widgets.models import Widget\n"
+              "from apps.widgets.permissions import IsTenantMember\n"
+              "from apps.widgets.serializers import CreateWidgetSerializer, UpdateWidgetSerializer, WidgetSerializer\n"
+              "from apps.widgets.services import WidgetService"),
+            B(DR, 1, "from rest_framework import viewsets, status"),
+        ],
+        "tests/factories.py": [stub("drf_factories.py")],
+        "tests/test_widgets.py": [
+            T("from uuid import uuid4\n\nfrom apps.widgets.models import Widget\n"
+              "from tests.factories import UserFactory, WidgetFactory  # harness: the suite's factories"),
+            B(DR, 8, "from rest_framework.test import APITestCase, APIClient"),
+        ],
+        "tests/test_drf_harness.py": [stub("test_drf_harness.py")],
+    },
+    imports=[],  # Django modules import only after django.setup(): the smoke imports them
+    env={"DJANGO_SETTINGS_MODULE": "config.settings", "JWT_SIGNING_KEY": "harness-only-signing-key-0123456789abcdef",
+         "JWT_ISSUER": "widget-api-test", "JWT_AUDIENCE": "widget-api-test"},
+    pyright_ignore=[
+        *django_ignores(DR, "the post step's test suite"),
+        (DR, 'Method "get_serializer_class" overrides class "GenericAPIView" in an incompatible manner',
+         "def get_serializer_class(self):",
+         "DRF ships no type information: pyright infers GenericAPIView.get_serializer_class() as Never from "
+         "`assert self.serializer_class is not None` on its `serializer_class = None`. The post step's "
+         "tests create, update and list through each serializer it returns."),
+        *[(DR, f'Cannot access attribute "{attr}" for class "WSGIRequest"', "response.",
+           "Django's test client has no type information: pyright infers its request() result as the "
+           "WSGIRequest it builds, not the response it returns. The post step runs these assertions.")
+          for attr in ("status_code", "json")],
+        (DR, 'Method "has_permission" overrides class "BasePermission" in an incompatible manner',
+         "def has_permission(self, request, view):",
+         "DRF ships no type information: pyright infers BasePermission.has_permission() as Literal[True] from "
+         "its `return True`. test_drf_harness.py runs all three permissions both ways (IsTenantMember through "
+         "the ViewSet, HasPermission and IsAdminOrReadOnly through probe views)."),
+        (DR, 'Method "to_representation" overrides class "Serializer" in an incompatible manner',
+         "def to_representation(self, instance):",
+         "pyright infers Serializer.to_representation()'s return from DRF's untyped source (an OrderedDict "
+         "built in the body); the override returns the read serializer's .data. The create and update "
+         "tests check the 201/200 bodies are the read shape."),
+        (DR, 'Cannot assign to attribute "enveloped" for class "Response"', "response.enveloped = True",
+         "a plain instance attribute on DRF's Response (no type information declares it). The cursor-page "
+         "tests read list bodies the renderer passed through unwrapped because of it."),
+    ],
+    smoke=smoke("smoke_drf.py"),
+    post=[["{py}", "-m", "django", "test", "tests", "--noinput", "-v", "2"]],
 ))
