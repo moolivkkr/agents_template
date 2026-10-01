@@ -1,0 +1,29 @@
+<!doctype html>
+<!-- Stands in for a Stitch recreation of /orders/: same regions, components and labels, but its own markup,
+     a different font, slightly different spacing and colours, and an extra subtitle (Stitch adds content). -->
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Orders</title>
+<style>
+  body { margin: 0; font-family: Georgia, serif; background: #F5F7FB; color: #111827; font-size: 15px; }
+  .top { display: flex; justify-content: space-between; align-items: center; padding: 14px 28px; background: #FFFFFF; border-bottom: 1px solid #E5E7EB; }
+  .top a { margin-right: 18px; color: #4B5563; text-decoration: none; }
+  .content { padding: 28px; }
+  .content h1 { font-size: 26px; margin: 0 0 6px; }
+  .sub { color: #6B7280; margin: 0 0 12px; }
+  .btn { background: #1D4ED8; color: #fff; border: 0; border-radius: 10px; padding: 11px 18px; font-size: 15px; }
+  .grid { width: 100%; border-collapse: collapse; background: #FFFFFF; margin-top: 4px; }
+  .grid th, .grid td { text-align: left; padding: 11px 14px; border-bottom: 1px solid #E5E7EB; }
+</style></head>
+<body>
+<div class="top" role="banner"><span>Acme</span><div role="navigation" aria-label="Primary"><a href="/">Dashboard</a><a href="/orders/">Orders</a></div></div>
+<div class="content" role="main">
+<h1>Orders</h1>
+<p class="sub">Track and manage customer orders</p>
+<button class="btn">Export CSV</button> <button class="btn">New order</button>
+<table class="grid"><thead><tr><th>Order</th><th>Customer</th><th>Status</th><th>Total</th></tr></thead>
+<tbody>
+<tr><td>#1042</td><td>Maria Lopez</td><td>Paid</td><td>$120.00</td></tr>
+<tr><td>#1041</td><td>Sam Chen</td><td>Pending</td><td>$64.50</td></tr>
+<tr><td>#1040</td><td>Priya Nair</td><td>Shipped</td><td>$310.20</td></tr>
+</tbody></table>
+</div>
+</body></html>

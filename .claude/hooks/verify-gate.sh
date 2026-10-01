@@ -32,6 +32,13 @@
 #                             real debate and linked from docs/DECISIONS.md, or is auto-resolved, withdrawn
 #                             or decided by a person (debate-status.py --check). Security debates count as
 #                             security findings when the gate is forced.
+#   (g)  Stitch baseline     — only when docs/design/stitch.json exists (Stitch is the project's designer):
+#                             every UI route this phase changed (ui_developer / mobile_developer manifest
+#                             screens[].route) has a Stitch screen that is approved or conformant at its
+#                             latest revision, whose stored render (docs/design/stitch/<key>/) still matches
+#                             its sha256; no screen is pending_approval, sync_back_pending or in drift; every
+#                             stitch_deviations[] entry in those manifests was fixed or accepted and synced
+#                             back (stitch-state.py gate; skills/ui/stitch-design.md §6).
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
 #
@@ -519,6 +526,30 @@ else
     NSEC="$(printf '%s\n' "$DEBATE_OUT" | grep -c '^BLOCKING: security debate')"
     SECURITY_FAILS=$((SECURITY_FAILS + NSEC))
     [ "$DEBATE_RC" -ne 2 ] && fail "debate-status.py failed (exit $DEBATE_RC)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5a2. Check (g): Stitch design baseline. When the project designs in Google Stitch (docs/design/stitch.json
+#      exists), the code a phase shipped must have been built against an approved, current Stitch render.
+#      stitch-state.py is the only reader of stitch.json; it validates the file (schema + cross-field rules +
+#      render hashes) and checks this phase's UI manifests against it. A finding, so gate.forced can override it.
+# ---------------------------------------------------------------------------
+echo "── (g) Stitch design baseline ──"
+STITCH_STATE="${HOOK_DIR:-.claude/hooks}/stitch-state.py"
+[ -f "$STITCH_STATE" ] || STITCH_STATE=".claude/hooks/stitch-state.py"
+if [ ! -f "docs/design/stitch.json" ]; then
+  ok "no docs/design/stitch.json — the Stitch design gate does not apply"
+elif [ ! -f "$STITCH_STATE" ] || ! command -v python3 >/dev/null 2>&1; then
+  fail "docs/design/stitch.json exists but stitch-state.py (or python3) is unavailable — can't verify the Stitch baselines (copy it from ~/.claude/hooks/startup/)."
+else
+  STITCH_OUT="$(python3 "$STITCH_STATE" --root "$PWD" gate --phase "$PHASE" 2>&1)"; STITCH_RC=$?
+  printf '%s\n' "$STITCH_OUT" | grep -v '^BLOCKING: ' | sed 's/^/    /'
+  if [ "$STITCH_RC" -eq 0 ]; then
+    ok "every UI route changed in phase $PHASE has a current, approved Stitch baseline"
+  else
+    while IFS= read -r b; do [ -n "$b" ] && fail "stitch: ${b#BLOCKING: }"; done < <(printf '%s\n' "$STITCH_OUT" | grep '^BLOCKING: ')
+    [ "$STITCH_RC" -ne 2 ] && fail "stitch-state.py gate failed (exit $STITCH_RC)"
   fi
 fi
 

@@ -1,0 +1,196 @@
+{
+ "route": "/orders/",
+ "viewport": "desktop",
+ "deviceType": "DESKTOP",
+ "url": "http://127.0.0.1:8765/orders/",
+ "status": 200,
+ "title": "Acme \u2014 Orders",
+ "outline": {
+  "landmarks": [
+   {
+    "role": "banner",
+    "name": "",
+    "box": [
+     0,
+     0,
+     1280,
+     42
+    ]
+   },
+   {
+    "role": "navigation",
+    "name": "Primary",
+    "box": [
+     1109,
+     12,
+     147,
+     17
+    ]
+   },
+   {
+    "role": "main",
+    "name": "",
+    "box": [
+     0,
+     42,
+     1280,
+     280
+    ]
+   }
+  ],
+  "headings": [
+   {
+    "level": 1,
+    "text": "Orders",
+    "box": [
+     24,
+     66,
+     1232,
+     28
+    ]
+   }
+  ],
+  "controls": [
+   {
+    "kind": "link",
+    "name": "Dashboard",
+    "box": [
+     1109,
+     12,
+     70,
+     17
+    ]
+   },
+   {
+    "kind": "link",
+    "name": "Orders",
+    "box": [
+     1196,
+     12,
+     44,
+     17
+    ]
+   },
+   {
+    "kind": "button",
+    "name": "Export CSV",
+    "type": "button",
+    "box": [
+     24,
+     110,
+     105,
+     36
+    ]
+   },
+   {
+    "kind": "button",
+    "name": "New order",
+    "type": "button",
+    "box": [
+     133,
+     110,
+     97,
+     36
+    ]
+   }
+  ],
+  "tables": [
+   {
+    "columns": [
+     "Order",
+     "Customer",
+     "Status",
+     "Total"
+    ],
+    "rows": 3,
+    "box": [
+     24,
+     146,
+     1232,
+     152
+    ]
+   }
+  ],
+  "lists": [],
+  "images": [],
+  "regions": [
+   {
+    "tag": "header",
+    "role": "banner",
+    "box": [
+     0,
+     0,
+     1280,
+     42
+    ]
+   },
+   {
+    "tag": "main",
+    "role": "main",
+    "box": [
+     0,
+     42,
+     1280,
+     280
+    ]
+   },
+   {
+    "tag": "table",
+    "role": null,
+    "box": [
+     24,
+     146,
+     1232,
+     152
+    ]
+   }
+  ]
+ },
+ "text": "Acme\nDashboardOrders\nOrders\nExport CSV New order\nOrder\tCustomer\tStatus\tTotal\n#1042\tMaria Lopez\tPaid\t$120.00\n#1041\tSam Chen\tPending\t$64.50\n#1040\tPriya Nair\tShipped\t$310.20",
+ "tokens": {
+  "color": [
+   {
+    "value": "rgb(15, 23, 42)",
+    "count": 18
+   },
+   {
+    "value": "rgb(71, 85, 105)",
+    "count": 2
+   },
+   {
+    "value": "rgb(255, 255, 255)",
+    "count": 2
+   }
+  ],
+  "background": [
+   {
+    "value": "rgb(255, 255, 255)",
+    "count": 2
+   },
+   {
+    "value": "rgb(37, 99, 235)",
+    "count": 2
+   }
+  ],
+  "fontSize": [
+   {
+    "value": "14px",
+    "count": 21
+   },
+   {
+    "value": "24px",
+    "count": 1
+   }
+  ],
+  "radius": [
+   {
+    "value": "8px",
+    "count": 2
+   }
+  ]
+ },
+ "page": {
+  "width": 1280,
+  "height": 800
+ }
+}
