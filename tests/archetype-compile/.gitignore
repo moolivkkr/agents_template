@@ -1,0 +1,9 @@
+# Build output and dependency caches the compile harnesses create when run in-tree. Never committed.
+node_modules/
+target/
+.venv/
+.cache/
+__pycache__/
+.units/
+test-results/
+playwright-report/
