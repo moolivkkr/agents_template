@@ -156,9 +156,9 @@ public class WorkerService {
     }
 
     private void processJob(String consumerId, Job job) {
-        MDC.put("jobId", job.id());
-        MDC.put("jobType", job.type());
-        MDC.put("tenantId", job.tenantId().toString());
+        MDC.put("job_id", job.id());
+        MDC.put("job_type", job.type());
+        MDC.put("tenant_id", job.tenantId().toString());
         MDC.put("attempt", String.valueOf(job.attempt()));
 
         inFlight.incrementAndGet();
@@ -385,8 +385,8 @@ public class StreamConsumers {
             OrderEvent event = message.getPayload();
             String eventId = message.getHeaders().getId().toString();
 
-            MDC.put("eventId", eventId);
-            MDC.put("tenantId", event.tenantId().toString());
+            MDC.put("event_id", eventId);
+            MDC.put("tenant_id", event.tenantId().toString());
 
             try {
                 log.info("event.received, type=order.created, orderId={}", event.orderId());

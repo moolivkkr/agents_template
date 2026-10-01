@@ -14,6 +14,8 @@ tags:
 
 # Java patterns and conventions for Spring Boot applications.
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16; the Gradle blocks built with Gradle 9.8.0 (`tests/archetype-compile/java/run.sh`). The tenant filter, the repository queries (keyset, `Limit`, projections, specifications) and the Redis cache serializer were also run, on PostgreSQL 16.
+
 ## Project Structure
 ```
 src/main/java/com/company/app/
@@ -107,9 +109,10 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
 // @RestController — HTTP layer
 @RestController
 @RequestMapping("/api/v1/orders")
-@RequiredArgsConstructor
 public class OrderController {
     private final OrderService orderService;
+
+    public OrderController(OrderService orderService) { this.orderService = orderService; }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
@@ -122,26 +125,28 @@ public class OrderController {
 ```
 
 ### Profiles and Configuration
-```java
-// application.yml — base config
+```yaml
+# application.yml — base config
 spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:local}
 
-// application-local.yml — dev overrides
+# application-local.yml — dev overrides
 spring:
   datasource:
     url: jdbc:postgresql://localhost:5432/myapp
   jpa:
     show-sql: true
 
-// application-prod.yml — production
+# application-prod.yml — production
 spring:
   datasource:
     url: ${DATABASE_URL}
   jpa:
     show-sql: false
+```
 
+```java
 // Type-safe config binding
 @ConfigurationProperties(prefix = "app")
 public record AppProperties(
@@ -162,6 +167,13 @@ public record AppProperties(
 @Service
 @Transactional(readOnly = true) // class-level default: read-only
 public class PaymentService {
+    private final PaymentRepository paymentRepo;
+    private final LedgerService ledgerService;
+
+    public PaymentService(PaymentRepository paymentRepo, LedgerService ledgerService) {
+        this.paymentRepo = paymentRepo;
+        this.ledgerService = ledgerService;
+    }
 
     @Transactional // method-level: read-write
     public Payment processPayment(UUID tenantId, PaymentRequest request) {
@@ -172,7 +184,7 @@ public class PaymentService {
         return payment;
     }
 
-    // readOnly = true: Hibernate uses read-only flush mode, DB may use read replica
+    // readOnly = true: Hibernate skips dirty checking and flushing; a routing DataSource can send it to a replica
     public List<Payment> listPayments(UUID tenantId) {
         return paymentRepo.findByTenantId(tenantId);
     }
@@ -194,7 +206,7 @@ public class PaymentService {
 @Table(name = "orders")
 @FilterDef(name = "tenantFilter", parameters = @ParamDef(name = "tenantId", type = UUID.class))
 @Filter(name = "tenantFilter", condition = "tenant_id = :tenantId")
-@Where(clause = "deleted_at IS NULL") // soft delete filter
+@SQLRestriction("deleted_at IS NULL") // soft delete filter (@Where is gone in Hibernate 7)
 public class Order {
     @Id
     private UUID id;
@@ -209,19 +221,34 @@ public class Order {
     private Integer version; // optimistic locking
 }
 
-// Enable filter per request via interceptor
+// Enable the filter INSIDE each transaction. A Hibernate filter belongs to one Session, and with
+// spring.jpa.open-in-view=false (spring-boot.md) the Session a @Transactional method uses only exists once
+// its transaction starts. Enabled earlier (a HandlerInterceptor, a servlet filter), it lands on a Session no
+// repository call uses, and every tenant's rows come back.
 @Component
-public class TenantFilterInterceptor implements HandlerInterceptor {
+public class TenantFilterActivator {
     private final EntityManager entityManager;
 
-    @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        UUID tenantId = TenantContext.getCurrentTenantId();
-        Session session = entityManager.unwrap(Session.class);
-        session.enableFilter("tenantFilter").setParameter("tenantId", tenantId);
-        return true;
+    public TenantFilterActivator(EntityManager entityManager) {
+        this.entityManager = entityManager;
+    }
+
+    /** First call in every @Transactional service method that reads tenant data. */
+    public void enable() {
+        entityManager.unwrap(Session.class)
+            .enableFilter("tenantFilter")
+            .setParameter("tenantId", TenantContext.getCurrentTenantId());
     }
 }
+
+// In the service:
+//   @Transactional(readOnly = true)
+//   public List<Order> listOrders() {
+//       tenantFilter.enable();       // the transaction's Session exists now
+//       return orderRepo.findAll();  // ... WHERE tenant_id = ? AND deleted_at IS NULL
+//   }
+// Filters cover queries, not load-by-id: findById/em.find return another tenant's row unless the
+// @FilterDef sets applyToLoadByKey = true. Keep tenantId in by-id lookups (findByTenantIdAndId...).
 ```
 
 ### ThreadLocal Tenant Context
@@ -327,6 +354,13 @@ public class SecurityConfig {
         converter.setJwtGrantedAuthoritiesConverter(jwt -> extractAuthorities(jwt));
         return converter;
     }
+
+    // The token's "roles" claim → ROLE_* authorities
+    private static Collection<GrantedAuthority> extractAuthorities(Jwt jwt) {
+        return Optional.ofNullable(jwt.getClaimAsStringList("roles")).orElse(List.of()).stream()
+            .map(role -> (GrantedAuthority) new SimpleGrantedAuthority("ROLE_" + role))
+            .toList();
+    }
 }
 ```
 
@@ -379,7 +413,7 @@ public record ErrorResponse(Body error) {
         return new ErrorResponse(new Body(code, message, details, RequestId.current(), retryable));
     }
 
-    private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final JsonMapper MAPPER = JsonMapper.shared(); // Jackson 3 (tools.jackson), as Spring Boot 4
 
     // For servlet filters and Spring Security handlers, which run outside @RestControllerAdvice
     public void writeTo(HttpServletResponse response, int status) throws IOException {
@@ -393,15 +427,19 @@ public record ErrorResponse(Body error) {
 // RequestId.current(): the id a first-in-chain filter took from X-Request-Id (or generated), put in MDC
 // as "request_id" and echoed on the response header, so the body and the header always match.
 
-// List endpoint: ?cursor=<opaque>&limit=<n>
+// List endpoint: ?cursor=<opaque>&limit=<n>. A limit outside 1..100 is a 400 with details[], never clamped:
+// a client asking for 500 must learn it gets at most 100.
 @GetMapping
 public ApiResponse<List<OrderResponse>> listOrders(
     @RequestParam(required = false) String cursor,
     @RequestParam(defaultValue = "20") int limit
 ) {
-    int size = Math.clamp(limit, 1, 100);
-    var page = orderService.listOrders(TenantContext.getCurrentTenantId(), cursor, size); // from the verified JWT
-    return ApiResponse.page(page.items().stream().map(OrderMapper::toResponse).toList(), page.nextCursor(), size);
+    if (limit < 1 || limit > 100) {
+        throw new ValidationException(List.of(new ErrorResponse.FieldError(
+            "limit", "out_of_range", "Limit must be a whole number from 1 to 100.")));
+    }
+    var page = orderService.listOrders(TenantContext.getCurrentTenantId(), cursor, limit); // from the verified JWT
+    return ApiResponse.page(page.items().stream().map(OrderMapper::toResponse).toList(), page.nextCursor(), limit);
 }
 ```
 
@@ -604,13 +642,14 @@ return it from API handlers: `handleExceptionInternal` above replaces it for Spr
 
 ### Spring Data JPA Repositories
 ```java
-public interface OrderRepository extends JpaRepository<Order, UUID> {
+public interface OrderRepository extends JpaRepository<Order, UUID>, JpaSpecificationExecutor<Order> {
 
     // Derived query methods — Spring generates SQL from method name
     Optional<Order> findByTenantIdAndIdAndDeletedAtIsNull(UUID tenantId, UUID id);
 
+    // Limit, not Pageable: lists are cursor-paginated, never by offset (api/response-envelope.md)
     List<Order> findByTenantIdAndStatusAndDeletedAtIsNull(
-        UUID tenantId, OrderStatus status, Pageable pageable
+        UUID tenantId, OrderStatus status, Limit limit
     );
 
     // JPQL for complex queries
@@ -619,26 +658,28 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
         WHERE o.tenantId = :tenantId
           AND o.status IN :statuses
           AND o.deletedAt IS NULL
-        ORDER BY o.createdAt DESC
+        ORDER BY o.createdAt DESC, o.id DESC
         """)
     List<Order> findByStatuses(
         @Param("tenantId") UUID tenantId,
         @Param("statuses") Set<OrderStatus> statuses,
-        Pageable pageable
+        Limit limit
     );
 
-    // Native query for performance-critical operations
+    // Native keyset query. The cursor is (created_at, id), which is unique: on created_at alone, rows that
+    // share a timestamp across a page boundary are skipped.
     @Query(value = """
         SELECT o.* FROM orders o
         WHERE o.tenant_id = :tenantId
-          AND o.created_at < :cursor
+          AND (o.created_at, o.id) < (:cursorCreatedAt, :cursorId)
           AND o.deleted_at IS NULL
-        ORDER BY o.created_at DESC
+        ORDER BY o.created_at DESC, o.id DESC
         LIMIT :limit
         """, nativeQuery = true)
     List<Order> findWithCursor(
         @Param("tenantId") UUID tenantId,
-        @Param("cursor") Instant cursor,
+        @Param("cursorCreatedAt") Instant cursorCreatedAt,
+        @Param("cursorId") UUID cursorId,
         @Param("limit") int limit
     );
 
@@ -670,14 +711,17 @@ public class OrderSpecifications {
     }
 }
 
-// Usage — compose specifications dynamically
+// Usage — compose specifications dynamically, then scroll by keyset (no offset pages)
 Specification<Order> spec = Specification
     .where(belongsToTenant(tenantId))
     .and(isNotDeleted())
     .and(hasStatus(PENDING))
     .and(createdBetween(startDate, endDate));
 
-List<Order> orders = orderRepo.findAll(spec, PageRequest.of(0, 20));
+Window<Order> orders = orderRepo.findBy(spec, q -> q
+    .sortBy(Sort.by(Sort.Direction.DESC, "createdAt", "id")) // a unique sort key
+    .limit(20)
+    .scroll(position)); // ScrollPosition.keyset() first; then orders.positionAt(orders.size() - 1)
 ```
 
 ### Projections
@@ -690,8 +734,9 @@ public interface OrderSummary {
     Instant getCreatedAt();
 }
 
-// Repository returns projection
-List<OrderSummary> findByTenantIdAndDeletedAtIsNull(UUID tenantId, Pageable pageable);
+// Repository returns projection — keyset-scrolled, so it exposes the sort keys (createdAt, id)
+Window<OrderSummary> findFirst20ByTenantIdAndDeletedAtIsNullOrderByCreatedAtDescIdDesc(
+    UUID tenantId, ScrollPosition position);
 
 // Record-based projection (JPA)
 public record OrderStats(OrderStatus status, long count, BigDecimal totalAmount) {}
@@ -739,9 +784,7 @@ class OrderServiceTest {
 
         assertThatThrownBy(() -> orderService.createOrder(TENANT_ID, request))
             .isInstanceOf(ValidationException.class)
-            .extracting(e -> ((ValidationException) e).getDetails())
-            .asList()
-            .hasSize(1);
+            .satisfies(e -> assertThat(((ValidationException) e).getDetails()).hasSize(1));
     }
 }
 ```
@@ -777,7 +820,7 @@ static Stream<Arguments> orderStatusTransitions() {
 
 ### @SpringBootTest & @DataJpaTest
 ```java
-// Slim test — only loads JPA layer
+// Slim test — only loads JPA layer (Spring Boot 4: org.springframework.boot.data.jpa.test.autoconfigure)
 @DataJpaTest
 @AutoConfigureTestDatabase(replace = Replace.NONE) // use testcontainers
 class OrderRepositoryTest {
@@ -791,16 +834,27 @@ class OrderRepositoryTest {
         var active = createOrder(tenantId, null);
         var deleted = createOrder(tenantId, Instant.now());
 
-        var results = orderRepo.findByTenantIdAndDeletedAtIsNull(tenantId);
+        var results = orderRepo.findByTenantIdAndStatusAndDeletedAtIsNull(tenantId, OrderStatus.PENDING);
 
         assertThat(results).containsExactly(active);
         assertThat(results).doesNotContain(deleted);
     }
+
+    private Order createOrder(UUID tenantId, Instant deletedAt) {
+        var order = Order.create(tenantId, new CreateOrderRequest(List.of(new LineItem("SKU-001", 1, BigDecimal.TEN))));
+        order.setDeletedAt(deletedAt);
+        return em.persistFlushFind(order);
+    }
 }
 
-// Full integration test — loads entire context
+// Full integration test — loads entire context. Spring Boot 4: TestRestTemplate is in spring-boot-resttestclient
+// (org.springframework.boot.resttestclient) and needs @AutoConfigureTestRestTemplate.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureTestRestTemplate
 class OrderApiIntegrationTest {
+
+    private static final UUID TENANT_ID = UUID.fromString("00000000-0000-0000-0000-000000000001");
+    private static final UUID OTHER_TENANT_ID = UUID.fromString("00000000-0000-0000-0000-000000000002");
 
     @Autowired private TestRestTemplate restTemplate;
 
@@ -841,18 +895,10 @@ class OrderApiIntegrationTest {
 @SpringBootTest
 class IntegrationTestBase {
 
+    // Testcontainers 2: org.testcontainers.postgresql.PostgreSQLContainer (no type parameter)
     @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
-        .withDatabaseName("testdb")
-        .withUsername("test")
-        .withPassword("test");
-
-    @DynamicPropertySource
-    static void configureProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-        registry.add("spring.datasource.username", postgres::getUsername);
-        registry.add("spring.datasource.password", postgres::getPassword);
-    }
+    @ServiceConnection // Spring Boot points spring.datasource.* at the container
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
 }
 
 // Extend for all integration tests
@@ -914,6 +960,9 @@ spring:
 ```java
 @Service
 public class UserService {
+    private final UserRepository userRepo;
+
+    public UserService(UserRepository userRepo) { this.userRepo = userRepo; }
 
     @Cacheable(value = "users", key = "#tenantId + ':' + #userId")
     public UserResponse getUser(UUID tenantId, UUID userId) {
@@ -938,30 +987,41 @@ public class UserService {
     }
 }
 
-// Cache config with Redis
+// Cache config with Redis. Jackson 3 serializer: Spring Data Redis 4 deprecated the Jackson 2 one for removal.
+// The type id brings a cached UserResponse back as one; the validator accepts your packages and the mutable
+// JDK collections a cached method returns — named, never all of "java.util." (gadget classes live there).
+// List.of(..) / Stream.toList() are final JDK types written without a type id: cache new ArrayList<>(list).
 @Configuration
 @EnableCaching
 public class CacheConfig {
     @Bean
     public RedisCacheConfiguration cacheConfiguration() {
+        var serializer = GenericJacksonJsonRedisSerializer.builder()
+            .enableDefaultTyping(BasicPolymorphicTypeValidator.builder()
+                .allowIfSubType("com.company.app.")
+                .allowIfSubType(ArrayList.class)
+                .allowIfSubType(HashSet.class)
+                .allowIfSubType(HashMap.class)
+                .build())
+            .build();
         return RedisCacheConfiguration.defaultCacheConfig()
             .entryTtl(Duration.ofMinutes(10))
-            .serializeValuesWith(
-                SerializationPair.fromSerializer(new GenericJackson2JsonRedisSerializer())
-            );
+            .serializeValuesWith(SerializationPair.fromSerializer(serializer));
     }
 }
 ```
 
 ### Virtual Threads (Java 21+)
-```java
-// Enable virtual threads in Spring Boot 3.2+
+```yaml
+# Enable virtual threads (Spring Boot 3.2+): Tomcat, @Async and scheduling all use them
 spring:
   threads:
     virtual:
       enabled: true
+```
 
-// Or configure manually
+```java
+// Or configure Tomcat manually
 @Bean
 public TomcatProtocolHandlerCustomizer<?> protocolHandlerVirtualThreadExecutorCustomizer() {
     return handler -> handler.setExecutor(Executors.newVirtualThreadPerTaskExecutor());
@@ -969,8 +1029,10 @@ public TomcatProtocolHandlerCustomizer<?> protocolHandlerVirtualThreadExecutorCu
 
 // Virtual threads are ideal for I/O-bound workloads (HTTP calls, DB queries)
 // No need for reactive (WebFlux) for most services — virtual threads handle blocking I/O efficiently
-// CAUTION: avoid synchronized blocks with virtual threads — use ReentrantLock instead
-// CAUTION: ThreadLocal may pin virtual threads — use ScopedValues (Java 21 preview) where possible
+// JDK 21-23: a blocking call inside synchronized pins the carrier thread — use ReentrantLock there.
+//   JDK 24+ (JEP 491) no longer pins on synchronized; native code and class initialisation still do.
+// ThreadLocal does not pin, but each of millions of virtual threads gets its own copy: prefer ScopedValue
+//   (final in JDK 25, JEP 506) for request-scoped context.
 ```
 
 ### Reactive (WebFlux) — When to Use
@@ -983,6 +1045,10 @@ public TomcatProtocolHandlerCustomizer<?> protocolHandlerVirtualThreadExecutorCu
 
 @RestController
 public class StreamController {
+    private final OrderEventService orderEventService;
+
+    public StreamController(OrderEventService orderEventService) { this.orderEventService = orderEventService; }
+
     @GetMapping(value = "/stream/orders", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public Flux<OrderEvent> streamOrders(@AuthenticationPrincipal Jwt jwt) {
         // tenant from the verified token — a tenantId query param would let anyone subscribe to any tenant
@@ -1021,53 +1087,59 @@ Recommendation: Gradle for new projects, Maven is fine for existing ones
 // build.gradle.kts
 plugins {
     java
-    id("org.springframework.boot") version "3.3.0"
-    id("io.spring.dependency-management") version "1.1.5"
+    id("org.springframework.boot") version "4.1.1"
+    id("io.spring.dependency-management") version "1.1.7"
 }
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(21)
+        languageVersion = JavaLanguageVersion.of(25)
     }
 }
 
 dependencies {
-    implementation("org.springframework.boot:spring-boot-starter-web")
+    implementation("org.springframework.boot:spring-boot-starter-webmvc")
     implementation("org.springframework.boot:spring-boot-starter-data-jpa")
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+    // Spring Boot 4 moved Flyway's auto-configuration into its own module: with flyway-core alone,
+    // no migration runs at startup
+    implementation("org.springframework.boot:spring-boot-starter-flyway")
 
     runtimeOnly("org.postgresql:postgresql")
-    runtimeOnly("org.flywaydb:flyway-core")
+    runtimeOnly("org.flywaydb:flyway-database-postgresql")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
-    testImplementation("org.testcontainers:postgresql")
-    testImplementation("org.testcontainers:junit-jupiter")
+    testImplementation("org.springframework.boot:spring-boot-testcontainers")
+    testImplementation("org.testcontainers:testcontainers-postgresql") // Testcontainers 2 artifact names
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter")
 }
 
 tasks.withType<Test> {
-    useJUnitPlatform()
-    jvmArgs("--enable-preview") // for virtual threads if needed
+    useJUnitPlatform() // virtual threads are final since JDK 21: no --enable-preview
 }
 ```
 
 ### Dependency Management
-```kotlin
-// Version catalogs (Gradle 7.4+) — single source of truth for versions
-// gradle/libs.versions.toml
+Version catalogs (Gradle 7.4+) — single source of truth for versions:
+
+```toml
+# gradle/libs.versions.toml
 [versions]
-spring-boot = "3.3.0"
-testcontainers = "1.19.8"
+spring-boot = "4.1.1"
+testcontainers = "2.0.5"
 
 [libraries]
-spring-boot-web = { module = "org.springframework.boot:spring-boot-starter-web", version.ref = "spring-boot" }
-testcontainers-postgres = { module = "org.testcontainers:postgresql", version.ref = "testcontainers" }
+spring-boot-webmvc = { module = "org.springframework.boot:spring-boot-starter-webmvc", version.ref = "spring-boot" }
+testcontainers-postgresql = { module = "org.testcontainers:testcontainers-postgresql", version.ref = "testcontainers" }
+```
 
+```kotlin
 // Usage in build.gradle.kts
 dependencies {
-    implementation(libs.spring.boot.web)
-    testImplementation(libs.testcontainers.postgres)
+    implementation(libs.spring.boot.webmvc)
+    testImplementation(libs.testcontainers.postgresql)
 }
 ```
 

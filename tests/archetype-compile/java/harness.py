@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Archetype Java compile harness — extraction, layout and reporting.
+"""Java compile harness for the skill packs (the backend archetypes and every other ```java block under
+.claude/skills) — extraction, layout and reporting.
 
   harness.py inventory                  check units.py covers every ```java block (no JDK needed)
   harness.py layout <dir>               write the Maven reactor (+ Gradle snippet projects) into <dir>
@@ -20,13 +21,14 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-ARCH = ROOT / ".claude" / "skills" / "backend" / "archetypes"
+SKILLS = ROOT / ".claude" / "skills"
+ARCH = SKILLS / "backend" / "archetypes"
 sys.path.insert(0, str(HERE))
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import units as U  # noqa: E402
 
 FENCE = re.compile(r"^```([A-Za-z0-9_+-]*)\s*$")
-JVM_LANGS = {"java", "kotlin", "groovy", "xml", "scala"}   # non-Java ones: BUILD_SNIPPETS or SKIP
+JVM_LANGS = {"java", "kotlin", "groovy", "xml", "scala", "hocon"}   # non-Java ones: BUILD_SNIPPETS or SKIP
 
 
 # ─────────────────────────────── markdown extraction ───────────────────────────────
@@ -45,9 +47,24 @@ class Block:
         return self.first_line + i
 
 
+def md_path(md_name):
+    """An archetype is named by its file name ("crud-handler-java.md"); any other skill pack by its path under
+    .claude/skills ("languages/java.md"; a file directly under .claude/skills has no directory part)."""
+    if "/" not in md_name and (ARCH / md_name).exists():
+        return ARCH / md_name
+    return SKILLS / md_name
+
+
+def skill_markdown():
+    """Every markdown file whose ```java blocks are inventoried: the archetypes, then every other skill pack."""
+    names = sorted(p.name for p in ARCH.glob("*.md"))
+    names += sorted(str(p.relative_to(SKILLS)) for p in SKILLS.rglob("*.md") if ARCH not in p.parents)
+    return names
+
+
 def read_blocks(md_name):
     """All fenced blocks of a markdown file, by language, in order."""
-    text = (ARCH / md_name).read_text(encoding="utf-8").split("\n")
+    text = md_path(md_name).read_text(encoding="utf-8").split("\n")
     out, counters, i = [], {}, 0
     while i < len(text):
         m = FENCE.match(text[i])
@@ -81,13 +98,15 @@ def block(block_id):
 # ─────────────────────────────── inventory ───────────────────────────────
 
 def inventory():
-    """Every ```java block in every archetype is compiled by exactly one unit or skipped with a reason."""
+    """Every ```java block in every skill pack is compiled by exactly one unit or skipped with a reason; so is
+    every Kotlin/Groovy/XML/Scala/HOCON block of the Java archetypes and of the Java packs (U.JVM_PACKS)."""
     errors = []
     found = {}
-    for md in sorted(p.name for p in ARCH.glob("*.md")):
+    for md in skill_markdown():
         blocks = read_blocks(md)
         n = sum(1 for b in blocks if b.lang == "java")
-        jvm = [b for b in blocks if b.lang in JVM_LANGS - {"java"}] if md.endswith("-java.md") else []
+        jvm_file = md.endswith("-java.md") or md in U.JVM_PACKS
+        jvm = [b for b in blocks if b.lang in JVM_LANGS - {"java"}] if jvm_file else []
         if n or md in U.JAVA_BLOCKS:
             found[md] = n
             want = U.JAVA_BLOCKS.get(md)
@@ -120,7 +139,7 @@ def inventory():
                 errors.append(f"{bid}: owned by several units {own} — own it once, list it as a dep elsewhere")
     for bid in list(owners) + list(U.SKIP) + [dep_id(d) for u in U.UNITS for d in u.deps]:
         md = bid.partition("#")[0]
-        if not (ARCH / md).exists():
+        if not md_path(md).exists():
             errors.append(f"{bid}: {md} does not exist")
         else:
             block(bid)  # raises if the index is gone
@@ -301,7 +320,8 @@ def transformed(blk, spec):
         if t == "elide":          # `{ ... }` placeholder bodies → empty bodies
             text = re.sub(r"\{\s*\.\.\.\s*\}", "{ }", text)
         elif t == "stub_bodies":  # method bodies holding only comments → throw (keeps annotations/signatures checked)
-            text = re.sub(r"(\)\s*(?:throws\s+[\w.,\s]+)?\{)((?:\s*//[^\n]*)*\s*)(\})",
+            # `{ }` or a comment-only body; never `{}`, which is a record's (or an empty void method's) real body
+            text = re.sub(r"(\)\s*(?:throws\s+[\w.,\s]+)?\{)((?:\s*//[^\n]*)*\s+)(\})",
                           r"\1\2throw new UnsupportedOperationException(); \3", text)
         else:
             raise SystemExit(f"unknown transform {t}")
@@ -332,40 +352,9 @@ def dep_id(d):
 
 
 def proto_texts(protos):
-    """The .proto blocks as files. Imports/options the protos are missing are added — idempotently, and
-    announced as NOTE lines, because those blocks belong to the language-neutral grpc-pattern.md."""
-    texts = {path: "\n".join(block(bid).lines) for bid, path in protos}
-    notes = []
-    defined = {}
-    for path, text in texts.items():
-        for m in re.finditer(r"^(?:message|enum)\s+(\w+)", text, re.M):
-            defined[m.group(1)] = path
-    java_pkg = next((m.group(1) for t in texts.values()
-                     for m in [re.search(r'option java_package = "([\w.]+)"', t)] if m), None)
-    out = {}
-    for bid, path in protos:
-        lines = texts[path].split("\n")
-        code = "\n".join(re.sub(r"//.*", "", l) for l in lines)
-        pkg_i = next(i for i, l in enumerate(lines) if l.startswith("package "))
-        add = []
-        if java_pkg and "java_package" not in code:
-            add.append(f'option java_package = "{java_pkg}";')
-        if java_pkg and "java_multiple_files" not in code:
-            add.append("option java_multiple_files = true;")
-        wanted = set()
-        if "google.protobuf.Timestamp" in code:
-            wanted.add("google/protobuf/timestamp.proto")
-        for name, where_ in defined.items():
-            if where_ != path and re.search(rf"(?<![\w.]){name}\b", code):
-                wanted.add(where_)
-        for imp in sorted(wanted):
-            if f'import "{imp}";' not in code:
-                add.append(f'import "{imp}";')
-        if add:
-            notes.append(f"NOTE {bid} ({path}): added {' '.join(add)} — missing in grpc-pattern.md, "
-                         f"which this Java harness does not edit")
-        out[path] = "\n".join(lines[:pkg_i + 1] + add + lines[pkg_i + 1:]) + "\n"
-    return out, notes
+    """The .proto blocks of the language-neutral grpc-pattern.md, written exactly as the doc has them (a missing
+    option or import fails protoc or javac — loudly)."""
+    return {path: "\n".join(block(bid).lines) + "\n" for bid, path in protos}
 
 
 def layout_unit(unit, dest):
@@ -419,20 +408,18 @@ def layout_unit(unit, dest):
             o.stub = str(f.relative_to(HERE))
             files[key] = o
     if unit.protos:
-        texts, notes = proto_texts(unit.protos)
-        for path, text in texts.items():
+        for path, text in proto_texts(unit.protos).items():
             p = mod / "src/main/protobuf" / path
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(text)
-        for n in notes:
-            print(n)
     maps = {}
     for key, o in files.items():
         p = mod / key
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("\n".join(o.lines) + "\n", encoding="utf-8")
         maps[str(p)] = {"map": o.map, "stub": getattr(o, "stub", None)}
-    (mod / "pom.xml").write_text(module_pom(unit), encoding="utf-8")
+    pom = unit.pom.replace("@NAME@", unit.name) if unit.pom else module_pom(unit)
+    (mod / "pom.xml").write_text(pom, encoding="utf-8")
     return maps
 
 
@@ -550,6 +537,9 @@ def snippet_modules(dest):
         mod = dest / chk.name
         (mod / "src/main/java/snippet").mkdir(parents=True, exist_ok=True)
         (mod / "src/main/java/snippet" / "Probe.java").write_text(chk.probe_java or "package snippet;\nclass Probe {}\n")
+        if chk.probe_test:
+            (mod / "src/test/java/snippet").mkdir(parents=True, exist_ok=True)
+            (mod / "src/test/java/snippet" / "ProbeTest.java").write_text(chk.probe_test)
         (mod / "pom.xml").write_text(chk.pom.replace("@SNIPPET@", "\n".join(b.lines)))
         out.append({"name": chk.name, "block": bid, "dir": str(mod), "goal": chk.goal, "verify": chk.verify})
     return out
@@ -586,13 +576,14 @@ def gradle_projects(dest):
         text = build.read_text().replace("@PLUGINS@", "\n".join(plugins)).replace("@SNIPPET@", "\n".join(rest))
         build.write_text(text)
         if chk.protos:
-            texts, notes = proto_texts(chk.protos)
-            for path, t in texts.items():
+            for path, t in proto_texts(chk.protos).items():
                 p = proj / "src/main/proto" / path
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(t)
-            for n in notes:
-                print(n.replace("NOTE", f"NOTE [{chk.name}]"))
+        for fid, path in chk.files:      # other doc blocks the build reads (a version catalog, ...)
+            p = proj / path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("\n".join(block(fid).lines) + "\n")
         out.append({"name": chk.name, "block": bid, "dir": str(proj), "tasks": list(chk.tasks),
                     "verify": chk.verify})
     return out

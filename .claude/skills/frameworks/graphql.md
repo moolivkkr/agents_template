@@ -415,10 +415,18 @@ export const widgetResolvers = {
 ### Java (graphql-java with Spring)
 
 ```java
+// Compile-checked 2026-09-30 with DGS 12.1.0 + Spring Boot 4.1.1 on JDK 25 (tests/archetype-compile/java/run.sh),
+// and run once through DgsQueryExecutor: first outside 1..100 comes back as the VALIDATION_FAILED error below
+// DGS 12 on Spring Boot 4: set the json-path.version property to 3.0.0 — Boot 4.1 manages 2.10.0, and DGS's query
+// executor then fails at startup (NoClassDefFoundError: com/jayway/jsonpath/spi/json/Jackson3JsonProvider).
 @DgsComponent
 public class WidgetDataFetcher {
 
     private final WidgetService widgetService;
+
+    public WidgetDataFetcher(WidgetService widgetService) {
+        this.widgetService = widgetService;
+    }
 
     @DgsQuery
     public Widget widget(@InputArgument String id, DgsDataFetchingEnvironment dfe) {
@@ -427,14 +435,26 @@ public class WidgetDataFetcher {
     }
 
     @DgsQuery
-    public WidgetConnection widgets(
+    public DataFetcherResult<WidgetConnection> widgets(
             @InputArgument Integer first,
             @InputArgument String after,
             @InputArgument WidgetFilter filter,
             DgsDataFetchingEnvironment dfe) {
-        UUID tenantId = AuthContext.getTenantId(dfe);
-        int pageSize = Math.min(first != null ? first : 20, 100);
-        return widgetService.list(tenantId, pageSize, after, filter);
+        int pageSize = first != null ? first : 20;
+        // outside 1..100 is an error, never clamped: a client asking for 500 and getting 100 can't tell
+        if (pageSize < 1 || pageSize > 100) {
+            return DataFetcherResult.<WidgetConnection>newResult()
+                .error(GraphqlErrorBuilder.newError(dfe)
+                    .errorType(ErrorType.BAD_REQUEST) // com.netflix.graphql.types.errors; the default reads as UNAVAILABLE
+                    .message("first must be between 1 and 100.")
+                    .extensions(Map.of("code", "VALIDATION_FAILED", "field", "first"))
+                    .build())
+                .build();
+        }
+        UUID tenantId = AuthContext.getTenantId(dfe); // from the verified token, per request
+        return DataFetcherResult.<WidgetConnection>newResult()
+            .data(widgetService.list(tenantId, pageSize, after, filter))
+            .build();
     }
 
     @DgsData(parentType = "Widget", field = "createdBy")

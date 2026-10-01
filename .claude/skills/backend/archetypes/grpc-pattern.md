@@ -78,6 +78,8 @@ syntax = "proto3";
 package yourapp.v1;
 
 option go_package = "yourapp/gen/proto/yourapp/v1;widgetv1";
+option java_package = "com.example.yourapp.v1";
+option java_multiple_files = true;
 
 import "google/protobuf/timestamp.proto";
 
@@ -160,6 +162,8 @@ syntax = "proto3";
 package yourapp.v1;
 
 option go_package = "yourapp/gen/proto/yourapp/v1;widgetv1";
+option java_package = "com.example.yourapp.v1";
+option java_multiple_files = true;
 
 import "google/protobuf/timestamp.proto";
 import "yourapp/v1/widget.proto";

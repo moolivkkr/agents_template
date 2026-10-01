@@ -12,6 +12,8 @@ tags:
 
 # JUnit 5 + Mockito Testing Patterns
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`). The unit, validation, controller and repository tests were also run against the Widget archetypes they test (the repository test on PostgreSQL 16), and the JaCoCo block with `mvn verify`.
+
 ## Unit Tests (No Spring Context)
 
 ```java
@@ -77,7 +79,8 @@ class WidgetServiceTest {
 
         assertThatThrownBy(() -> service.findById(id, tenantId))
             .isInstanceOf(ResourceNotFoundException.class)
-            .hasMessageContaining(id.toString());
+            .hasFieldOrPropertyWithValue("userMessage", "Widget not found.") // what the client sees: no id
+            .hasFieldOrPropertyWithValue("identifier", id.toString());      // the id is log context only
     }
 
     @Nested
@@ -110,6 +113,8 @@ import org.junit.jupiter.params.provider.*;
 
 class WidgetValidationTest {
 
+    private final Validator validator = Validation.buildDefaultValidatorFactory().getValidator();
+
     @ParameterizedTest
     @NullAndEmptySource
     @ValueSource(strings = {"   ", "\t"})
@@ -122,14 +127,12 @@ class WidgetValidationTest {
 
     @ParameterizedTest
     @CsvSource({
-        "ACTIVE, true",
-        "INACTIVE, true",
-        "ARCHIVED, false"
+        "2000, true",
+        "2001, false"
     })
-    void isEditable_dependsOnStatus(WidgetStatus status, boolean expected) {
-        var widget = new Widget();
-        widget.setStatus(status);
-        assertThat(widget.isEditable()).isEqualTo(expected);
+    void description_atMost2000Characters(int length, boolean valid) {
+        var request = new CreateWidgetRequest("name", "x".repeat(length));
+        assertThat(validator.validate(request).isEmpty()).isEqualTo(valid);
     }
 
     @ParameterizedTest
@@ -152,46 +155,75 @@ class WidgetValidationTest {
 ## Controller Tests with MockMvc
 
 ```java
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.mock.mockito.MockBean;
+import com.example.app.config.SecurityConfig;
+import com.example.app.security.SecurityErrorDelegate;
+import com.example.app.security.UserPrincipal;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;       // Spring Boot 4 package
+import org.springframework.context.annotation.Import;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;  // @MockBean was removed in Spring Boot 4
 import org.springframework.test.web.servlet.MockMvc;
 
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @WebMvcTest(WidgetController.class)
+@Import({SecurityConfig.class, SecurityErrorDelegate.class}) // the app's filter chain (auth-middleware-java.md)
+@TestPropertySource(properties = {                            // JwtAuthenticationFilter is a Filter bean: test key
+    "app.jwt.secret=test-only-hmac-key-of-at-least-32-bytes", "app.jwt.issuer=test", "app.jwt.audience=test"})
 class WidgetControllerTest {
 
+    private static final UUID TENANT_ID = UUID.fromString("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    private static final UUID USER_ID = UUID.fromString("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+
     @Autowired MockMvc mockMvc;
-    @MockBean WidgetService widgetService;
+    @MockitoBean WidgetService widgetService;
+
+    // The tenant comes from the authenticated principal, never from a header or the body
+    private static UserPrincipal principal() {
+        return new UserPrincipal(USER_ID, TENANT_ID, "test@example.com",
+            List.of(new SimpleGrantedAuthority("ROLE_USER")));
+    }
+
+    private static Widget buildWidget(String name) {
+        var widget = new Widget();
+        widget.setId(UUID.randomUUID());
+        widget.setTenantId(TENANT_ID);
+        widget.setName(name);
+        widget.setStatus(WidgetStatus.ACTIVE);
+        widget.setCreatedAt(Instant.now());
+        widget.setUpdatedAt(Instant.now());
+        widget.setCreatedBy(USER_ID);
+        widget.setVersion(1);
+        return widget;
+    }
 
     @Test
     void create_validRequest_returns201() throws Exception {
-        var widget = buildWidget("Test Widget");
-        given(widgetService.create(any(), any(), any())).willReturn(widget);
+        given(widgetService.create(any(), eq(TENANT_ID), eq(USER_ID))).willReturn(buildWidget("Test Widget"));
 
         mockMvc.perform(post("/api/v1/widgets")
                 .contentType(MediaType.APPLICATION_JSON)
                 .content("""
                     {"name": "Test Widget", "description": "A test widget"}
                     """)
-                .with(jwt().jwt(builder -> builder
-                    .claim("tenant_id", TENANT_ID.toString())
-                    .claim("sub", USER_ID.toString()))))
+                .with(user(principal())))
             .andExpect(status().isCreated())
             .andExpect(jsonPath("$.data.name").value("Test Widget"))
-            .andExpect(jsonPath("$.meta.requestId").exists());
+            .andExpect(jsonPath("$.meta.request_id").exists()); // the envelope's key (api/response-envelope.md)
     }
 
     @Test
-    void list_pagination_enforcesMaxPageSize() throws Exception {
-        given(widgetService.findAll(any(), isNull(), any())).willReturn(Page.empty());
-
+    void list_limitOver100_returns400() throws Exception {
         mockMvc.perform(get("/api/v1/widgets")
-                .param("size", "500") // exceeds max
-                .with(jwt()))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.meta.size").value(100)); // capped at max
+                .param("limit", "500") // over the max: rejected, never silently clamped
+                .with(user(principal())))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+            .andExpect(jsonPath("$.error.details[0].field").value("limit"));
+
+        then(widgetService).shouldHaveNoInteractions();
     }
 
     @Test
@@ -199,9 +231,11 @@ class WidgetControllerTest {
         var id = UUID.randomUUID();
 
         mockMvc.perform(delete("/api/v1/widgets/{id}", id)
-                .with(jwt()))
+                .with(user(principal())))
             .andExpect(status().isNoContent())
             .andExpect(content().string(""));
+
+        then(widgetService).should().delete(id, TENANT_ID, USER_ID);
     }
 }
 ```
@@ -209,11 +243,22 @@ class WidgetControllerTest {
 ## Repository Tests with @DataJpaTest
 
 ```java
-import org.springframework.boot.test.autoconfigure.orm.jpa.DataJpaTest;
-import org.springframework.boot.test.autoconfigure.orm.jpa.TestEntityManager;
+import org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest;             // Spring Boot 4 packages
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.boot.jpa.test.autoconfigure.TestEntityManager;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import org.testcontainers.postgresql.PostgreSQLContainer;                             // Testcontainers 2
 
 @DataJpaTest
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE) // real Postgres, not H2
+@Testcontainers
 class WidgetRepositoryTest {
+
+    @Container
+    @ServiceConnection
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
 
     @Autowired TestEntityManager entityManager;
     @Autowired WidgetRepository repository;
@@ -249,17 +294,20 @@ class WidgetRepositoryTest {
     }
 
     @Test
-    void findByTenantId_paginatesCorrectly() {
+    void findFirst20_scrollsByKeyset() { // cursor pagination: no offset, no COUNT
         for (int i = 0; i < 25; i++) {
             createAndPersistWidget("Widget " + i, tenantId);
         }
         entityManager.flush();
 
-        var page = repository.findByTenantId(tenantId, PageRequest.of(0, 10, Sort.by("name")));
+        var first = repository.findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(tenantId, ScrollPosition.keyset());
+        var second = repository.findFirst20ByTenantIdOrderByCreatedAtDescIdDesc(
+            tenantId, first.positionAt(first.size() - 1));
 
-        assertThat(page.getContent()).hasSize(10);
-        assertThat(page.getTotalElements()).isEqualTo(25);
-        assertThat(page.getTotalPages()).isEqualTo(3);
+        assertThat(first.getContent()).hasSize(20);
+        assertThat(first.hasNext()).isTrue();
+        assertThat(second.getContent()).hasSize(5).doesNotContainAnyElementsOf(first.getContent());
+        assertThat(second.hasNext()).isFalse();
     }
 
     private Widget createAndPersistWidget(String name, UUID tenant) {
@@ -279,49 +327,65 @@ class WidgetRepositoryTest {
 ## Integration Tests with Testcontainers
 
 ```java
-import org.testcontainers.containers.PostgreSQLContainer;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.security.Keys;
+import org.springframework.boot.resttestclient.TestRestTemplate;                      // spring-boot-resttestclient
+import org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.core.ParameterizedTypeReference;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.postgresql.PostgreSQLContainer;                             // Testcontainers 2
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
+    "app.jwt.secret=" + WidgetIntegrationTest.SECRET, "app.jwt.issuer=test", "app.jwt.audience=test"})
+@AutoConfigureTestRestTemplate
 @Testcontainers
 class WidgetIntegrationTest {
 
-    @Container
-    static PostgreSQLContainer<?> postgres = new PostgreSQLContainer<>("postgres:16-alpine")
-        .withDatabaseName("testdb")
-        .withUsername("test")
-        .withPassword("test");
+    static final String SECRET = "test-only-hmac-key-of-at-least-32-bytes";
+    static final UUID TENANT_ID = UUID.randomUUID();
 
-    @DynamicPropertySource
-    static void configureProperties(DynamicPropertyRegistry registry) {
-        registry.add("spring.datasource.url", postgres::getJdbcUrl);
-        registry.add("spring.datasource.username", postgres::getUsername);
-        registry.add("spring.datasource.password", postgres::getPassword);
-    }
+    @Container
+    @ServiceConnection // spring.datasource.* point at the container
+    static PostgreSQLContainer postgres = new PostgreSQLContainer("postgres:16-alpine");
 
     @Autowired TestRestTemplate restTemplate;
 
+    // A token JwtAuthenticationFilter (auth-middleware-java.md) accepts: same key, issuer and audience
+    private static HttpHeaders auth() {
+        var token = Jwts.builder()
+            .subject(UUID.randomUUID().toString()).issuer("test").audience().add("test").and()
+            .claim("tenant_id", TENANT_ID.toString()).claim("roles", List.of("USER"))
+            .expiration(Date.from(Instant.now().plusSeconds(300)))
+            .signWith(Keys.hmacShaKeyFor(SECRET.getBytes(StandardCharsets.UTF_8)))
+            .compact();
+        var headers = new HttpHeaders();
+        headers.setBearerAuth(token);
+        return headers;
+    }
+
     @Test
     void fullCrudLifecycle() {
+        var widgetType = new ParameterizedTypeReference<ApiResponse<WidgetResponse>>() {};
+
         // Create
-        var createResponse = restTemplate.postForEntity("/api/v1/widgets",
-            new CreateWidgetRequest("Integration Test Widget", "desc"), ApiResponse.class);
-        assertThat(createResponse.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        var created = restTemplate.exchange("/api/v1/widgets", HttpMethod.POST,
+            new HttpEntity<>(new CreateWidgetRequest("Integration Test Widget", "desc"), auth()), widgetType);
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        var id = created.getBody().data().id();
 
         // Read
-        var id = extractId(createResponse);
-        var getResponse = restTemplate.getForEntity("/api/v1/widgets/{id}", ApiResponse.class, id);
-        assertThat(getResponse.getStatusCode()).isEqualTo(HttpStatus.OK);
+        var read = restTemplate.exchange("/api/v1/widgets/{id}", HttpMethod.GET, new HttpEntity<>(auth()), widgetType, id);
+        assertThat(read.getStatusCode()).isEqualTo(HttpStatus.OK);
 
-        // Delete
-        restTemplate.delete("/api/v1/widgets/{id}", id);
-        var afterDelete = restTemplate.getForEntity("/api/v1/widgets/{id}", ProblemDetail.class, id);
+        // Delete, then the error envelope (not ProblemDetail)
+        restTemplate.exchange("/api/v1/widgets/{id}", HttpMethod.DELETE, new HttpEntity<>(auth()), Void.class, id);
+        var afterDelete = restTemplate.exchange("/api/v1/widgets/{id}", HttpMethod.GET, new HttpEntity<>(auth()),
+            ErrorBody.class, id);
         assertThat(afterDelete.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND);
+        assertThat(afterDelete.getBody().error().code()).isEqualTo("NOT_FOUND");
     }
 }
 ```
@@ -342,7 +406,7 @@ assertThat(widgets).hasSize(3)
 assertThatThrownBy(() -> service.findById(id, tenantId))
     .isInstanceOf(ResourceNotFoundException.class)
     .hasMessageContaining("not found")
-    .hasFieldOrPropertyWithValue("resource", "widget");
+    .hasFieldOrPropertyWithValue("resource", "Widget");
 
 // Soft assertions (collect multiple failures)
 SoftAssertions.assertSoftly(softly -> {
@@ -359,7 +423,7 @@ SoftAssertions.assertSoftly(softly -> {
 <plugin>
     <groupId>org.jacoco</groupId>
     <artifactId>jacoco-maven-plugin</artifactId>
-    <version>0.8.12</version>
+    <version>0.8.15</version> <!-- 0.8.12 cannot read JDK 25 class files (major version 69) -->
     <executions>
         <execution>
             <goals><goal>prepare-agent</goal></goals>
@@ -412,7 +476,7 @@ mvn jacoco:report                           # generate HTML coverage report
 
 - Use `@ExtendWith(MockitoExtension.class)` for unit tests — no Spring context needed.
 - Use `@WebMvcTest` for controller tests — loads only the web layer + mocks services.
-- Use `@DataJpaTest` for repository tests — loads JPA layer with embedded H2 (or Testcontainers).
+- Use `@DataJpaTest` for repository tests — JPA layer against Testcontainers Postgres (`@AutoConfigureTestDatabase(replace = NONE)`); H2 hides Postgres behaviour.
 - Use `@SpringBootTest` + `@Testcontainers` for integration tests — full context with real Postgres.
 - BDDMockito (`given`/`then`) over classic Mockito (`when`/`verify`) — reads like specifications.
 - AssertJ over JUnit assertions — fluent, expressive, better error messages.

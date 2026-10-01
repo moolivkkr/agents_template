@@ -1,7 +1,9 @@
-"""How every Java block in .claude/skills/backend/archetypes/*.md is compiled (read by harness.py).
+"""How every Java block in .claude/skills is compiled (read by harness.py): the backend archetypes, then the other
+skill packs (section "skill packs outside backend/archetypes" at the end).
 
-Block ids are "<file>.md#<n>", n = 1-based index among that file's ```java blocks. Other fenced
-languages use "<file>.md#<lang><n>" (e.g. "grpc-pattern.md#protobuf2", "dockerfile-java.md#kotlin1").
+Block ids are "<file>.md#<n>", n = 1-based index among that file's ```java blocks; an archetype is named by its file
+name, any other pack by its path under .claude/skills ("languages/java.md#3"). Other fenced languages use
+"<file>.md#<lang><n>" (e.g. "grpc-pattern.md#protobuf2", "dockerfile-java.md#kotlin1").
 
 Layout specs (default for a block not listed in BLOCKS: File()):
   File        the block is one or more complete top-level types; each type becomes its own .java file.
@@ -75,6 +77,7 @@ class Unit:
     stubs: tuple = ()
     pom_extra: str = ""
     protos: tuple = ()        # (block id, path under src/main/protobuf)
+    pom: str = ""             # a whole module POM instead of the Spring Boot parent's (@NAME@ = the unit name)
 
 
 @dataclass
@@ -82,7 +85,8 @@ class MavenSnippet:
     name: str
     pom: str                  # @SNIPPET@ is replaced by the block
     probe_java: str = ""
-    goal: str = "test-compile"   # "package" runs as its own Maven invocation after the reactor
+    probe_test: str = ""      # src/test/java/snippet/ProbeTest.java, for snippets that act on tests (coverage)
+    goal: str = "test-compile"   # "package" / "verify" run as their own Maven invocation after the reactor
     verify: str = ""          # run.sh check after the build (see run.sh)
     tool: str = "maven"
 
@@ -96,6 +100,7 @@ class GradleSnippet:  # the snippet is merged into gradle/<template>/<build_file
     protos: tuple = ()        # (block id, path under src/main/proto)
     verify: str = ""
     tool: str = "gradle"
+    files: tuple = ()         # (block id, path in the project): other doc blocks the build reads
 
 
 def ids(md, *nums):
@@ -111,7 +116,7 @@ BLOCKS = {}
 
 # Expected ```java block count per file — a mismatch means the doc changed: re-map it here.
 JAVA_BLOCKS = {
-    "auth-middleware-java.md": 10,
+    "auth-middleware-java.md": 9,
     "crud-handler-java.md": 9,
     "crud-handler-test-java.md": 11,
     "crud-repository-java.md": 10,
@@ -123,7 +128,7 @@ JAVA_BLOCKS = {
     "migration-pattern-java.md": 3,
     "observability-java.md": 17,
     "performance-java.md": 26,
-    "websocket-pattern-java.md": 7,
+    "websocket-pattern-java.md": 11,
     "worker-pattern-java.md": 8,
 }
 
@@ -253,7 +258,7 @@ BLOCKS[f"{SERVICE}#8"] = Split([
 
 # ── auth-middleware-java.md ──
 BLOCKS[f"{AUTH}#4"] = File(transforms=("stub_bodies",))   # @PreAuthorize placement sketch: bodies are `// ...`
-BLOCKS[f"{AUTH}#10"] = Members(
+BLOCKS[f"{AUTH}#9"] = Members(
     cls="CorsSecurityConfigExample", package="com.example.app.config",
     imports=("org.springframework.context.annotation.Bean",
              "org.springframework.security.config.annotation.web.builders.HttpSecurity",
@@ -409,7 +414,7 @@ PREVIEW_POM = """  <build>
 # ── units ──────────────────────────────────────────────────────────────────────────────────────────
 UNITS = [
     Unit("error-handling-java", own=ids(EH, 1, 2, 3, 4, 6),
-         deps=ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3)),
+         deps=ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3, 8), stubs=("auth",)),
     Unit("crud-repository-java", own=rng(REPO, 1, 10), deps=EXCEPTIONS + ENVELOPE, stubs=("crud-repository",)),
     Unit("crud-handler-java-entity", own=ids(HANDLER, 1),
          deps=[(f"{REPO}#2", File(only=("WidgetStatus",)))]),
@@ -417,12 +422,12 @@ UNITS = [
     Unit("crud-service-java", own=ids(SERVICE, 1, 2, 3, 4, 5, 7, 8),
          deps=EXCEPTIONS + ENTITY + REPOSITORY + DTO + SANITIZER, stubs=("crud-service",)),
     Unit("crud-handler-test-java", own=rng("crud-handler-test-java.md", 1, 11),
-         deps=EXCEPTIONS + ERROR_WRITER + ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3),
-         stubs=()),
+         deps=EXCEPTIONS + ERROR_WRITER + ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3, 8),
+         stubs=("auth",)),
     Unit("crud-service-test-java", own=rng("crud-service-test-java.md", 1, 10),
          deps=EXCEPTIONS + ENTITY + REPOSITORY + DTO + SANITIZER + SERVICE_API + SERVICE_IMPL, stubs=("crud-service",)),
     Unit("crud-repository-test-java", own=rng("crud-repository-test-java.md", 1, 13), deps=ENTITY + REPOSITORY),
-    Unit("auth-middleware-java", own=rng(AUTH, 1, 10),
+    Unit("auth-middleware-java", own=rng(AUTH, 1, 9),
          deps=EXCEPTIONS + ERROR_WRITER + ENTITY + REPOSITORY + DTO, stubs=("auth",)),
     Unit("observability-java", own=ids(OBS, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 15, 16, 17),
          stubs=("observability",)),
@@ -431,8 +436,8 @@ UNITS = [
     Unit("performance-java", own=[b for b in rng(PERF, 1, 26) if b != f"{PERF}#18"], deps=EXCEPTIONS,
          stubs=("performance",)),
     Unit("performance-java-preview", own=ids(PERF, 18), stubs=("performance",), pom_extra=PREVIEW_POM),
-    Unit("websocket-pattern-java", own=rng("websocket-pattern-java.md", 1, 7), deps=ids(AUTH, 3),
-         stubs=("websocket",)),
+    Unit("websocket-pattern-java", own=rng("websocket-pattern-java.md", 1, 11),
+         deps=EXCEPTIONS + ENVELOPE + ids(AUTH, 3) + [(f"{EH}#3", File(only=("ErrorBody", "ApiError")))]),
     Unit("worker-pattern-java", own=rng("worker-pattern-java.md", 1, 8), stubs=("worker",)),
     Unit("grpc-pattern-java", own=rng(GRPC, 1, 7), deps=EXCEPTIONS + ENTITY + DTO + ENVELOPE + SERVICE_API,
          stubs=("grpc",), pom_extra=GRPC_POM, protos=PROTOS),
@@ -497,9 +502,415 @@ SKIP[f"{OBS}#xml2"] = ("logback-spring.xml is runtime logging config, not a buil
                        "need Spring Boot's LoggingSystem, so this harness does not load it. (Loaded once on 2026-09-30: "
                        "logback 1.5.38 + logstash-logback-encoder 9.0 took the production profile without warnings "
                        "and <decorator> redacted a structured `password` field.)")
-SKIP[f"{PERF}#xml1"] = ("caffeine-cache.xml is runtime JCache config, not a build file. NOT verified, and likely "
-                        "wrong: Caffeine's JCache provider is configured with Typesafe Config (application.conf), "
-                        "not jsr107 XML")
+SKIP[f"{PERF}#hocon1"] = ("Caffeine JCache config (Typesafe Config), runtime config rather than a build file; "
+                          "not loaded here. (Loaded once on 2026-09-30: Hibernate 7.4.5 + Caffeine 3.2.4 jcache built the "
+                          "products region with maximum size 1000 and expire-after-write 15m from it.)")
 SKIP[f"{PERF}#scala1"] = ("Gatling simulation (Scala), outside this Java harness. Not compiled. Reviewed by eye only: it "
                           "sends the tenant as an X-Tenant-ID header (the tenant comes from the verified token) and "
                           "reads $.id where the envelope puts it at $.data.id")
+
+
+# ═════════════════════════════ skill packs outside backend/archetypes ═════════════════════════════
+# Block ids are "<path under .claude/skills>#<n>". Their ```java blocks are excerpts (no package line), so the
+# specs give each a package and the imports it assumes; each pack's undefined application types are stubs.
+
+# Java packs whose Kotlin/Groovy/XML blocks are build files too (checked or skipped like the *-java.md ones)
+JVM_PACKS = {"languages/java.md", "frameworks/spring-boot.md", "frameworks/quarkus.md", "testing/junit-mockito.md"}
+
+JAVA_BLOCKS.update({
+    "languages/java.md": 22,
+    "frameworks/spring-boot.md": 5,
+    "frameworks/quarkus.md": 8,
+    "testing/junit-mockito.md": 6,
+    "testing/property-based.md": 1,
+    "testing/contract-testing.md": 1,
+    "testing/external-service-mocks.md": 1,
+    "frameworks/graphql.md": 1,
+})
+
+
+def dep(group, artifact, version=None, scope=None):
+    v = f"<version>{version}</version>" if version else ""
+    sc = f"<scope>{scope}</scope>" if scope else ""
+    return f"    <dependency><groupId>{group}</groupId><artifactId>{artifact}</artifactId>{v}{sc}</dependency>"
+
+
+def deps_pom(*lines):
+    return "  <dependencies>\n" + "\n".join(lines) + "\n  </dependencies>"
+
+
+REST_TEST_CLIENT = dep("org.springframework.boot", "spring-boot-resttestclient", scope="test")
+JJWT_RUNTIME = (dep("io.jsonwebtoken", "jjwt-impl", "${jjwt.version}", "test"),
+                dep("io.jsonwebtoken", "jjwt-jackson", "${jjwt.version}", "test"))
+
+# ── languages/java.md ── (package com.company.app, the pack's own project layout)
+JM = "languages/java.md"
+JP = "com.company.app"
+_SPRING_MVC = ("org.springframework.web.bind.annotation.*", "org.springframework.http.HttpStatus")
+_TX = ("org.springframework.stereotype.Service", "org.springframework.transaction.annotation.Transactional")
+_U = ("java.util.List", "java.util.Optional", "java.util.UUID")
+_JUNIT = ("org.junit.jupiter.api.Test", S + "org.assertj.core.api.Assertions.assertThat",
+          S + "org.assertj.core.api.Assertions.assertThatThrownBy")
+BLOCKS[f"{JM}#1"] = Split([   # the good and the bad UserService, side by side
+    (None, File(package=f"{JP}.di.good", imports=("org.springframework.stereotype.Service", f"{JP}.UserRepository"))),
+    (r"^// Bad", File(package=f"{JP}.di.bad", imports=(
+        "org.springframework.stereotype.Service", "org.springframework.beans.factory.annotation.Autowired",
+        f"{JP}.UserRepository"))),
+])
+BLOCKS[f"{JM}#2"] = File(package=JP, imports=("jakarta.validation.constraints.NotBlank",
+                                              "jakarta.validation.constraints.Size"))
+BLOCKS[f"{JM}#3"] = File(package=JP, imports=_TX + _SPRING_MVC + _U + (
+    "org.springframework.stereotype.Repository", "org.springframework.cache.CacheManager",
+    "org.springframework.data.jpa.repository.JpaRepository", "jakarta.validation.Valid"))
+BLOCKS[f"{JM}#4"] = File(package=JP, imports=(
+    "org.springframework.boot.context.properties.ConfigurationProperties", "java.time.Duration"))
+BLOCKS[f"{JM}#5"] = File(package=JP, imports=_TX + _U)
+BLOCKS[f"{JM}#6"] = File(package=f"{JP}.tenancy", imports=(   # its Order is the filter demo; the rest use the stub
+    "jakarta.persistence.Column", "jakarta.persistence.Entity", "jakarta.persistence.EntityManager",
+    "jakarta.persistence.Id", "jakarta.persistence.Table", "jakarta.persistence.Version",
+    "org.hibernate.Session", "org.hibernate.annotations.Filter", "org.hibernate.annotations.FilterDef",
+    "org.hibernate.annotations.ParamDef", "org.hibernate.annotations.SQLRestriction",
+    "org.springframework.stereotype.Component", f"{JP}.TenantContext", "java.time.Instant", "java.util.UUID"))
+BLOCKS[f"{JM}#7"] = File(package=JP, imports=_U + (
+    "jakarta.servlet.FilterChain", "jakarta.servlet.ServletException", "jakarta.servlet.http.HttpServletRequest",
+    "jakarta.servlet.http.HttpServletResponse", "org.springframework.web.filter.OncePerRequestFilter",
+    "org.springframework.security.core.context.SecurityContextHolder",
+    "org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken",
+    "org.springframework.security.oauth2.jwt.Jwt", "org.slf4j.MDC", "java.io.IOException"))
+BLOCKS[f"{JM}#8"] = File(package=JP, imports=_U + (
+    "org.springframework.context.annotation.Bean", "org.springframework.context.annotation.Configuration",
+    "org.springframework.security.config.annotation.web.builders.HttpSecurity",
+    "org.springframework.security.config.annotation.web.configuration.EnableWebSecurity",
+    "org.springframework.security.web.SecurityFilterChain", "org.springframework.security.web.AuthenticationEntryPoint",
+    "org.springframework.security.web.access.AccessDeniedHandler",
+    "org.springframework.security.oauth2.server.resource.web.authentication.BearerTokenAuthenticationFilter",
+    "org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationConverter",
+    "org.springframework.security.oauth2.jwt.Jwt", "org.springframework.security.core.GrantedAuthority",
+    "org.springframework.security.core.authority.SimpleGrantedAuthority", "java.util.Collection"))
+BLOCKS[f"{JM}#9"] = Split([
+    (None, File(package=JP, imports=(
+        "com.fasterxml.jackson.annotation.JsonInclude", "com.fasterxml.jackson.annotation.JsonProperty",
+        "jakarta.servlet.http.HttpServletResponse", "org.springframework.http.HttpHeaders",
+        "org.springframework.http.MediaType", "tools.jackson.databind.json.JsonMapper", "java.io.IOException",
+        "java.util.List"))),
+    (r"^// List endpoint", Members(cls="OrderListEndpoint", package=JP, imports=(
+        "org.springframework.web.bind.annotation.GetMapping", "org.springframework.web.bind.annotation.RequestParam",
+        "java.util.List"), inject=("private OrderQueryService orderService;",))),
+])
+BLOCKS[f"{JM}#10"] = File(package=JP, imports=(
+    "org.slf4j.Logger", "org.slf4j.LoggerFactory", "org.springframework.http.HttpHeaders",
+    "org.springframework.http.HttpStatusCode", "org.springframework.http.ResponseEntity",
+    "org.springframework.web.bind.MethodArgumentNotValidException",
+    "org.springframework.web.bind.annotation.ExceptionHandler",
+    "org.springframework.web.bind.annotation.RestControllerAdvice",
+    "org.springframework.web.context.request.WebRequest",
+    "org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler",
+    "java.util.List", "java.util.Map"))
+BLOCKS[f"{JM}#11"] = File(package=JP, imports=("java.util.List",))
+_DATA = (f"{JP}.Order", f"{JP}.OrderStatus", "java.time.Instant", "java.util.UUID")
+BLOCKS[f"{JM}#12"] = File(package=f"{JP}.data", imports=_DATA + (
+    "org.springframework.data.jpa.repository.JpaRepository", "org.springframework.data.jpa.repository.JpaSpecificationExecutor",
+    "org.springframework.data.jpa.repository.Query", "org.springframework.data.jpa.repository.Modifying",
+    "org.springframework.data.repository.query.Param", "org.springframework.data.domain.Limit",
+    "java.util.List", "java.util.Optional", "java.util.Set"))
+BLOCKS[f"{JM}#13"] = Split([
+    (None, File(package=f"{JP}.data", imports=_DATA + ("org.springframework.data.jpa.domain.Specification",))),
+    (r"^// Usage", Statements(cls="SpecificationUsage", package=f"{JP}.data", imports=_DATA + (
+        "org.springframework.data.jpa.domain.Specification", "org.springframework.data.domain.ScrollPosition",
+        "org.springframework.data.domain.Sort", "org.springframework.data.domain.Window",
+        S + f"{JP}.data.OrderSpecifications.*", S + f"{JP}.OrderStatus.PENDING"),
+        method="void run(OrderRepository orderRepo, UUID tenantId, Instant startDate, Instant endDate, "
+               "ScrollPosition position)")),
+])
+_REPO_OF_ORDER = "org.springframework.data.repository.Repository<Order, UUID>"
+BLOCKS[f"{JM}#14"] = Split([
+    (None, File(package=f"{JP}.data", imports=_DATA + ("java.math.BigDecimal",))),
+    (r"^// Repository returns projection", Members(
+        cls="OrderSummaryRepository", package=f"{JP}.data", interface=True, extends=_REPO_OF_ORDER,
+        imports=_DATA + ("org.springframework.data.domain.ScrollPosition", "org.springframework.data.domain.Window"))),
+    # the JPQL constructor expression names com.company.app.dto.OrderStats — so that is its package here
+    (r"^// Record-based projection", File(package=f"{JP}.dto", imports=(f"{JP}.OrderStatus", "java.math.BigDecimal"))),
+    (r"^@Query", Members(cls="OrderStatsRepository", package=f"{JP}.data", interface=True, extends=_REPO_OF_ORDER,
+                         imports=_DATA + (f"{JP}.dto.OrderStats", "org.springframework.data.jpa.repository.Query",
+                                          "org.springframework.data.repository.query.Param", "java.util.List"))),
+])
+BLOCKS[f"{JM}#15"] = File(package=JP, test=True, imports=_JUNIT + _U + (
+    "org.junit.jupiter.api.extension.ExtendWith", "org.mockito.InjectMocks", "org.mockito.Mock",
+    "org.mockito.junit.jupiter.MockitoExtension", "java.math.BigDecimal",
+    S + "org.mockito.ArgumentMatchers.any", S + "org.mockito.Mockito.verify", S + "org.mockito.Mockito.when"))
+BLOCKS[f"{JM}#16"] = Members(cls="OrderParameterizedTest", package=JP, test=True, imports=(
+    "org.junit.jupiter.params.ParameterizedTest", "org.junit.jupiter.params.provider.Arguments",
+    "org.junit.jupiter.params.provider.CsvSource", "org.junit.jupiter.params.provider.MethodSource",
+    "java.util.stream.Stream", S + "org.junit.jupiter.api.Assertions.assertEquals", S + f"{JP}.OrderStatus.*"))
+BLOCKS[f"{JM}#17"] = File(package=JP, test=True, imports=_JUNIT + _U + (
+    "org.springframework.beans.factory.annotation.Autowired",
+    "org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest",
+    "org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase",
+    "org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase.Replace",
+    "org.springframework.boot.jpa.test.autoconfigure.TestEntityManager",
+    "org.springframework.boot.test.context.SpringBootTest",
+    "org.springframework.boot.resttestclient.TestRestTemplate",
+    "org.springframework.boot.resttestclient.autoconfigure.AutoConfigureTestRestTemplate",
+    "org.springframework.http.HttpEntity", "org.springframework.http.HttpHeaders",
+    "org.springframework.http.HttpMethod", "org.springframework.http.HttpStatus",
+    "java.math.BigDecimal", "java.time.Instant"))
+BLOCKS[f"{JM}#18"] = File(package=JP, test=True, imports=(
+    "org.junit.jupiter.api.Test", "org.springframework.beans.factory.annotation.Autowired",
+    "org.springframework.boot.test.context.SpringBootTest",
+    "org.springframework.boot.testcontainers.service.connection.ServiceConnection",
+    "org.testcontainers.junit.jupiter.Container", "org.testcontainers.junit.jupiter.Testcontainers",
+    "org.testcontainers.postgresql.PostgreSQLContainer"))
+BLOCKS[f"{JM}#19"] = Statements(cls="AssertJExamples", package=JP, test=True, imports=_JUNIT + _U,
+                                method="void run(Order order, List<Order> orders, PaymentService service, "
+                                       "PaymentRequest invalidRequest, UUID TENANT_ID)")
+BLOCKS[f"{JM}#20"] = File(package=f"{JP}.cache", imports=_TX + (
+    "org.springframework.cache.annotation.Cacheable", "org.springframework.cache.annotation.CacheEvict",
+    "org.springframework.cache.annotation.EnableCaching", "org.springframework.context.annotation.Bean",
+    "org.springframework.context.annotation.Configuration",
+    "org.springframework.data.redis.cache.RedisCacheConfiguration",
+    "org.springframework.data.redis.serializer.GenericJacksonJsonRedisSerializer",
+    "org.springframework.data.redis.serializer.RedisSerializationContext.SerializationPair",
+    "tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator",
+    f"{JP}.NotFoundException", f"{JP}.UpdateUserRequest", f"{JP}.UserMapper", f"{JP}.UserRepository",
+    f"{JP}.UserResponse", "java.time.Duration", "java.util.ArrayList", "java.util.HashMap", "java.util.HashSet",
+    "java.util.UUID"))
+BLOCKS[f"{JM}#21"] = Members(cls="VirtualThreadConfig", package=JP,
+                             annotations=("@org.springframework.context.annotation.Configuration",), imports=(
+    "org.springframework.context.annotation.Bean", "org.springframework.boot.tomcat.TomcatProtocolHandlerCustomizer",
+    "java.util.concurrent.Executors"))
+BLOCKS[f"{JM}#22"] = File(package=JP, imports=(
+    "org.springframework.web.bind.annotation.GetMapping", "org.springframework.web.bind.annotation.RestController",
+    "org.springframework.http.MediaType", "org.springframework.security.core.annotation.AuthenticationPrincipal",
+    "org.springframework.security.oauth2.jwt.Jwt", "reactor.core.publisher.Flux", "java.util.UUID"))
+
+# ── frameworks/spring-boot.md ── (its own package; the exception, envelope and security types are the archetypes')
+SB = "frameworks/spring-boot.md"
+SBP = "com.example.app.springboot"
+BLOCKS[f"{SB}#1"] = File(package=SBP, imports=("org.springframework.stereotype.Service",
+                                               "org.springframework.cache.CacheManager"))
+BLOCKS[f"{SB}#2"] = File(package=SBP, transforms=("elide", "stub_bodies"), imports=(
+    "com.example.app.exception.*", "org.springframework.http.ResponseEntity",
+    "org.springframework.web.bind.MethodArgumentNotValidException",
+    "org.springframework.web.bind.annotation.ExceptionHandler",
+    "org.springframework.web.bind.annotation.RestControllerAdvice"))
+BLOCKS[f"{SB}#3"] = Split([
+    (None, File(package=SBP, imports=("jakarta.validation.constraints.NotBlank", "jakarta.validation.constraints.NotNull",
+                                      "jakarta.validation.constraints.Size"))),
+    (r"^// In controller", Members(cls="ValidationExample", package=SBP, transforms=("elide", "stub_bodies"), imports=(
+        "com.example.app.common.ApiResponse", "jakarta.validation.Valid", "org.springframework.http.ResponseEntity",
+        "org.springframework.web.bind.annotation.PostMapping", "org.springframework.web.bind.annotation.RequestBody"))),
+])
+BLOCKS[f"{SB}#4"] = File(package=SBP, imports=(
+    "com.example.app.security.JwtAuthenticationFilter", "com.example.app.security.SecurityErrorDelegate",
+    "org.springframework.context.annotation.Bean", "org.springframework.context.annotation.Configuration",
+    "org.springframework.security.config.annotation.web.builders.HttpSecurity",
+    "org.springframework.security.config.annotation.web.configuration.EnableWebSecurity",
+    "org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer",
+    "org.springframework.security.config.http.SessionCreationPolicy",
+    "org.springframework.security.web.SecurityFilterChain",
+    "org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter"))
+BLOCKS[f"{SB}#5"] = File(package=SBP, test=True, imports=(
+    "org.junit.jupiter.api.extension.ExtendWith", "org.mockito.InjectMocks", "org.mockito.Mock",
+    "org.mockito.junit.jupiter.MockitoExtension", "org.springframework.beans.factory.annotation.Autowired",
+    "org.springframework.boot.test.context.SpringBootTest",
+    "org.springframework.boot.testcontainers.service.connection.ServiceConnection",
+    "org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest",
+    "org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest",
+    "org.springframework.boot.jpa.test.autoconfigure.TestEntityManager",
+    "org.springframework.test.context.bean.override.mockito.MockitoBean",
+    "org.springframework.test.web.servlet.MockMvc", "org.testcontainers.junit.jupiter.Container",
+    "org.testcontainers.junit.jupiter.Testcontainers", "org.testcontainers.postgresql.PostgreSQLContainer"))
+
+# ── testing/junit-mockito.md ── (tests of the Widget archetypes, in their packages)
+JU = "testing/junit-mockito.md"
+_W = ("com.example.app.model.entity.Widget", "com.example.app.model.entity.WidgetStatus",
+      "com.example.app.model.dto.CreateWidgetRequest", "com.example.app.model.dto.UpdateWidgetRequest",
+      "com.example.app.model.dto.WidgetResponse", "com.example.app.exception.ConflictException",
+      "com.example.app.exception.ResourceNotFoundException", "java.time.Instant", "java.util.List",
+      "java.util.Optional", "java.util.UUID")
+BLOCKS[f"{JU}#1"] = File(package="com.example.app.service", test=True, imports=_W + (
+    "com.example.app.repository.WidgetRepository",))
+BLOCKS[f"{JU}#2"] = File(package="com.example.app.model.dto", test=True, imports=_W + (
+    "jakarta.validation.Validation", "jakarta.validation.Validator", "org.junit.jupiter.api.DisplayName",
+    "java.util.stream.Stream", S + "org.assertj.core.api.Assertions.assertThat"))
+BLOCKS[f"{JU}#3"] = File(package="com.example.app.controller", test=True, imports=_W + (
+    "com.example.app.service.WidgetService", "org.junit.jupiter.api.Test",
+    "org.springframework.beans.factory.annotation.Autowired", "org.springframework.http.MediaType",
+    "org.springframework.security.core.authority.SimpleGrantedAuthority",
+    S + "org.mockito.ArgumentMatchers.any", S + "org.mockito.ArgumentMatchers.eq",
+    S + "org.mockito.BDDMockito.given", S + "org.mockito.BDDMockito.then"))
+BLOCKS[f"{JU}#4"] = File(package="com.example.app.repository", test=True, imports=_W + (
+    "org.junit.jupiter.api.BeforeEach", "org.junit.jupiter.api.Test",
+    "org.springframework.beans.factory.annotation.Autowired", "org.springframework.data.domain.ScrollPosition",
+    S + "org.assertj.core.api.Assertions.assertThat"))
+BLOCKS[f"{JU}#5"] = File(package="com.example.app", test=True, imports=_W + (
+    "com.example.app.common.ApiResponse", "com.example.app.exception.ErrorBody", "org.junit.jupiter.api.Test",
+    "org.springframework.beans.factory.annotation.Autowired", "org.springframework.http.HttpEntity",
+    "org.springframework.http.HttpHeaders", "org.springframework.http.HttpMethod",
+    "org.springframework.http.HttpStatus", "java.nio.charset.StandardCharsets", "java.util.Date",
+    S + "org.assertj.core.api.Assertions.assertThat"))
+BLOCKS[f"{JU}#6"] = Statements(cls="AssertJPatterns", package="com.example.app", test=True, imports=_W + (
+    "com.example.app.service.WidgetService", "org.assertj.core.api.SoftAssertions",
+    S + "org.assertj.core.api.Assertions.assertThat", S + "org.assertj.core.api.Assertions.assertThatThrownBy"),
+    method="void run(Widget widget, List<Widget> widgets, WidgetService service, UUID id, UUID tenantId, "
+           "Widget result)")
+
+# ── frameworks/quarkus.md ── (its own POM: the Quarkus platform BOM, not Spring Boot)
+QM = "frameworks/quarkus.md"
+QP = "com.example.quarkus"
+_CDI = ("jakarta.enterprise.context.ApplicationScoped", "jakarta.inject.Inject")
+BLOCKS[f"{QM}#1"] = Split([   # constructor injection, then the field-injection alternative (same class name)
+    (None, File(package=QP, imports=_CDI + ("io.quarkus.cache.CacheManager",))),
+    (r"^// Alternative: field injection", File(package=f"{QP}.fieldinjection", imports=_CDI + (
+        "io.quarkus.cache.CacheManager", f"{QP}.WidgetRepository", f"{QP}.WidgetService"))),
+])
+BLOCKS[f"{QM}#2"] = File(package=QP, imports=_CDI + (
+    "jakarta.ws.rs.Consumes", "jakarta.ws.rs.DELETE", "jakarta.ws.rs.DefaultValue", "jakarta.ws.rs.GET",
+    "jakarta.ws.rs.POST", "jakarta.ws.rs.PUT", "jakarta.ws.rs.Path", "jakarta.ws.rs.PathParam",
+    "jakarta.ws.rs.Produces", "jakarta.ws.rs.QueryParam", "jakarta.ws.rs.core.Context",
+    "jakarta.ws.rs.core.MediaType", "jakarta.ws.rs.core.Response", "jakarta.ws.rs.core.SecurityContext",
+    "jakarta.validation.Valid", "java.util.Set", "java.util.UUID", S + f"{QP}.Envelopes.newMeta"))
+BLOCKS[f"{QM}#3"] = File(package=QP, imports=_CDI + (
+    "jakarta.persistence.Column", "jakarta.persistence.Entity", "jakarta.persistence.GeneratedValue",
+    "jakarta.persistence.Id", "jakarta.persistence.Table",
+    "io.quarkus.hibernate.orm.panache.PanacheEntityBase", "io.quarkus.hibernate.orm.panache.PanacheRepositoryBase",
+    "org.hibernate.reactive.mutiny.Mutiny", "io.smallrye.mutiny.Uni",
+    "java.time.Instant", "java.util.List", "java.util.Optional", "java.util.UUID"))
+BLOCKS[f"{QM}#4"] = File(package=QP, imports=("io.quarkus.runtime.annotations.RegisterForReflection",
+                                              "java.time.Instant", "java.util.UUID"))
+BLOCKS[f"{QM}#5"] = File(package=QP, imports=("io.smallrye.config.ConfigMapping", "io.smallrye.config.WithDefault",
+                                              "java.time.Duration", "java.util.Optional"))
+BLOCKS[f"{QM}#6"] = File(package=QP, test=True, imports=(
+    "io.quarkus.test.InjectMock", "io.quarkus.test.junit.QuarkusTest", "io.quarkus.test.junit.QuarkusTestProfile",
+    "io.quarkus.test.junit.TestProfile", "io.quarkus.test.security.TestSecurity",
+    "io.quarkus.test.security.jwt.Claim", "io.quarkus.test.security.jwt.JwtSecurity",
+    "io.restassured.http.ContentType", "jakarta.inject.Inject", "org.junit.jupiter.api.Test",
+    "java.util.Map", "java.util.UUID", S + "io.restassured.RestAssured.given", S + "org.hamcrest.Matchers.equalTo",
+    S + "org.junit.jupiter.api.Assertions.assertEquals", S + "org.mockito.ArgumentMatchers.any",
+    S + "org.mockito.Mockito.verify"))
+BLOCKS[f"{QM}#7"] = File(package=QP, imports=_CDI + (
+    "org.eclipse.microprofile.health.HealthCheck", "org.eclipse.microprofile.health.HealthCheckResponse",
+    "org.eclipse.microprofile.health.Readiness", "io.micrometer.core.instrument.MeterRegistry",
+    "javax.sql.DataSource", "java.time.Duration"))
+BLOCKS[f"{QM}#8"] = File(package=QP, imports=(
+    "jakarta.ws.rs.WebApplicationException", "jakarta.ws.rs.core.Response", "jakarta.ws.rs.ext.ExceptionMapper",
+    "jakarta.ws.rs.ext.Provider", "io.quarkus.logging.Log", "org.jboss.logging.MDC",
+    "java.util.LinkedHashMap", "java.util.List", "java.util.Map", "java.util.Objects"))
+
+QUARKUS_VERSION = "3.40.1"
+QUARKUS_POM = f"""<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0">
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>archetype.compile</groupId>
+  <artifactId>@NAME@</artifactId>
+  <version>0</version>
+  <name>@NAME@</name>
+  <properties>
+    <maven.compiler.release>25</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+  </properties>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>io.quarkus.platform</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>{QUARKUS_VERSION}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+  <dependencies>
+{dep("io.quarkus", "quarkus-rest-jackson")}
+{dep("io.quarkus", "quarkus-hibernate-validator")}
+{dep("io.quarkus", "quarkus-hibernate-orm-panache")}
+{dep("io.quarkus", "quarkus-hibernate-reactive")}
+{dep("io.quarkus", "quarkus-cache")}
+{dep("io.quarkus", "quarkus-smallrye-health")}
+{dep("io.quarkus", "quarkus-micrometer")}
+{dep("io.quarkus", "quarkus-smallrye-jwt")}
+{dep("io.quarkus", "quarkus-junit5", scope="test")}
+{dep("io.quarkus", "quarkus-junit5-mockito", scope="test")}
+{dep("io.quarkus", "quarkus-test-security-jwt", scope="test")}
+{dep("io.rest-assured", "rest-assured", scope="test")}
+  </dependencies>
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.14.1</version>
+        <configuration>
+          <release>25</release>
+          <parameters>true</parameters>
+          <showWarnings>true</showWarnings>
+          <compilerArgs>
+            <arg>-Xlint:deprecation,removal</arg>
+          </compilerArgs>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>
+"""
+
+# ── single Java blocks in shared testing / API packs ──
+PB, CT, ES, GQ = ("testing/property-based.md", "testing/contract-testing.md", "testing/external-service-mocks.md",
+                  "frameworks/graphql.md")
+BLOCKS[f"{PB}#1"] = File(package="com.example.pbt", test=True, imports=(
+    "org.junit.jupiter.api.Assertions", "java.util.ArrayList", "java.util.Collections", "java.util.List",
+    S + "com.example.pbt.TestData.generateWidgets", S + "com.example.pbt.Paging.paginate"))
+BLOCKS[f"{CT}#1"] = File(package="com.example.pact", test=True, imports=(
+    "au.com.dius.pact.consumer.MockServer", "au.com.dius.pact.consumer.dsl.PactDslJsonBody",
+    "au.com.dius.pact.consumer.dsl.PactDslWithProvider", "au.com.dius.pact.consumer.junit5.PactConsumerTestExt",
+    "au.com.dius.pact.consumer.junit5.PactTestFor", "au.com.dius.pact.core.model.V4Pact",
+    "au.com.dius.pact.core.model.annotations.Pact", "org.junit.jupiter.api.Test",
+    "org.junit.jupiter.api.extension.ExtendWith", "java.util.Map", S + "org.junit.jupiter.api.Assertions.assertEquals"))
+BLOCKS[f"{ES}#1"] = File(package="com.example.wiremock", test=True, imports=(
+    "com.github.tomakehurst.wiremock.junit5.WireMockRuntimeInfo", "com.github.tomakehurst.wiremock.junit5.WireMockTest",
+    "org.junit.jupiter.api.Test", S + "org.assertj.core.api.Assertions.assertThat"))
+BLOCKS[f"{GQ}#1"] = File(package="com.example.dgs", imports=(
+    "com.netflix.graphql.dgs.DgsComponent", "com.netflix.graphql.dgs.DgsData",
+    "com.netflix.graphql.dgs.DgsDataFetchingEnvironment", "com.netflix.graphql.dgs.DgsQuery",
+    "com.netflix.graphql.dgs.InputArgument", "graphql.GraphqlErrorBuilder", "graphql.execution.DataFetcherResult",
+    "com.netflix.graphql.types.errors.ErrorType",
+    "org.dataloader.DataLoader", "java.util.Map", "java.util.UUID", "java.util.concurrent.CompletableFuture"))
+
+UNITS += [
+    Unit("java-pack", own=rng(JM, 1, 22), stubs=("java-pack",),
+         pom_extra=deps_pom(REST_TEST_CLIENT)),
+    Unit("spring-boot-pack", own=rng(SB, 1, 5), stubs=("spring-boot-pack",),
+         deps=EXCEPTIONS + ENVELOPE + ids(AUTH, 2, 3) + ids(EH, 4) + [(f"{EH}#3", File(only=("ErrorBody", "ApiError")))]),
+    Unit("junit-mockito-pack", own=rng(JU, 1, 6),
+         deps=EXCEPTIONS + ERROR_WRITER + ENTITY + REPOSITORY + DTO + ENVELOPE + CONTROLLER + SANITIZER
+         + SERVICE_API + SERVICE_IMPL + ids(AUTH, 1, 2, 3, 8),
+         stubs=("auth", "crud-service"), pom_extra=deps_pom(REST_TEST_CLIENT)),
+    Unit("quarkus-pack", own=rng(QM, 1, 8), stubs=("quarkus-pack",), pom=QUARKUS_POM),
+    Unit("property-based-pack", own=[f"{PB}#1"], stubs=("property-based",),
+         pom_extra=deps_pom(dep("net.jqwik", "jqwik", "1.10.1", "test"))),
+    Unit("contract-testing-pack", own=[f"{CT}#1"], stubs=("contract-testing",),
+         pom_extra=deps_pom(dep("au.com.dius.pact.consumer", "junit5", "4.7.5", "test"))),
+    Unit("external-service-mocks-pack", own=[f"{ES}#1"], stubs=("external-service-mocks",),
+         pom_extra=deps_pom(dep("org.wiremock", "wiremock-standalone", "3.13.2", "test"))),
+    Unit("graphql-pack", own=[f"{GQ}#1"], stubs=("graphql",),
+         pom_extra=deps_pom(dep("com.netflix.graphql.dgs", "graphql-dgs-spring-graphql-starter", "12.1.0"))),
+]
+
+# ── JVM build blocks of the Java packs ──
+BUILD_SNIPPETS[f"{JM}#kotlin1"] = GradleSnippet(
+    name="java-pack-gradle-build", template="boot-build-kts", build_file="build.gradle.kts",
+    tasks=("compileTestJava",))
+BUILD_SNIPPETS[f"{JM}#kotlin2"] = GradleSnippet(
+    name="java-pack-gradle-catalog", template="catalog-kts", build_file="build.gradle.kts",
+    tasks=("compileTestJava",), files=((f"{JM}#toml1", "gradle/libs.versions.toml"),))
+BUILD_SNIPPETS[f"{JU}#xml1"] = MavenSnippet(
+    name="junit-jacoco-coverage", goal="verify",
+    pom=boot_pom("junit-jacoco-coverage",
+                 deps_pom(dep("org.springframework.boot", "spring-boot-starter-test", scope="test"))
+                 + "\n  <build>\n    <plugins>\n@SNIPPET@\n    </plugins>\n  </build>"),
+    probe_java="package snippet;\n\npublic class Probe {\n    public int add(int a, int b) {\n"
+               "        return a + b;\n    }\n}\n",
+    probe_test="package snippet;\n\nimport org.junit.jupiter.api.Test;\n\n"
+               "import static org.assertj.core.api.Assertions.assertThat;\n\n"
+               "class ProbeTest {\n    @Test\n    void adds() {\n"
+               "        assertThat(new Probe().add(1, 2)).isEqualTo(3);\n    }\n}\n")

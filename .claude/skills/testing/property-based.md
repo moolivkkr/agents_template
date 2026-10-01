@@ -156,10 +156,16 @@ def test_email_normalization_is_idempotent(email: str):
 ## Java: jqwik
 
 ```java
+// Compile-checked 2026-09-30: jqwik 1.10.1, JDK 25 (tests/archetype-compile/java/run.sh)
 import net.jqwik.api.*;
 import net.jqwik.api.constraints.*;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.json.JsonMapper;
 
 class WidgetPropertyTests {
+
+    // Jackson 3 (Spring Boot 4): readValue/writeValueAsString throw unchecked JacksonException
+    private final ObjectMapper objectMapper = JsonMapper.builder().build();
 
     @Property
     void encodeDecodeRoundtrip(@ForAll @StringLength(min = 1, max = 255) String name) {

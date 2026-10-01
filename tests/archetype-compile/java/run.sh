@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# run.sh — compile every Java sample in .claude/skills/backend/archetypes/*.md, and check the JVM build
-# snippets they depend on.
+# run.sh — compile every Java sample in .claude/skills: the archetypes (backend/archetypes/*.md) and every other
+# skill pack's ```java blocks (languages/java.md, frameworks/{spring-boot,quarkus,graphql}.md, testing/*.md), and
+# check the JVM build snippets they depend on.
 #
 #   bash tests/archetype-compile/java/run.sh              # everything (Maven units + Gradle snippets)
 #   bash tests/archetype-compile/java/run.sh --inventory  # only: is every ```java block compiled or skipped? (no JDK)
@@ -10,10 +11,12 @@
 #   1. harness.py inventory — fails if a file's ```java block count differs from units.py, or any block is
 #      neither compiled by a unit nor skipped with a reason, or a Kotlin/Groovy/XML build block is unchecked.
 #   2. harness.py layout — one Maven module per unit (parent-pom.xml: Spring Boot 4.1.1 and the libraries the
-#      samples import), plus modules/projects for the Maven and Gradle build snippets.
+#      samples import; the Quarkus pack has its own POM on the Quarkus 3.40.1 BOM), plus modules/projects for the
+#      Maven and Gradle build snippets.
 #   3. mvn test-compile over the reactor (--fail-at-end): main code compiles, tests type-check. Nothing runs,
 #      so no database or Docker is needed. Compiler errors are mapped back to <file>.md:<line>.
-#   4. Build snippets: `mvn package` for snippets that configure packaging (layers.idx is checked), Gradle
+#   4. Build snippets: `mvn package` for snippets that configure packaging (layers.idx is checked), `mvn verify`
+#      for the JaCoCo coverage gate (a probe test runs under the agent on JDK 25), Gradle
 #      tasks for the Gradle snippets (compile, bootJar + layers.idx, native task graph, protobuf codegen),
 #      and an OpenTelemetry API version check (Spring Boot's BOM must not downgrade what the OTel starter needs).
 #
@@ -93,6 +96,11 @@ while IFS=$'\t' read -r name dir goal verify; do
       snippet_result "$name" FAIL "$(grep -m1 'is unknown for plugin' "$dir/package.log")"; continue
     fi
     detail="packages"
+  elif [ "$goal" = verify ]; then   # runs the probe's tests too (e.g. a coverage gate)
+    if ! ( cd "$dir" && mvn -B verify ) > "$dir/verify.log" 2>&1; then
+      snippet_result "$name" FAIL "mvn verify failed: $(grep -m1 -E '\[(ERROR|WARNING)\].*(Rule violated|Unsupported|coverage|BUILD)' "$dir/verify.log" | cut -c1-200) ($dir/verify.log)"; continue
+    fi
+    detail="mvn verify ok"
   fi
   case "$verify" in
     layers-idx) if ! detail="$(check_layers_idx "$(ls "$dir"/target/*.jar | head -1)")"; then snippet_result "$name" FAIL "$detail"; continue; fi ;;
@@ -129,6 +137,6 @@ done < "$WORK/gradle.tsv"
 INV="$(python3 "$HERE/harness.py" inventory | tail -1)"
 echo "────────────────────────────────────────────"
 echo "$INV"
-if [ "$RC" -eq 0 ] && [ "$FAILS" -eq 0 ]; then echo "ALL JAVA ARCHETYPE SAMPLES COMPILE"; exit 0; fi
+if [ "$RC" -eq 0 ] && [ "$FAILS" -eq 0 ]; then echo "ALL JAVA SAMPLES COMPILE (archetypes + skill packs)"; exit 0; fi
 echo "FAILURES: Java units $([ "$RC" -eq 0 ] && echo ok || echo failed), build snippets failed: $FAILS"
 exit 1

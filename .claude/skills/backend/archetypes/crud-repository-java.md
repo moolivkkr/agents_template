@@ -302,7 +302,7 @@ public final class WidgetSpecs {
 @Override
 public Window<Widget> search(UUID tenantId, WidgetSearchCriteria criteria,
                              ScrollPosition position, Sort sort, int limit) {
-    var requestId = MDC.get("requestId");
+    var requestId = MDC.get("request_id");
     log.debug("Searching widgets, tenant={}, criteria={}, requestId={}", tenantId, criteria, requestId);
 
     var spec = WidgetSpecs.belongsToTenant(tenantId)

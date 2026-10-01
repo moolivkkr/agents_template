@@ -114,8 +114,11 @@ The Java agent auto-instruments Spring MVC, WebFlux, JDBC, JPA, Redis, HTTP clie
 # Dockerfile — download and attach the OTel Java agent
 FROM eclipse-temurin:21-jre-alpine
 
-# Download OTel Java agent
-ADD https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.6.0/opentelemetry-javaagent.jar /opt/otel/opentelemetry-javaagent.jar
+# OTel Java agent, pinned by version AND checksum. Keep it current: 2.6.0 attached to a JDK 25 JVM fails to
+# initialise and the app runs with no traces at all (no error at startup); 2.31.1 traces Spring Boot 4 on 21 and 25.
+ADD --checksum=sha256:bbf83c151b6400709e2f225bdd07a04f839d9d13b8b93464241333fd25d3e3ba \
+    https://repo1.maven.org/maven2/io/opentelemetry/javaagent/opentelemetry-javaagent/2.31.1/opentelemetry-javaagent-2.31.1.jar \
+    /opt/otel/opentelemetry-javaagent.jar
 
 COPY build/libs/app.jar /app/app.jar
 
@@ -780,6 +783,12 @@ and alert with multi-window burn rates. See `core/observability-patterns.md` §S
                 <includeMdcKeyName>user_id</includeMdcKeyName>
                 <includeMdcKeyName>trace_id</includeMdcKeyName>
                 <includeMdcKeyName>span_id</includeMdcKeyName>
+                <!-- every other MDC key the archetypes put (snake_case); a key not listed here is dropped -->
+                <includeMdcKeyName>order_id</includeMdcKeyName>
+                <includeMdcKeyName>job_id</includeMdcKeyName>
+                <includeMdcKeyName>job_type</includeMdcKeyName>
+                <includeMdcKeyName>attempt</includeMdcKeyName>
+                <includeMdcKeyName>event_id</includeMdcKeyName>
 
                 <!-- Static fields -->
                 <customFields>
@@ -842,19 +851,14 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
-import java.util.UUID;
-import java.util.regex.Pattern;
 
 /**
- * Populates MDC with request_id and the trace IDs for every request.
- * Must run early in the filter chain (low order number), before Spring Security.
+ * Adds the trace IDs to the MDC for every request. request_id is NOT handled here: RequestIdFilter
+ * (crud-handler-java.md) is the one filter that reads, validates and echoes X-Request-ID; it runs first.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 10)
 public class CorrelationFilter extends OncePerRequestFilter {
-
-    // Bounded charset and length: an inbound ID can't inject log lines or bloat every record
-    private static final Pattern VALID_REQUEST_ID = Pattern.compile("[A-Za-z0-9._-]{8,128}");
 
     @Override
     protected void doFilterInternal(HttpServletRequest request,
@@ -862,27 +866,18 @@ public class CorrelationFilter extends OncePerRequestFilter {
                                      FilterChain filterChain)
             throws ServletException, IOException {
 
+        // OTel trace/span IDs (if the OTel agent is active, these are already in MDC;
+        // this is a fallback for non-agent setups)
+        SpanContext spanContext = Span.current().getSpanContext();
+        if (spanContext.isValid()) {
+            MDC.put("trace_id", spanContext.getTraceId());
+            MDC.put("span_id", spanContext.getSpanId());
+        }
         try {
-            // Request ID — accept a well-formed inbound ID, otherwise generate one
-            String requestId = request.getHeader("X-Request-ID");
-            if (requestId == null || !VALID_REQUEST_ID.matcher(requestId).matches()) {
-                requestId = "req_" + UUID.randomUUID().toString().replace("-", "").substring(0, 16);
-            }
-            MDC.put("request_id", requestId);
-            response.setHeader("X-Request-ID", requestId);
-
-            // OTel trace/span IDs (if OTel agent is active, these are already in MDC;
-            // this is a fallback for non-agent setups)
-            SpanContext spanContext = Span.current().getSpanContext();
-            if (spanContext.isValid()) {
-                MDC.put("trace_id", spanContext.getTraceId());
-                MDC.put("span_id", spanContext.getSpanId());
-            }
-
             filterChain.doFilter(request, response);
-
         } finally {
-            MDC.clear();
+            MDC.remove("trace_id"); // only our own keys: request_id belongs to RequestIdFilter
+            MDC.remove("span_id");
         }
     }
 }
@@ -965,8 +960,8 @@ public class OrderService {
     }
 
     public Order createOrder(String tenantId, CreateOrderRequest request) {
-        // MDC fields (request_id, trace_id; tenant_id, user_id) are added by CorrelationFilter
-        // and TenantMdcFilter.
+        // MDC fields are added by RequestIdFilter (request_id), CorrelationFilter (trace_id, span_id)
+        // and TenantMdcFilter (tenant_id, user_id).
         // They appear in every log line automatically — no need to repeat them.
 
         log.info("Creating order items={} user={}", request.getItems().size(), request.getUserId());

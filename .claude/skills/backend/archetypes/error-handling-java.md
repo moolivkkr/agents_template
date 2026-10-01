@@ -331,7 +331,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<ErrorBody> handleDataIntegrity(DataIntegrityViolationException ex) {
         var sqlState = sqlState(ex);
-        log.warn("Data integrity violation, sqlState={}, requestId={}", sqlState, MDC.get("requestId"), ex);
+        log.warn("Data integrity violation, sqlState={}, requestId={}", sqlState, MDC.get("request_id"), ex);
         if ("23505".equals(sqlState)) { // unique_violation
             return write(new ConflictException(null, "This conflicts with existing data."));
         }
@@ -355,7 +355,7 @@ public class GlobalExceptionHandler {
     // --- The one writer ---
 
     private ResponseEntity<ErrorBody> write(DomainException ex) {
-        var requestId = MDC.get("requestId"); // set by RequestIdFilter (crud-handler-java.md)
+        var requestId = MDC.get("request_id"); // set by RequestIdFilter (crud-handler-java.md)
         if (ex.getStatus().is5xxServerError()) {
             // The cause chain goes to the log under requestId — never to the client
             log.error("Request failed, code={}, resource={}, requestId={}",
