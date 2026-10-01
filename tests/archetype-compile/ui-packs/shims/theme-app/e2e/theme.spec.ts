@@ -39,6 +39,13 @@ async function expectSameColor(page: Page, actual: string, literal: string, labe
   expect(a.every((v, i) => Math.abs(v - b[i]!) <= 2), `${label}: ${actual} [${a}] vs ${literal} [${b}]`).toBe(true);
 }
 
+/** Switch to dark with CSS transitions off first: the shadcn Button animates background-color, so sampling
+ *  right after the class change read an in-between colour (flaky: 3 runs gave 3 different values). */
+async function goDark(page: Page) {
+  await page.addStyleTag({ content: "*, *::before, *::after { transition: none !important; animation: none !important; }" });
+  await page.evaluate(() => document.documentElement.classList.add("dark"));
+}
+
 const PAIRS: Array<[testId: string, prop: string, token: string]> = [
   ["bg-background", "background-color", "background"],
   ["bg-background", "color", "foreground"],
@@ -78,14 +85,14 @@ test("light: every token utility resolves to its token (shadcn.md overrides appl
 
 test("dark: the .dark values apply through the dark variant class", async ({ page }) => {
   await page.goto("/");
-  await page.evaluate(() => document.documentElement.classList.add("dark"));
+  await goDark(page);
   await expectTokens(page, DARK);
 });
 
 for (const mode of ["light", "dark"] as const) {
   test(`${mode}: Alert variants use the tokens and pass WCAG 2 AA color contrast`, async ({ page }) => {
     await page.goto("/");
-    if (mode === "dark") await page.evaluate(() => document.documentElement.classList.add("dark"));
+    if (mode === "dark") await goDark(page);
     const values = mode === "dark" ? DARK : LIGHT;
     const alerts = page.getByTestId("alerts").locator('[role="alert"]');
     await expect(alerts).toHaveCount(4);
