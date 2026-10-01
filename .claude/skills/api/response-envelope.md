@@ -83,7 +83,23 @@ The HTTP status carries the class; the body carries the detail:
 - **Error bodies never carry stack traces, SQL, file paths, upstream messages or "technical detail".**
   The `request_id` links the client-visible error to the server log line that has them.
 - **`code` values are UPPER_SNAKE, stable and documented** in `data-contracts.md`. `message` is safe
-  to show a user. Field-level `details[].code` values are lower_snake.
+  to show a user. Field-level `details[].code` values are lower_snake and come from this closed set,
+  so a client maps them once for every service and every language:
+
+  | `details[].code` | When |
+  |---|---|
+  | `required` | missing, `null`, or empty where a value is required |
+  | `invalid_type` | wrong JSON type, or not parseable as the type (`"abc"` for a number) |
+  | `invalid_format` | right type, wrong shape: email, UUID, date, pattern |
+  | `invalid_value` | not one of the allowed values (an enum, an unknown status); also the fallback for a validator rule with no closer code |
+  | `out_of_range` | a number outside its bounds, either side (`limit` outside `1..max`, GraphQL `first`) |
+  | `too_short` / `too_long` | a string or list shorter or longer than allowed |
+  | `unknown_field` | a field the endpoint doesn't accept |
+  | `invalid_cursor` | a malformed cursor, or one minted under a different sort |
+  | `already_exists` | a value that must be unique is already used (409 `CONFLICT`, or 400 when checked up front) |
+
+  A validator's own vocabulary (`too_small`, `min_value`, `greater_than_equal`, `max_length`, …) is
+  mapped onto this set before it reaches the wire. Add a code here before using a new one.
 - **Timestamps are RFC 3339 UTC strings. IDs are strings** (even if numeric in the DB), and money is
   in integer minor units.
 - **Every response sets `X-Request-Id`,** which equals `meta.request_id` / `error.request_id`.
@@ -106,6 +122,8 @@ export type FieldError = { field: string; code: string; message: string };
 ```
 
 **Go (server):**
+
+> Go types compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh).
 
 ```go
 type Meta struct {
@@ -132,6 +150,11 @@ type APIError struct {
 	RequestID string       `json:"request_id"`
 	Retryable bool         `json:"retryable"`
 }
+type FieldError struct {
+	Field   string `json:"field"`
+	Code    string `json:"code"` // lower_snake, stable
+	Message string `json:"message"`
+}
 ```
 
 ## What tests assert
@@ -149,3 +172,5 @@ These are the contract tests, owned by `integration_test_agent`, with shapes fro
   body contains no stack trace or SQL (assert the absence of `"stack"`, `"SELECT "`, file paths).
 - **UI and mobile mocks** (MSW handlers, fixtures) are built from these types, so a mock that violates
   the envelope fails to type-check.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 JSON blocks parsed + response-envelope rules.

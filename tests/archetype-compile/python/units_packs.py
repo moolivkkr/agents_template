@@ -670,6 +670,7 @@ UNITS.append(Unit(
             B(PY, 14, "from collections.abc import AsyncGenerator"),
         ],
         "tests/test_python_fastapi.py": [stub("test_python_fastapi.py")],
+        "tests/test_python_field_codes.py": [stub("test_python_field_codes.py")],
     },
     imports=["app.types", "app.errors", "app.handlers", "app.tenancy", "app.db_tenant", "app.tenant_middleware",
              "app.users"],

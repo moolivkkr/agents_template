@@ -303,14 +303,9 @@ class Query:
         filter: WidgetFilter | None = None,
     ) -> WidgetConnection:
         if not 1 <= first <= 100:  # an error, never clamped: the client can't tell it got fewer
-            too_small = first < 1
             raise GraphQLError("Some fields are invalid.", extensions={
                 "code": "VALIDATION_FAILED",
-                "details": [{
-                    "field": "first",
-                    "code": "greater_than_equal" if too_small else "less_than_equal",
-                    "message": "This value is too small." if too_small else "This value is too large.",
-                }],
+                "details": [{"field": "first", "code": "out_of_range", "message": "This value is out of range."}],
             })
         user = get_current_user(info)
         return await info.context.widget_svc.list(user.tenant_id, first, after, filter)

@@ -43,7 +43,7 @@ class HarnessDRFTests(APITestCase):
         self.assertEqual(sorted(seen), sorted(str(w.id) for w in made))
 
     def test_limit_outside_bounds_is_400_never_clamped(self):
-        for bad, code in (("0", "min_value"), ("101", "max_value"), ("-3", "min_value"), ("x", "invalid")):
+        for bad, code in (("0", "out_of_range"), ("101", "out_of_range"), ("-3", "out_of_range"), ("x", "invalid_type")):
             resp = self.client.get(f"/api/v1/widgets/?limit={bad}")
             self.assertEqual(resp.status_code, 400, (bad, resp.content))
             err = _error(resp)
@@ -117,6 +117,57 @@ class HarnessDRFTests(APITestCase):
         err = _error(resp)
         self.assertEqual((err["code"], err["message"]), ("INTERNAL", "Something went wrong."))
         self.assertNotIn("secret internal detail", resp.content.decode())
+
+
+class HarnessFieldCodeTests(APITestCase):
+    """DRF's native ErrorDetail codes, produced by real serializers, reach the wire as the envelope's closed
+    set (the doc's custom_exception_handler)."""
+
+    def test_native_codes_map_onto_the_closed_set(self):
+        from rest_framework import serializers
+        from rest_framework.validators import UniqueValidator
+
+        from apps.core.exceptions import custom_exception_handler
+
+        WidgetFactory(name="taken")
+
+        class Probe(serializers.Serializer):
+            missing = serializers.CharField()                                   # required
+            empty = serializers.CharField()                                     # blank
+            nothing = serializers.CharField()                                   # null
+            short = serializers.CharField(min_length=3)                         # min_length
+            long = serializers.CharField(max_length=2)                          # max_length
+            low = serializers.IntegerField(min_value=1)                         # min_value
+            high = serializers.IntegerField(max_value=5)                        # max_value
+            choice = serializers.ChoiceField(choices=["a", "b"])                # invalid_choice
+            name = serializers.CharField(validators=[UniqueValidator(queryset=Widget.objects.all())])  # unique
+            number = serializers.IntegerField()                                 # invalid (DRF's own)
+            own = serializers.CharField()
+
+            def validate_own(self, value):
+                raise serializers.ValidationError("bad format", code="invalid_format")  # already in the set
+
+        data = {"empty": "", "nothing": None, "short": "ab", "long": "abc", "low": 0, "high": 6, "choice": "z",
+                "name": "taken", "number": "x", "own": "v"}
+        probe = Probe(data=data)
+        self.assertFalse(probe.is_valid())
+        native = {f: [d.code for d in errs] for f, errs in probe.errors.items()}
+        self.assertEqual(native, {"missing": ["required"], "empty": ["blank"], "nothing": ["null"],
+                                  "short": ["min_length"], "long": ["max_length"], "low": ["min_value"],
+                                  "high": ["max_value"], "choice": ["invalid_choice"], "name": ["unique"],
+                                  "number": ["invalid"], "own": ["invalid_format"]})
+        resp = custom_exception_handler(serializers.ValidationError(probe.errors), {"request": None})
+        self.assertEqual(resp.status_code, 400)
+        wire = {d["field"]: d["code"] for d in resp.data["error"]["details"]}
+        self.assertEqual(wire, {"missing": "required", "empty": "required", "nothing": "required",
+                                "short": "too_short", "long": "too_long", "low": "out_of_range",
+                                "high": "out_of_range", "choice": "invalid_value", "name": "already_exists",
+                                "number": "invalid_value", "own": "invalid_format"})
+        allowed = {"required", "invalid_type", "invalid_format", "invalid_value", "out_of_range", "too_short",
+                   "too_long", "unknown_field", "invalid_cursor", "already_exists"}
+        self.assertLessEqual(set(wire.values()), allowed)
+        for d in resp.data["error"]["details"]:
+            self.assertTrue(d["message"].startswith("This "), d)  # the catalog message, never DRF's text
 
 
 class HarnessJWTTests(APITestCase):

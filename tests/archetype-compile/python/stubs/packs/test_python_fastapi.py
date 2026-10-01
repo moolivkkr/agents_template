@@ -58,7 +58,7 @@ def test_missing_credentials_are_401_with_www_authenticate(client):
 
 
 def test_limit_out_of_range_is_400_validation_failed(client):
-    for bad, code in (("0", "too_small"), ("101", "too_large"), ("x", "invalid")):
+    for bad, code in (("0", "out_of_range"), ("101", "out_of_range"), ("x", "invalid_type")):
         err = _error(client.get(f"/orders?limit={bad}", headers=A), 400, "VALIDATION_FAILED")
         assert err["details"][0]["field"] == "limit" and err["details"][0]["code"] == code, err
 

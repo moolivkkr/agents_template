@@ -87,8 +87,10 @@ class UpdateWidgetSerializer(WidgetWriteSerializer):
 - Use plain `Serializer` for write operations — explicit control over input validation; their
   `to_representation` returns the read shape, so a 201/200 body is the resource, not the echoed input
 - `validate_<field>` for per-field validation, `validate()` for cross-field rules
-- Raise `ValidationError(..., code="<lower_snake>")` — the code reaches `details[].code`; the text you write is
-  replaced by the catalog message for that code (Custom Exception Handler below)
+- Raise `ValidationError(..., code="<lower_snake>")` with a code from the envelope's closed set
+  (`api/response-envelope.md`) — it reaches `details[].code`; DRF's own codes (`blank`, `max_length`, …) are
+  mapped onto the set, and the text you write is replaced by the catalog message for that code (Custom
+  Exception Handler below)
 - Pass `context={"request": request}` for tenant-scoped uniqueness checks
 
 ## ViewSets and Routers
@@ -246,11 +248,9 @@ class EnvelopeCursorPagination(CursorPagination):
         try:
             limit = int(raw)
         except ValueError:
-            raise ValidationError({"limit": "Must be a whole number."}, code="invalid") from None
-        if limit < 1:
-            raise ValidationError({"limit": "Must be at least 1."}, code="min_value")
-        if limit > self.max_page_size:
-            raise ValidationError({"limit": f"Must be at most {self.max_page_size}."}, code="max_value")
+            raise ValidationError({"limit": "Must be a whole number."}, code="invalid_type") from None
+        if not 1 <= limit <= self.max_page_size:
+            raise ValidationError({"limit": f"Must be 1 to {self.max_page_size}."}, code="out_of_range")
         return limit
 
     def get_paginated_response(self, data):
@@ -381,17 +381,26 @@ _BY_STATUS = {
     429: ("RATE_LIMITED", "Too many requests. Try again shortly."),  # DRF sets Retry-After
 }
 
-# DRF's ErrorDetail.code is already a stable lower_snake id (required, blank, max_length, invalid, …).
-# Each code maps to a fixed catalog message; DRF's own text (which can echo the input) is not sent.
+# details[].code comes from the envelope's closed set (api/response-envelope.md). DRF's ErrorDetail.code is
+# its own vocabulary (blank, max_length, min_value, invalid_choice, unique, …): mapped onto the set here; a
+# code already in the set (raised with code=...) passes through. Each wire code has one catalog message;
+# DRF's own text (which can echo the input) is not sent.
+FIELD_CODES = {
+    "required": "required", "blank": "required", "null": "required",
+    "max_length": "too_long", "min_length": "too_short",
+    "min_value": "out_of_range", "max_value": "out_of_range",
+    "invalid_choice": "invalid_value", "unique": "already_exists",
+}
 FIELD_MESSAGES = {
     "required": "This field is required.",
-    "blank": "This field is required.",
-    "null": "This field is required.",
-    "max_length": "This value is too long.",
-    "min_length": "This value is too short.",
-    "min_value": "This value is too small.",
-    "max_value": "This value is too large.",
-    "invalid_choice": "Choose one of the allowed values.",
+    "invalid_type": "This value has the wrong type.",
+    "invalid_format": "This value has the wrong format.",
+    "invalid_value": "This value is invalid.",
+    "out_of_range": "This value is out of range.",
+    "too_short": "This value is too short.",
+    "too_long": "This value is too long.",
+    "unknown_field": "This field is not accepted.",
+    "invalid_cursor": "This cursor is not valid.",
     "already_exists": "This value is already in use.",
 }
 
@@ -405,8 +414,9 @@ def _field_errors(detail, field=""):
             nested = isinstance(item, (dict, list))
             yield from _field_errors(item, (f"{field}.{i}" if field else str(i)) if nested else field)
     else:
-        code = getattr(detail, "code", None) or "invalid"
-        yield {"field": field, "code": code, "message": FIELD_MESSAGES.get(code, "This value is invalid.")}
+        native = getattr(detail, "code", "") or ""
+        code = native if native in FIELD_MESSAGES else FIELD_CODES.get(native, "invalid_value")
+        yield {"field": field, "code": code, "message": FIELD_MESSAGES[code]}
 
 def _body(code, message, request_id, details=None, retryable=False):
     error = {"code": code, "message": message}

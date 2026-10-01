@@ -24,16 +24,16 @@ res, _ = run('{ widget(id: "t2-w1") { id } }')
 assert res.errors is None and res.data == {"widget": None}, (res.errors, res.data)
 
 # first outside 1..100 is a VALIDATION_FAILED error and no data — never a clamped page
-for first, code in ((0, "greater_than_equal"), (-1, "greater_than_equal"), (101, "less_than_equal")):
+for first in (0, -1, 101):
     res, calls = run(f"{{ widgets(first: {first}) {{ totalCount }} }}")
     assert res.data is None, (first, res.data)
     assert res.errors is not None and len(res.errors) == 1, (first, res.errors)
     ext = res.errors[0].extensions or {}
     assert ext.get("code") == "VALIDATION_FAILED", (first, ext)
-    assert ext["details"] == [{"field": "first", "code": code, "message": ext["details"][0]["message"]}], ext
+    assert ext["details"] == [{"field": "first", "code": "out_of_range", "message": "This value is out of range."}], ext
     assert res.errors[0].path == ["widgets"], res.errors[0].path
     assert calls.lists == [], "the service must not be called for an invalid page size"
-    print(f"graphql first={first}: error VALIDATION_FAILED ({code}), data=None")
+    print(f"graphql first={first}: error VALIDATION_FAILED (details[0].code out_of_range), data=None")
 
 # the bounds themselves succeed; the DataLoaders batch one call per level for the whole page
 for first in (1, 100):

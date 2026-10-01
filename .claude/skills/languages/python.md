@@ -557,18 +557,27 @@ async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
                 exc_info=exc if exc.status_code >= 500 else None)  # cause chain: logs only
     return error_response(request, exc)
 
-# pydantic error type → stable lower_snake code + catalog message. pydantic's "msg" (and "input", which
-# echoes the submitted value) never reaches the client.
+# pydantic error type → a details[].code from the envelope's closed set (api/response-envelope.md) + a
+# catalog message. pydantic's "msg" (and "input", which echoes the submitted value) never reaches the client.
+_OUT_OF_RANGE = ("out_of_range", "This value is out of range.")
+_INVALID_TYPE = ("invalid_type", "This value has the wrong type.")
+_INVALID_FORMAT = ("invalid_format", "This value has the wrong format.")
 PYDANTIC_FIELD_ERRORS: dict[str, tuple[str, str]] = {
     "missing": ("required", "This field is required."),
     "string_too_short": ("too_short", "This value is too short."),
+    "too_short": ("too_short", "This value is too short."),
     "string_too_long": ("too_long", "This value is too long."),
-    "greater_than_equal": ("too_small", "This value is too small."),
-    "less_than_equal": ("too_large", "This value is too large."),
-    "string_pattern_mismatch": ("invalid_format", "This value has the wrong format."),
-    "uuid_parsing": ("invalid_format", "This value has the wrong format."),
-    "enum": ("invalid_choice", "Choose one of the allowed values."),
-    "literal_error": ("invalid_choice", "Choose one of the allowed values."),
+    "too_long": ("too_long", "This value is too long."),
+    **dict.fromkeys(["greater_than", "greater_than_equal", "less_than", "less_than_equal", "multiple_of"],
+                    _OUT_OF_RANGE),
+    **dict.fromkeys(["int_parsing", "int_type", "int_from_float", "float_parsing", "float_type", "bool_parsing",
+                     "bool_type", "string_type", "decimal_parsing", "list_type", "dict_type", "model_type",
+                     "uuid_type"], _INVALID_TYPE),
+    **dict.fromkeys(["uuid_parsing", "string_pattern_mismatch", "date_parsing", "datetime_parsing",
+                     "datetime_from_date_parsing", "url_parsing"], _INVALID_FORMAT),
+    "enum": ("invalid_value", "Choose one of the allowed values."),
+    "literal_error": ("invalid_value", "Choose one of the allowed values."),
+    "extra_forbidden": ("unknown_field", "This field is not accepted."),
 }
 
 @app.exception_handler(RequestValidationError)
@@ -578,7 +587,7 @@ async def request_validation_handler(request: Request, exc: RequestValidationErr
         return error_response(request, MalformedRequestError())
     details: list[FieldError] = []
     for e in errors:
-        code, message = PYDANTIC_FIELD_ERRORS.get(e["type"], ("invalid", "This value is invalid."))
+        code, message = PYDANTIC_FIELD_ERRORS.get(e["type"], ("invalid_value", "This value is invalid."))
         details.append({"field": ".".join(str(p) for p in e["loc"][1:]),  # drop "body"/"query"/"header"
                         "code": code, "message": message})
     return error_response(request, ValidationError(details))  # 400, not FastAPI's default 422
@@ -1054,9 +1063,9 @@ class OrderSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs: dict) -> dict:
         if attrs.get("total", 0) < 0:
-            # code= becomes details[].code; the EXCEPTION_HANDLER sends a catalog message for it,
-            # as 400 VALIDATION_FAILED (see frameworks/drf.md)
-            raise serializers.ValidationError({"total": "Must be non-negative"}, code="min_value")
+            # code= becomes details[].code (one of the envelope's closed set); the EXCEPTION_HANDLER sends
+            # a catalog message for it, as 400 VALIDATION_FAILED (see frameworks/drf.md)
+            raise serializers.ValidationError({"total": "Must be non-negative"}, code="out_of_range")
         return attrs
 
     def create(self, validated_data: dict) -> Order:
