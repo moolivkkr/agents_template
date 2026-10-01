@@ -119,7 +119,7 @@ EXPECTED = {
     "testing/vitest.md": {"sh": 1},
     "ui/accessibility-patterns.md": {"json": 1},
     "ui/shadcn.md": {"sh": 1},
-    "ui/stitch-design.md": {"json": 1},
+    "ui/stitch-design.md": {"json": 2, "sh": 1},
     "ui/structured-wireframe-format.md": {"yaml": 6},
     "review/board-review/protocol.md": {"json": 2},
 }
@@ -729,6 +729,9 @@ BLOCKS = {
     "ui/shadcn.md#sh1": dict(anchor='# Initialize shadcn/ui in a project', check="sh"),
     # ── ui/stitch-design.md
     "ui/stitch-design.md#json1": dict(anchor='{', check="json"),
+    "ui/stitch-design.md#json2": dict(anchor='{', check="json"),
+    "ui/stitch-design.md#sh1": dict(anchor='# PHASE / SEEDED_ORDER_ID come from the import step; add --storage-state agent_state/stitch/auth.json for logged-in pages',
+                                    check="sh", sc_exclude={"SC2154": FRAGMENT_VARS["SC2154"]}),
     # ── ui/structured-wireframe-format.md (format spec: YAML parse only)
     "ui/structured-wireframe-format.md#yaml1": dict(anchor='# <screen-name>.wireframe.yaml', check="yaml"),
     "ui/structured-wireframe-format.md#yaml2": dict(anchor='screen:', check="yaml"),
