@@ -175,6 +175,10 @@ def assemble(unit, by_ref, root, tools_env):
         err = protoc(unit["protoc"], root, tools_env)
         if err:
             return None, err
+    if unit.get("sql_migrations"):
+        err = sql_migrations(unit["sql_migrations"], root)
+        if err:
+            return None, err
     if fragments:
         # goimports computes each fragment's import block; the code itself is written back untouched
         # so the //line mapping stays exact.
@@ -188,6 +192,27 @@ def assemble(unit, by_ref, root, tools_env):
             with open(path, "w", encoding="utf-8") as f:
                 f.write(f"package {pkg}\n\n{imports}\n{body}")
     return fragments, None
+
+
+def sql_migrations(spec, root):
+    """Write the ```sql blocks that start with `-- Migration: <file>.sql` into the unit, so the Go
+    code that embeds and runs them runs the documented SQL itself."""
+    out = os.path.join(root, spec["out"])
+    os.makedirs(out, exist_ok=True)
+    written = 0
+    for b in mdblocks.blocks(os.path.join(REPO, spec["md"]), lang="sql"):
+        m = re.match(r"^--\s*Migration:\s*(\S+\.sql)\s*$", b.text.split("\n", 1)[0])
+        if not m:
+            continue
+        name = m.group(1)
+        if os.path.exists(os.path.join(out, name)):
+            return f"{spec['md']}: two SQL blocks claim {name}"
+        with open(os.path.join(out, name), "w", encoding="utf-8") as f:
+            f.write(b.text)
+        written += 1
+    if written < spec.get("min", 1):
+        return f"{spec['md']}: found {written} '-- Migration:' SQL blocks, expected at least {spec.get('min', 1)}"
+    return None
 
 
 def protoc(spec, root, env):

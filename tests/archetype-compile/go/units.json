@@ -115,7 +115,11 @@
       "Server Startup",
       "Proto-to-Domain Conversion"
     ],
-    "migration-pattern-go.md": ["Go Migration Runner Integration", "RLS Application-Level Setup"],
+    "migration-pattern-go.md": [
+      "Go Migration Runner Integration",
+      "RLS Application-Level Setup",
+      "Testing Migrations — Up, Down, Round Trip"
+    ],
     "observability-go.md": [
       "1.1 TracerProvider Setup (main.go)",
       "1.2 Span Creation in Handlers, Services, Repositories",
@@ -286,15 +290,22 @@
     },
     {
       "name": "migration",
-      "doc": "golang-migrate runner (with an embedded migrations dir) and the RLS transaction helper",
+      "doc": "golang-migrate runner, the RLS transaction helper, and the migration test: it embeds the doc's own SQL migrations (extracted at run time) and, with ARCHETYPE_DB_TESTS=1, runs up/down/re-up for every version and the seed + backfill under FORCE ROW LEVEL SECURITY as a non-superuser owner",
       "files": [
         {"path": "cmd/migrate/runner.go", "blocks": ["migration-pattern-go.md#1"]},
-        {"path": "cmd/migrate/rls.go", "blocks": ["migration-pattern-go.md#2"], "package": "main", "imports": ["github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgxpool", "github.com/google/uuid"]}
+        {"path": "cmd/migrate/rls.go", "blocks": ["migration-pattern-go.md#2"], "package": "main", "imports": ["github.com/jackc/pgx/v5", "github.com/jackc/pgx/v5/pgxpool", "github.com/google/uuid"]},
+        {"path": "cmd/migrate/migrate_test.go", "blocks": ["migration-pattern-go.md#3"]}
       ],
       "stubs": {
-        "cmd/migrate/stub_main.go": "testdata/stubs/main_stub.go",
-        "cmd/migrate/migrations/20260115100000_create_widgets_table.up.sql": "testdata/fixtures/create_widgets.up.sql"
-      }
+        "cmd/migrate/stub_main.go": "testdata/stubs/main_stub.go"
+      },
+      "sql_migrations": {
+        "md": ".claude/skills/backend/archetypes/migration-pattern-go.md",
+        "out": "cmd/migrate/migrations",
+        "min": 10
+      },
+      "tests": true,
+      "db_tests": ["./cmd/migrate/"]
     },
     {
       "name": "dockerfile",
