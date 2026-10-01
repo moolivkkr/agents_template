@@ -264,10 +264,28 @@ func (r *widgetResolver) Tags(ctx context.Context, obj *model.Widget) ([]*model.
 # app/graphql/schema.py
 
 import strawberry
+from graphql import GraphQLError
 from strawberry.types import Info
 
 from app.auth.context import get_current_user
 from app.graphql.dataloaders import UserLoader, TagLoader
+
+# Widget comes first: Query's return annotations are evaluated when Query is defined
+@strawberry.type
+class Widget:
+    id: strawberry.ID
+    name: str
+    description: str
+    status: WidgetStatus
+    created_by_id: strawberry.Private[str]  # not exposed, used for DataLoader
+
+    @strawberry.field
+    async def created_by(self, info: Info) -> User:
+        return await info.context.user_loader.load(self.created_by_id)
+
+    @strawberry.field
+    async def tags(self, info: Info) -> list[Tag]:
+        return await info.context.tag_loader.load(self.id)
 
 @strawberry.type
 class Query:
@@ -284,25 +302,13 @@ class Query:
         after: str | None = None,
         filter: WidgetFilter | None = None,
     ) -> WidgetConnection:
+        if not 1 <= first <= 100:  # an error, never clamped: the client can't tell it got fewer
+            raise GraphQLError("Some fields are invalid.", extensions={
+                "code": "VALIDATION_FAILED",
+                "details": [{"field": "first", "code": "out_of_range", "message": "This value is out of range."}],
+            })
         user = get_current_user(info)
-        first = min(first, 100)
         return await info.context.widget_svc.list(user.tenant_id, first, after, filter)
-
-@strawberry.type
-class Widget:
-    id: strawberry.ID
-    name: str
-    description: str
-    status: WidgetStatus
-    created_by_id: strawberry.Private[str]  # not exposed, used for DataLoader
-
-    @strawberry.field
-    async def created_by(self, info: Info) -> User:
-        return await info.context.user_loader.load(self.created_by_id)
-
-    @strawberry.field
-    async def tags(self, info: Info) -> list[Tag]:
-        return await info.context.tag_loader.load(self.id)
 ```
 
 ### TypeScript (Apollo Server)

@@ -1,0 +1,42 @@
+# Libraries the ```python samples in the other .claude/skills packs import (languages/python.md,
+# frameworks/*.md, testing/*.md, databases/*.md, infrastructure/*.md, core/*.md), on top of
+# requirements.txt. Current stable releases, vetted with .claude/guard/vet-package.py and resolved
+# 2026-09-30 for Python 3.12. requirements-packs.txt is the lock, compiled with the archetype lock as
+# constraints so a library both use stays on one version:
+#   uv pip compile requirements-packs.in -c requirements.txt -o requirements-packs.txt --python-version 3.12
+
+# Django REST framework (frameworks/drf.md, frameworks/django.md, languages/python.md)
+djangorestframework==3.18.1
+django-filter==26.1
+djangorestframework-simplejwt==5.5.1
+django-model-utils==5.0.0
+
+# EmailStr in request models (frameworks/fastapi.md)
+email-validator==2.3.0
+
+# GraphQL (frameworks/graphql.md)
+strawberry-graphql==0.328.0
+
+# AWS (databases/dynamodb.md, infrastructure/localstack-aws-local.md): real boto3 against moto, in-process
+# and as a local HTTP endpoint (moto's server mode needs flask + flask-cors). LocalStack isn't used: its
+# current image needs a license to start.
+boto3==1.43.106
+moto[dynamodb,s3]==5.2.3
+flask==3.1.3
+flask-cors==6.0.5
+types-boto3[dynamodb,kms,s3,sqs]==1.43.106
+
+# DB-API parameter binding (core/security-owasp.md)
+psycopg[binary]==3.3.6
+
+# testing packs
+hypothesis==6.168.3
+pytest-httpx==0.36.2
+pytest-mock==3.16.0
+factory-boy==3.3.3
+pact-python==3.4.1
+locust==2.46.6
+
+# ML patterns (languages/python.md)
+numpy==2.5.3
+torch==2.14.1

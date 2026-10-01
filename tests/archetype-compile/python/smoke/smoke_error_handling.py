@@ -57,6 +57,7 @@ assert r.status_code == 400 and r.json()["error"]["code"] == "MALFORMED_REQUEST"
 # details[].code: pydantic's own error types are mapped onto the closed set in api/response-envelope.md
 from enum import Enum  # noqa: E402
 from typing import Literal  # noqa: E402
+from datetime import date, datetime  # noqa: E402
 from uuid import UUID  # noqa: E402
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator  # noqa: E402
@@ -78,6 +79,8 @@ class Probe(BaseModel):
     kind: Literal["a", "b"]
     tags: list[str] = Field(default_factory=list, max_length=2)
     nickname: str | None = None
+    due: date | None = None
+    at: datetime | None = None
 
     @field_validator("nickname")
     @classmethod
@@ -106,6 +109,8 @@ CASES = [  # (field overrides, field, expected code)
     ({"tags": ["x", "y", "z"]}, "tags", "too_long"),
     ({"surprise": 1}, "surprise", "unknown_field"),
     ({"nickname": "admin"}, "nickname", "invalid_value"),
+    ({"due": "2026-13-45"}, "due", "invalid_format"),  # pydantic: date_from_datetime_parsing
+    ({"at": "yesterday"}, "at", "invalid_format"),  # pydantic: datetime_from_date_parsing
 ]
 for overrides, field, expected in CASES:
     payload = {**VALID, **overrides}

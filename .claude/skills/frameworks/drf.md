@@ -1,5 +1,7 @@
 # Django REST Framework patterns for Python REST APIs.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked, imported, and run as one Django project on SQLite: the doc's APITestCase suite under Django's test runner, plus requests through every block (envelope bodies, cursor pages and the `limit` bounds, optimistic-locking update, permissions, JWT with iss/aud, the error handler's 400/401/404/405/409/500). Django 6.1.1, Django REST framework 3.18.1, django-filter 26.1, djangorestframework-simplejwt 5.5.1, factory_boy 3.3.3.
+
 ## Project Structure
 ```
 myapp/
@@ -42,7 +44,13 @@ class WidgetSerializer(serializers.ModelSerializer):
         fields = ["id", "name", "description", "status", "created_at", "updated_at"]
         read_only_fields = ["id", "created_at", "updated_at"]
 
-class CreateWidgetSerializer(serializers.Serializer):
+class WidgetWriteSerializer(serializers.Serializer):
+    """Base of the write serializers: validates the input, answers with the read shape."""
+
+    def to_representation(self, instance):
+        return WidgetSerializer(instance, context=self.context).data
+
+class CreateWidgetSerializer(WidgetWriteSerializer):
     name = serializers.CharField(max_length=255)
     description = serializers.CharField(max_length=2000, required=False, default="")
     status = serializers.ChoiceField(choices=["active", "draft"], default="active")
@@ -58,22 +66,31 @@ class CreateWidgetSerializer(serializers.Serializer):
             raise serializers.ValidationError("A widget with this name already exists.", code="already_exists")
         return value.strip()
 
-    def validate(self, data):
+    def validate(self, attrs):
         """Cross-field validation."""
-        if data.get("status") == "active" and not data.get("name"):
+        if attrs.get("status") == "active" and not attrs.get("name"):
             raise serializers.ValidationError({"name": "Active widgets must have a name."}, code="required")
-        return data
+        return attrs
 
-class UpdateWidgetSerializer(serializers.Serializer):
+class UpdateWidgetSerializer(WidgetWriteSerializer):
     name = serializers.CharField(max_length=255, required=False)
     description = serializers.CharField(max_length=2000, required=False)
     version = serializers.IntegerField(required=True)
+
+    def validate(self, attrs):
+        # PATCH validates with partial=True, which skips `required`: the lock version is still needed
+        if "version" not in attrs:
+            raise serializers.ValidationError({"version": "This field is required."}, code="required")
+        return attrs
 ```
 - Use `ModelSerializer` for read serializers — auto-generates fields from model
-- Use plain `Serializer` for write operations — explicit control over input validation
+- Use plain `Serializer` for write operations — explicit control over input validation; their
+  `to_representation` returns the read shape, so a 201/200 body is the resource, not the echoed input
 - `validate_<field>` for per-field validation, `validate()` for cross-field rules
-- Raise `ValidationError(..., code="<lower_snake>")` — the code reaches `details[].code`; the text you write is
-  replaced by the catalog message for that code (Custom Exception Handler below)
+- Raise `ValidationError(..., code="<lower_snake>")` with a code from the envelope's closed set
+  (`api/response-envelope.md`) — it reaches `details[].code`; DRF's own codes (`blank`, `max_length`, …) are
+  mapped onto the set, and the text you write is replaced by the catalog message for that code (Custom
+  Exception Handler below)
 - Pass `context={"request": request}` for tenant-scoped uniqueness checks
 
 ## ViewSets and Routers
@@ -113,6 +130,12 @@ class WidgetViewSet(viewsets.ModelViewSet):
         )
         serializer.instance = widget
 
+    def perform_update(self, serializer):
+        """Optimistic locking in the service: a stale `version` raises ConflictError (409)."""
+        serializer.instance = WidgetService.update(
+            serializer.instance, self.request.user.id, **serializer.validated_data,
+        )
+
     def perform_destroy(self, instance):
         """Soft delete — set deleted_at instead of removing."""
         WidgetService.soft_delete(instance, self.request.user.id)
@@ -140,6 +163,8 @@ urlpatterns = router.urls
 - `ModelViewSet` provides list, create, retrieve, update, partial_update, destroy
 - Override `get_queryset()` to enforce tenant isolation — never return unscoped querysets
 - Override `get_serializer_class()` for different read/write serializers
+- Writes go through the service: `perform_create` / `perform_update` / `perform_destroy` (a plain
+  `Serializer` has no `create()`/`update()` of its own)
 - `@action` decorator for custom endpoints beyond CRUD
 - `DefaultRouter` auto-generates URL patterns from ViewSets
 
@@ -163,10 +188,15 @@ class IsAdminOrReadOnly(BasePermission):
         return request.user.is_staff or "admin" in getattr(request.user, "roles", [])
 
 class HasPermission(BasePermission):
-    """Check for specific permission strings."""
+    """Check for a specific permission string:
+    permission_classes = [IsAuthenticated, HasPermission("widgets.archive")]"""
 
     def __init__(self, required_permission):
         self.required_permission = required_permission
+
+    def __call__(self):
+        # DRF instantiates every permission_classes entry (`permission()`): an instance returns itself
+        return self
 
     def has_permission(self, request, view):
         user_permissions = getattr(request.user, "permissions", [])
@@ -182,6 +212,7 @@ class HasPermission(BasePermission):
 from urllib.parse import parse_qs, urlparse
 
 import django_filters
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import CursorPagination
 from rest_framework.response import Response
 
@@ -208,6 +239,20 @@ class EnvelopeCursorPagination(CursorPagination):
     ordering = "-created_at"           # an unchanging, (nearly) unique field — DRF's cursor requirement
     cursor_query_param = "cursor"
 
+    def get_page_size(self, request):
+        # DRF's own get_page_size clamps to max_page_size and ignores junk: the envelope makes a limit
+        # outside 1..max a 400 VALIDATION_FAILED instead (a client asking for 500 must know it got 100)
+        raw = request.query_params.get(self.page_size_query_param)
+        if raw is None:
+            return self.page_size
+        try:
+            limit = int(raw)
+        except ValueError:
+            raise ValidationError({"limit": "Must be a whole number."}, code="invalid_type") from None
+        if not 1 <= limit <= self.max_page_size:
+            raise ValidationError({"limit": f"Must be 1 to {self.max_page_size}."}, code="out_of_range")
+        return limit
+
     def get_paginated_response(self, data):
         response = Response({
             "data": data,  # always a list — [] when empty
@@ -232,12 +277,17 @@ class EnvelopeCursorPagination(CursorPagination):
 - Cursor pagination only — for public APIs and admin UIs alike (no page-number or limit/offset paginators;
   `meta.pagination.total_count` is optional, only when cheap and the UI shows it)
 - `?limit=` is the page-size parameter; `next_cursor` is `null` when `has_more` is false
-- Always set `max_page_size` — never return unbounded results
+- Always set `max_page_size` — never return unbounded results; a `limit` outside `1..max_page_size` is a
+  400 `VALIDATION_FAILED` with a `details[]` entry for `limit`, never silently clamped
+- No `OrderingFilter`: a client-chosen ordering would replace the cursor's stable sort key
 - Use `django-filter` for declarative filtering — never parse query params manually
 
 ## Authentication
 ```python
 # settings.py
+import os
+from datetime import timedelta
+
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework_simplejwt.authentication.JWTAuthentication",
@@ -248,13 +298,24 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "apps.core.pagination.EnvelopeCursorPagination",
     "DEFAULT_RENDERER_CLASSES": ["apps.core.renderers.EnvelopeJSONRenderer"],
     "DEFAULT_FILTER_BACKENDS": [
-        "django_filters.rest_framework.DjangoFilterBackend",
-        "rest_framework.filters.OrderingFilter",
+        "django_filters.rest_framework.DjangoFilterBackend",  # no OrderingFilter: the cursor fixes the order
     ],
     "EXCEPTION_HANDLER": "apps.core.exceptions.custom_exception_handler",
 }
 
-# Custom JWT claims
+# No defaults: a missing key, issuer or audience stops the process at start-up. With ISSUER and AUDIENCE
+# set, simplejwt writes iss/aud into every token and rejects a token without them or minted elsewhere.
+SIMPLE_JWT = {
+    "SIGNING_KEY": os.environ["JWT_SIGNING_KEY"],
+    "ISSUER": os.environ["JWT_ISSUER"],
+    "AUDIENCE": os.environ["JWT_AUDIENCE"],
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
+    "TOKEN_OBTAIN_SERIALIZER": "apps.users.serializers.CustomTokenObtainPairSerializer",
+}
+```
+
+```python
+# apps/users/serializers.py — custom JWT claims (never import DRF serializers from settings.py)
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
@@ -267,6 +328,8 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
 ```
 - Use `djangorestframework-simplejwt` for JWT — never roll your own JWT
 - Add custom claims (tenant_id, roles) to the token payload
+- Signing key, issuer and audience come from the environment with no default (`SIMPLE_JWT`); iss and aud
+  are then required on every token
 - Set authentication and permission classes globally in `REST_FRAMEWORK` settings
 
 ## Custom Exception Handler
@@ -318,17 +381,26 @@ _BY_STATUS = {
     429: ("RATE_LIMITED", "Too many requests. Try again shortly."),  # DRF sets Retry-After
 }
 
-# DRF's ErrorDetail.code is already a stable lower_snake id (required, blank, max_length, invalid, …).
-# Each code maps to a fixed catalog message; DRF's own text (which can echo the input) is not sent.
+# details[].code comes from the envelope's closed set (api/response-envelope.md). DRF's ErrorDetail.code is
+# its own vocabulary (blank, max_length, min_value, invalid_choice, unique, …): mapped onto the set here; a
+# code already in the set (raised with code=...) passes through. Each wire code has one catalog message;
+# DRF's own text (which can echo the input) is not sent.
+FIELD_CODES = {
+    "required": "required", "blank": "required", "null": "required",
+    "max_length": "too_long", "min_length": "too_short",
+    "min_value": "out_of_range", "max_value": "out_of_range",
+    "invalid_choice": "invalid_value", "unique": "already_exists",
+}
 FIELD_MESSAGES = {
     "required": "This field is required.",
-    "blank": "This field is required.",
-    "null": "This field is required.",
-    "max_length": "This value is too long.",
-    "min_length": "This value is too short.",
-    "min_value": "This value is too small.",
-    "max_value": "This value is too large.",
-    "invalid_choice": "Choose one of the allowed values.",
+    "invalid_type": "This value has the wrong type.",
+    "invalid_format": "This value has the wrong format.",
+    "invalid_value": "This value is invalid.",
+    "out_of_range": "This value is out of range.",
+    "too_short": "This value is too short.",
+    "too_long": "This value is too long.",
+    "unknown_field": "This field is not accepted.",
+    "invalid_cursor": "This cursor is not valid.",
     "already_exists": "This value is already in use.",
 }
 
@@ -342,8 +414,9 @@ def _field_errors(detail, field=""):
             nested = isinstance(item, (dict, list))
             yield from _field_errors(item, (f"{field}.{i}" if field else str(i)) if nested else field)
     else:
-        code = getattr(detail, "code", None) or "invalid"
-        yield {"field": field, "code": code, "message": FIELD_MESSAGES.get(code, "This value is invalid.")}
+        native = getattr(detail, "code", "") or ""
+        code = native if native in FIELD_MESSAGES else FIELD_CODES.get(native, "invalid_value")
+        yield {"field": field, "code": code, "message": FIELD_MESSAGES[code]}
 
 def _body(code, message, request_id, details=None, retryable=False):
     error = {"code": code, "message": message}
@@ -479,8 +552,8 @@ from django.dispatch import receiver
 
 @receiver(post_save, sender=Widget)
 def widget_post_save(sender, instance, created, **kwargs):
-    if created:
-        AuditLog.objects.create(...)  # hidden, runs in same transaction, hard to test
+    if created:  # hidden, runs in same transaction, hard to test
+        AuditLog.objects.create(action="widget.created", entity_id=instance.id, actor_id=instance.created_by)
 ```
 - Prefer explicit service calls over signals for business logic
 - Signals are acceptable for: cache invalidation, search index updates, denormalization
@@ -490,7 +563,8 @@ def widget_post_save(sender, instance, created, **kwargs):
 - `get_queryset()` MUST filter by `tenant_id` — never return unscoped querysets
 - Business logic lives in `services.py` — views and serializers are thin adapters
 - Use `ModelSerializer` for reads, plain `Serializer` for writes
-- `EnvelopeCursorPagination` (`?cursor=` + `?limit=`) for every list — no page-number or limit/offset paginators
+- `EnvelopeCursorPagination` (`?cursor=` + `?limit=`) for every list — no page-number or limit/offset paginators;
+  a `limit` outside `1..max_page_size` is a 400, never clamped
 - Always set `max_page_size` — never return unbounded results
 - Every body is the envelope (`api/response-envelope.md`): `EnvelopeJSONRenderer` for success,
   `custom_exception_handler` for errors — `{"error": {code, message, details?, request_id, retryable}}`,

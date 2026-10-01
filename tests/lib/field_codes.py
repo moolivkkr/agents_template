@@ -24,9 +24,9 @@ EXTERNAL = {"card_declined"}  # Stripe error code in testing/external-service-mo
 
 PATS = [
     re.compile(r'''\b[Cc]ode["']?\s*[:=]\s*["']([a-z][a-z0-9_]*)["']'''),  # lower_snake only: UPPER_SNAKE is error.code
-    re.compile(r'''(?:[Vv]alidation(?:Error|FailedError|Exception)?|NewValidationError|[Ff]ield_?[Ee]rror|validation_error)\s*\(\s*[^,()]+,\s*["']([a-z][a-z0-9_]*)["']'''),
+    re.compile(r'''(?:[Vv]alidation(?:Error|FailedError|Exception)?|NewValidationError|[Ff]ield_?[Ee]rror(?:::new)?|validation_error)\s*\(\s*[^,()]+,\s*["']([a-z][a-z0-9_]*)["']'''),
     re.compile(r'''(?:^|[(=>]|Entry\()\s*["']([a-z][a-z0-9_]*)["']\s*,\s*["'](?:This |Enter |Choose |Select |That )'''),
-    re.compile(r'''[:?]\s*["'](too_small|too_big|too_large|min_value|max_value|min_length|max_length|invalid_length|invalid_choice|invalid|taken|already_taken|missing|min|max)["']\s*[,;)}\]\n]'''),
+    re.compile(r'''(?:[:?]|=>)\s*["'](invalid_reference|too_small|too_big|too_large|min_value|max_value|min_length|max_length|invalid_length|invalid_choice|invalid|taken|already_taken|missing|min|max)["']\s*[,;)}\]\n]'''),
 ]
 SKIP_LINE = re.compile(r"ConflictException\(|NotFoundException\(|invalidArgument\(|case\s+[\"']")
 NON_CODE = {"sql", "bash", "sh", "shell", "yaml", "yml", "text", "markdown", "md", "http", "ini", "toml", "dockerfile", "proto", "protobuf", "hcl", "ngql", "xml", "gitignore", "dockerignore", "scala", "groovy", "kotlin", "css", "html", "graphql"}

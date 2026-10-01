@@ -14,7 +14,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/error-handling-go.md` (Go) and `backend/archetypes/error-handling-typescript.md` (TypeScript). The wire shape all three produce is the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`); if this file and the envelope ever disagree, the envelope wins.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and every handler path exercised through TestClient (AppError, validation, 404/405, catch-all 500); 12 pydantic validation failures (missing, too short/long, out of range, wrong type, bad UUID, enum, literal, list too long, extra field, a custom validator) come back as `details[].code` values from the closed set in `api/response-envelope.md`, and `tests/lib/field_codes.py --lang python` passes. FastAPI 0.142.2, Starlette 1.7.0, Pydantic 2.13.5.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and every handler path exercised through TestClient (AppError, validation, 404/405, catch-all 500); 14 pydantic validation failures (missing, too short/long, out of range, wrong type, bad UUID, bad date and datetime, enum, literal, list too long, extra field, a custom validator) come back as `details[].code` values from the closed set in `api/response-envelope.md`, and `tests/lib/field_codes.py --lang python` passes. FastAPI 0.142.2, Starlette 1.7.0, Pydantic 2.13.5.
 
 Complete error handling system for Python backend services (FastAPI, Starlette). Every generated Python service MUST follow this pattern.
 
@@ -329,8 +329,11 @@ _PYDANTIC_FIELD_ERRORS: dict[str, tuple[str, str]] = {
     "string_type": ("invalid_type", "Must be text."),
     "uuid_parsing": ("invalid_format", "Must be a valid ID."),
     "string_pattern_mismatch": ("invalid_format", "This value has an invalid format."),
+    # a malformed date / datetime string is reported as *_from_*_parsing, not date_parsing / datetime_parsing
     "date_parsing": ("invalid_format", "Must be a date (YYYY-MM-DD)."),
+    "date_from_datetime_parsing": ("invalid_format", "Must be a date (YYYY-MM-DD)."),
     "datetime_parsing": ("invalid_format", "Must be a date and time (RFC 3339)."),
+    "datetime_from_date_parsing": ("invalid_format", "Must be a date and time (RFC 3339)."),
     "enum": ("invalid_value", "This value is not one of the allowed options."),
     "literal_error": ("invalid_value", "This value is not one of the allowed options."),
     "extra_forbidden": ("unknown_field", "This field is not accepted."),
