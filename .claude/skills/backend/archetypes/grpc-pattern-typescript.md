@@ -159,7 +159,9 @@ export function createWidgetServer(svc: WidgetService, events: WidgetEventSource
     ): Promise<ListWidgetsResponse> {
       const auth = getAuthContext(context);
 
-      const pageSize = Math.max(1, Math.min(request.pageSize || 20, 100));
+      // AIP-158: 0 means the default, above the maximum is coerced to it, negative is an error.
+      if (request.pageSize < 0) throw new ServerError(Status.INVALID_ARGUMENT, 'page_size must not be negative');
+      const pageSize = Math.min(request.pageSize || 20, 100);
       const [sortBy = 'created_at', sortDir] = (request.orderBy || 'created_at desc').split(' ');
 
       try {

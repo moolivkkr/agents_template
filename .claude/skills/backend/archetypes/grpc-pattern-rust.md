@@ -148,7 +148,11 @@ impl WidgetService for WidgetGrpcServer {
         let tenant_id = tenant_id_from_request(&request)?;
         let req = request.into_inner();
 
-        let page_size = req.page_size.max(1).min(100);
+        // AIP-158: 0 means the default, above the maximum is coerced to it, negative is an error.
+        if req.page_size < 0 {
+            return Err(Status::invalid_argument("page_size must not be negative"));
+        }
+        let page_size = if req.page_size == 0 { 20 } else { req.page_size.min(100) };
         let cursor = if req.page_token.is_empty() { None } else { Some(req.page_token) };
 
         let result = self.svc

@@ -140,7 +140,8 @@ message DeleteWidgetRequest {
 message DeleteWidgetResponse {}
 
 message ListWidgetsRequest {
-  int32 page_size = 1;      // Max 100
+  int32 page_size = 1;      // AIP-158: 0 = default (20); above 100 is coerced to 100; negative = INVALID_ARGUMENT.
+                            // gRPC follows AIP-158 here; the REST envelope's limit is never coerced (a 400 instead).
   string page_token = 2;    // Opaque cursor
   string order_by = 3;      // e.g., "created_at desc"
 }

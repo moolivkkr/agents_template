@@ -140,7 +140,13 @@ public class WidgetGrpcService extends WidgetServiceGrpc.WidgetServiceImplBase {
             StreamObserver<ListWidgetsResponse> responseObserver) {
 
         UUID tenantId = GrpcContext.getTenantId();
-        int pageSize = Math.max(1, Math.min(request.getPageSize() > 0 ? request.getPageSize() : 20, 100));
+        // AIP-158: 0 means the default, above the maximum is coerced to it, negative is an error.
+        if (request.getPageSize() < 0) {
+            responseObserver.onError(io.grpc.Status.INVALID_ARGUMENT
+                    .withDescription("page_size must not be negative").asRuntimeException());
+            return;
+        }
+        int pageSize = Math.min(request.getPageSize() > 0 ? request.getPageSize() : 20, 100);
 
         try {
             // A keyset window, like the REST list: page_token is the opaque cursor. No OFFSET and no

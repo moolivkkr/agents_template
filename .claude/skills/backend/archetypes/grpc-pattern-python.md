@@ -115,7 +115,10 @@ class WidgetServicer(pb_grpc.WidgetServiceServicer):
     async def ListWidgets(
         self, request: widget_pb2.ListWidgetsRequest, context: grpc.aio.ServicerContext,
     ) -> widget_pb2.ListWidgetsResponse:
-        page_size = max(1, min(request.page_size or 20, 100))
+        # AIP-158: 0 means the default, above the maximum is coerced to it, negative is an error.
+        if request.page_size < 0:
+            await context.abort(grpc.StatusCode.INVALID_ARGUMENT, "page_size must not be negative")
+        page_size = min(request.page_size or 20, 100)
         # order_by is "<field> <asc|desc>"; the service allow-lists both parts
         sort_by, _, sort_dir = (request.order_by or "created_at desc").partition(" ")
 
