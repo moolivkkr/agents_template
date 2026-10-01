@@ -605,7 +605,8 @@ BLOCKS[f"{JM}#10"] = File(package=JP, imports=(
     "org.springframework.web.bind.annotation.RestControllerAdvice",
     "org.springframework.web.context.request.WebRequest",
     "org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler",
-    "java.util.List", "java.util.Map"))
+    "org.springframework.validation.FieldError", "jakarta.validation.ConstraintViolation",
+    "java.util.Collection", "java.util.List", "java.util.Map"))
 BLOCKS[f"{JM}#11"] = File(package=JP, imports=("java.util.List",))
 _DATA = (f"{JP}.Order", f"{JP}.OrderStatus", "java.time.Instant", "java.util.UUID")
 BLOCKS[f"{JM}#12"] = File(package=f"{JP}.data", imports=_DATA + (

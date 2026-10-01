@@ -121,7 +121,7 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(MethodArgumentNotValidException.class)   // 400 VALIDATION_FAILED + details[]
     public ResponseEntity<ErrorBody> handleValidation(MethodArgumentNotValidException ex) {
         var details = ex.getBindingResult().getFieldErrors().stream()
-            .map(fe -> FieldError.fromConstraint(fe.getField(), fe.getCode())) // stable code + catalog message
+            .map(FieldError::fromConstraint) // closed-set code (Size → too_short/too_long) + catalog message
             .toList();
         return write(new ValidationException(details));
     }
