@@ -189,8 +189,10 @@ label so the project can keep both renders side by side, compare them and say wh
 | `v0.2`, `v0.3` ... | pre-approval iterations: each reviewable improvement is the next minor |
 | `v1.0` | the owner's approval of a revision **promotes** it: `approve --by owner --promote` relabels the approved revision `v1.0` if that label is free, else the next major (`v2.0`); its archive folder is renamed to match |
 
-**Multi-step edits.** Stitch returns a NEW screen id for every edit and keeps the old one (so
-`previous_screenId` chains the screens). When several small `edit_screens` calls make up one reviewable
+**Multi-step edits.** An edit that Stitch renders in full returns a NEW screen id and keeps the old one (so
+`previous_screenId` chains the screens). Not every edit does (§6.7: some come back as in-place DOM
+operations that are not saved to the screen); only record a revision when the response carries a new
+screen id with a screenshot, or when a re-fetched screen's HTML shows the change. When several small `edit_screens` calls make up one reviewable
 improvement (§6.7: one concern per edit), record each edit as a revision (`revise --no-version`), and
 label only the final one as the release (`revise` without the flag, or `label <key>` afterwards). The
 intermediates stay `rev-N`.
@@ -528,7 +530,19 @@ Observed in one live session on 2026-10-01 (a scratch project). Everything here 
   "[Donut Chart]") instead of rendering charts; the stronger `GEMINI_3_8_FLASH` rendered them. After each
   edit scan the downloaded HTML for `[... Chart` / `placeholder` strings and re-edit that concern with the
   stronger model (the `/stitch` approval loop has this as a step).
-- `edit_screens` returns a **new screen id** and the **old screen stays**.
+- `edit_screens` usually returns a **new screen id** with a screenshot, and the **old screen stays**. **But it
+  sometimes returns no `design` at all**, only `sessionEvent.eventPayload.dom_operations` (a
+  `DomOperationEvent` naming the *same* `screen_id`). Observed 2026-10-01 on a MOBILE screen: re-fetching
+  with `get_screen` returned the **same** screenshot/HTML file names and the saved HTML contained none of
+  the changes. Treat that as **not applied**: never record a revision for it. Re-issue the edit on the
+  stronger model (`GEMINI_3_8_FLASH`) asking to "re-render the full screen", then confirm that the response
+  has a new `id` and screenshot, or that the fetched HTML contains the change.
+- **Timeouts are not tied to prompt length alone.** Four calls timed out on 2026-10-01: two long prompts,
+  two *short* ones that passed `designSystem` explicitly, plus a `GEMINI_3_8_FLASH` edit. A short MOBILE
+  generate with **no** `designSystem` argument came back at once, and Stitch applied the project's most
+  recent design system by itself. So omit `designSystem` when the project's latest one is the one you want,
+  prefer the lighter model for generation, and use the stronger one only for a concern the lighter one
+  skips (charts).
 - `screenshot.downloadUrl` returns a **512 px thumbnail by default**; append `=w2560` for the full-size
   render (`${url}=w2560`). `htmlCode.downloadUrl` returns the full HTML (Tailwind via CDN + Material
   Symbols). Never use the bare screenshot URL as the stored render.
@@ -539,10 +553,15 @@ Observed in one live session on 2026-10-01 (a scratch project). Everything here 
 - `create_design_system` echoes the theme back, and Stitch expands `designMd` into `styleGuidelines`,
   named colors and a typography scale. `update_design_system` needs the **full** `designSystem` object
   and keeps the style guidelines.
-- Polling: `list_screens` returned `{}` for a project with no completed screen.
+- **`list_screens` is not a reliable way to detect a finished generation.** It returned `{}` for a
+  project that held 8+ completed screens (2026-10-01), so an empty list does **not** mean nothing was
+  generated. After a timeout, prefer `get_screen` on a known id; if there is none, say the outcome is
+  unknown instead of reporting failure.
+- Mobile screens are generated at 780 px wide (`deviceType: MOBILE`); append `=w780` (or larger) to the
+  screenshot URL for the full image.
 
-**Still unverified:** how long download URLs stay valid, polling timing for slow generations (how long a
-timed-out request may still complete), `generate_variants`, and `apply_design_system`.
+**Still unverified:** how long download URLs stay valid, how long a timed-out request may still complete,
+why some edits come back as unsaved DOM operations, `generate_variants`, and `apply_design_system`.
 
 ## 7. Reverse: code and requirements → Stitch
 
