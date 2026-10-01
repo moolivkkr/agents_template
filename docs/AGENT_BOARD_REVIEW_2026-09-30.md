@@ -507,35 +507,74 @@ Two recipes could pass a run that should fail; both are fixed and have regressio
     Postgres 17);
   - `deadcode -test`, knip;
   - every Spring Data `scroll()` / `Window` / `ScrollPosition` call (minimum Spring Data 3.1, Boot 3.1).
-- **Archetype samples, compiled and run (follow-up, same day).** There were about 790 code blocks in 75
-  archetype files, not ~30. Each language now has a re-runnable harness in `tests/archetype-compile/<lang>/`.
-  It extracts the blocks from the markdown at run time and fails when a block is neither checked nor
-  skipped with a reason. An offline inventory check for each language runs in `run-all.sh`. The harnesses
-  need the toolchain and network for the first dependency install, so they stay opt-in.
+- **Every code sample in `.claude/skills` is checked (follow-up, same day).** It started as "about 30
+  uncompiled archetype samples". In fact there were about 790 blocks in the archetypes alone. The owner
+  asked for it fully done, so the scope became every code block the agents copy from, in every pack:
+  archetypes, language, framework and testing packs, UI packs, and the SQL, shell, YAML, JSON,
+  Dockerfile, HCL and nGQL blocks. It also covers the 367 bash blocks in commands and agents, which the
+  pipeline runs.
 
-  | Language | Blocks checked | Units | Also run |
-  |---|---|---|---|
-  | Go 1.27.1 | 146/151 (5 comment-only) | 9/9 | handler/service tests; repository tests 26/26 on Postgres |
-  | Python 3.12 (pyright) | 162/163 | 15/15 | handler 51/51, service 43/43; repository 32/32 + migrations 4/4 on Postgres |
-  | TypeScript 7.0.2 strict | 198/200 | 20/20 | handler 40/40, service 43/43; `prisma validate`; Nest DI probe |
-  | Rust 1.98.1 | 157/182 (25 unchecked blocks in the newly covered `languages/rust.md` and `frameworks/axum.md`) | 11/11 | 97/97 on Postgres 17, full migration set |
-  | Java 25 / Spring Boot 4.1 | 143/145 | 18/18 | handler 64/64, service 34/34, repository 40/40 on Postgres |
-  | Vue / Svelte / Angular packs | 41/41 | 3/3 | 7 component tests each |
+  **Coverage.** Each family has a re-runnable harness in `tests/archetype-compile/<family>/`. It extracts
+  the blocks at run time and fails on any block that is neither checked nor skipped with a reason, and on
+  block-count drift. A python-only inventory test per family runs in `run-all.sh`. Every skill fence has a
+  language tag, and an untagged one fails. The harnesses need the toolchain and network on their first
+  install, so they stay opt-in.
 
-  Running them found more than compile errors. The fixes include:
-  - an SQL injection (`ORDER BY` direction, Go);
-  - gRPC streams with no auth (Go) and a gRPC server whose middleware never ran (TS);
-  - JWTs taken from websocket URLs (Go, TS, Rust);
-  - auth and rate-limit errors in a second envelope shape (Go, Python, TS, Java);
-  - a JWT decode `NameError` that turned every request into a 401 (Python);
-  - cursors that broke page 2 for non-default sorts (Rust, Python);
-  - a tenant filter enabled outside the transaction, so it filtered nothing (Java);
-  - log masking that masked nothing (Java);
-  - Postgres DDL that was a syntax error (Go, Rust);
-  - APIs removed in Zod 4, Express 5, Prisma 7, axum 0.8, OpenTelemetry, Spring Boot 4, Hibernate 7 and Jackson 3.
+  | Family | Blocks | Checked | Units | Also run |
+  |---|---|---|---|---|
+  | Go 1.27.1 | 319 in 44 files | 296 (23 comment-only or BAD/GOOD pairs) | 26/26 | handler and service tests; repository 29/29, testcontainers and pact-go run live |
+  | Python 3.12 (pyright, import, smoke) | 244 in 33 files | 243 | 41/41 | handler 51, service 43, repository 32, migrations as a non-owner role under FORCE RLS; Redis and Channels live |
+  | TypeScript 7.0.2 strict (backend) | 281 | 269 | 36/36 | handler 40, service 43, Nest DI and ValidationPipe probes, pact, fast-check; npm, pnpm and Bun images built and run |
+  | Rust 1.98.1 | 205 in 21 files | 205 | 16/16 | widget app 97/97 and lang tests as a non-owner role on PG17; 5 Dockerfiles built and run (arm64) |
+  | Java 25 / Spring Boot 4.1 | 193 in 22 files | 191 | 26/26 + build snippets 9/9 | handler 68, service 38, repository 40 on Postgres; STOMP rooms end to end |
+  | React / Next / RN / UI packs | 140 | 134 | 26/26 | 51 tests, `next build`, Playwright 13, RNTL with MSW 2 and 3, theme tokens in light and dark |
+  | Vue / Svelte / Angular packs | 41 | 41 | 3/3 | 7 component tests each |
+  | SQL / sh / YAML / JSON / Dockerfile / HCL / nGQL | 223 in 72 files, plus 367 command and agent bash blocks | all but 3 template placeholders | — | SQL on PG17, MySQL 8.4 and SQLite; nGQL on NebulaGraph 3.8; actionlint, kubeconform, hadolint, shellcheck on macOS bash 3.2 and Linux bash 5.2 |
 
-  MSW 3 (released 2026-09-28) renamed `onUnhandledRequest` to `onUnhandledFrame` and silently ignores
-  the old key. `msw.md` and the RN testing pack are updated.
+  **What running them found** (each fix is proven by the harness, and most by a test that fails on the old code):
+  - **Security:**
+    - an SQL injection through the `ORDER BY` direction (Go);
+    - gRPC streams with no auth (Go), and a gRPC server whose auth and logging middleware never ran (TS);
+    - an actix auth middleware that verified nothing (Rust);
+    - JWTs in websocket URLs, and cross-tenant websocket rooms: Java delivered tenant A's messages to tenant B;
+    - JWT issuer and audience skipped when unset, a static password salt, and a per-tenant rate limiter that never fired (Python);
+    - a public, unscoped tRPC user list, CORS `*` with credentials, Express falling back to CORS `*`, and Fastify silently stripping unknown fields.
+  - **Contract:**
+    - a second error-envelope shape in auth, rate-limit and validation paths (all five languages);
+    - `limit` and GraphQL `first` silently clamped (now 400 `VALIDATION_FAILED`);
+    - one closed set of `details[].code` values (see `api/response-envelope.md`), with `tests/field-codes.test.sh`;
+    - gRPC `page_size` on AIP-158 everywhere;
+    - one validated request-id source per stack.
+  - **Data:**
+    - cursors that skipped or repeated rows for non-default sorts or tied timestamps (Go, Rust, Python, Java);
+    - a tenant filter enabled outside the transaction (Java);
+    - `SET LOCAL … = $1`, which Postgres rejects;
+    - Postgres DDL syntax errors;
+    - migrations that failed on a clean database or under FORCE RLS;
+    - a Flyway migration in a package Flyway never scans;
+    - an offline queue that re-sent mutations;
+    - an optimistic delete that did nothing.
+  - **Pipeline itself (fail-open):**
+    - Phase detection used `grep -oP`, so every macOS run restarted at Phase 1.
+    - Staleness checks never fired on Linux.
+    - The phase gate had four pass-on-failure paths.
+    - "BLOCKING" checks only printed a warning.
+    - An empty `--diff-base` skipped the test-weakening check.
+    - A step used `git reset --hard`.
+    - Three command blocks were shell syntax errors.
+  - **Current majors:**
+    - Zod 4, Express 5, Prisma 7, MSW 3 (released 2026-09-28; it silently ignores `onUnhandledRequest`), Tailwind 4, Next 16, React 19.3;
+    - axum 0.8, sqlx 0.9, Spring Boot 4 / Hibernate 7 / Jackson 3, JDK 25 (OpenTelemetry agent 2.6 traces nothing there), Echo v5;
+    - SQLAlchemy 2.1 (its OpenTelemetry instrumentor records nothing; replaced by event-based spans), ESLint 10 (`.eslintrc` ignored);
+    - LocalStack `:latest` (needs a paid token; pinned to 4.4).
+
+  **Not verified here, stated plainly:**
+  - linux/amd64 Rust images: rustc segfaults under QEMU on this arm64 host.
+  - Detox and Appium specs: type-checked only.
+  - Elasticsearch bodies: parsed only.
+  - Maestro flows: checked against the documented command list, not the CLI.
+  - `firestore-rules`: no tool was run.
+  - The lab's two-role database wiring: proven on a local Postgres. The live `tests/k8s-e2e.sh` waits for the lab, which is offline during the owner's Thunderbolt IP move.
 
 **Decisions (confirmed by the owner, 2026-09-30):**
 - **Changing an existing test.** A coder may change an *existing* test's expectation only when this
