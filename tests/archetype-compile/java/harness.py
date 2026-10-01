@@ -26,7 +26,7 @@ sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import units as U  # noqa: E402
 
 FENCE = re.compile(r"^```([A-Za-z0-9_+-]*)\s*$")
-JVM_LANGS = {"java", "kotlin", "groovy", "xml", "scala"}   # non-Java ones: BUILD_SNIPPETS or SKIP
+JVM_LANGS = {"java", "kotlin", "groovy", "xml", "scala", "hocon"}   # non-Java ones: BUILD_SNIPPETS or SKIP
 
 
 # ─────────────────────────────── markdown extraction ───────────────────────────────

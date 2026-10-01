@@ -497,9 +497,9 @@ SKIP[f"{OBS}#xml2"] = ("logback-spring.xml is runtime logging config, not a buil
                        "need Spring Boot's LoggingSystem, so this harness does not load it. (Loaded once on 2026-09-30: "
                        "logback 1.5.38 + logstash-logback-encoder 9.0 took the production profile without warnings "
                        "and <decorator> redacted a structured `password` field.)")
-SKIP[f"{PERF}#xml1"] = ("caffeine-cache.xml is runtime JCache config, not a build file. NOT verified, and likely "
-                        "wrong: Caffeine's JCache provider is configured with Typesafe Config (application.conf), "
-                        "not jsr107 XML")
+SKIP[f"{PERF}#hocon1"] = ("Caffeine JCache config (Typesafe Config), runtime config rather than a build file; "
+                          "not loaded here. (Loaded once on 2026-09-30: Hibernate 7.4.5 + Caffeine 3.2.4 jcache built the "
+                          "products region with maximum size 1000 and expire-after-write 15m from it.)")
 SKIP[f"{PERF}#scala1"] = ("Gatling simulation (Scala), outside this Java harness. Not compiled. Reviewed by eye only: it "
                           "sends the tenant as an X-Tenant-ID header (the tenant comes from the verified token) and "
                           "reads $.id where the envelope puts it at $.data.id")

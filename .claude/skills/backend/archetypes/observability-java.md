@@ -114,8 +114,11 @@ The Java agent auto-instruments Spring MVC, WebFlux, JDBC, JPA, Redis, HTTP clie
 # Dockerfile — download and attach the OTel Java agent
 FROM eclipse-temurin:21-jre-alpine
 
-# Download OTel Java agent
-ADD https://github.com/open-telemetry/opentelemetry-java-instrumentation/releases/download/v2.6.0/opentelemetry-javaagent.jar /opt/otel/opentelemetry-javaagent.jar
+# OTel Java agent, pinned by version AND checksum. Keep it current: 2.6.0 attached to a JDK 25 JVM fails to
+# initialise and the app runs with no traces at all (no error at startup); 2.31.1 traces Spring Boot 4 on 21 and 25.
+ADD --checksum=sha256:bbf83c151b6400709e2f225bdd07a04f839d9d13b8b93464241333fd25d3e3ba \
+    https://repo1.maven.org/maven2/io/opentelemetry/javaagent/opentelemetry-javaagent/2.31.1/opentelemetry-javaagent-2.31.1.jar \
+    /opt/otel/opentelemetry-javaagent.jar
 
 COPY build/libs/app.jar /app/app.jar
 

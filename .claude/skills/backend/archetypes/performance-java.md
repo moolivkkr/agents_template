@@ -678,6 +678,9 @@ public class OrderQueryService {
 
 ### 4e. Second-Level Cache with Caffeine
 
+Dependencies: `org.hibernate.orm:hibernate-jcache` and `com.github.ben-manes.caffeine:jcache` (both
+version-managed by Spring Boot).
+
 ```yaml
 # application.yml
 spring:
@@ -686,10 +689,11 @@ spring:
       hibernate:
         cache:
           use_second_level_cache: true
-          region.factory_class: org.hibernate.cache.jcache.JCacheRegionFactory
+          region.factory_class: jcache          # Hibernate 7's name for its JCache region factory
         javax:
           cache:
             provider: com.github.benmanes.caffeine.jcache.spi.CaffeineCachingProvider
+            missing_cache_strategy: fail        # a region with no Caffeine config fails startup, not unbounded
       jakarta:
         persistence:
           sharedCache:
@@ -715,17 +719,19 @@ public class Product {
 }
 ```
 
-```xml
-<!-- src/main/resources/caffeine-cache.xml -->
-<config xmlns="urn:jsr107:config"
-        xmlns:caffeine="urn:caffeine:config">
-    <cache name="products">
-        <expiry>
-            <ttl unit="minutes">15</ttl>
-        </expiry>
-        <caffeine:config maximumSize="1000"/>
-    </cache>
-</config>
+Caffeine's JCache provider is configured with Typesafe Config (HOCON), not XML. Each cache named here
+is created at startup with these limits; the region name is the entity's `@Cache(region = ...)`:
+
+```hocon
+# src/main/resources/application.conf
+caffeine.jcache {
+  products {
+    policy {
+      maximum.size = 1000
+      eager-expiration.after-write = 15m
+    }
+  }
+}
 ```
 
 ### 4f. N+1 Detection

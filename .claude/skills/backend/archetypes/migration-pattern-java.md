@@ -79,8 +79,8 @@ src/main/resources/db/
     V1000__seed_default_categories.sql     # Seed data for local dev
   callback/
     afterMigrate__seed_demo_data.sql       # Callback script
-src/main/java/com/example/app/migration/
-    V5__ComplexDataMigration.java          # Java-based migration
+src/main/java/db/migration/
+    V5__ComplexDataMigration.java          # Java-based migration (package db.migration: Flyway scans it)
 src/test/resources/db/
   testdata/
     V9000__seed_test_data.sql              # Test-only seed data
@@ -264,23 +264,28 @@ $$ LANGUAGE plpgsql STABLE;
 ## Java-Based Migration (Complex Logic)
 
 ```java
-package com.example.app.migration;
+package db.migration; // Flyway finds Java migrations by package: classpath:db/migration = package db.migration
 
 import org.flywaydb.core.api.migration.BaseJavaMigration;
 import org.flywaydb.core.api.migration.Context;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.util.UUID;
 
 /**
- * Java-based migration for complex data transformations that cannot be
- * expressed in pure SQL (e.g., calling external services, conditional logic,
- * multi-step transforms with rollback).
+ * Java-based migration for data transformations that cannot be expressed in pure SQL (conditional logic,
+ * parsing, derived values).
  *
- * Naming: V5__ComplexDataMigration.java — follows Flyway conventions.
+ * Naming: V5__ComplexDataMigration.java, in package db.migration — Flyway's default location scans that
+ * package. (In any other package it is never run unless registered: as a Spring bean or via
+ * Flyway.configure().javaMigrations(..).)
+ *
+ * It commits batch by batch, so a large table never sits in one long transaction, and says so
+ * (canExecuteInTransaction() = false) instead of committing inside a transaction Flyway thinks it owns. It is
+ * NOT atomic: if a batch fails, the batches already committed stay and V5 is not recorded (PostgreSQL,
+ * Flyway 12). Fix the cause and migrate again — the WHERE clause skips the rows already transformed, so the
+ * rerun resumes where it stopped. Write every batched migration so that a rerun is safe.
  */
 public class V5__ComplexDataMigration extends BaseJavaMigration {
 
@@ -288,57 +293,68 @@ public class V5__ComplexDataMigration extends BaseJavaMigration {
     private static final int BATCH_SIZE = 1000;
 
     @Override
+    public boolean canExecuteInTransaction() {
+        return false; // it commits per batch itself
+    }
+
+    @Override
     public void migrate(Context context) throws Exception {
         var connection = context.getConnection();
+        boolean autoCommit = connection.getAutoCommit();
+        connection.setAutoCommit(false);
 
-        // Step 1: Read data that needs transformation
-        var selectStmt = connection.prepareStatement("""
-            SELECT id, config FROM widgets
-            WHERE deleted_at IS NULL
-            AND config->>'legacy_format' IS NOT NULL
-            ORDER BY id
-            LIMIT ?
-            """);
+        try (var selectStmt = connection.prepareStatement("""
+                 SELECT id, config FROM widgets
+                 WHERE deleted_at IS NULL
+                 AND config->>'legacy_format' IS NOT NULL
+                 ORDER BY id
+                 LIMIT ?
+                 """);
+             var updateStmt = connection.prepareStatement("""
+                 UPDATE widgets
+                 SET config = ?::jsonb,
+                     updated_at = NOW()
+                 WHERE id = ?
+                 """)) {
 
-        var updateStmt = connection.prepareStatement("""
-            UPDATE widgets
-            SET config = ?::jsonb,
-                updated_at = NOW()
-            WHERE id = ?
-            """);
+            int totalUpdated = 0;
+            boolean hasMore = true;
 
-        int totalUpdated = 0;
-        boolean hasMore = true;
+            while (hasMore) {
+                selectStmt.setInt(1, BATCH_SIZE);
+                int batchCount = 0;
+                try (var rs = selectStmt.executeQuery()) {
+                    while (rs.next()) {
+                        var id = rs.getObject("id", UUID.class);
+                        var configJson = rs.getString("config");
 
-        while (hasMore) {
-            selectStmt.setInt(1, BATCH_SIZE);
-            ResultSet rs = selectStmt.executeQuery();
+                        // Transform the config (example: migrate legacy format)
+                        var newConfig = transformConfig(configJson);
 
-            int batchCount = 0;
-            while (rs.next()) {
-                var id = rs.getObject("id", UUID.class);
-                var configJson = rs.getString("config");
+                        updateStmt.setString(1, newConfig);
+                        updateStmt.setObject(2, id);
+                        updateStmt.addBatch();
+                        batchCount++;
+                    }
+                }
 
-                // Transform the config (example: migrate legacy format)
-                var newConfig = transformConfig(configJson);
+                if (batchCount > 0) {
+                    updateStmt.executeBatch();
+                    connection.commit();
+                    totalUpdated += batchCount;
+                    log.info("Migrated batch of {} records (total: {})", batchCount, totalUpdated);
+                }
 
-                updateStmt.setString(1, newConfig);
-                updateStmt.setObject(2, id);
-                updateStmt.addBatch();
-                batchCount++;
+                hasMore = batchCount == BATCH_SIZE;
             }
 
-            if (batchCount > 0) {
-                updateStmt.executeBatch();
-                connection.commit();
-                totalUpdated += batchCount;
-                log.info("Migrated batch of {} records (total: {})", batchCount, totalUpdated);
-            }
-
-            hasMore = batchCount == BATCH_SIZE;
+            log.info("Migration complete: {} records transformed", totalUpdated);
+        } catch (Exception e) {
+            connection.rollback(); // the batch in progress; the committed ones stay (see the class comment)
+            throw e;
+        } finally {
+            connection.setAutoCommit(autoCommit);
         }
-
-        log.info("Migration complete: {} records transformed", totalUpdated);
     }
 
     private String transformConfig(String configJson) {
