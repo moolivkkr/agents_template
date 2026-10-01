@@ -14,7 +14,7 @@ tags:
 
 # Auth Middleware Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, chi v5.3.2, golang-jwt v5.3.1, x/time v0.16.0, together with the error, service and handler archetypes; the handler/service unit tests that use `RequestID` and `WithIdentity` were run (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, chi v5.3.2, golang-jwt v5.3.1, x/time v0.16.0, compiled as ONE `middleware` package with observability-go.md's; run: JWTAuth against real signed tokens (valid, wrong key/algorithm/issuer/audience, expired, no exp), CORS allowlist and wildcard rules, and the handler/service tests that use `RequestID` and `WithIdentity` (tests/archetype-compile/go/run.sh).
 
 Complete authentication and authorization middleware for chi router. Every generated auth layer MUST follow this pattern.
 
@@ -29,6 +29,7 @@ import (
     "fmt"
     "log/slog"
     "net/http"
+    "net/url"
     "regexp"
     "strings"
     "sync"
@@ -182,13 +183,11 @@ func JWTAuth(cfg JWTConfig) func(http.Handler) http.Handler {
             ctx = context.WithValue(ctx, ctxKeyRoles, claims.Roles)
             ctx = context.WithValue(ctx, ctxKeyPermissions, claims.Permissions)
 
-            // 5. Enrich logger with auth context
-            reqID := RequestIDFromContext(ctx)
-            logger := slog.With(
+            // 5. Extend the request logger (LogEnrichment's: request_id, method, path) with the identity
+            logger := LoggerFromContext(ctx).With(
                 "user_id", userID,
                 "tenant_id", tenantID,
                 "roles", claims.Roles,
-                "request_id", reqID,
             )
             ctx = context.WithValue(ctx, ctxKeyLogger, logger)
 
@@ -394,7 +393,9 @@ func (trl *TenantRateLimiter) RateLimit() func(http.Handler) http.Handler {
 ## CORS Configuration
 
 ```go
-// CORSConfig defines allowed origins, methods, and headers.
+// CORSConfig defines allowed origins, methods, and headers. AllowedOrigins is an allowlist from
+// config — e.g. ParseOrigins(os.Getenv("CORS_ALLOWED_ORIGINS")) — of exact origins such as
+// "https://app.example.com". "*" is accepted only without credentials.
 type CORSConfig struct {
     AllowedOrigins   []string
     AllowedMethods   []string
@@ -404,41 +405,81 @@ type CORSConfig struct {
     MaxAge           int // preflight cache duration in seconds
 }
 
-// CORS returns middleware that handles Cross-Origin Resource Sharing.
-func CORS(cfg CORSConfig) func(http.Handler) http.Handler {
+// ParseOrigins parses a comma-separated allowlist. Each entry must be a bare origin —
+// scheme://host[:port], no path or trailing slash — because that is exactly what browsers send in
+// the Origin header; anything else would silently never match.
+func ParseOrigins(csv string) ([]string, error) {
+    var origins []string
+    for _, o := range strings.Split(csv, ",") {
+        o = strings.TrimSpace(o)
+        if o == "" {
+            continue
+        }
+        if o != "*" {
+            u, err := url.Parse(o)
+            if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" ||
+                u.Path != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
+                return nil, fmt.Errorf("cors: %q is not an origin (want scheme://host[:port])", o)
+            }
+        }
+        origins = append(origins, o)
+    }
+    return origins, nil
+}
+
+// CORS returns middleware that answers only allowlisted origins. It refuses a config combining "*"
+// with credentials: a credentialed response must name one origin, and echoing whatever Origin
+// arrives would let every website make requests with your users' cookies.
+func CORS(cfg CORSConfig) (func(http.Handler) http.Handler, error) {
+    anyOrigin := false
     originSet := make(map[string]bool, len(cfg.AllowedOrigins))
     for _, o := range cfg.AllowedOrigins {
+        if o == "*" {
+            anyOrigin = true
+            continue
+        }
         originSet[o] = true
+    }
+    if anyOrigin && cfg.AllowCredentials {
+        return nil, errors.New(`cors: AllowedOrigins "*" cannot be combined with AllowCredentials`)
     }
 
     return func(next http.Handler) http.Handler {
         return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            // The response depends on Origin: keep shared caches from serving one origin's answer
+            // to another.
+            w.Header().Add("Vary", "Origin")
+
             origin := r.Header.Get("Origin")
-
-            if originSet[origin] || originSet["*"] {
-                w.Header().Set("Access-Control-Allow-Origin", origin)
+            allowed := origin != "" && (anyOrigin || originSet[origin])
+            if allowed {
+                if anyOrigin {
+                    w.Header().Set("Access-Control-Allow-Origin", "*") // the literal "*", never an echo
+                } else {
+                    w.Header().Set("Access-Control-Allow-Origin", origin) // an allowlisted origin
+                    if cfg.AllowCredentials {
+                        w.Header().Set("Access-Control-Allow-Credentials", "true")
+                    }
+                }
+                if len(cfg.ExposedHeaders) > 0 {
+                    w.Header().Set("Access-Control-Expose-Headers", strings.Join(cfg.ExposedHeaders, ", "))
+                }
             }
 
-            if cfg.AllowCredentials {
-                w.Header().Set("Access-Control-Allow-Credentials", "true")
-            }
-
-            if len(cfg.ExposedHeaders) > 0 {
-                w.Header().Set("Access-Control-Expose-Headers", strings.Join(cfg.ExposedHeaders, ", "))
-            }
-
-            // Handle preflight
-            if r.Method == http.MethodOptions {
-                w.Header().Set("Access-Control-Allow-Methods", strings.Join(cfg.AllowedMethods, ", "))
-                w.Header().Set("Access-Control-Allow-Headers", strings.Join(cfg.AllowedHeaders, ", "))
-                w.Header().Set("Access-Control-Max-Age", fmt.Sprintf("%d", cfg.MaxAge))
+            // Handle preflight — no CORS headers for an origin that isn't allowed
+            if r.Method == http.MethodOptions && r.Header.Get("Access-Control-Request-Method") != "" {
+                if allowed {
+                    w.Header().Set("Access-Control-Allow-Methods", strings.Join(cfg.AllowedMethods, ", "))
+                    w.Header().Set("Access-Control-Allow-Headers", strings.Join(cfg.AllowedHeaders, ", "))
+                    w.Header().Set("Access-Control-Max-Age", fmt.Sprintf("%d", cfg.MaxAge))
+                }
                 w.WriteHeader(http.StatusNoContent)
                 return
             }
 
             next.ServeHTTP(w, r)
         })
-    }
+    }, nil
 }
 ```
 
@@ -476,10 +517,14 @@ type AppConfig struct {
 }
 
 // SetupMiddleware assembles the full middleware stack in correct order.
-// Order matters: outermost middleware runs first.
-func SetupMiddleware(r chi.Router, cfg AppConfig) {
+// Order matters: outermost middleware runs first. A bad CORS config fails startup.
+func SetupMiddleware(r chi.Router, cfg AppConfig) error {
     // 1. CORS — must be outermost to handle preflight before auth
-    r.Use(CORS(cfg.CORS))
+    cors, err := CORS(cfg.CORS)
+    if err != nil {
+        return err
+    }
+    r.Use(cors)
 
     // 2. Request ID — generate/extract before anything else
     r.Use(RequestID)
@@ -500,6 +545,7 @@ func SetupMiddleware(r chi.Router, cfg AppConfig) {
     // Route-level RBAC:
     // r.With(RequireRole("admin")).Post("/admin/settings", adminHandler)
     // r.With(RequirePermission("users:write")).Put("/users/{id}", updateUserHandler)
+    return nil
 }
 ```
 
@@ -524,7 +570,7 @@ func writeAuthError(w http.ResponseWriter, r *http.Request, e *apperr.AppError) 
 - API keys MUST be stored as hashes (bcrypt/argon2) — never compare plaintext
 - Use `crypto/subtle.ConstantTimeCompare` for any secret comparison to prevent timing attacks
 - Rate limiters MUST be per-tenant — shared limits allow noisy neighbor abuse
-- CORS MUST NOT use `*` with `AllowCredentials: true` — browsers reject this
+- CORS answers only an allowlist of exact origins from config (`ParseOrigins`), sends `Vary: Origin`, and never echoes an arbitrary Origin: `CORS()` refuses `*` together with `AllowCredentials` (an error at startup)
 - Request ID MUST be set on response headers for client-side correlation
 - Logger MUST be enriched with user_id, tenant_id, request_id at the auth boundary
 - Middleware order matters: CORS -> RequestID -> Logger -> Recovery -> Auth -> RateLimit

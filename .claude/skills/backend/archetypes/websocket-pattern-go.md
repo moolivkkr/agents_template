@@ -13,7 +13,7 @@ tags:
 
 # WebSocket Pattern — Go
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, github.com/coder/websocket v1.8.15, chi v5.3.2; a two-client upgrade/subscribe/broadcast round trip was run (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, github.com/coder/websocket v1.8.15, chi v5.3.2; the room-authorization test was run, plus a two-client upgrade/subscribe/broadcast round trip with a cross-tenant subscribe refused (tests/archetype-compile/go/run.sh).
 
 > **Canonical reference**: This is the Go counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
@@ -29,6 +29,7 @@ import (
     "encoding/json"
     "log/slog"
     "net/http"
+    "strings"
     "sync"
     "time"
 
@@ -69,6 +70,14 @@ type Hub struct {
 
     mu     sync.RWMutex
     logger *slog.Logger
+    authz  RoomAuthorizer
+}
+
+// RoomAuthorizer decides whether a user may join a room of their own tenant — e.g. "is this user
+// a member of project 42?" (a DB lookup) or "admin rooms need the admin role". The tenant check
+// itself is canJoinRoom's, and never delegated.
+type RoomAuthorizer interface {
+    CanJoin(ctx context.Context, conn *Connection, kind, id string) (bool, error)
 }
 
 type roomMessage struct {
@@ -77,7 +86,7 @@ type roomMessage struct {
     Except  string // exclude this connID (optional)
 }
 
-func NewHub(logger *slog.Logger) *Hub {
+func NewHub(logger *slog.Logger, authz RoomAuthorizer) *Hub {
     return &Hub{
         connections: make(map[string]*Connection),
         rooms:       make(map[string]map[string]bool),
@@ -86,6 +95,7 @@ func NewHub(logger *slog.Logger) *Hub {
         unregister:  make(chan *Connection, 64),
         broadcast:   make(chan roomMessage, 256),
         logger:      logger.With("component", "ws-hub"),
+        authz:       authz,
     }
 }
 ```
@@ -308,8 +318,8 @@ func (h *Hub) handleMessage(ctx context.Context, conn *Connection, msg Message) 
             return
         }
 
-        // Authorization check
-        if !h.canJoinRoom(conn, payload.Room) {
+        // Authorization check (tenant, then membership) — never trust the room name alone
+        if !h.canJoinRoom(ctx, conn, payload.Room) {
             h.sendError(conn, msg.Ref, "FORBIDDEN", "not authorized for this room")
             return
         }
@@ -418,11 +428,25 @@ func (h *Hub) sendError(conn *Connection, ref, code, message string) {
     }
 }
 
-func (h *Hub) canJoinRoom(conn *Connection, room string) bool {
-    // Implement room-level authorization.
-    // Example: room "tenant:{id}" requires matching tenant_id
-    // Example: room "project:{id}" requires project membership check
-    return true // Replace with actual authorization logic
+// canJoinRoom enforces room authorization on subscribe (websocket-pattern.md). Rooms are named
+// "<tenant_id>:<kind>:<id>", e.g. "3f9c…:project:42". The tenant part must equal the tenant from the
+// connection's verified ticket, so no room name reaches another tenant's room; the RoomAuthorizer
+// then decides membership. Malformed names and authorizer errors are refused (fail closed).
+func (h *Hub) canJoinRoom(ctx context.Context, conn *Connection, room string) bool {
+    tenantID, rest, ok := strings.Cut(room, ":")
+    if !ok || tenantID == "" || tenantID != conn.TenantID {
+        return false
+    }
+    kind, id, ok := strings.Cut(rest, ":")
+    if !ok || kind == "" || id == "" {
+        return false
+    }
+    allowed, err := h.authz.CanJoin(ctx, conn, kind, id)
+    if err != nil {
+        h.logger.Warn("ws.room_authz_failed", "conn_id", conn.ID, "room", room, "error", err)
+        return false
+    }
+    return allowed
 }
 
 // BroadcastToRoom sends a message to all connections in a room (for use from services).
@@ -458,11 +482,53 @@ func RegisterWebSocketRoutes(r chi.Router, hub *Hub) {
 
 // Start the hub before the server (in main):
 //
-//     hub := ws.NewHub(logger)
+//     hub := ws.NewHub(logger, roomAuthz) // roomAuthz: your RoomAuthorizer (membership store)
 //     go hub.Run(ctx)
 //
 //     r := chi.NewRouter()
 //     ws.RegisterWebSocketRoutes(r, hub)
+```
+
+## Testing Room Authorization
+
+```go
+// allowKinds is a test RoomAuthorizer: members may join the listed room kinds.
+type allowKinds map[string]bool
+
+func (a allowKinds) CanJoin(_ context.Context, _ *Connection, kind, _ string) (bool, error) {
+    return a[kind], nil
+}
+
+type failingAuthz struct{}
+
+func (failingAuthz) CanJoin(context.Context, *Connection, string, string) (bool, error) {
+    return false, errors.New("membership store unavailable")
+}
+
+func TestCanJoinRoom_TenantAndMembership(t *testing.T) {
+    ctx := context.Background()
+    conn := &Connection{ID: "c1", UserID: "u1", TenantID: "tenant-a"}
+    hub := NewHub(slog.New(slog.DiscardHandler), allowKinds{"chat": true})
+
+    for room, want := range map[string]bool{
+        "tenant-a:chat:general": true,  // own tenant, a kind the user may join
+        "tenant-b:chat:general": false, // another tenant's room: refused before the authorizer is asked
+        "tenant-a:project:42":   false, // own tenant, the authorizer says no
+        "chat:general":          false, // no tenant part
+        "tenant-a":              false, // malformed
+        "":                      false,
+    } {
+        if got := hub.canJoinRoom(ctx, conn, room); got != want {
+            t.Errorf("canJoinRoom(%q) = %v, want %v", room, got, want)
+        }
+    }
+
+    // An authorizer error refuses the join (fail closed).
+    down := NewHub(slog.New(slog.DiscardHandler), failingAuthz{})
+    if down.canJoinRoom(ctx, conn, "tenant-a:chat:general") {
+        t.Error("joined a room while the authorizer was failing")
+    }
+}
 ```
 
 ## Critical Rules
@@ -472,7 +538,7 @@ func RegisterWebSocketRoutes(r chi.Router, hub *Hub) {
 - Set `ReadLimit` on the WebSocket connection — prevent memory exhaustion
 - Use `context.WithTimeout` for write operations — prevent blocking on slow clients
 - Hub operations go through channels (`register`, `unregister`, `broadcast`) — not direct map access
-- Room authorization MUST be checked on subscribe — do not trust the client
+- Room authorization MUST be checked on subscribe — do not trust the client: the room's tenant must be the connection's (from the verified ticket), then a RoomAuthorizer checks membership, failing closed
 - Close the `send` channel to signal the write pump to exit — do not close the WebSocket from the hub
 - Always `defer unregister` in the read pump — ensures cleanup on any exit path
 - Run the read pump on the handler's goroutine: `r.Context()` is cancelled when the handler returns

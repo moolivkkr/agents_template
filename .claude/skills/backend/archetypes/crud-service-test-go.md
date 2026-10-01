@@ -464,6 +464,7 @@ import (
     "github.com/stretchr/testify/mock"
     "github.com/stretchr/testify/require"
 
+    "yourapp/internal/apperr"
     "yourapp/internal/domain"
 )
 
@@ -566,6 +567,8 @@ func TestList_TableDriven(t *testing.T) {
         repoResult   *domain.ListResult[Widget]
         repoErr      error
         wantErr      bool
+        wantCode     string // a validation failure: the repository must not be called
+        wantPageSize int    // the page size the repository receives
         wantItems    int
         wantHasMore  bool
     }{
@@ -578,8 +581,9 @@ func TestList_TableDriven(t *testing.T) {
                 Cursor:  "abc",
                 Total:   25,
             },
-            wantItems:   3,
-            wantHasMore: true,
+            wantPageSize: 10,
+            wantItems:    3,
+            wantHasMore:  true,
         },
         {
             name:    "empty list returns zero items",
@@ -593,24 +597,24 @@ func TestList_TableDriven(t *testing.T) {
             wantHasMore: false,
         },
         {
-            name:    "enforces max page size",
-            filters: domain.ListFilters{PageSize: 500}, // exceeds max
-            repoResult: &domain.ListResult[Widget]{
-                Items: []Widget{},
-                Total: 0,
-            },
-            wantItems: 0,
-            // Service should clamp PageSize to 100 before passing to repo.
+            name:     "rejects a page size above the maximum, never clamps it",
+            filters:  domain.ListFilters{PageSize: 500},
+            wantCode: "VALIDATION_FAILED",
         },
         {
-            name:    "defaults page size when zero",
+            name:     "rejects a negative page size",
+            filters:  domain.ListFilters{PageSize: -5},
+            wantCode: "VALIDATION_FAILED",
+        },
+        {
+            name:    "defaults page size when not set",
             filters: domain.ListFilters{PageSize: 0},
             repoResult: &domain.ListResult[Widget]{
                 Items: []Widget{},
                 Total: 0,
             },
-            wantItems: 0,
-            // Service should default PageSize to 20.
+            wantPageSize: 20,
+            wantItems:    0,
         },
         {
             name:    "repo error propagates",
@@ -632,11 +636,21 @@ func TestList_TableDriven(t *testing.T) {
 
             ctx := contextWithTenant(context.Background(), tenantID, uuid.New())
 
-            repo.On("List", mock.Anything, tenantID, mock.AnythingOfType("domain.ListFilters")).
-                Return(tt.repoResult, tt.repoErr)
+            repo.On("List", mock.Anything, tenantID, mock.MatchedBy(func(f domain.ListFilters) bool {
+                return tt.wantPageSize == 0 || f.PageSize == tt.wantPageSize
+            })).Return(tt.repoResult, tt.repoErr)
 
             result, err := svc.List(ctx, tt.filters)
 
+            if tt.wantCode != "" {
+                var appErr *apperr.AppError
+                require.ErrorAs(t, err, &appErr)
+                assert.Equal(t, tt.wantCode, appErr.Code)
+                require.NotEmpty(t, appErr.Details)
+                assert.Equal(t, "limit", appErr.Details[0].Field)
+                repo.AssertNotCalled(t, "List", mock.Anything, mock.Anything, mock.Anything)
+                return
+            }
             if tt.wantErr {
                 assert.Error(t, err)
                 return
@@ -644,6 +658,7 @@ func TestList_TableDriven(t *testing.T) {
             require.NoError(t, err)
             assert.Len(t, result.Items, tt.wantItems)
             assert.Equal(t, tt.wantHasMore, result.HasMore)
+            repo.AssertExpectations(t) // the page size reached the repository as expected
         })
     }
 }

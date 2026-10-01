@@ -13,7 +13,7 @@ tags:
 
 # CRUD Repository Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, OpenTelemetry v1.46.0; the crud-repository-test-go.md integration tests were also run once against postgres:16-alpine (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, OpenTelemetry v1.46.0; the crud-repository-test-go.md integration tests (cursor paging by created_at, name and updated_at, cross-sort cursor rejection) were run against postgres:16-alpine (tests/archetype-compile/go/run.sh).
 
 Complete pgx-based PostgreSQL repository template. Every generated repository MUST follow this pattern.
 
@@ -318,7 +318,7 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
 
     // Column and direction come from allow-lists here too, not only in the handler: they are the
     // two parts of this query that can't be bind parameters.
-    sortCol := sanitizeColumn(filters.SortBy)
+    sortCol := sanitizeSortColumn(filters.SortBy)
     sortDir := sanitizeDirection(filters.SortDir)
 
     // Build query with dynamic filters
@@ -337,18 +337,19 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
         qb.AddParam(value)
     }
 
-    // Apply cursor (decode from opaque base64 token)
+    // Apply cursor: rows strictly after the previous page's last (sort key, id), in sort order.
     if filters.Cursor != "" {
-        ts, cursorID, err := decodeCursor(filters.Cursor)
+        key, cursorID, err := decodeCursor(filters.Cursor, sortCol, sortDir)
         if err != nil {
-            return nil, apperr.NewValidationError("cursor", "invalid_cursor", "The page cursor is invalid or expired.").WithError(err)
+            return nil, apperr.NewValidationError("cursor", "invalid_cursor",
+                "The page cursor is invalid, or was issued for a different sort.").WithError(err)
         }
         if sortDir == "DESC" {
             qb.WriteString(fmt.Sprintf(` AND (%s, id) < (`, sortCol))
         } else {
             qb.WriteString(fmt.Sprintf(` AND (%s, id) > (`, sortCol))
         }
-        qb.AddParam(ts)
+        qb.AddParam(key) // a time.Time or a string, typed like the sort column
         qb.WriteString(`, `)
         qb.AddParam(cursorID)
         qb.WriteString(`)`)
@@ -386,11 +387,10 @@ func (r *widgetRepo) List(ctx context.Context, tenantID uuid.UUID, filters domai
         items = items[:filters.PageSize]
     }
 
-    // Build next cursor from last item
+    // Build next cursor from the last item, under this list's sort
     var nextCursor string
     if hasMore && len(items) > 0 {
-        last := items[len(items)-1]
-        nextCursor = encodeCursor(last.CreatedAt, last.ID)
+        nextCursor = encodeCursor(sortCol, sortDir, items[len(items)-1])
     }
 
     // Count total (optional — use for UI, skip for performance on huge tables)
@@ -431,28 +431,66 @@ func (r *widgetRepo) countTotal(ctx context.Context, tenantID uuid.UUID, filters
 ## Cursor Encoding / Decoding
 
 ```go
-// Cursor = base64(JSON{timestamp, id}) — opaque, stable across inserts.
+// Cursor = base64url(JSON) of the sort it was minted under, the last row's value in the sort
+// column (typed like the column) and the id tie-breaker. Opaque to clients, stable across inserts.
 type cursorPayload struct {
-    Timestamp time.Time `json:"ts"`
-    ID        uuid.UUID `json:"id"`
+    SortBy  string     `json:"s"`
+    SortDir string     `json:"d"`
+    At      *time.Time `json:"t,omitempty"` // key for timestamp sort columns
+    Text    *string    `json:"v,omitempty"` // key for text sort columns
+    ID      uuid.UUID  `json:"id"`
 }
 
-func encodeCursor(ts time.Time, id uuid.UUID) string {
-    payload := cursorPayload{Timestamp: ts, ID: id}
-    data, _ := json.Marshal(payload)
-    return base64.URLEncoding.EncodeToString(data)
+// sortColumns are the columns a list may be ordered by (the handler's sort_by allow-list), each
+// with the type of its cursor key.
+var sortColumns = map[string]string{"created_at": "time", "updated_at": "time", "name": "text"}
+
+// sanitizeSortColumn allows only sortable columns; anything else sorts by created_at.
+func sanitizeSortColumn(col string) string {
+    if _, ok := sortColumns[col]; ok {
+        return col
+    }
+    return "created_at"
 }
 
-func decodeCursor(cursor string) (time.Time, uuid.UUID, error) {
-    data, err := base64.URLEncoding.DecodeString(cursor)
+// encodeCursor records the page's last row under the list's sort column and direction.
+func encodeCursor(sortCol, sortDir string, last widget.Widget) string {
+    p := cursorPayload{SortBy: sortCol, SortDir: sortDir, ID: last.ID}
+    switch sortCol {
+    case "name":
+        p.Text = &last.Name
+    case "updated_at":
+        p.At = &last.UpdatedAt
+    default:
+        p.At = &last.CreatedAt
+    }
+    data, _ := json.Marshal(p)
+    return base64.RawURLEncoding.EncodeToString(data)
+}
+
+// decodeCursor returns the cursor's sort key (a time.Time or a string, matching the column) and
+// its id. A cursor minted under another sort column or direction is rejected: its key would be
+// compared against the wrong column and skip or repeat rows.
+func decodeCursor(cursor, sortCol, sortDir string) (any, uuid.UUID, error) {
+    data, err := base64.RawURLEncoding.DecodeString(cursor)
     if err != nil {
-        return time.Time{}, uuid.Nil, fmt.Errorf("invalid cursor encoding: %w", err)
+        return nil, uuid.Nil, fmt.Errorf("invalid cursor encoding: %w", err)
     }
-    var payload cursorPayload
-    if err := json.Unmarshal(data, &payload); err != nil {
-        return time.Time{}, uuid.Nil, fmt.Errorf("invalid cursor payload: %w", err)
+    var p cursorPayload
+    if err := json.Unmarshal(data, &p); err != nil {
+        return nil, uuid.Nil, fmt.Errorf("invalid cursor payload: %w", err)
     }
-    return payload.Timestamp, payload.ID, nil
+    if p.SortBy != sortCol || p.SortDir != sortDir {
+        return nil, uuid.Nil, fmt.Errorf("cursor is for sort %q %s, the request sorts by %q %s",
+            p.SortBy, p.SortDir, sortCol, sortDir)
+    }
+    switch {
+    case sortColumns[sortCol] == "time" && p.At != nil:
+        return *p.At, p.ID, nil
+    case sortColumns[sortCol] == "text" && p.Text != nil:
+        return *p.Text, p.ID, nil
+    }
+    return nil, uuid.Nil, errors.New("cursor has no key for its sort column")
 }
 ```
 
@@ -558,7 +596,8 @@ func (qb *queryBuilder) AddParam(val any) {
 func (qb *queryBuilder) String() string { return qb.buf.String() }
 func (qb *queryBuilder) Params() []any  { return qb.params }
 
-// sanitizeColumn allows only known column names — prevents SQL injection in ORDER BY / WHERE.
+// sanitizeColumn allows only known filter column names — prevents SQL injection in WHERE.
+// (ORDER BY uses sanitizeSortColumn: only columns the cursor knows how to key.)
 func sanitizeColumn(col string) string {
     allowed := map[string]string{
         "created_at": "created_at",
@@ -634,7 +673,7 @@ func (r *widgetRepo) mapError(err error, operation string) error {
 - Every query MUST have a `context.WithTimeout` — never allow unbounded queries
 - Update operations MUST use optimistic locking: `WHERE version = $expected`
 - Column names in ORDER BY / WHERE MUST be allow-listed via `sanitizeColumn`, and the sort direction via `sanitizeDirection` — in the repository itself, not only in the handler
-- Cursor values MUST be opaque (base64-encoded JSON) — never expose raw DB values
+- Cursor values MUST be opaque (base64url JSON) and carry the sort column, direction and typed key of the last row plus the id tie-breaker; a cursor minted under a different sort is 400 `VALIDATION_FAILED`, never silently reinterpreted
 - List queries MUST request `LIMIT + 1` to detect `has_more` without extra count query
 - Batch inserts SHOULD use `pgx.CopyFrom` for performance (thousands of rows)
 - Batch updates SHOULD use `pgx.Batch` to minimize round trips

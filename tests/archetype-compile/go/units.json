@@ -173,7 +173,8 @@
       "Read and Write Pumps",
       "Message Handling (Subscribe, Unsubscribe, Message)",
       "Helper Methods",
-      "Route Registration"
+      "Route Registration",
+      "Testing Room Authorization"
     ],
     "worker-pattern-go.md": [
       "Worker Struct and Constructor",
@@ -238,7 +239,9 @@
       "stubs": {
         "internal/widget/stub_entity.go": "testdata/stubs/widget_entity.go",
         "internal/widget/stub_inputs.go": "testdata/stubs/widget_inputs.go",
-        "internal/middleware/smoke_test.go": "testdata/stubs/auth_smoke_test.go"
+        "internal/middleware/smoke_test.go": "testdata/stubs/auth_smoke_test.go",
+        "internal/middleware/cors_smoke_test.go": "testdata/stubs/cors_smoke_test.go",
+        "internal/apperr/recovery_route_test.go": "testdata/stubs/recovery_route_test.go"
       },
       "tests": true,
       "run_tests": ["./internal/..."]
@@ -303,7 +306,7 @@
     },
     {
       "name": "observability",
-      "doc": "every observability package (tracing, metrics, logging, correlation) plus the main that wires them",
+      "doc": "every observability package plus the main that wires them; internal/middleware is ONE package built from observability-go.md AND auth-middleware-go.md (plus apperr), so a second set of context keys or accessors fails to compile. Smoke tests run the resource and the full chain (span name, http.route on span and metric, correlated log line)",
       "imports": [
         "go.opentelemetry.io/otel/attribute",
         "go.opentelemetry.io/otel/codes",
@@ -312,17 +315,19 @@
         "github.com/google/uuid"
       ],
       "files": [
+        {"path": "internal/apperr/apperr.go", "blocks": ["error-handling-go.md#1-6"]},
+        {"path": "internal/middleware/auth.go", "blocks": ["auth-middleware-go.md#1-11"]},
         {"path": "cmd/server/tracing.go", "blocks": ["observability-go.md#1"]},
         {"path": "cmd/server/metrics.go", "blocks": ["observability-go.md#8"]},
         {"path": "cmd/server/main.go", "blocks": ["observability-go.md#22"]},
         {"path": "internal/order/order.go", "blocks": ["observability-go.md#2"]},
         {"path": "internal/order/process.go", "blocks": ["observability-go.md#6"], "package": "order"},
+        {"path": "internal/order/logging.go", "blocks": ["observability-go.md#15"]},
         {"path": "internal/server/server.go", "blocks": ["observability-go.md#3"]},
         {"path": "internal/database/database.go", "blocks": ["observability-go.md#4"]},
         {"path": "internal/cache/cache.go", "blocks": ["observability-go.md#5"]},
         {"path": "internal/middleware/context.go", "blocks": ["observability-go.md#7"], "package": "middleware"},
         {"path": "internal/middleware/metrics.go", "blocks": ["observability-go.md#9"]},
-        {"path": "internal/middleware/logger.go", "blocks": ["observability-go.md#15"]},
         {"path": "internal/middleware/chain.go", "blocks": ["observability-go.md#18"], "package": "middleware"},
         {"path": "internal/repository/metrics.go", "blocks": ["observability-go.md#10"]},
         {"path": "internal/observability/runtime.go", "blocks": ["observability-go.md#11"]},
@@ -336,8 +341,8 @@
       "stubs": {
         "internal/order/stub_order.go": "testdata/stubs/obs_order.go",
         "internal/service/stub_order.go": "testdata/stubs/obs_service.go",
-        "internal/middleware/stub_auth.go": "testdata/stubs/obs_auth.go",
-        "cmd/server/smoke_test.go": "testdata/stubs/obs_smoke_test.go"
+        "cmd/server/smoke_test.go": "testdata/stubs/obs_smoke_test.go",
+        "cmd/server/chain_smoke_test.go": "testdata/stubs/obs_chain_smoke_test.go"
       },
       "tests": true,
       "run_tests": ["./cmd/server/"]
@@ -379,17 +384,20 @@
       "stubs": {
         "cmd/server/stub_main.go": "testdata/stubs/main_stub.go",
         "internal/repository/stub_order.go": "testdata/stubs/perf_repository.go",
-        "internal/perf/stub_types.go": "testdata/stubs/perf_types.go"
+        "internal/perf/stub_types.go": "testdata/stubs/perf_types.go",
+        "internal/cache/redis_retry_test.go": "testdata/stubs/redis_retry_test.go"
       },
       "tests": true,
-      "bench_once": ["./internal/encoding/"]
+      "bench_once": ["./internal/encoding/"],
+      "run_tests": ["./internal/cache/"]
     },
     {
       "name": "websocket",
       "doc": "hub, upgrade handler, pumps and message handling on github.com/coder/websocket",
       "files": [
         {"path": "internal/ws/hub.go", "blocks": ["websocket-pattern-go.md#1-6"]},
-        {"path": "internal/ws/routes.go", "blocks": ["websocket-pattern-go.md#7"], "package": "ws", "imports": ["github.com/go-chi/chi/v5"]}
+        {"path": "internal/ws/routes.go", "blocks": ["websocket-pattern-go.md#7"], "package": "ws", "imports": ["github.com/go-chi/chi/v5"]},
+        {"path": "internal/ws/rooms_test.go", "blocks": ["websocket-pattern-go.md#8"], "package": "ws"}
       ],
       "stubs": {
         "internal/ws/stub_auth.go": "testdata/stubs/ws_auth.go",

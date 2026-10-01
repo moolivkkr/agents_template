@@ -17,7 +17,7 @@ tags:
 
 # Go Observability Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0 (SDK, OTLP exporters), otelhttp v0.71.0, OTel Prometheus exporter v0.68.0, otelsql v0.44.0, go-redis v9.22.0; `buildResource` was run (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0 (SDK, OTLP exporters), otelhttp v0.71.0, OTel Prometheus exporter v0.68.0, otelsql v0.44.0, go-redis v9.22.0, compiled as ONE `middleware` package with auth-middleware-go.md's; run: `buildResource`, and the full server chain with in-memory trace/metric SDKs (span name and http.route, route-labelled histogram, correlated log line) (tests/archetype-compile/go/run.sh).
 
 > **CANONICAL REFERENCE**: This file is the single source of truth for Go observability implementation. It is the language-specific complement to `core/observability-patterns.md`, which defines the cross-language strategy and required fields. Every generated Go service MUST follow these patterns.
 
@@ -132,7 +132,7 @@ import (
     "go.opentelemetry.io/otel/codes"
     "go.opentelemetry.io/otel/trace"
 
-    "yourapp/internal/middleware" // context accessors (1.8)
+    "yourapp/internal/middleware" // identity accessors (auth-middleware-go.md) + IdentityAttrs (1.8)
 )
 
 // One tracer per package — named after the module
@@ -145,10 +145,7 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
     // Root HTTP span is created automatically by otelhttp middleware (see 1.4).
     // Add business attributes to the current span.
     span := trace.SpanFromContext(ctx)
-    span.SetAttributes(
-        attribute.String("tenant_id", middleware.TenantFromContext(ctx)),
-        attribute.String("user_id", middleware.UserIDFromContext(ctx)),
-    )
+    span.SetAttributes(middleware.IdentityAttrs(ctx)...) // tenant_id, user_id from the verified token
 
     order, err := h.service.CreateOrder(ctx, parseCreateRequest(r))
     if err != nil {
@@ -166,9 +163,7 @@ func (h *Handler) CreateOrder(w http.ResponseWriter, r *http.Request) {
 
 func (s *Service) CreateOrder(ctx context.Context, req CreateOrderRequest) (*Order, error) {
     ctx, span := tracer.Start(ctx, "OrderService.CreateOrder",
-        trace.WithAttributes(
-            attribute.String("tenant_id", middleware.TenantFromContext(ctx)),
-        ),
+        trace.WithAttributes(middleware.IdentityAttrs(ctx)...),
     )
     defer span.End()
 
@@ -208,8 +203,8 @@ func (r *PostgresOrderRepo) Save(ctx context.Context, order *Order) error {
             attribute.String("db.system", "postgresql"),
             attribute.String("db.operation", "INSERT"),
             attribute.String("db.sql.table", "orders"),
-            attribute.String("tenant_id", middleware.TenantFromContext(ctx)),
         ),
+        trace.WithAttributes(middleware.IdentityAttrs(ctx)...),
     )
     defer span.End()
 
@@ -249,6 +244,7 @@ package server
 import (
     "fmt"
     "net/http"
+    "strings"
     "time"
 
     "go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -257,18 +253,21 @@ import (
 
 // NewServer wraps your root handler so every incoming request gets a span.
 func NewServer(handler http.Handler) *http.Server {
-    // otelhttp creates a root span for every request with:
-    //   - span name = "HTTP {METHOD} {route}"
-    //   - http.method, http.url, http.status_code, etc.
+    // otelhttp creates a root span for every request (method, url, status code, …). It names the
+    // span before routing — "HTTP {METHOD}" — and renames it afterwards only if the mux set
+    // r.Pattern on otelhttp's own *http.Request. Middleware that calls r.WithContext (request ID,
+    // logger, auth) hands the mux a copy, so MetricsMiddleware (2.2), which sees the matched route,
+    // renames the span to "HTTP {METHOD} {route}" and sets http.route.
     wrappedHandler := otelhttp.NewHandler(handler, "http-server",
         otelhttp.WithMessageEvents(otelhttp.ReadEvents, otelhttp.WriteEvents),
         // MetricsMiddleware (2.2) is the single source of HTTP server metrics; don't let otelhttp
         // record a second set under other names.
         otelhttp.WithMeterProvider(noop.NewMeterProvider()),
         otelhttp.WithSpanNameFormatter(func(operation string, r *http.Request) string {
-            // Use the route pattern if available (Go 1.23+ ServeMux sets r.Pattern)
-            if pattern := r.Pattern; pattern != "" {
-                return fmt.Sprintf("HTTP %s %s", r.Method, pattern)
+            // r.Pattern is "GET /api/v1/orders/{id}" when the mux matched on this request: keep the
+            // path part, or the method appears twice.
+            if i := strings.IndexByte(r.Pattern, '/'); i >= 0 {
+                return fmt.Sprintf("HTTP %s %s", r.Method, r.Pattern[i:])
             }
             return "HTTP " + r.Method // never r.URL.Path: raw paths make span names unbounded
         }),
@@ -345,6 +344,8 @@ import (
 )
 
 func NewRedisClient(addr string) *redis.Client {
+    // go-redis retries by default (3), including after a timeout once a command was sent: fine for
+    // this cache's GET/SET/DEL, not for INCR-style commands (performance-go.md 1.3).
     rdb := redis.NewClient(&redis.Options{
         Addr:     addr,
         PoolSize: 20,
@@ -404,8 +405,9 @@ func (s *Service) Process(ctx context.Context, id string) error {
 //
 //   Request arrives
 //     -> otelhttp extracts W3C traceparent header, creates root span
-//     -> RequestIDMiddleware validates an inbound X-Request-ID (or generates one) into context
-//     -> AuthMiddleware verifies the token and puts tenant_id + user_id FROM ITS CLAIMS into context
+//     -> RequestID validates an inbound X-Request-ID (or generates one) into context
+//     -> LogEnrichment puts the request logger (request_id, method, path) into context
+//     -> JWTAuth verifies the token and puts tenant_id + user_id FROM ITS CLAIMS into context
 //        (never from a client header such as X-Tenant-ID: anyone can set it)
 //     -> Handler reads context, calls service
 //       -> Service reads context, starts child span, calls repo
@@ -415,36 +417,21 @@ func (s *Service) Process(ctx context.Context, id string) error {
 //     -> otelhttp.NewTransport injects traceparent + baggage into outgoing headers
 //     -> Downstream service extracts them, continues the trace
 
-// Context key types (unexported to prevent collisions)
-type ctxKey int
+// This is package middleware — the same package as auth-middleware-go.md, which owns the context
+// keys and the accessors: RequestIDFromContext, TenantIDFromContext, UserIDFromContext and
+// LoggerFromContext. Observability adds only trace-side helpers.
 
-const (
-    ctxKeyRequestID ctxKey = iota
-    ctxKeyTenantID
-    ctxKeyUserID
-    ctxKeyLogger
-)
-
-// TenantFromContext returns the tenant AuthMiddleware took from the verified token.
-func TenantFromContext(ctx context.Context) string {
-    if v, ok := ctx.Value(ctxKeyTenantID).(string); ok {
-        return v
+// IdentityAttrs returns the verified tenant_id and user_id as span attributes (none for an
+// unauthenticated request). For spans and logs only — never metric labels (unbounded).
+func IdentityAttrs(ctx context.Context) []attribute.KeyValue {
+    var attrs []attribute.KeyValue
+    if id, err := TenantIDFromContext(ctx); err == nil {
+        attrs = append(attrs, attribute.String("tenant_id", id.String()))
     }
-    return "unknown"
-}
-
-func RequestIDFromContext(ctx context.Context) string {
-    if v, ok := ctx.Value(ctxKeyRequestID).(string); ok {
-        return v
+    if id, err := UserIDFromContext(ctx); err == nil {
+        attrs = append(attrs, attribute.String("user_id", id.String()))
     }
-    return ""
-}
-
-func UserIDFromContext(ctx context.Context) string {
-    if v, ok := ctx.Value(ctxKeyUserID).(string); ok {
-        return v
-    }
-    return ""
+    return attrs
 }
 
 // TraceIDFromContext extracts the trace ID from the current span.
@@ -561,9 +548,11 @@ import (
     "strings"
     "time"
 
+    "github.com/go-chi/chi/v5"
     "go.opentelemetry.io/otel"
     "go.opentelemetry.io/otel/attribute"
     "go.opentelemetry.io/otel/metric"
+    "go.opentelemetry.io/otel/trace"
 )
 
 var meter = otel.Meter("myapp/middleware")
@@ -596,9 +585,11 @@ func init() {
 
 var knownMethods = map[string]bool{"GET": true, "HEAD": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "OPTIONS": true}
 
-// MetricsMiddleware records request duration and in-flight requests. It must wrap the ServeMux
-// DIRECTLY: the mux sets r.Pattern on this same *http.Request, and a middleware in between that
-// calls r.WithContext would hand the mux a copy and hide the pattern from us.
+// MetricsMiddleware records request duration and in-flight requests, and names the server span
+// after the route. With net/http's ServeMux it must wrap the mux DIRECTLY: the mux sets r.Pattern on
+// this same *http.Request, and a middleware in between that calls r.WithContext would hand the mux
+// a copy and hide the pattern from us. With chi the template comes from chi's route context, so
+// position doesn't matter.
 func MetricsMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         ctx := r.Context()
@@ -626,6 +617,10 @@ func MetricsMiddleware(next http.Handler) http.Handler {
         }
         if route := routePattern(r); route != "" { // unmatched (404): leave http.route out
             attrs = append(attrs, attribute.String("http.route", route))
+            // otelhttp named the span before routing ("HTTP GET"): name it now that the route is known.
+            span := trace.SpanFromContext(ctx)
+            span.SetName("HTTP " + method + " " + route)
+            span.SetAttributes(attribute.String("http.route", route))
         }
         if rec.statusCode >= 500 {
             attrs = append(attrs, attribute.String("error.type", strconv.Itoa(rec.statusCode)))
@@ -645,11 +640,14 @@ func (r *statusRecorder) WriteHeader(code int) {
     r.ResponseWriter.WriteHeader(code)
 }
 
-// routePattern returns the route TEMPLATE the ServeMux matched, as its path part. r.Pattern (Go 1.23+)
-// is e.g. "GET /api/v1/orders/{id}", and this returns "/api/v1/orders/{id}". It returns "" when nothing
-// matched. Never fall back to r.URL.Path: raw paths are unbounded series.
-// (chi: chi.RouteContext(r.Context()).RoutePattern().)
+// routePattern returns the matched route TEMPLATE, e.g. "/api/v1/orders/{id}", or "" when nothing
+// matched. chi keeps it in its route context; net/http's ServeMux sets r.Pattern (Go 1.23+), e.g.
+// "GET /api/v1/orders/{id}", whose path part is the template. Never fall back to r.URL.Path: raw
+// paths are unbounded series.
 func routePattern(r *http.Request) string {
+    if rctx := chi.RouteContext(r.Context()); rctx != nil {
+        return rctx.RoutePattern()
+    }
     if i := strings.IndexByte(r.Pattern, '/'); i >= 0 {
         return r.Pattern[i:] // drop the "METHOD " and host prefixes
     }
@@ -1021,50 +1019,25 @@ func (h *TracingHandler) WithGroup(name string) slog.Handler {
 
 ### 3.3 Request-Scoped Logger (via Context)
 
+The request-scoped logger comes from auth-middleware-go.md (same `middleware` package):
+`LogEnrichment` puts one in the context with `request_id`, method, path and remote address, and
+`JWTAuth` extends it with `tenant_id`, `user_id` and roles from the verified token. Handlers,
+services and repositories only read it:
+
 ```go
-package middleware
+package order
 
 import (
     "context"
-    "log/slog"
-    "net/http"
+
+    "yourapp/internal/middleware"
 )
 
-// LoggerMiddleware creates a request-scoped logger with correlation fields
-// and stores it in the context for all downstream handlers/services.
-func LoggerMiddleware(baseLogger *slog.Logger) func(http.Handler) http.Handler {
-    return func(next http.Handler) http.Handler {
-        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-            ctx := r.Context()
-
-            reqLogger := baseLogger.With(
-                "request_id", RequestIDFromContext(ctx),
-                "tenant_id", TenantFromContext(ctx),
-                "user_id", UserIDFromContext(ctx),
-                "http.method", r.Method,
-                "http.path", r.URL.Path, // no query string: it can carry tokens and PII
-                "http.remote_addr", r.RemoteAddr,
-            )
-
-            ctx = context.WithValue(ctx, ctxKeyLogger, reqLogger)
-            next.ServeHTTP(w, r.WithContext(ctx))
-        })
-    }
+// logStep logs with the request's correlation fields (request_id, tenant_id, user_id, …) already
+// attached — nothing is passed around by hand. The TracingHandler (3.2) adds trace_id and span_id.
+func (s *Service) logStep(ctx context.Context, step, orderID string) {
+    middleware.LoggerFromContext(ctx).InfoContext(ctx, "order step", "step", step, "order_id", orderID)
 }
-
-// LoggerFromContext retrieves the request-scoped logger.
-// Falls back to the default logger if none was set.
-func LoggerFromContext(ctx context.Context) *slog.Logger {
-    if l, ok := ctx.Value(ctxKeyLogger).(*slog.Logger); ok {
-        return l
-    }
-    return slog.Default()
-}
-
-// Usage in service/repository code:
-//
-//     logger := middleware.LoggerFromContext(ctx)
-//     logger.InfoContext(ctx, "processing entity", "entity_id", id)
 ```
 
 ### 3.4 Log Level Strategy
@@ -1168,43 +1141,27 @@ func MaskCard(card string) string {
 Middleware MUST be applied in this order:
 
 ```go
-// BuildMiddlewareChain wraps the ServeMux in the correlation middleware, in order.
-// AuthMiddleware is auth-middleware-go.md's JWTAuth(cfg) — the tenant comes from the verified token.
-func BuildMiddlewareChain(logger *slog.Logger, handler http.Handler) http.Handler {
+// BuildMiddlewareChain wraps the ServeMux in the correlation middleware, in order. RequestID,
+// LogEnrichment and JWTAuth are auth-middleware-go.md's (same package); MetricsMiddleware is 2.2.
+func BuildMiddlewareChain(logger *slog.Logger, jwt JWTConfig, handler http.Handler) http.Handler {
     // Applied bottom-to-top (last middleware runs first):
     h := handler
 
     // 5. Business logic handler (the ServeMux)
-    // 4. Metrics recording, which wraps the mux directly so it can read r.Pattern (see 2.2)
+    // 4. Metrics + span naming, wrapping the mux directly so it can read r.Pattern (see 2.2)
     h = MetricsMiddleware(h)
-    // 3. Request-scoped logger (needs tenant_id, request_id, user_id from ctx)
-    h = LoggerMiddleware(logger)(h)
-    // 2. Auth verifies the token and puts tenant_id + user_id FROM ITS CLAIMS into ctx.
-    //    There is no tenant middleware reading X-Tenant-ID: a client header is spoofable.
-    h = AuthMiddleware(h)
+    // 3. Auth verifies the token, puts tenant_id + user_id FROM ITS CLAIMS into ctx and adds them to
+    //    the request logger. There is no tenant middleware reading X-Tenant-ID: a client header is
+    //    spoofable.
+    h = JWTAuth(jwt)(h)
+    // 2. Request-scoped logger (request_id, method, path)
+    h = LogEnrichment(logger)(h)
     // 1. Request ID: validate an inbound X-Request-ID or generate one
-    h = RequestIDMiddleware(h)
+    h = RequestID(h)
     // 0. OTel HTTP handler — creates root trace span, extracts W3C traceparent
     //    (applied in NewServer via otelhttp.NewHandler)
 
     return h
-}
-
-var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
-
-// RequestIDMiddleware accepts a well-formed inbound X-Request-ID, otherwise generates one, and echoes
-// it on the response. The charset and length are bounded: no log injection, and no megabyte IDs
-// copied onto every log line.
-func RequestIDMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        requestID := r.Header.Get("X-Request-ID")
-        if !validRequestID.MatchString(requestID) {
-            requestID = "req_" + uuid.NewString()
-        }
-        w.Header().Set("X-Request-ID", requestID)
-        ctx := context.WithValue(r.Context(), ctxKeyRequestID, requestID)
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
 }
 ```
 
@@ -1363,7 +1320,19 @@ func main() {
         os.Exit(1)
     }
 
-    // 8. Build handler chain
+    // 8. Build handler chain. JWT settings come from the environment (or a secret store) — no default key.
+    jwtKey := os.Getenv("JWT_HS256_KEY")
+    if jwtKey == "" {
+        slog.Error("JWT_HS256_KEY is not set")
+        os.Exit(1)
+    }
+    jwtCfg := middleware.JWTConfig{
+        VerifyKey:     []byte(jwtKey),
+        Issuer:        os.Getenv("JWT_ISSUER"),
+        Audience:      os.Getenv("JWT_AUDIENCE"),
+        SigningMethod: "HS256",
+    }
+
     repo := order.NewPostgresOrderRepo(db)
     svc := order.NewOrderService(repo)
     handler := order.NewOrderHandler(svc)
@@ -1372,7 +1341,7 @@ func main() {
     mux.HandleFunc("POST /api/v1/orders", handler.CreateOrder)
     mux.HandleFunc("GET /api/v1/orders/{id}", handler.GetOrder)
 
-    chain := middleware.BuildMiddlewareChain(logger, mux)
+    chain := middleware.BuildMiddlewareChain(logger, jwtCfg, mux)
     srv := server.NewServer(chain) // wraps with otelhttp
 
     // 9. Start server
@@ -1453,7 +1422,7 @@ count is the histogram's count, so there is no `http.server.request.total`.
 1. **tenant_id on every log line and span, never on a metric.** At most a bounded `tenant.tier`. The tenant comes from the verified token, never from a client header.
 2. **trace_id + span_id on every log line** — use `TracingHandler` to automate this.
 3. **RecordError + SetStatus on every error** — never swallow errors silently in spans.
-4. **Middleware order matters.** otelhttp runs first, then request_id (validated), then auth (which sets tenant_id and user_id), then the logger, then metrics wrapping the mux.
+4. **Middleware order matters.** otelhttp runs first, then request_id (validated), then the request logger, then auth (which sets tenant_id and user_id and adds them to the logger), then metrics wrapping the mux (it names the span after the route).
 5. **No high-cardinality metric attributes.** Never use tenant_id, user_id, order_id, request_id, raw paths, query strings or error messages as metric labels. `http.route` is the route template (`r.Pattern`), never `r.URL.Path`.
 6. **JSON logs in production** — text logs only in local development.
 7. **Never log sensitive data.** The handler's `ReplaceAttr` redacts by key name at every level. Never log request or response bodies. Use the masking helpers for the rest.
@@ -1461,3 +1430,4 @@ count is the histogram's count, so there is no `http.server.request.total`.
 9. **Separate metrics port** — serve `/metrics` on a different port (9090) from the application port (8080). Keeps Prometheus scraping out of application routing.
 10. **Exemplars link metrics to traces** — the OTel Prometheus exporter handles this automatically when context carries valid trace spans.
 11. **SLIs come from the histogram at query time.** No in-process SLA gauges. Alert on multi-window burn rates (see 2.7).
+12. **One `middleware` package.** The context keys and the request-id / identity / logger accessors are auth-middleware-go.md's; observability adds MetricsMiddleware, IdentityAttrs and the trace-ID helpers, never a second set of keys.

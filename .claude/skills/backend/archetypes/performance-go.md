@@ -16,7 +16,7 @@ tags:
 
 # Go Performance Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, go-redis v9.22.0, OpenTelemetry v1.46.0; the 4.6 benchmarks were run once each (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0, go-redis v9.22.0, OpenTelemetry v1.46.0; the 4.6 benchmarks were run once each, and the 1.3 retry semantics were checked against go-redis v9.22.0 with a fake server that loses an INCR reply (tests/archetype-compile/go/run.sh).
 
 > **CANONICAL REFERENCE**: This file is the single source of truth for Go performance patterns. Every generated Go service MUST follow these patterns for connection pooling, memory management, concurrency, and profiling.
 
@@ -137,41 +137,66 @@ import (
     "github.com/redis/go-redis/v9"
 )
 
-// NewRedisClient creates a Redis client with production pool settings.
-func NewRedisClient(addr, password string) *redis.Client {
-    return redis.NewClient(&redis.Options{
+// How go-redis v9 retries: it re-sends a command after a dial error or a pool timeout (never sent —
+// safe), and ALSO after a read timeout or a dropped connection once the command was written, when
+// Redis may already have run it. That second case applies a non-idempotent command twice. So:
+//   - NewRedisClient (retries on): reads and idempotent writes — GET, MGET, EXISTS, SET key value,
+//     DEL, EXPIRE, HSET of whole fields, SADD, SREM, ZADD with fixed scores.
+//   - NewRedisNoRetryClient (retries off): commands relative to the current state — INCR/INCRBY/
+//     DECR, HINCRBY, ZINCRBY, LPUSH/RPUSH/LPOP, XADD with an auto ID, PUBLISH, most Lua scripts.
+//     After an error their outcome is unknown: read the value back to reconcile, or surface
+//     UNAVAILABLE — never blind-retry (core/resiliency-patterns.md, idempotent-only retries).
+
+// redisOptions is the pool configuration both clients share.
+func redisOptions(addr, password string) *redis.Options {
+    return &redis.Options{
         Addr:     addr,
         Password: password,
         DB:       0,
 
         // Pool settings
-        PoolSize:     20,                  // Max connections (10 * GOMAXPROCS is a good start)
-        MinIdleConns: 5,                   // Keep warm connections
-        MaxIdleConns: 10,                  // Max idle connections before cleanup
-        PoolTimeout:  4 * time.Second,     // Wait for a pool slot before failing
-        ConnMaxIdleTime: 5 * time.Minute,  // Close idle connections
+        PoolSize:        20,              // Max connections (10 * GOMAXPROCS is a good start)
+        MinIdleConns:    5,               // Keep warm connections
+        MaxIdleConns:    10,              // Max idle connections before cleanup
+        PoolTimeout:     4 * time.Second, // Wait for a pool slot before failing
+        ConnMaxIdleTime: 5 * time.Minute, // Close idle connections
 
         // Timeouts
         DialTimeout:  5 * time.Second,
         ReadTimeout:  3 * time.Second,
         WriteTimeout: 3 * time.Second,
-
-        // Retry
-        MaxRetries:      3,
-        MinRetryBackoff: 8 * time.Millisecond,
-        MaxRetryBackoff: 512 * time.Millisecond,
-    })
+    }
 }
 
-// For Redis Cluster:
+// NewRedisClient is for reads and idempotent writes: retries are on.
+func NewRedisClient(addr, password string) *redis.Client {
+    opts := redisOptions(addr, password)
+    opts.MaxRetries = 3
+    opts.MinRetryBackoff = 8 * time.Millisecond
+    opts.MaxRetryBackoff = 512 * time.Millisecond
+    return redis.NewClient(opts)
+}
+
+// NewRedisNoRetryClient is for non-idempotent commands. -1 disables retries — 0 does not: it means
+// "use the default", which is 3.
+func NewRedisNoRetryClient(addr, password string) *redis.Client {
+    opts := redisOptions(addr, password)
+    opts.MaxRetries = -1
+    return redis.NewClient(opts)
+}
+
+// For Redis Cluster: the cluster client itself re-sends a command after the same errors, inside its
+// MaxRedirects loop (default 3, also needed to follow MOVED/ASK), whatever MaxRetries says — so no
+// cluster client is retry-free. Leave MaxRetries unset: the cluster default (-1) stops the per-node
+// clients retrying on top. Make non-idempotent writes idempotent instead, e.g. a Lua script that runs
+// the INCR only if SET {key}:op:<request-id> 1 NX EX 86400 succeeds (same hash tag → same slot).
 func NewRedisClusterClient(addrs []string) *redis.ClusterClient {
     return redis.NewClusterClient(&redis.ClusterOptions{
-        Addrs:        addrs,
-        PoolSize:     20,
-        MinIdleConns: 5,
-        ReadTimeout:  3 * time.Second,
-        WriteTimeout: 3 * time.Second,
-        MaxRetries:   3,
+        Addrs:          addrs,
+        PoolSize:       20,
+        MinIdleConns:   5,
+        ReadTimeout:    3 * time.Second,
+        WriteTimeout:   3 * time.Second,
         RouteByLatency: true, // Route reads to the closest node
     })
 }

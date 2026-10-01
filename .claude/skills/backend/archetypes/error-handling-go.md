@@ -12,7 +12,7 @@ tags:
 
 # Error Handling Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testify v1.12.1; the tests in Testing Error Types were run (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, chi v5.3.2, testify v1.12.1; the tests in Testing Error Types were run, and a panic behind chi was checked to log the route template (tests/archetype-compile/go/run.sh).
 
 > **CANONICAL REFERENCE**: This file is the single source of truth for backend error handling patterns.
 > The wire shape it produces is the error envelope in `~/.claude/skills/api/response-envelope.md`
@@ -33,6 +33,8 @@ import (
     "net/http"
     "runtime"
     "strconv"
+
+    "github.com/go-chi/chi/v5"
 )
 
 // FieldError is one entry of error.details[] — field-level problems for VALIDATION_FAILED.
@@ -238,6 +240,17 @@ func requestID(w http.ResponseWriter) string {
     return w.Header().Get("X-Request-Id")
 }
 
+// routeOf returns the matched route template for logs — never the raw path, which is unbounded and
+// can carry IDs. chi records the template in its route context, which middleware can read after
+// routing; r.Pattern is only set on the request copy chi hands the final handler, so a middleware
+// that ran earlier sees "" there. r.Pattern is the answer for net/http's ServeMux.
+func routeOf(r *http.Request) string {
+    if rctx := chi.RouteContext(r.Context()); rctx != nil {
+        return rctx.RoutePattern()
+    }
+    return r.Pattern
+}
+
 // writeErrorBody is the only function that writes an error response.
 func writeErrorBody(w http.ResponseWriter, e *AppError) {
     w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -268,7 +281,7 @@ func RecoveryMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
                         "stack", string(buf[:n]),
                         "request_id", requestID(w),
                         "method", r.Method,
-                        "route", r.Pattern, // the route template, not the raw path
+                        "route", routeOf(r), // the route template, not the raw path
                     )
                     // Return a clean 500 — never expose panic details to clients
                     writeErrorBody(w, NewInternalError(nil))

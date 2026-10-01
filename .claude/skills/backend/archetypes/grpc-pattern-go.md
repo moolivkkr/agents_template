@@ -13,7 +13,7 @@ tags:
 
 # gRPC Pattern — Go
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, grpc v1.84.0, protobuf v1.36.12, against code generated from grpc-pattern.md's protos by protoc-gen-go v1.36.12 and protoc-gen-go-grpc v1.6.2 (tests/archetype-compile/go/run.sh). Not run against a live server.
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, grpc v1.84.0, protobuf v1.36.12, against code generated from grpc-pattern.md's protos by protoc-gen-go v1.36.12 and protoc-gen-go-grpc v1.6.2; the protoc command below was run verbatim with protoc 36.2 (tests/archetype-compile/go/run.sh). Not run against a live server.
 
 > **Canonical reference**: This is the Go counterpart to `grpc-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
@@ -25,6 +25,13 @@ Go gRPC uses `google.golang.org/grpc` for the runtime and `protoc-gen-go` + `pro
 # Install tools
 go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
 go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+# Generate with protoc. List ALL three files: protoc only generates code for the files it is given,
+# and widget.proto / common.proto hold the messages the service uses.
+protoc -I proto \
+  --go_out=gen/proto --go_opt=paths=source_relative \
+  --go-grpc_out=gen/proto --go-grpc_opt=paths=source_relative \
+  proto/yourapp/v1/widget_service.proto proto/yourapp/v1/widget.proto proto/yourapp/v1/common.proto
 
 # Or use buf (recommended)
 # buf.gen.yaml
