@@ -14,6 +14,8 @@ tags:
 
 # TypeScript patterns and conventions for type-safe, maintainable applications.
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 under this page's own tsconfig set (strict, noUncheckedIndexedAccess, exactOptionalPropertyTypes, noImplicitReturns, noFallthroughCasesInSwitch), Zod 4.6, Express 5.2, pino 10.3, React 19 + TanStack Query 5.104 / Virtual 3.14, NestJS 12.1 (legacy decorators, its own block). Two illustration-only blocks are skipped (tests/archetype-compile/typescript/run.sh).
+
 ## Compiler Config
 ```json
 {
@@ -78,8 +80,8 @@ src/
 import { z } from "zod"
 
 const UserSchema = z.object({
-  id: z.string().uuid(),
-  email: z.string().email(),
+  id: z.uuid(),               // Zod 4: top-level string formats (z.string().uuid() is deprecated)
+  email: z.email(),
   createdAt: z.coerce.date(),
 })
 type User = z.infer<typeof UserSchema>
@@ -88,7 +90,7 @@ Use `zod` for all external data (API input, env vars, config files).
 
 ## Strict Mode Rules
 
-```typescript
+```jsonc
 // tsconfig.json — non-negotiable settings
 {
   "compilerOptions": {
@@ -99,7 +101,9 @@ Use `zod` for all external data (API input, env vars, config files).
     "noFallthroughCasesInSwitch": true
   }
 }
+```
 
+```typescript
 // Never use `any` — use `unknown` + type narrowing
 function processInput(input: unknown): string {
   if (typeof input === "string") return input.toUpperCase();
@@ -140,13 +144,17 @@ const ROUTES = {
 
 ## Performance
 
-```typescript
+```tsx
 // Bundle-aware imports — always use named imports for tree-shaking
 import { debounce } from "lodash-es";        // tree-shakeable ESM
 // NOT: import _ from "lodash";              // imports entire library
+import { lazy, memo, Suspense, useCallback, useMemo, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { useVirtualizer } from "@tanstack/react-virtual";
 
 // Lazy loading with React.lazy + Suspense
-const Dashboard = React.lazy(() => import("./pages/Dashboard"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
 
 function App() {
   return (
@@ -157,19 +165,20 @@ function App() {
 }
 
 // Memoization — only when you've measured a performance issue
-const ExpensiveList = React.memo(function ExpensiveList({ items }: Props) {
+const ExpensiveList = memo(function ExpensiveList({ items }: { items: readonly Item[] }) {
   return <ul>{items.map((item) => <li key={item.id}>{item.name}</li>)}</ul>;
 });
 
 // useMemo / useCallback — for referential stability, not premature optimization
 function ParentComponent({ data }: { data: RawData[] }) {
+  const navigate = useNavigate();
   const processed = useMemo(
     () => data.filter(isValid).map(transform),
     [data],
   );
 
   const handleClick = useCallback(
-    (id: string) => { navigate(`/items/${id}`); },
+    (id: string) => { void navigate(`/items/${id}`); },
     [navigate],
   );
 
@@ -177,8 +186,6 @@ function ParentComponent({ data }: { data: RawData[] }) {
 }
 
 // Virtual lists for large datasets — never render 10,000+ DOM nodes
-import { useVirtualizer } from "@tanstack/react-virtual";
-
 function VirtualList({ items }: { items: Item[] }) {
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
@@ -188,10 +195,15 @@ function VirtualList({ items }: { items: Item[] }) {
   });
   return (
     <div ref={parentRef} style={{ overflow: "auto", height: 600 }}>
-      <div style={{ height: virtualizer.getTotalSize() }}>
+      {/* rows are absolutely positioned inside a container as tall as the whole list */}
+      <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
         {virtualizer.getVirtualItems().map((vItem) => (
-          <div key={vItem.key} style={{ transform: `translateY(${vItem.start}px)` }}>
-            {items[vItem.index].name}
+          <div
+            key={vItem.key}
+            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: vItem.size,
+                     transform: `translateY(${vItem.start}px)` }}
+          >
+            {items[vItem.index]?.name}
           </div>
         ))}
       </div>
@@ -199,28 +211,28 @@ function VirtualList({ items }: { items: Item[] }) {
   );
 }
 
-// AbortController for cancellable requests
+// AbortSignal for cancellable requests
 async function fetchWithCancel(url: string, signal: AbortSignal): Promise<Data> {
   const res = await fetch(url, { signal });
   if (!res.ok) throw new HttpError(res.status);
-  return res.json();
+  return DataSchema.parse(await res.json()); // validate at the boundary (Runtime Validation above)
 }
 
-// In React — cancel on unmount
-useEffect(() => {
-  const controller = new AbortController();
-  fetchData(controller.signal).then(setData).catch((err) => {
-    if (!controller.signal.aborted) setError(err);
+// In React, server state goes through TanStack Query — never fetch in useEffect (react.md). Its queryFn gets
+// a signal that aborts on unmount and when the key changes: pass it through.
+function useWidgets() {
+  return useQuery({
+    queryKey: ["widgets"],
+    queryFn: ({ signal }) => fetchWithCancel("/api/v1/widgets", signal),
   });
-  return () => controller.abort();
-}, []);
+}
 ```
 
 - Use named imports from tree-shakeable ESM packages
 - `React.lazy()` + `Suspense` for route-level code splitting
 - `useMemo` / `useCallback` only when profiling shows re-render overhead
 - Virtual lists (`@tanstack/react-virtual`) for datasets > 100 items
-- `AbortController` for every fetch — cancel on unmount, cancel on re-request
+- An `AbortSignal` on every fetch — cancel on unmount, cancel on re-request (TanStack Query's `signal`)
 
 ## Error Handling
 
@@ -274,7 +286,9 @@ function parseConfig(raw: unknown): Result<Config, ValidationError> {
 app.post("/users", async (req, res) => {
   const requestId = res.locals.requestId as string; // set by the request-id middleware; = X-Request-Id
   try {
-    const user = await userService.create(req.body);
+    const tenantId = req.user?.tenantId; // from the verified token (auth middleware) — never from the body
+    if (!tenantId) throw new AppError("UNAUTHENTICATED", "Sign in to continue.", 401);
+    const user = await userService.create(tenantId, req.body); // the service validates the body (zod)
     res.status(201).json({ data: user, meta: { request_id: requestId } });
   } catch (err) {
     if (err instanceof AppError) {
@@ -288,7 +302,7 @@ app.post("/users", async (req, res) => {
         },
       });
     } else {
-      logger.error("Unhandled error", { err, request_id: requestId }); // the cause stays in the log
+      logger.error({ err, request_id: requestId }, "unhandled error"); // pino: fields first; the cause stays in the log
       res.status(500).json({
         error: { code: "INTERNAL", message: "Something went wrong.", request_id: requestId, retryable: false },
       });
@@ -297,21 +311,23 @@ app.post("/users", async (req, res) => {
 });
 
 // ErrorBoundary for React components
-class ErrorBoundary extends React.Component<
-  { fallback: React.ReactNode; children: React.ReactNode },
+import { Component, type ErrorInfo, type ReactNode } from "react";
+
+class ErrorBoundary extends Component<
+  { fallback: ReactNode; children: ReactNode },
   { hasError: boolean }
 > {
-  state = { hasError: false };
+  override state = { hasError: false };
 
   static getDerivedStateFromError() {
     return { hasError: true };
   }
 
-  componentDidCatch(error: Error, info: React.ErrorInfo) {
-    reportError(error, info);
+  override componentDidCatch(error: Error, info: ErrorInfo) {
+    reportToErrorTracker(error, info.componentStack); // the project's error tracker (Sentry, …)
   }
 
-  render() {
+  override render() {
     if (this.state.hasError) return this.props.fallback;
     return this.props.children;
   }
@@ -335,15 +351,16 @@ class ErrorBoundary extends React.Component<
 ## Async/Await Patterns
 
 ```typescript
-// --- Promise creation ---
-function fetchUser(id: string): Promise<User> {
+// --- Promise creation — only to wrap a callback/timer API ---
+// Never wrap something that already returns a promise in `new Promise` (errors get lost): await it.
+// (Node ships this one as `setTimeout` from "node:timers/promises".)
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    db.query("SELECT * FROM users WHERE id = $1", [id])
-      .then((rows) => {
-        if (rows.length === 0) reject(new NotFoundError("User"));
-        else resolve(rows[0] as User);
-      })
-      .catch(reject);
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    }, { once: true });
   });
 }
 
@@ -389,23 +406,29 @@ async function sendBulkEmails(
 
   for (const result of results) {
     if (result.status === "rejected") {
-      logger.warn("Email send failed", { error: result.reason });
+      logger.warn({ err: result.reason }, "email send failed"); // pino: fields first, message second
     }
   }
 
   return { sent, failed };
 }
 
-// --- Promise.race — first to resolve wins ---
-// Use for timeouts or fastest-response patterns
-async function fetchWithTimeout<T>(
+// --- Promise.race — first to settle wins ---
+// Use for timeouts or fastest-response patterns. The race only stops WAITING: the losing operation keeps
+// running — give it an AbortSignal (below) when it can be cancelled.
+async function withTimeout<T>(
   promise: Promise<T>,
   timeoutMs: number,
 ): Promise<T> {
-  const timeout = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs),
-  );
-  return Promise.race([promise, timeout]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout after ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer); // don't hold the process open for the rest of timeoutMs
+  }
 }
 
 // --- AbortController for cancellation ---
@@ -420,14 +443,9 @@ async function fetchData(
   return response.json();
 }
 
-// Cancel on timeout
-const controller = new AbortController();
-const timeoutId = setTimeout(() => controller.abort(), 5000);
-try {
-  const data = await fetchData("/api/widgets", controller.signal);
-} finally {
-  clearTimeout(timeoutId);
-}
+// Cancel on timeout — AbortSignal.timeout() replaces the AbortController + setTimeout pair;
+// AbortSignal.any([callerSignal, AbortSignal.timeout(ms)]) also honours the caller's deadline
+const widgets = await fetchData(`${WIDGETS_API_URL}/api/v1/widgets`, AbortSignal.timeout(5000));
 
 // --- Async iterators ---
 async function* paginateAll<T>(
@@ -460,27 +478,25 @@ async function processSequentially(items: string[]): Promise<void> {
   );
 }
 
-// --- Retry with exponential backoff ---
+// --- Retry with exponential backoff — IDEMPOTENT operations only ---
+// A retried write whose first attempt reached the server can apply twice. Retry reads, PUT/DELETE, and
+// writes that carry an Idempotency-Key; the full policy (per-attempt timeout, deadline, Retry-After) is
+// core/resiliency-patterns.md.
 async function withRetry<T>(
   fn: () => Promise<T>,
+  isRetryable: (err: unknown) => boolean, // 429/502/503/504, ECONNRESET … — never a 400 or a 409
   maxRetries: number = 3,
   baseDelayMs: number = 100,
 ): Promise<T> {
-  let lastError: Error | undefined;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+  for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
     } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      if (attempt < maxRetries) {
-        const delay = baseDelayMs * Math.pow(2, attempt);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
+      if (attempt >= maxRetries || !isRetryable(err)) throw err;
+      // full jitter: clients that failed together don't retry together
+      await sleep(Math.random() * baseDelayMs * 2 ** attempt);
     }
   }
-
-  throw lastError;
 }
 ```
 
@@ -492,6 +508,7 @@ async function withRetry<T>(
 - Async generators (`async function*`) for paginated data iteration
 - Never use `async void` except in top-level event handlers — it swallows errors
 - Always `await` the return value of async functions — dangling promises are bugs
+- Retry only idempotent operations, only retryable errors, with full-jitter backoff (`withRetry` above)
 
 ## Type System Deep Patterns
 
@@ -525,9 +542,10 @@ type IsString<T> = T extends string ? true : false;
 type A = IsString<string>;   // true
 type B = IsString<number>;   // false
 
-// Extract return type of async functions
-type AsyncReturnType<T extends (...args: any[]) => Promise<any>> =
-  T extends (...args: any[]) => Promise<infer R> ? R : never;
+// Extract return type of async functions (built in: Awaited<ReturnType<F>>). `never[]` parameters accept
+// any function; `any` isn't needed
+type AsyncReturnType<T extends (...args: never[]) => Promise<unknown>> =
+  T extends (...args: never[]) => Promise<infer R> ? R : never;
 
 // Conditional type for nullable handling
 type NonNullableFields<T> = {
@@ -625,10 +643,11 @@ function handleEvent(event: DomainEvent): void {
     case "widget.deleted":
       console.log("Deleted:", event.payload.widgetId);
       break;
-    default:
+    default: {
       // Exhaustiveness check — compile error if a case is missed
       const _exhaustive: never = event;
-      throw new Error(`Unhandled event type: ${(_exhaustive as any).type}`);
+      throw new Error(`Unhandled event type: ${(_exhaustive as { type: string }).type}`);
+    }
   }
 }
 
@@ -696,7 +715,8 @@ function createTenantId(id: string): TenantId {
 ## Module System
 
 ```typescript
-// --- ESM (ECMAScript Modules) — the default for TypeScript 5.x+ ---
+// --- ESM (ECMAScript Modules) — the default for TypeScript 5.x and 7 ---
+// (This listing shows alternative forms side by side; it is not one module.)
 // tsconfig.json: "module": "NodeNext" or "ESNext"
 // package.json: "type": "module"
 
@@ -756,14 +776,11 @@ export type { CreateWidgetInput, UpdateWidgetInput } from "./widget.service.inte
 // Deep re-exports defeat tree-shaking and create circular dependency risks
 
 // --- Path aliases (tsconfig paths) ---
-// tsconfig.json:
+// tsconfig.json — no "baseUrl": TypeScript 7 removed it (TS5102); targets are relative to the tsconfig:
 // {
 //   "compilerOptions": {
-//     "baseUrl": ".",
 //     "paths": {
-//       "@/*": ["src/*"],
-//       "@/domain/*": ["src/domain/*"],
-//       "@/services/*": ["src/services/*"]
+//       "@/*": ["./src/*"]
 //     }
 //   }
 // }
@@ -784,155 +801,165 @@ import type { Widget } from "@/domain/entity.js";
 - `.js` extensions in import paths for ESM compatibility (TypeScript resolves `.js` to `.ts`)
 - `export type` for type-only exports — stripped at compile time, no runtime cost
 
-## Decorators (Stage 3 / TypeScript 5.x)
+## Decorators (Stage 3, and NestJS's legacy decorators)
 
 ```typescript
-// --- TypeScript 5.x Stage 3 Decorators ---
-// tsconfig.json: no experimentalDecorators needed (Stage 3 is built-in)
+// --- Stage 3 decorators (TypeScript 5.0+ and 7) ---
+// tsconfig.json: NO "experimentalDecorators" — that flag switches every decorator to the legacy semantics
+// NestJS uses (next block). A Stage 3 decorator receives (value, context); the context type says what it decorates.
 
-// Class decorator — adds metadata or modifies class behavior
-function sealed(constructor: Function) {
-  Object.seal(constructor);
-  Object.seal(constructor.prototype);
+// Class decorator — seal the class and its prototype
+function sealed<T extends abstract new (...args: never[]) => object>(target: T, _context: ClassDecoratorContext<T>): void {
+  Object.seal(target);
+  Object.seal(target.prototype);
 }
 
 @sealed
-class Widget {
-  name: string;
-  constructor(name: string) {
-    this.name = name;
-  }
+class Money {
+  constructor(readonly amountCents: number, readonly currency: string) {}
 }
 
-// Class decorator factory — parameterized decorator
+// Class decorator factory — returns a subclass (TypeScript requires `any[]` for a mixin constructor, TS2545)
 function entity(tableName: string) {
-  return function <T extends { new (...args: any[]): {} }>(constructor: T) {
-    return class extends constructor {
-      static tableName = tableName;
+  return function <T extends new (...args: any[]) => object>(target: T, _context: ClassDecoratorContext<T>) {
+    return class extends target {
+      static readonly tableName = tableName;
     };
   };
 }
 
 @entity("widgets")
 class WidgetEntity {
-  name!: string;
+  name = "";
 }
 
 // --- Method decorators ---
-// Logging decorator
-function log(target: any, propertyKey: string, descriptor: PropertyDescriptor) {
-  const originalMethod = descriptor.value;
-
-  descriptor.value = function (...args: any[]) {
-    console.log(`Calling ${propertyKey} with:`, args);
-    const result = originalMethod.apply(this, args);
-    console.log(`${propertyKey} returned:`, result);
-    return result;
+// Timing decorator: logs the method name and duration — never the arguments or result (they can hold PII)
+function timed<This, Args extends unknown[], Return>(
+  method: (this: This, ...args: Args) => Promise<Return>,
+  context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Promise<Return>>,
+) {
+  const name = String(context.name);
+  return async function (this: This, ...args: Args): Promise<Return> {
+    const start = performance.now();
+    try {
+      return await method.call(this, ...args);
+    } finally {
+      logger.debug({ method: name, duration_ms: Math.round(performance.now() - start) }, "method timed");
+    }
   };
-
-  return descriptor;
 }
 
-// Retry decorator
-function retry(maxAttempts: number = 3) {
-  return function (target: any, propertyKey: string, descriptor: PropertyDescriptor) {
-    const originalMethod = descriptor.value;
-
-    descriptor.value = async function (...args: any[]) {
-      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+// Retry decorator — ONLY on idempotent methods (reads): a retried write can apply twice. Retries only
+// errors marked retryable (AppError.retryable: RATE_LIMITED / UNAVAILABLE), with full-jitter backoff.
+function retryIdempotent(maxAttempts = 3, baseDelayMs = 100) {
+  return function <This, Args extends unknown[], Return>(
+    method: (this: This, ...args: Args) => Promise<Return>,
+    _context: ClassMethodDecoratorContext<This, (this: This, ...args: Args) => Promise<Return>>,
+  ) {
+    return async function (this: This, ...args: Args): Promise<Return> {
+      for (let attempt = 1; ; attempt++) {
         try {
-          return await originalMethod.apply(this, args);
+          return await method.call(this, ...args);
         } catch (err) {
-          if (attempt === maxAttempts) throw err;
-          await new Promise((r) => setTimeout(r, 100 * attempt));
+          if (!(err instanceof AppError && err.retryable) || attempt >= maxAttempts) throw err;
+          await new Promise((resolve) => setTimeout(resolve, Math.random() * baseDelayMs * 2 ** attempt));
         }
       }
     };
-
-    return descriptor;
   };
 }
 
 class WidgetService {
-  @log
-  @retry(3)
-  async fetchWidget(id: string): Promise<Widget> {
-    return this.repo.findById(id);
+  constructor(private readonly repo: WidgetRepository) {}
+
+  @timed
+  @retryIdempotent(3)
+  async fetchWidget(tenantId: string, id: string): Promise<Widget> {
+    return this.repo.findById(tenantId, id); // tenant-scoped read: safe to retry
   }
 }
+```
 
-// --- Parameter decorators (NestJS style) ---
-// These require experimentalDecorators: true in tsconfig.json
-// NestJS uses legacy/experimental decorators (not Stage 3)
+```typescript
+// --- NestJS: legacy (experimental) decorators ---
+// NestJS needs parameter decorators and emitted type metadata, which Stage 3 doesn't have. A NestJS
+// project's tsconfig.json sets "experimentalDecorators": true and "emitDecoratorMetadata": true.
+import {
+  Controller,
+  createParamDecorator,
+  Get,
+  Injectable,
+  Param,
+  Query,
+  SetMetadata,
+  UseGuards,
+  type CanActivate,
+  type ExecutionContext,
+} from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
 
-import { Controller, Get, Param, Query } from "@nestjs/common";
+// Custom parameter decorator — the user the auth guard verified (never a header or the body)
+const CurrentUser = createParamDecorator((_data: unknown, ctx: ExecutionContext): AuthUser =>
+  ctx.switchToHttp().getRequest<{ user: AuthUser }>().user,
+);
+
+// Custom metadata decorator, read by the guard below
+const ROLES_KEY = "roles";
+const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+
+// Guard reading the metadata via Reflector (method-level @Roles overrides class-level)
+@Injectable()
+class RolesGuard implements CanActivate {
+  constructor(private readonly reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const required = this.reflector.getAllAndOverride<string[] | undefined>(ROLES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if (!required || required.length === 0) return true; // no role rule here (authentication still applies)
+    const user = context.switchToHttp().getRequest<{ user?: AuthUser }>().user;
+    return user !== undefined && required.some((role) => user.roles.includes(role)); // no user: deny
+  }
+}
 
 // Handlers return the payload; a global interceptor wraps it as { data, meta: { request_id } } and a global
 // exception filter writes the error envelope (api/response-envelope.md) — never Nest's default error body
 @Controller("widgets")
 class WidgetController {
+  constructor(private readonly widgetService: WidgetService) {}
+
   @Get(":id")
-  async findOne(
-    @Param("id") id: string,
-    @Query("include") include?: string,
-  ): Promise<Widget> {
-    return this.widgetService.get(id);
+  async findOne(@CurrentUser() user: AuthUser, @Param("id") id: string): Promise<Widget> {
+    return this.widgetService.get(user.tenantId, id); // tenant from the verified token
   }
 }
-
-// --- NestJS decorator patterns ---
-
-// Custom parameter decorator
-import { createParamDecorator, ExecutionContext } from "@nestjs/common";
-
-const CurrentUser = createParamDecorator(
-  (data: unknown, ctx: ExecutionContext) => {
-    const request = ctx.switchToHttp().getRequest();
-    return request.user;
-  },
-);
-
-// Custom method decorator
-import { SetMetadata } from "@nestjs/common";
-
-const Roles = (...roles: string[]) => SetMetadata("roles", roles);
 
 @Controller("admin/widgets")
+@UseGuards(RolesGuard)
 class AdminWidgetController {
+  constructor(private readonly widgetService: WidgetService) {}
+
   @Get()
   @Roles("admin", "manager")
-  async listAll(@CurrentUser() user: AuthUser): Promise<Widget[]> {
-    return this.widgetService.listAll(user.tenantId);
-  }
-}
-
-// Custom class decorator (Guard)
-import { Injectable, CanActivate, ExecutionContext } from "@nestjs/common";
-import { Reflector } from "@nestjs/core";
-
-@Injectable()
-class RolesGuard implements CanActivate {
-  constructor(private reflector: Reflector) {}
-
-  canActivate(context: ExecutionContext): boolean {
-    const requiredRoles = this.reflector.get<string[]>("roles", context.getHandler());
-    if (!requiredRoles) return true;
-
-    const request = context.switchToHttp().getRequest();
-    const user = request.user as AuthUser;
-    return requiredRoles.some((role) => user.roles.includes(role));
+  async list(@CurrentUser() user: AuthUser, @Query("cursor") cursor?: string): Promise<WidgetPage> {
+    return this.widgetService.list(user.tenantId, { cursor, limit: 50 }); // cursor pagination
   }
 }
 ```
 
-- TypeScript 5.x supports Stage 3 decorators natively (no `experimentalDecorators` flag needed)
-- NestJS still uses legacy/experimental decorators — set `experimentalDecorators: true` for NestJS projects
+- Stage 3 decorators are built into TypeScript 5.0+ and 7 — no `experimentalDecorators` flag. Typed by
+  their context: `ClassDecoratorContext`, `ClassMethodDecoratorContext`, `ClassFieldDecoratorContext`, …
+- Stage 3 has no parameter decorators and no `emitDecoratorMetadata` — NestJS (and class-validator) need the
+  legacy flags: `experimentalDecorators: true` + `emitDecoratorMetadata: true` in NestJS projects
 - Class decorators modify or replace the class constructor
-- Method decorators wrap method behavior (logging, retry, caching)
+- Method decorators wrap method behavior (timing, idempotent-only retry, caching)
 - Parameter decorators extract and transform request data (NestJS `@Param`, `@Query`, `@Body`)
 - Custom decorators combine `createParamDecorator` (params) and `SetMetadata` (metadata)
 - Guards read decorator metadata via `Reflector` for authorization decisions
-- Decorator execution order: parameter decorators first, then method, then class (bottom to top)
+- Decorator order: decorators listed on one member apply bottom-up (`@retryIdempotent` wraps first, `@timed`
+  wraps the result); legacy parameter decorators run before the method's decorators
 
 ## Error Handling
 
@@ -1104,25 +1131,26 @@ const CreateWidgetSchema = z.object({
   description: z.string().trim().max(2000).default(""),
   priority: z.number().int().min(0).max(10).default(0),
   tags: z.array(z.string().min(1)).max(20).default([]),
-  config: z.record(z.unknown()).default({}),
+  config: z.record(z.string(), z.unknown()).default({}), // Zod 4: key schema + value schema
 });
 
 type CreateWidgetInput = z.infer<typeof CreateWidgetSchema>;
 
-// Zod issue → envelope details[] entry. Zod's issue codes are already stable lower_snake ids
-// (invalid_type, too_small, …; zod 4 renames some, e.g. invalid_string → invalid_format — pin them in
-// data-contracts.md). issue.message is NOT sent: custom refinements can carry anything, and it isn't
-// written for your users. Each code maps to a fixed catalog message.
-const FIELD_MESSAGES: Record<string, string> = {
+// Zod issue → envelope details[] entry. Zod's issue codes are stable lower_snake ids (Zod 4: invalid_type,
+// too_small, too_big, invalid_format, invalid_value, …; Zod 3's invalid_string / invalid_enum_value are gone —
+// pin the ones you emit in data-contracts.md). issue.message is NOT sent: custom refinements can carry
+// anything, and it isn't written for your users. Each code maps to a fixed catalog message; keying the map by
+// Zod's own code type makes a renamed code a compile error. (Finer codes — required vs too_short — are in
+// backend/archetypes/crud-handler-typescript.md.)
+const FIELD_MESSAGES: Partial<Record<z.core.$ZodIssue["code"], string>> = {
   invalid_type: "This field is required or has the wrong type.",
   too_small: "This value is too short or too small.",
   too_big: "This value is too long or too large.",
-  invalid_string: "This value has the wrong format.",
   invalid_format: "This value has the wrong format.",
-  invalid_enum_value: "Choose one of the allowed values.",
+  invalid_value: "Choose one of the allowed values.",
 };
 
-function toFieldErrors(issues: z.ZodIssue[]): FieldError[] {
+function toFieldErrors(issues: z.core.$ZodIssue[]): FieldError[] {
   return issues.map((issue) => ({
     field: issue.path.join("."),
     code: issue.code,
@@ -1141,8 +1169,8 @@ function validateInput(raw: unknown): CreateWidgetInput {
 
 // Zod for environment variable validation
 const EnvSchema = z.object({
-  DATABASE_URL: z.string().url(),
-  REDIS_URL: z.string().url(),
+  DATABASE_URL: z.url(),
+  REDIS_URL: z.url(),
   PORT: z.coerce.number().int().min(1).max(65535).default(3000),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
   JWT_SECRET: z.string().min(32),
@@ -1176,7 +1204,7 @@ function errorHandler(err: Error, _req: Request, res: Response, _next: NextFunct
 
   if (appErr.statusCode >= 500) {
     // full details (message, stack, cause chain) go to the log under the same request_id
-    logger.error("Request failed", { request_id: requestId, code: appErr.code, err });
+    logger.error({ request_id: requestId, code: appErr.code, err }, "request failed"); // pino: fields, then message
   }
   if (appErr.retryAfterSec !== undefined) res.set("Retry-After", String(appErr.retryAfterSec));
   if (appErr.statusCode === 401) res.set("WWW-Authenticate", "Bearer");

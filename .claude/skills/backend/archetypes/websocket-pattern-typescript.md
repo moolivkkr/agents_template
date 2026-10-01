@@ -14,7 +14,7 @@ tags:
 
 # WebSocket Pattern — TypeScript
 
-> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, ws 8.22, socket.io 4.8 (tests/archetype-compile/typescript/run.sh).
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, ws 8.22, socket.io 4.8. Both servers are also run over real sockets: a foreign Origin, a missing or reused ticket, and a cross-tenant join or post are refused, and same-tenant messages flow (5 tests) (tests/archetype-compile/typescript/run.sh).
 
 > **Canonical reference**: This is the TypeScript counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 

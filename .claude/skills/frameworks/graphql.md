@@ -310,8 +310,9 @@ class Widget:
 ```typescript
 // src/graphql/resolvers/widget.ts
 
-import { GraphQLResolveInfo } from 'graphql';
-import { Context } from '../context';
+import type { Context } from '../context'; // tenantId/userId from the verified token, per-request loaders
+import { toUserError } from '../errors'; // domain error → UserError; null for anything else
+import type { CreateWidgetInput, Widget, WidgetFilter } from '../types';
 
 export const widgetResolvers = {
   Query: {
@@ -346,7 +347,11 @@ export const widgetResolvers = {
         const widget = await ctx.widgetService.create(ctx.tenantId, ctx.userId, args.input);
         return { widget, errors: [] };
       } catch (err) {
-        return { widget: null, errors: [mapToUserError(err)] };
+        // A typed, user-facing error (validation, conflict, …) goes in the payload. A system error is rethrown:
+        // the client gets a GraphQL error with a generic message, the cause goes to the log.
+        const userError = toUserError(err);
+        if (!userError) throw err;
+        return { widget: null, errors: [userError] };
       }
     },
   },
@@ -453,12 +458,15 @@ Rules:
 ### DataLoader Example (TypeScript)
 
 ```typescript
+// src/graphql/loaders.ts
 import DataLoader from 'dataloader';
+import type { Database, Tag, User } from './types';
 
 // Create per-request
 export function createLoaders(db: Database) {
   return {
-    userLoader: new DataLoader<string, User>(async (ids) => {
+    // a missing id resolves to null at its position — so the value type is User | null
+    userLoader: new DataLoader<string, User | null>(async (ids) => {
       const users = await db.users.findByIds([...ids]);
       const userMap = new Map(users.map(u => [u.id, u]));
       return ids.map(id => userMap.get(id) ?? null);

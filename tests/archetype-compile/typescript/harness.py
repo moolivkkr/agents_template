@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
-"""Type-check the TypeScript/TSX samples in the archetype skill files.
+"""Type-check the TypeScript/TSX samples in the archetype skill files and the backend packs.
 
-Every ```typescript / ```ts / ```tsx / ```javascript (…) block in
-  .claude/skills/backend/archetypes/*.md
-  .claude/skills/ui/archetypes/*.md
+Every ```typescript / ```ts / ```tsx / ```javascript (…) block in the files
+SCAN_GLOBS names (under .claude/skills/):
+  backend/archetypes/*.md, ui/archetypes/*.md            — the archetypes
+  languages/typescript.md, frameworks/{express,fastify,nestjs,trpc,graphql}.md,
+  testing/{vitest,testcontainers,contract-testing,property-based,load-testing}.md,
+  core/**/*.md, security/*.md, api/*.md                  — the backend packs agents copy from
 is extracted AT RUN TIME (so an edited sample is re-verified), placed into a
 throw-away project per unit (see units.py), and type-checked with the pinned
-TypeScript (`tsc --noEmit`, strict + noUncheckedIndexedAccess).
+TypeScript (`tsc --noEmit`, strict + noUncheckedIndexedAccess). k6 scripts
+(```javascript in testing/load-testing.md) are type-checked as JavaScript
+(checkJs) against @types/k6. The React/React Native/UI packs (react.md,
+nextjs.md, tanstack-query.md, react-native*.md, ui/*.md, msw.md, playwright.md,
+react-native-testing-library.md, detox.md) are another harness's scope.
+
+--inventory-only runs just the coverage checks below (python3 only, no npm, no
+tsc): tests/archetype-compile-typescript-inventory.test.sh runs it in run-all.
 
 The run FAILS when:
   * any unit has a type error;
@@ -48,7 +58,24 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 SKILLS = os.path.join(ROOT, ".claude", "skills")
-ARCHETYPE_GLOBS = ["backend/archetypes/*.md", "ui/archetypes/*.md"]
+SCAN_GLOBS = [
+    "backend/archetypes/*.md",
+    "ui/archetypes/*.md",
+    "languages/typescript.md",
+    "frameworks/express.md",
+    "frameworks/fastify.md",
+    "frameworks/nestjs.md",
+    "frameworks/trpc.md",
+    "frameworks/graphql.md",           # its TypeScript blocks (the Python/Java/Go ones are other harnesses')
+    "testing/vitest.md",
+    "testing/testcontainers.md",       # no TS blocks today; one added later must be covered
+    "testing/contract-testing.md",
+    "testing/property-based.md",
+    "testing/load-testing.md",         # k6 scripts: ```javascript, checked against @types/k6
+    "core/**/*.md",
+    "security/*.md",
+    "api/*.md",
+]
 TS_LANGS = {"typescript", "ts", "tsx", "javascript", "js", "jsx", "mts", "cts"}
 FENCE_OPEN = re.compile(r"^(\s*)```(\S*)\s*$")
 FENCE_CLOSE = re.compile(r"^\s*```\s*$")
@@ -80,27 +107,27 @@ class Block:
 
 def extract_blocks() -> dict[str, list[Block]]:
     out: dict[str, list[Block]] = {}
-    for g in ARCHETYPE_GLOBS:
-        for path in sorted(glob.glob(os.path.join(SKILLS, g))):
-            rel = os.path.relpath(path, SKILLS)
-            lines = open(path, encoding="utf-8").read().split("\n")
-            blocks: list[Block] = []
-            i = 0
-            while i < len(lines):
-                m = FENCE_OPEN.match(lines[i])
-                if not m:
-                    i += 1
-                    continue
-                lang, indent = m.group(2), len(m.group(1))
-                j = i + 1
-                while j < len(lines) and not FENCE_CLOSE.match(lines[j]):
-                    j += 1
-                if lang in TS_LANGS:
-                    body = [l[indent:] if l[:indent].strip() == "" else l for l in lines[i + 1:j]]
-                    blocks.append(Block(rel, len(blocks) + 1, lang, i + 2, body))
-                i = j + 1
-            if blocks:
-                out[rel] = blocks
+    paths = [p for g in SCAN_GLOBS for p in sorted(glob.glob(os.path.join(SKILLS, g), recursive=True))]
+    for path in dict.fromkeys(paths):  # de-duplicated, scan order kept
+        rel = os.path.relpath(path, SKILLS)
+        lines = open(path, encoding="utf-8").read().split("\n")
+        blocks: list[Block] = []
+        i = 0
+        while i < len(lines):
+            m = FENCE_OPEN.match(lines[i])
+            if not m:
+                i += 1
+                continue
+            lang, indent = m.group(2), len(m.group(1))
+            j = i + 1
+            while j < len(lines) and not FENCE_CLOSE.match(lines[j]):
+                j += 1
+            if lang in TS_LANGS:
+                body = [l[indent:] if l[:indent].strip() == "" else l for l in lines[i + 1:j]]
+                blocks.append(Block(rel, len(blocks) + 1, lang, i + 2, body))
+            i = j + 1
+        if blocks:
+            out[rel] = blocks
     return out
 
 
@@ -202,6 +229,12 @@ def assemble(unit: dict, blocks_by_ref: dict[str, Block], workdir: str) -> Sourc
             if path is None:
                 raise SystemExit(f"units.py: {ref} has text before any `// src/...` header — give it a `place` entry")
             src.add(path, lines, origin_for(blk, off, len(lines)))
+    if unit.get("modules"):
+        # header-less fragments (no import/export) would be global SCRIPTS: their names would collide across
+        # files and top-level await would be illegal. Make each one a module, as it is in a project.
+        for path, lines in src.files.items():
+            if not path.endswith(".d.ts") and not any(re.match(r"\s*(import|export)\b", l) for l in lines):
+                src.add(path, ["export {}; // (harness: a module, as in a project)"], [f"(harness {unit['name']})"])
     return src
 
 
@@ -354,8 +387,37 @@ def run_node_probe(d: str, entry: str) -> tuple[bool, str]:
     return r.returncode == 0, ("node probe: " + out.splitlines()[-1]) if r.returncode == 0 else ("node probe FAILED:\n" + out)
 
 
+def run_node_test(d: str, spec: dict) -> tuple[bool, str]:
+    """Emit a node:test file (and what it imports) to CommonJS, then run it with `node --test`.
+
+    For test samples written for node:test rather than Vitest (fastify.md's inject() tests). In-process only:
+    the unit's shims stand in for project services, so no database or network is needed.
+    """
+    cfg = {"compilerOptions": {"strict": True, "skipLibCheck": True, "target": "es2022", "module": "nodenext",
+                               "moduleResolution": "nodenext", "esModuleInterop": True, "types": ["node"],
+                               "rootDir": "src", "outDir": "dist-test"},
+           "files": [spec["entry"], *spec.get("files", [])]}
+    with open(os.path.join(d, "tsconfig.node-test.json"), "w") as f:
+        json.dump(cfg, f)
+    tsc = os.path.join(HERE, "node_modules", ".bin", "tsc")
+    p = subprocess.run([tsc, "-p", "tsconfig.node-test.json", "--pretty", "false"], cwd=d, capture_output=True,
+                       text=True)
+    if p.returncode != 0:
+        return False, "node:test emit failed:\n" + p.stdout + p.stderr
+    js = os.path.join("dist-test", os.path.relpath(spec["entry"], "src")).rsplit(".", 1)[0] + ".js"
+    r = subprocess.run(["node", "--test", "--test-reporter=spec", js], cwd=d, capture_output=True, text=True,
+                       env={**os.environ, "NO_COLOR": "1", **spec.get("env", {})})
+    out = (r.stdout + r.stderr).strip().splitlines()
+    summary = " ; ".join(l.strip().lstrip("ℹ ").strip() for l in out if l.strip().lstrip("ℹ ").startswith(("tests ", "pass ", "fail ")))
+    return r.returncode == 0, ("node --test: " + summary) if r.returncode == 0 else ("node --test FAILED:\n" + "\n".join(out[-80:]))
+
+
 def check_unit(unit: dict, d: str, src: Source, run_tests: bool) -> tuple[bool, str]:  # noqa: C901
     ok, out = run_tsc(d, src)
+    if ok and run_tests and unit.get("node_test"):
+        ok, out = run_node_test(d, unit["node_test"])
+        if not ok:
+            return ok, out
     if ok and unit.get("prisma_validate"):
         ok, out = run_prisma_validate(d, unit["prisma_validate"])
         if not ok:
@@ -406,6 +468,8 @@ def main() -> int:
     ap.add_argument("--unit", action="append", help="run only these units (repeatable)")
     ap.add_argument("--keep", action="store_true", help="keep the temp dir and print its path")
     ap.add_argument("--list", action="store_true", help="list units and exit")
+    ap.add_argument("--inventory-only", action="store_true",
+                    help="only the coverage checks (block counts, every block compiled or skipped): python3, offline")
     ap.add_argument("-j", "--jobs", type=int, default=max(2, (os.cpu_count() or 4) // 2))
     ap.add_argument("--no-run", action="store_true",
                     help="type-check only; skip executing the units' declared Vitest test samples")
@@ -419,6 +483,14 @@ def main() -> int:
     blocks = extract_blocks()
     by_ref = {b.ref: b for bl in blocks.values() for b in bl}
     problems: list[str] = []
+
+    # 0. a block ref is "<file stem>#<n>": two scanned files with one stem would make refs ambiguous
+    stems: dict[str, str] = {}
+    for rel in blocks:
+        stem = os.path.basename(rel)[:-3]
+        if stem in stems:
+            problems.append(f"{rel} and {stems[stem]} share the stem {stem!r} — block refs would be ambiguous")
+        stems[stem] = rel
 
     # 1. block-count contract per file
     for rel, bl in blocks.items():
@@ -461,6 +533,13 @@ def main() -> int:
         for u in CFG.UNITS:
             print(f"{u['name']}: {', '.join(u['blocks'])}")
         return 0
+    if args.inventory_only:
+        for p in problems:
+            print("  - " + p)
+        print(f"{'INVENTORY FAIL' if problems else 'INVENTORY OK'}: {len(blocks)} files, {len(by_ref)} TS blocks "
+              f"({len(used & set(by_ref))} compiled by {len(CFG.UNITS)} units, "
+              f"{len(set(CFG.SKIP) & set(by_ref))} skipped with a reason)")
+        return 2 if problems else 0
     if problems:
         print("CONFIG FAIL" if not args.unit else "CONFIG PROBLEMS (ignored: --unit run)")
         for p in problems:
@@ -495,7 +574,7 @@ def main() -> int:
         blocks_desc = f"{len(u['blocks'])} blocks from {', '.join(files)}"
         if ok:
             n_pass += 1
-            print(f"PASS  {u['name']}  ({blocks_desc})" + (f"  [{out}]" if out.startswith(("vitest: ", "prisma validate: ", "node probe: ")) else ""))
+            print(f"PASS  {u['name']}  ({blocks_desc})" + (f"  [{out}]" if out.startswith(("vitest: ", "prisma validate: ", "node probe: ", "node --test: ")) else ""))
         else:
             n_fail += 1
             print(f"FAIL  {u['name']}  ({blocks_desc})")

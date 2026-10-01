@@ -54,6 +54,7 @@ const BASE = __ENV.APP_BASE_URL;                     // the deployed build (qa);
 if (!BASE) throw new Error("APP_BASE_URL not set");
 const TOKEN = __ENV.PERF_TOKEN;                      // from the environment, never committed
 
+/** @type {import("k6/options").Options} */
 export const options = {
   scenarios: {
     // TC-PERF-20101 / NFR-PERF-003: GET /orders at 50 req/s — p95 < 300 ms, p99 < 800 ms, errors < 0.1 %
@@ -76,6 +77,7 @@ export function listOrders() {
   check(r, { "200": (res) => res.status === 200 });
 }
 
+/** @param {Record<string, unknown>} data */
 export function handleSummary(data) {             // the machine-readable result performance_agent converts
   return { [__ENV.K6_SUMMARY || "k6-summary.json"]: JSON.stringify(data) };
 }
@@ -106,6 +108,7 @@ import { Rate, Trend } from "k6/metrics";
 const errorRate = new Rate("errors");
 const widgetLatency = new Trend("widget_latency", true);
 
+/** @type {import("k6/options").Options} */
 export const options = {
   stages: [
     { duration: "1m", target: 50 },   // ramp up to 50 VUs
@@ -138,12 +141,12 @@ export default function () {
   );
   check(createRes, {
     "create: status 201": (r) => r.status === 201,
-    "create: has id": (r) => JSON.parse(r.body).data.id !== undefined,
+    "create: has id": (r) => r.json("data.id") !== undefined,
   });
   errorRate.add(createRes.status !== 201);
 
   if (createRes.status === 201) {
-    const widgetId = JSON.parse(createRes.body).data.id;
+    const widgetId = createRes.json("data.id");
 
     // Get the widget
     const getRes = http.get(`${BASE_URL}/api/v1/widgets/${widgetId}`, {
@@ -156,7 +159,7 @@ export default function () {
   }
 
   // List widgets
-  const listRes = http.get(`${BASE_URL}/api/v1/widgets?page_size=20`, {
+  const listRes = http.get(`${BASE_URL}/api/v1/widgets?limit=20`, { // cursor pagination: ?cursor=&limit=
     headers,
     tags: { name: "list_widgets" },
   });
@@ -169,6 +172,7 @@ export default function () {
 
 ### Stress Test
 ```javascript
+/** @type {import("k6/options").Options} */
 export const options = {
   stages: [
     { duration: "2m", target: 100 },
@@ -186,6 +190,7 @@ export const options = {
 
 ### Spike Test
 ```javascript
+/** @type {import("k6/options").Options} */
 export const options = {
   stages: [
     { duration: "1m", target: 50 },    // normal load
@@ -378,6 +383,7 @@ load-test:
 ### Threshold-Based Pipeline Gating
 ```javascript
 // k6 thresholds that fail the CI pipeline
+/** @type {import("k6/options").Options} */
 export const options = {
   thresholds: {
     // Abort run early if these are breached

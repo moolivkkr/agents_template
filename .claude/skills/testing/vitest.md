@@ -1,15 +1,17 @@
 # Vitest patterns for Vite-native unit and component testing.
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Vitest 5.0, Vite 8.3, @vitejs/plugin-react 6.1, Testing Library (react 16.3, user-event 14.6, jest-dom 7.0), React 19. Type-checked only (tests/archetype-compile/typescript/run.sh).
+
 ## Configuration
 ```typescript
-// vite.config.ts
-import { defineConfig } from "vite"
+// vite.config.ts — defineConfig from "vitest/config" (vite's own doesn't know the `test` key)
+import { defineConfig } from "vitest/config"
 import react from "@vitejs/plugin-react"
 
 export default defineConfig({
   plugins: [react()],
   test: {
-    globals: true,                    // no need to import describe/it/expect
+    globals: true,                    // describe/it/expect/vi without imports; tsconfig "types": ["vitest/globals"]
     environment: "jsdom",             // DOM APIs for component tests
     setupFiles: ["./src/test/setup.ts"],
     css: true,                        // process CSS imports
@@ -66,7 +68,7 @@ describe("formatCurrency", () => {
 ```
 
 ## React Component Testing
-```typescript
+```tsx
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { UserCard } from "./UserCard"
@@ -78,22 +80,27 @@ describe("UserCard", () => {
   })
 
   it("calls onEdit when button clicked", async () => {
+    const user = userEvent.setup() // one per test, before render
     const onEdit = vi.fn()
     render(<UserCard user={{ id: "1", name: "Alice" }} onEdit={onEdit} />)
 
-    await userEvent.click(screen.getByRole("button", { name: /edit/i }))
+    await user.click(screen.getByRole("button", { name: /edit/i }))
     expect(onEdit).toHaveBeenCalledWith("1")
   })
 })
 ```
 
 ## Mocking
-```typescript
-// Mock a module
+```tsx
+import { render, screen } from "@testing-library/react"
+import { fetchUser } from "../api/client"
+import { UserProfile } from "./UserProfile"
+import { reportFailure } from "./report"
+
+// Mock a module (hoisted above the imports)
 vi.mock("../api/client", () => ({
   fetchUser: vi.fn(),
 }))
-import { fetchUser } from "../api/client"
 
 it("fetches user on mount", async () => {
   vi.mocked(fetchUser).mockResolvedValue({ id: "1", name: "Alice" })
@@ -103,20 +110,27 @@ it("fetches user on mount", async () => {
 })
 
 // Spy on an existing function
-const spy = vi.spyOn(console, "error").mockImplementation(() => {})
-// ...
-expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed"))
-spy.mockRestore()
+it("reports a failure on stderr", () => {
+  const spy = vi.spyOn(console, "error").mockImplementation(() => {})
+  reportFailure("sync")
+  expect(spy).toHaveBeenCalledWith(expect.stringContaining("failed"))
+  spy.mockRestore()
+})
 
 // Mock timers
-vi.useFakeTimers()
-vi.advanceTimersByTime(1000)
-vi.useRealTimers()
+it("fires after a second", () => {
+  vi.useFakeTimers()
+  const done = vi.fn()
+  setTimeout(done, 1000)
+  vi.advanceTimersByTime(1000)
+  expect(done).toHaveBeenCalledOnce()
+  vi.useRealTimers()
+})
 ```
 
 ## Testing Hooks
 ```typescript
-import { renderHook, waitFor } from "@testing-library/react"
+import { act, renderHook } from "@testing-library/react"
 import { useCounter } from "./useCounter"
 
 it("increments counter", () => {
@@ -128,7 +142,11 @@ it("increments counter", () => {
 ```
 
 ## Snapshot Testing
-```typescript
+```tsx
+import { render } from "@testing-library/react"
+import { Badge } from "./Badge"
+import { formatDate } from "../utils/format"
+
 it("matches snapshot", () => {
   const { container } = render(<Badge variant="success">Active</Badge>)
   expect(container.firstChild).toMatchSnapshot()

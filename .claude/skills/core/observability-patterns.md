@@ -595,6 +595,9 @@ func LoggingMiddleware(logger *slog.Logger) func(http.Handler) http.Handler {
 ```
 
 ```typescript
+import { randomUUID } from "node:crypto";
+import type { NextFunction, Request, Response } from "express";
+
 const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
 
 function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
@@ -607,7 +610,8 @@ function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {
 // Propagate to downstream calls. The downstream service authenticates the CALLER (service token or
 // mTLS) and takes the tenant from that credential. A forwarded X-Tenant-ID header is a hint for
 // logging only, never an authorization input.
-async function callDownstream(ctx: RequestContext, url: string, body: unknown): Promise<Response> {
+// globalThis.Response: fetch's Response — `Response` here is Express's (imported above)
+async function callDownstream(ctx: RequestContext, url: string, body: unknown): Promise<globalThis.Response> {
   return fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Request-Id": ctx.requestId, Authorization: `Bearer ${ctx.serviceToken}` },

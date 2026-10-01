@@ -112,8 +112,9 @@ def test_get_widget():
 
 ### TypeScript (pact-js)
 ```typescript
-import { PactV4 } from "@pact-foundation/pact";
-import { MatchersV3 } from "@pact-foundation/pact";
+import { describe, expect, it } from "vitest";
+import { MatchersV3, PactV4 } from "@pact-foundation/pact";
+import { WidgetClient } from "../src/api/widget-client"; // the consumer's real API client
 
 const { like } = MatchersV3;
 
@@ -140,6 +141,7 @@ describe("Widget API Consumer", () => {
             name: like("My Widget"),
             status: like("active"),
           },
+          meta: { request_id: like("req-1") }, // the envelope (api/response-envelope.md): data AND meta
         });
       })
       .executeTest(async (mockServer) => {
