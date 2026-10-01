@@ -6,7 +6,7 @@ path the samples import) from the markdown blocks, as they are in the .md files 
 stubs listed for the unit, then runs:
 
     go build ./...                       (with -gcflags=-e: every type error, not the first ten)
-    go test -count=1 -run '^$' ./...     (compiles and links the test binaries; units with "tests")
+    go test -count=1 -exec true ./...    (compiles and links the test binaries without running them)
     go vet ./...
     go test -count=1 <pkgs>              (units that list "run_tests": no external service needed)
     go test ... "db_tests"               (ARCHETYPE_DB_TESTS=1: testcontainers start Docker containers)
@@ -371,7 +371,10 @@ def check_unit(unit, by_ref, workdir, env):
     else:
         steps = [(["go", "build", "-gcflags=-e", "./..."], env)]
         if unit.get("tests", False):
-            steps.append((["go", "test", "-count=1", "-run", "^$", "-gcflags=-e", "./..."], env))
+            # -exec true links every test binary without running it: `-run '^$'` alone still executes
+            # TestMain, and crud-repository-test-go.md's TestMain starts a Postgres container, which
+            # made the default (Docker-free) run depend on Docker.
+            steps.append((["go", "test", "-count=1", "-exec", "true", "-gcflags=-e", "./..."], env))
         steps.append((["go", "vet", "./..."], env))
     for pkgs in unit.get("run_tests", []):
         steps.append((["go", "test", "-count=1"] + args(pkgs), env))
