@@ -68,6 +68,8 @@ cursor.execute("SELECT * FROM users WHERE id = %s", (user_id,))
 - Use allowlists, not denylists, for format validation (e.g., email regex)
 - Validate file uploads: MIME type, size, filename, scan for malware
 
+> Go sample compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh).
+
 ```go
 // Validate before processing
 if len(input.Email) > 254 || !emailRegex.MatchString(input.Email) {

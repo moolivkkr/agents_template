@@ -13,6 +13,8 @@ tags:
 
 # Caching strategies for correct, fast, and non-lying reads.
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, go-redis v9.22.0 (tests/archetype-compile/go/run.sh).
+
 A cache is a correctness liability you accept for latency. The default posture is **no cache** until a
 measured hot path justifies one. Every cached value is a copy that can go stale; the hard part is never
 the read, it's the invalidation.
@@ -31,7 +33,7 @@ func (s *Service) Get(ctx context.Context, id string) (*Item, error) {
     if err != nil {
         return nil, err
     }
-    // SetNX-style write with jittered TTL to avoid synchronized expiry
+    // Fill with a jittered TTL so a class of keys does not expire on the same tick
     s.rdb.Set(ctx, key, encode(item), ttlWithJitter(5*time.Minute))
     return item, nil
 }
@@ -71,8 +73,9 @@ func (s *Service) Update(ctx context.Context, id string, patch Patch) error {
     if err := s.repo.Update(ctx, id, patch); err != nil {
         return err
     }
-    s.rdb.Del(ctx, cacheKey(ctx, "item", id))        // invalidate AFTER the DB commit
-    s.rdb.Del(ctx, cacheKey(ctx, "item-list", ...))  // and any list/aggregate that includes it
+    s.rdb.Del(ctx, cacheKey(ctx, "item", id))           // invalidate AFTER the DB commit
+    s.rdb.Incr(ctx, cacheKey(ctx, "item-list", "ver"))  // and bump the list namespace's version:
+                                                        // list-page keys include it, so every page is a miss
     return nil
 }
 ```

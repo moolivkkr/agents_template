@@ -160,6 +160,8 @@ count.
 | Detox / Appium | `it` title | `it('TC-ME2E-20101 signs in', …)` |
 
 <!-- BEGIN example-tests-go -->
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh).
+
 ```go
 func TestOrderTotal(t *testing.T) {
 	tests := []struct {

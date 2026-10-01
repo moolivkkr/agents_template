@@ -13,7 +13,7 @@ tags:
 
 # Migration Pattern Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-migrate v4.20.1, pgx v5.11.0 (tests/archetype-compile/go/run.sh). The SQL migrations in this file were not executed.
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-migrate v4.20.1, pgx v5.11.0, testcontainers-go v0.44.0; the SQL migrations below were run with golang-migrate against postgres:16-alpine as a non-superuser owner (up, down, re-up for every version; seed and backfill under FORCE ROW LEVEL SECURITY), and the large-table DO-block alternative was run once (tests/archetype-compile/go/run.sh, ARCHETYPE_DB_TESTS=1). The schema matches migration-pattern-python.md.
 
 Complete PostgreSQL migration templates. Every generated migration MUST follow this pattern.
 
@@ -27,8 +27,10 @@ migrations/
   20260115100100_add_widget_categories.down.sql
   20260115100200_seed_default_categories.up.sql
   20260115100200_seed_default_categories.down.sql
-  20260115100300_backfill_widget_status.up.sql
-  20260115100300_backfill_widget_status.down.sql
+  20260115100300_backfill_widget_category.up.sql
+  20260115100300_backfill_widget_category.down.sql
+  20260115100400_add_widget_search_index.up.sql
+  20260115100400_add_widget_search_index.down.sql
 ```
 
 Format: `YYYYMMDDHHMMSS_description.{up|down}.sql`
@@ -39,6 +41,14 @@ Rules:
 - Schema migrations and seed data are SEPARATE files
 - Data migrations (backfills) are SEPARATE from schema changes
 - Each migration is a single, atomic operation — don't combine unrelated changes
+
+**Who runs migrations.** A plain login role that owns the tables: not a superuser, no `BYPASSRLS`. The
+application connects as a different role that owns nothing (`infrastructure/saas-tenancy-models.md`).
+`FORCE ROW LEVEL SECURITY` applies RLS to the owner too, so any migration step that reads or writes rows
+— a data migration, a seed, even adding a foreign key, whose validation query reads both tables — first
+lifts `FORCE` for its own transaction and restores it before commit. The app role never owns the tables,
+so RLS keeps applying to it throughout. Run the migration tests as such a role (Testing Migrations,
+below): a superuser skips RLS and hides every one of these failures.
 
 ## UP Migration — Table Creation
 
@@ -52,43 +62,33 @@ BEGIN;
 -- Table: widgets
 -- =============================================================================
 
-CREATE TABLE IF NOT EXISTS widgets (
-    -- Primary key: UUID v7 (time-ordered) for natural sort + uniqueness
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE widgets (
+    id          UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
 
-    -- Tenant isolation: every row belongs to exactly one tenant
-    tenant_id   UUID        NOT NULL,
+    -- Tenant isolation: every row belongs to exactly one tenant. These samples have no tenants
+    -- table; if your schema has one, add FOREIGN KEY (tenant_id) REFERENCES tenants(id).
+    tenant_id   UUID          NOT NULL,
 
     -- Business fields
-    name        TEXT        NOT NULL,
-    description TEXT        NOT NULL DEFAULT '',
-    status      TEXT        NOT NULL DEFAULT 'active',
-    priority    INT         NOT NULL DEFAULT 0,
-    config      JSONB       NOT NULL DEFAULT '{}',
-
-    -- Audit trail: who created/modified
-    created_by  UUID        NOT NULL,
-    updated_by  UUID        NOT NULL,
+    name        VARCHAR(255)  NOT NULL,
+    description VARCHAR(2000) NOT NULL DEFAULT '',
+    status      VARCHAR(50)   NOT NULL DEFAULT 'active',
 
     -- Timestamps
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
     deleted_at  TIMESTAMPTZ,  -- NULL = active, set = soft-deleted
 
-    -- Optimistic locking: increment on every update
-    version     INT         NOT NULL DEFAULT 1,
+    -- Audit trail: who created/modified (user IDs from the verified token)
+    created_by  UUID          NOT NULL,
+    updated_by  UUID          NOT NULL,
 
-    -- Foreign keys
-    CONSTRAINT fk_widgets_tenant
-        FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE,
-    CONSTRAINT fk_widgets_created_by
-        FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL,
+    -- Optimistic locking: increment on every update
+    version     INT           NOT NULL DEFAULT 1,
 
     -- Check constraints for enum-like fields
     CONSTRAINT chk_widgets_status
-        CHECK (status IN ('active', 'inactive', 'archived', 'draft')),
-    CONSTRAINT chk_widgets_priority
-        CHECK (priority BETWEEN 0 AND 10),
+        CHECK (status IN ('active', 'inactive', 'archived')),
     CONSTRAINT chk_widgets_version
         CHECK (version > 0)
 );
@@ -98,38 +98,28 @@ CREATE TABLE IF NOT EXISTS widgets (
 -- =============================================================================
 
 -- Tenant isolation index: EVERY query filters by tenant_id — this MUST exist
-CREATE INDEX IF NOT EXISTS idx_widgets_tenant_id
+CREATE INDEX idx_widgets_tenant_id
     ON widgets (tenant_id);
 
 -- Composite index for common list query: tenant + sort + cursor pagination
--- Covers: WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC
-CREATE INDEX IF NOT EXISTS idx_widgets_tenant_created
+-- Covers: WHERE tenant_id = $1 AND deleted_at IS NULL ORDER BY created_at DESC, id DESC
+CREATE INDEX idx_widgets_tenant_created
     ON widgets (tenant_id, created_at DESC, id DESC)
     WHERE deleted_at IS NULL;
 
 -- Unique constraint scoped to tenant (name is unique per tenant, not globally)
-CREATE UNIQUE INDEX IF NOT EXISTS idx_widgets_tenant_name_unique
+CREATE UNIQUE INDEX idx_widgets_tenant_name_unique
     ON widgets (tenant_id, lower(name))
     WHERE deleted_at IS NULL;
 
 -- Partial index for active records — soft delete filter
--- All queries that filter `WHERE deleted_at IS NULL` benefit from this
-CREATE INDEX IF NOT EXISTS idx_widgets_active
+CREATE INDEX idx_widgets_active
     ON widgets (id)
     WHERE deleted_at IS NULL;
 
 -- Status filter (common filter in list queries)
-CREATE INDEX IF NOT EXISTS idx_widgets_tenant_status
+CREATE INDEX idx_widgets_tenant_status
     ON widgets (tenant_id, status)
-    WHERE deleted_at IS NULL;
-
--- GIN index for JSONB config column (supports @>, ?, ?& operators)
-CREATE INDEX IF NOT EXISTS idx_widgets_config_gin
-    ON widgets USING GIN (config);
-
--- Updated_at index for change-feed / sync queries
-CREATE INDEX IF NOT EXISTS idx_widgets_updated_at
-    ON widgets (updated_at DESC)
     WHERE deleted_at IS NULL;
 
 -- =============================================================================
@@ -139,7 +129,7 @@ CREATE INDEX IF NOT EXISTS idx_widgets_updated_at
 -- Enable RLS on the table
 ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;
 
--- Force RLS for table owner too (prevents bypass via superuser queries)
+-- FORCE: the policy applies to the table owner too (superusers and BYPASSRLS roles still skip it)
 ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 
 -- Policy: tenant can only see/modify their own rows
@@ -171,10 +161,6 @@ CREATE TRIGGER trg_widgets_updated_at
 -- =============================================================================
 
 COMMENT ON TABLE widgets IS 'Core widget entities — multi-tenant, soft-deletable';
-COMMENT ON COLUMN widgets.id IS 'UUID primary key (gen_random_uuid)';
-COMMENT ON COLUMN widgets.tenant_id IS 'Owning tenant — enforced by RLS policy';
-COMMENT ON COLUMN widgets.status IS 'Lifecycle status: active, inactive, archived, draft';
-COMMENT ON COLUMN widgets.config IS 'Flexible JSONB configuration (schema validated in app layer)';
 COMMENT ON COLUMN widgets.deleted_at IS 'Soft delete timestamp — NULL means active';
 COMMENT ON COLUMN widgets.version IS 'Optimistic lock counter — increment on every update';
 
@@ -195,9 +181,7 @@ DROP TRIGGER IF EXISTS trg_widgets_updated_at ON widgets;
 -- Drop RLS policy (must drop before table)
 DROP POLICY IF EXISTS tenant_isolation ON widgets;
 
--- Drop indexes explicitly (for clarity, though DROP TABLE CASCADE handles them)
-DROP INDEX IF EXISTS idx_widgets_updated_at;
-DROP INDEX IF EXISTS idx_widgets_config_gin;
+-- Drop indexes explicitly (for clarity, though DROP TABLE handles them)
 DROP INDEX IF EXISTS idx_widgets_tenant_status;
 DROP INDEX IF EXISTS idx_widgets_active;
 DROP INDEX IF EXISTS idx_widgets_tenant_name_unique;
@@ -222,36 +206,38 @@ COMMIT;
 
 BEGIN;
 
-CREATE TABLE IF NOT EXISTS widget_categories (
-    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id   UUID        NOT NULL,
-    name        TEXT        NOT NULL,
-    slug        TEXT        NOT NULL,
-    description TEXT        NOT NULL DEFAULT '',
-    sort_order  INT         NOT NULL DEFAULT 0,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at  TIMESTAMPTZ,
-
-    CONSTRAINT fk_widget_categories_tenant
-        FOREIGN KEY (tenant_id) REFERENCES tenants(id) ON DELETE CASCADE
+CREATE TABLE widget_categories (
+    id          UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID          NOT NULL,
+    name        VARCHAR(255)  NOT NULL,
+    slug        VARCHAR(255)  NOT NULL,
+    description VARCHAR(2000) NOT NULL DEFAULT '',
+    sort_order  INT           NOT NULL DEFAULT 0,
+    created_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+    deleted_at  TIMESTAMPTZ
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_widget_categories_tenant_slug
+CREATE UNIQUE INDEX idx_widget_categories_tenant_slug
     ON widget_categories (tenant_id, lower(slug))
     WHERE deleted_at IS NULL;
 
--- Add category_id to widgets with ON DELETE SET NULL (don't cascade delete widgets)
+-- Add category_id to widgets with ON DELETE SET NULL (don't cascade delete widgets). Creating a
+-- foreign key runs a validation query that reads widgets as the owner, and FORCE ROW LEVEL SECURITY
+-- applies RLS to it: with no tenant set, current_setting() raises. Lift FORCE for this transaction
+-- only (see "Who runs migrations").
+ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE widgets ADD COLUMN category_id UUID;
 ALTER TABLE widgets
-    ADD COLUMN IF NOT EXISTS category_id UUID,
     ADD CONSTRAINT fk_widgets_category
         FOREIGN KEY (category_id) REFERENCES widget_categories(id) ON DELETE SET NULL;
+ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 
-CREATE INDEX IF NOT EXISTS idx_widgets_category
+CREATE INDEX idx_widgets_category
     ON widgets (category_id)
     WHERE deleted_at IS NULL AND category_id IS NOT NULL;
 
--- RLS for categories
+-- RLS for categories (after the foreign key, whose validation reads this table too)
 ALTER TABLE widget_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
 
@@ -262,28 +248,49 @@ CREATE POLICY tenant_isolation ON widget_categories
 COMMIT;
 ```
 
+```sql
+-- Migration: 20260115100100_add_widget_categories.down.sql
+BEGIN;
+
+DROP INDEX IF EXISTS idx_widgets_category;
+ALTER TABLE widgets DROP CONSTRAINT IF EXISTS fk_widgets_category;
+ALTER TABLE widgets DROP COLUMN IF EXISTS category_id;
+
+DROP POLICY IF EXISTS tenant_isolation ON widget_categories;
+DROP INDEX IF EXISTS idx_widget_categories_tenant_slug;
+DROP TABLE IF EXISTS widget_categories;
+
+COMMIT;
+```
+
 ## Seed Data Migration
 
 ```sql
 -- Migration: 20260115100200_seed_default_categories.up.sql
--- Purpose: Insert default categories for existing tenants
+-- Purpose: Insert default categories for every tenant that has widgets
 -- NOTE: Seed data is SEPARATE from schema migrations
 
 BEGIN;
 
--- Insert default categories for each existing tenant
+-- These samples have no tenants table: the tenants are the ones that have widgets. If your schema
+-- has a tenants table, select the tenants from it instead.
+-- The owner runs this, and FORCE ROW LEVEL SECURITY applies to it: lift FORCE for this transaction
+-- only. ALTER TABLE holds an ACCESS EXCLUSIVE lock until commit, so keep the transaction short.
+ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
+
 -- Uses ON CONFLICT to make the migration idempotent (safe to re-run)
 INSERT INTO widget_categories (id, tenant_id, name, slug, description, sort_order, created_at, updated_at)
 SELECT
     gen_random_uuid(),
-    t.id,
+    t.tenant_id,
     category.name,
     category.slug,
     category.description,
     category.sort_order,
     NOW(),
     NOW()
-FROM tenants t
+FROM (SELECT DISTINCT tenant_id FROM widgets) AS t
 CROSS JOIN (
     VALUES
         ('General',    'general',    'Default category for uncategorized widgets', 0),
@@ -293,6 +300,9 @@ CROSS JOIN (
 ) AS category(name, slug, description, sort_order)
 ON CONFLICT DO NOTHING;
 
+ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
+ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
+
 COMMIT;
 ```
 
@@ -300,9 +310,11 @@ COMMIT;
 -- Migration: 20260115100200_seed_default_categories.down.sql
 BEGIN;
 
--- Remove only the seeded default categories (by slug pattern)
+-- Remove only the seeded default categories (by slug), with FORCE lifted for this transaction
+ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
 DELETE FROM widget_categories
 WHERE slug IN ('general', 'internal', 'customer', 'deprecated');
+ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
 
 COMMIT;
 ```
@@ -310,45 +322,71 @@ COMMIT;
 ## Data Migration Pattern (Backfill / Transform)
 
 ```sql
--- Migration: 20260115100300_backfill_widget_status.up.sql
--- Purpose: Backfill status for legacy widgets that have NULL status
+-- Migration: 20260115100300_backfill_widget_category.up.sql
+-- Purpose: Put every existing widget in its tenant's "general" category
 --
--- IMPORTANT: For tables with > 100K rows, run this in batches to avoid long locks.
+-- IMPORTANT: For tables with > 100K rows, run this in batches to avoid long locks (below).
 
 BEGIN;
 
--- Small tables (< 100K rows): single UPDATE is fine
-UPDATE widgets
-SET status = 'active', updated_at = NOW()
-WHERE status IS NULL AND deleted_at IS NULL;
+-- Small tables (< 100K rows): single UPDATE, with FORCE lifted for this transaction (the owner runs
+-- it; see "Who runs migrations")
+ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
+
+UPDATE widgets w
+SET category_id = c.id, updated_at = NOW()
+FROM widget_categories c
+WHERE c.tenant_id = w.tenant_id AND c.slug = 'general' AND c.deleted_at IS NULL
+  AND w.category_id IS NULL AND w.deleted_at IS NULL;
+
+ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
+ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 
 COMMIT;
 
 -- ============================================================================
--- LARGE TABLE ALTERNATIVE: Batch update pattern (run outside a transaction)
--- Use this for tables with > 100K rows to avoid long-running locks.
+-- LARGE TABLE ALTERNATIVE: batches, each its own short transaction, so no lock is held for the
+-- whole run. A DO block may COMMIT between batches (PostgreSQL 11+) when it runs outside a
+-- transaction block: make it the ONLY statement in its migration file (no BEGIN/COMMIT) —
+-- golang-migrate sends the file as one statement. FORCE is lifted and restored inside each batch,
+-- so no other session ever sees it off.
 -- ============================================================================
 --
 -- DO $$
 -- DECLARE
---     batch_size INT := 5000;
---     rows_updated INT;
+--     updated integer;
 -- BEGIN
 --     LOOP
---         UPDATE widgets
---         SET status = 'active', updated_at = NOW()
---         WHERE id IN (
---             SELECT id FROM widgets
---             WHERE status IS NULL AND deleted_at IS NULL
---             LIMIT batch_size
---             FOR UPDATE SKIP LOCKED
---         );
---         GET DIAGNOSTICS rows_updated = ROW_COUNT;
---         RAISE NOTICE 'Updated % rows', rows_updated;
---         EXIT WHEN rows_updated = 0;
---         PERFORM pg_sleep(0.1);  -- brief pause to reduce lock pressure
+--         ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
+--         ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
+--         UPDATE widgets w
+--         SET category_id = c.id, updated_at = NOW()
+--         FROM widget_categories c
+--         WHERE c.tenant_id = w.tenant_id AND c.slug = 'general' AND c.deleted_at IS NULL
+--           AND w.id IN (
+--               SELECT w2.id
+--               FROM widgets w2
+--               JOIN widget_categories c2
+--                 ON c2.tenant_id = w2.tenant_id AND c2.slug = 'general' AND c2.deleted_at IS NULL
+--               WHERE w2.category_id IS NULL AND w2.deleted_at IS NULL
+--               LIMIT 5000
+--               FOR UPDATE OF w2 SKIP LOCKED
+--           );
+--         GET DIAGNOSTICS updated = ROW_COUNT;
+--         ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
+--         ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
+--         COMMIT;
+--         EXIT WHEN updated = 0;
 --     END LOOP;
 -- END $$;
+```
+
+```sql
+-- Migration: 20260115100300_backfill_widget_category.down.sql
+-- Reverting a backfill is generally not safe: rows that chose "general" themselves since can't be
+-- told apart. Intentionally a no-op; the previous migration's down drops the column anyway.
+SELECT 1;
 ```
 
 ## CREATE INDEX CONCURRENTLY for Large Tables
@@ -453,6 +491,256 @@ func WithTenantTx(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, f
 }
 ```
 
+## Testing Migrations — Up, Down, Round Trip
+
+```go
+// cmd/migrate/migrate_test.go — runs the embedded migrations (migrationsFS, above) against a real
+// PostgreSQL as a NON-superuser table owner, the way they run when deployed. A superuser skips
+// row-level security, which hides every migration that breaks under FORCE ROW LEVEL SECURITY.
+// It catches: missing or wrong DOWN migrations, foreign-key ordering, and data migrations that fail,
+// or silently update nothing, under RLS.
+package main
+
+import (
+    "context"
+    "database/sql"
+    "errors"
+    "fmt"
+    "io/fs"
+    "slices"
+    "testing"
+    "time"
+
+    "github.com/golang-migrate/migrate/v4"
+    "github.com/golang-migrate/migrate/v4/database/postgres"
+    "github.com/golang-migrate/migrate/v4/source/iofs"
+    "github.com/google/uuid"
+    "github.com/jackc/pgx/v5/pgconn"
+    _ "github.com/jackc/pgx/v5/stdlib" // registers the "pgx" database/sql driver
+    "github.com/testcontainers/testcontainers-go"
+    tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+    "github.com/testcontainers/testcontainers-go/wait"
+)
+
+const owner = "app_owner" // owns the schema and runs the migrations: NOSUPERUSER NOBYPASSRLS
+
+// schemaVersion is the last schema migration, before the seed and the backfill.
+const schemaVersion = 20260115100100
+
+// ownerDSN starts PostgreSQL, creates the owner role and a database it owns, and returns a DSN that
+// connects as the owner.
+func ownerDSN(t *testing.T) string {
+    t.Helper()
+    ctx := context.Background()
+    pg, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+        tcpostgres.WithDatabase("postgres"),
+        tcpostgres.WithUsername("postgres"),
+        tcpostgres.WithPassword("postgres"),
+        testcontainers.WithWaitStrategy(
+            wait.ForLog("database system is ready to accept connections").
+                WithOccurrence(2).WithStartupTimeout(30*time.Second),
+        ),
+    )
+    if err != nil {
+        t.Fatalf("start postgres: %v", err)
+    }
+    t.Cleanup(func() { _ = testcontainers.TerminateContainer(pg) })
+
+    superDSN, err := pg.ConnectionString(ctx, "sslmode=disable")
+    if err != nil {
+        t.Fatal(err)
+    }
+    super, err := sql.Open("pgx", superDSN)
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer super.Close()
+
+    password := uuid.NewString() // throwaway, per run (CREATE ROLE takes no bind parameters)
+    for _, stmt := range []string{
+        fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '%s'", owner, password),
+        "CREATE DATABASE migrations_test OWNER " + owner,
+    } {
+        if _, err := super.ExecContext(ctx, stmt); err != nil {
+            t.Fatalf("%s: %v", stmt, err)
+        }
+    }
+    host, err := pg.Host(ctx)
+    if err != nil {
+        t.Fatal(err)
+    }
+    port, err := pg.MappedPort(ctx, "5432/tcp")
+    if err != nil {
+        t.Fatal(err)
+    }
+    return fmt.Sprintf("postgres://%s:%s@%s:%s/migrations_test?sslmode=disable", owner, password, host, port.Port())
+}
+
+func openDB(t *testing.T, dsn string) *sql.DB {
+    t.Helper()
+    db, err := sql.Open("pgx", dsn)
+    if err != nil {
+        t.Fatal(err)
+    }
+    t.Cleanup(func() { _ = db.Close() })
+    return db
+}
+
+// newMigrator returns a migrator over the embedded migrations, on a *sql.DB of its own (m.Close
+// closes it).
+func newMigrator(t *testing.T, dsn string) *migrate.Migrate {
+    t.Helper()
+    db, err := sql.Open("pgx", dsn)
+    if err != nil {
+        t.Fatal(err)
+    }
+    source, err := iofs.New(migrationsFS, "migrations")
+    if err != nil {
+        t.Fatal(err)
+    }
+    driver, err := postgres.WithInstance(db, &postgres.Config{})
+    if err != nil {
+        t.Fatal(err)
+    }
+    m, err := migrate.NewWithInstance("iofs", source, "postgres", driver)
+    if err != nil {
+        t.Fatal(err)
+    }
+    t.Cleanup(func() { _, _ = m.Close() })
+    return m
+}
+
+// versions lists the migration versions, oldest first.
+func versions(t *testing.T) []uint {
+    t.Helper()
+    source, err := iofs.New(migrationsFS, "migrations")
+    if err != nil {
+        t.Fatal(err)
+    }
+    var out []uint
+    v, err := source.First()
+    for err == nil {
+        out = append(out, v)
+        v, err = source.Next(v)
+    }
+    if !errors.Is(err, fs.ErrNotExist) {
+        t.Fatal(err)
+    }
+    return out
+}
+
+func must(t *testing.T, err error) {
+    t.Helper()
+    if err != nil && !errors.Is(err, migrate.ErrNoChange) {
+        t.Fatal(err)
+    }
+}
+
+func TestMigrations(t *testing.T) {
+    dsn := ownerDSN(t)
+    m := newMigrator(t, dsn)
+
+    t.Run("up, down, up again", func(t *testing.T) {
+        must(t, m.Up())
+        must(t, m.Down())
+        must(t, m.Up())
+    })
+
+    t.Run("each migration applies, reverses and re-applies", func(t *testing.T) {
+        must(t, m.Down())
+        for _, v := range versions(t) {
+            must(t, m.Migrate(v))
+            must(t, m.Steps(-1))
+            must(t, m.Migrate(v))
+        }
+    })
+
+    t.Run("seed and backfill work under FORCE ROW LEVEL SECURITY", func(t *testing.T) {
+        must(t, m.Down())
+        must(t, m.Migrate(schemaVersion))
+        db := openDB(t, dsn)
+        tenants := []uuid.UUID{uuid.New(), uuid.New()}
+        for _, tenant := range tenants {
+            insertWidget(t, db, tenant)
+        }
+
+        must(t, m.Up())
+
+        for _, tenant := range tenants {
+            slugs, uncategorized := tenantState(t, db, tenant)
+            if !slices.Equal(slugs, []string{"customer", "deprecated", "general", "internal"}) || uncategorized != 0 {
+                t.Errorf("tenant %s: categories %v, %d uncategorized widgets", tenant, slugs, uncategorized)
+            }
+        }
+
+        // FORCE is back on: without a tenant the owner is refused, not shown every row. The error is
+        // 42704 (undefined_object) on a connection that never set the tenant, and 22P02 ('' is not
+        // a UUID) on a pooled one whose earlier transaction-local set_config left the setting empty.
+        var n int
+        err := db.QueryRow("SELECT count(*) FROM widgets").Scan(&n)
+        var pgErr *pgconn.PgError
+        if !errors.As(err, &pgErr) || (pgErr.Code != "42704" && pgErr.Code != "22P02") {
+            t.Fatalf("count without a tenant = %d, %v; want it refused (42704 or 22P02)", n, err)
+        }
+    })
+}
+
+// insertWidget writes one widget the way the application does under RLS: in a transaction that
+// names its tenant (WithTenantTx).
+func insertWidget(t *testing.T, db *sql.DB, tenant uuid.UUID) {
+    t.Helper()
+    tx, err := db.Begin()
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer func() { _ = tx.Rollback() }()
+    if _, err := tx.Exec("SELECT set_config('app.current_tenant_id', $1, true)", tenant.String()); err != nil {
+        t.Fatal(err)
+    }
+    user := uuid.New()
+    if _, err := tx.Exec("INSERT INTO widgets (tenant_id, name, created_by, updated_by) VALUES ($1, $2, $3, $3)",
+        tenant, "widget-"+uuid.NewString()[:8], user); err != nil {
+        t.Fatal(err)
+    }
+    if err := tx.Commit(); err != nil {
+        t.Fatal(err)
+    }
+}
+
+// tenantState returns the tenant's category slugs and how many of its widgets have no category.
+func tenantState(t *testing.T, db *sql.DB, tenant uuid.UUID) ([]string, int) {
+    t.Helper()
+    tx, err := db.Begin()
+    if err != nil {
+        t.Fatal(err)
+    }
+    defer func() { _ = tx.Rollback() }()
+    if _, err := tx.Exec("SELECT set_config('app.current_tenant_id', $1, true)", tenant.String()); err != nil {
+        t.Fatal(err)
+    }
+    rows, err := tx.Query("SELECT slug FROM widget_categories ORDER BY slug")
+    if err != nil {
+        t.Fatal(err)
+    }
+    var slugs []string
+    for rows.Next() {
+        var s string
+        if err := rows.Scan(&s); err != nil {
+            t.Fatal(err)
+        }
+        slugs = append(slugs, s)
+    }
+    if err := rows.Err(); err != nil {
+        t.Fatal(err)
+    }
+    var uncategorized int
+    if err := tx.QueryRow("SELECT count(*) FROM widgets WHERE category_id IS NULL").Scan(&uncategorized); err != nil {
+        t.Fatal(err)
+    }
+    return slugs, uncategorized
+}
+```
+
 ## Standard Columns Reference
 
 Every table MUST include these columns:
@@ -477,7 +765,7 @@ Optional but recommended:
 ## Critical Rules
 
 - Every migration MUST be wrapped in `BEGIN`/`COMMIT` (except `CREATE INDEX CONCURRENTLY`)
-- Every table MUST have `tenant_id` with a foreign key to `tenants`
+- Every table MUST have `tenant_id` (with a foreign key to `tenants` if your schema has that table)
 - Every table MUST have `deleted_at` for soft delete support
 - Every table MUST have a `version` column for optimistic locking
 - Every table MUST have RLS enabled with a tenant isolation policy
@@ -490,5 +778,7 @@ Optional but recommended:
 - Data migrations (backfills) MUST be separate from schema migrations
 - Seed data MUST use `ON CONFLICT DO NOTHING` for idempotency
 - Foreign keys MUST specify `ON DELETE` behavior explicitly (`CASCADE`, `SET NULL`, `RESTRICT`)
-- JSONB columns MUST have a GIN index if they will be queried
+- JSONB columns MUST have a GIN index if they will be queried (when you add one)
 - Table and column comments MUST be added for documentation
+- Migrations run as a non-superuser owner without `BYPASSRLS`; every step that reads or writes rows of a `FORCE ROW LEVEL SECURITY` table (data migrations, seeds, adding a foreign key) lifts `FORCE` inside its own transaction and restores it before commit — never across a commit
+- Migration tests run as that owner role, not a superuser (a superuser skips RLS and hides these failures), and cover up, down and re-up for every version

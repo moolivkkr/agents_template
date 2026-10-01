@@ -57,9 +57,15 @@ import type { paths } from "./api/types";
 type ListUsersResponse = paths["/api/v1/users"]["get"]["responses"]["200"]["content"]["application/json"];
 ```
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, kin-openapi v0.149.0, against the archetype apperr + middleware packages (tests/archetype-compile/go/run.sh).
+
 ```go
 // Validate requests against spec at runtime (middleware)
-import "github.com/getkin/kin-openapi/openapi3filter"
+import (
+    "github.com/getkin/kin-openapi/openapi3"
+    "github.com/getkin/kin-openapi/openapi3filter"
+    "github.com/getkin/kin-openapi/routers/gorillamux"
+)
 
 func ValidateRequest(spec *openapi3.T) (func(http.Handler) http.Handler, error) {
     router, err := gorillamux.NewRouter(spec)
@@ -147,6 +153,11 @@ type APIError struct {
     RequestID string       `json:"request_id"`
     Retryable bool         `json:"retryable"`
 }
+type FieldError struct {
+    Field   string `json:"field"`
+    Code    string `json:"code"` // lower_snake, stable
+    Message string `json:"message"`
+}
 type ErrorBody struct {
     Error APIError `json:"error"`
 }
@@ -158,7 +169,7 @@ func writeJSON[T any](w http.ResponseWriter, status int, payload T) {
 }
 
 func writeOne[T any](w http.ResponseWriter, r *http.Request, status int, v T) {
-    writeJSON(w, status, Success[T]{Data: v, Meta: Meta{RequestID: middleware.RequestID(r.Context())}})
+    writeJSON(w, status, Success[T]{Data: v, Meta: Meta{RequestID: middleware.RequestIDFromContext(r.Context())}})
 }
 
 func writeList[T any](w http.ResponseWriter, r *http.Request, items []T, next *string, hasMore bool, limit int) {
@@ -166,14 +177,14 @@ func writeList[T any](w http.ResponseWriter, r *http.Request, items []T, next *s
         items = []T{} // never null
     }
     writeJSON(w, http.StatusOK, Success[[]T]{Data: items, Meta: Meta{
-        RequestID:  middleware.RequestID(r.Context()),
+        RequestID:  middleware.RequestIDFromContext(r.Context()),
         Pagination: &Pagination{NextCursor: next, HasMore: hasMore, Limit: limit},
     }})
 }
 
 func writeError(w http.ResponseWriter, r *http.Request, status int, code, message string, retryable bool) {
     writeJSON(w, status, ErrorBody{Error: APIError{
-        Code: code, Message: message, RequestID: middleware.RequestID(r.Context()), Retryable: retryable,
+        Code: code, Message: message, RequestID: middleware.RequestIDFromContext(r.Context()), Retryable: retryable,
     }})
 }
 ```
@@ -213,23 +224,27 @@ func DecodeCursor(cursor string) (id string, createdAt time.Time, err error) {
     return parts[0], time.Unix(0, nanos), nil
 }
 
-// Query with cursor
-func (r *UserRepo) List(ctx context.Context, cursor *string, limit int) ([]User, *string, bool, error) {
-    if limit <= 0 || limit > 100 {
-        limit = 20 // default page size, max 100
+// Query with cursor. tenantID is the verified tenant from the auth middleware's context — never a
+// request value. limit is 1..100 (the handler defaults a missing limit to 20); anything else is a
+// 400 VALIDATION_FAILED, never clamped.
+func (r *UserRepo) List(ctx context.Context, tenantID string, cursor *string, limit int) ([]User, *string, bool, error) {
+    if limit < 1 || limit > 100 {
+        return nil, nil, false, &DomainError{Code: CodeValidationFailed, Message: "Some fields are invalid.",
+            Details: []FieldError{{Field: "limit", Code: "out_of_range", Message: "Limit must be a whole number from 1 to 100."}}}
     }
     // Fetch limit+1 to determine has_more
     fetchLimit := limit + 1
 
-    var args []any
-    query := "SELECT id, email, created_at FROM users"
+    args := []any{tenantID}
+    query := "SELECT id, email, created_at FROM users WHERE tenant_id = $1"
 
     if cursor != nil {
         id, ts, err := DecodeCursor(*cursor)
         if err != nil {
-            return nil, nil, false, err
+            return nil, nil, false, &DomainError{Code: CodeValidationFailed, Message: "Some fields are invalid.",
+                Details: []FieldError{{Field: "cursor", Code: "invalid_cursor", Message: "The page cursor is invalid."}}}
         }
-        query += " WHERE (created_at, id) < ($1, $2)"
+        query += " AND (created_at, id) < ($2, $3)"
         args = append(args, ts, id)
     }
     query += " ORDER BY created_at DESC, id DESC LIMIT $" + strconv.Itoa(len(args)+1)
@@ -248,6 +263,9 @@ func (r *UserRepo) List(ctx context.Context, cursor *string, limit int) ([]User,
             return nil, nil, false, err
         }
         users = append(users, u)
+    }
+    if err := rows.Err(); err != nil {
+        return nil, nil, false, err
     }
 
     hasMore := len(users) > limit
@@ -279,6 +297,7 @@ Machine-readable codes that clients switch on. Human-readable messages for displ
 // Domain error codes — clients switch on these, not HTTP status codes
 // (the table in api/response-envelope.md is canonical)
 const (
+    CodeMalformedRequest = "MALFORMED_REQUEST"       // 400 — unreadable body: bad JSON, too large
     CodeValidationFailed = "VALIDATION_FAILED"       // 400 — input fails schema; details[] lists fields
     CodeUnauthenticated  = "UNAUTHENTICATED"         // 401 — missing/invalid/expired credentials
     CodeForbidden        = "FORBIDDEN"               // 403 — authenticated but not allowed
@@ -293,6 +312,7 @@ const (
 
 // Map domain codes to HTTP status (and whether a client may retry)
 var codeToStatus = map[string]int{
+    CodeMalformedRequest: http.StatusBadRequest,
     CodeValidationFailed: http.StatusBadRequest,
     CodeUnauthenticated:  http.StatusUnauthorized,
     CodeForbidden:        http.StatusForbidden,
@@ -320,7 +340,7 @@ func ErrorHandler(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
         defer func() {
             if err := recover(); err != nil {
-                slog.ErrorContext(r.Context(), "panic", "panic", err, "request_id", middleware.RequestID(r.Context()))
+                slog.ErrorContext(r.Context(), "panic", "panic", err, "request_id", middleware.RequestIDFromContext(r.Context()))
                 writeError(w, r, http.StatusInternalServerError, CodeInternal, "Something went wrong.", false)
             }
         }()
@@ -342,9 +362,10 @@ GET /api/v2/users         # next version with breaking changes
 ```
 
 ```go
-// Route versioned handlers
-mux.Handle("/api/v1/", v1Router)
-mux.Handle("/api/v2/", v2Router)
+// Route versioned handlers:
+//
+//     mux.Handle("/api/v1/", DeprecationMiddleware(v1Sunset)(v1Router))
+//     mux.Handle("/api/v2/", v2Router)
 
 // Deprecation header on old versions
 func DeprecationMiddleware(sunset time.Time) func(http.Handler) http.Handler {
@@ -382,13 +403,19 @@ func IdempotencyMiddleware(store IdempotencyStore) func(http.Handler) http.Handl
                 return
             }
             // Scope the key to the caller: one tenant's key must never replay another's response.
+            tenantID, err := middleware.TenantIDFromContext(r.Context()) // from the verified token
+            if err != nil {
+                writeError(w, r, http.StatusUnauthorized, CodeUnauthenticated, "Sign in to continue.", false)
+                return
+            }
+            userID, _ := middleware.UserIDFromContext(r.Context())
             body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
             if err != nil {
-                writeError(w, r, http.StatusBadRequest, CodeValidationFailed, "Request body too large.", false)
+                writeError(w, r, http.StatusBadRequest, CodeMalformedRequest, "The request could not be read.", false)
                 return
             }
             r.Body = io.NopCloser(bytes.NewReader(body))
-            scoped := auth.TenantID(r.Context()) + ":" + auth.UserID(r.Context()) + ":" + key
+            scoped := tenantID.String() + ":" + userID.String() + ":" + key
             hash := sha256.Sum256(append([]byte(r.Method+" "+r.URL.Path+"\n"), body...))
 
             // Claim the key atomically (SET NX with a short lock TTL): a concurrent duplicate waits or gets 409.

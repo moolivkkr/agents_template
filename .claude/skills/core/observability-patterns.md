@@ -32,34 +32,38 @@ alerts go blind during the next incident (board review 2026-09-30, SRE-04). So:
 For per-tenant questions ("is tenant X slow?"), query traces or logs by `tenant_id`, or use exemplars.
 A metric is not the tool for them.
 
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0, against the archetype middleware package (tests/archetype-compile/go/run.sh).
+
 ```go
 // The tenant comes from the VERIFIED token the auth middleware put in the context — never from a
 // client header (X-Tenant-ID is spoofable).
+// (middleware.TenantIDFromContext: auth-middleware-go.md)
 func TenantFromContext(ctx context.Context) string {
-    if v, ok := auth.TenantID(ctx); ok {
-        return v
+    if id, err := middleware.TenantIDFromContext(ctx); err == nil {
+        return id.String()
     }
     return "unknown"
 }
 
-// Every log line includes tenant_id (the logging middleware adds it once; see Correlation IDs)
 func (s *Service) ProcessOrder(ctx context.Context, order *Order) error {
+    // Every trace span includes tenant_id
+    ctx, span := tracer.Start(ctx, "OrderService.ProcessOrder",
+        trace.WithAttributes(
+            attribute.String("tenant_id", TenantFromContext(ctx)),
+            attribute.String("order_id", order.ID),
+        ),
+    )
+    defer span.End()
+
+    // Every log line includes tenant_id (the logging middleware adds it once; see Correlation IDs)
     s.logger.InfoContext(ctx, "processing order",
         "tenant_id", TenantFromContext(ctx),
         "order_id", order.ID,
         "amount_cents", order.TotalCents,
     )
     // ...
+    return nil
 }
-
-// Every trace span includes tenant_id
-ctx, span := tracer.Start(ctx, "OrderService.ProcessOrder",
-    trace.WithAttributes(
-        attribute.String("tenant_id", TenantFromContext(ctx)),
-        attribute.String("order_id", order.ID),
-    ),
-)
-defer span.End()
 
 // Metrics: bounded labels only (see the metrics middleware below)
 ```
@@ -505,15 +509,17 @@ at every level, and bodies are never logged whole:
 ```go
 var sensitive = regexp.MustCompile(`(?i)(pass(word)?|secret|token|authorization|cookie|api[-_]?key|session|card|cvv|iban|ssn)`)
 
-logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-    Level: logLevel, // from config; DEBUG stays safe because of the line below
-    ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
-        if sensitive.MatchString(a.Key) {
-            return slog.String(a.Key, "[REDACTED]")
-        }
-        return a
-    },
-}))
+func NewLogger(logLevel slog.Leveler) *slog.Logger {
+    return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+        Level: logLevel, // from config; DEBUG stays safe because of the line below
+        ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
+            if sensitive.MatchString(a.Key) {
+                return slog.String(a.Key, "[REDACTED]")
+            }
+            return a
+        },
+    }))
+}
 ```
 
 ```typescript
@@ -545,6 +551,13 @@ through every service call, log line, trace span, **and error body** (`error.req
 ```go
 var validRequestID = regexp.MustCompile(`^[A-Za-z0-9._-]{8,128}$`)
 
+type ctxKey int
+
+const (
+    requestIDKey ctxKey = iota
+    loggerKey
+)
+
 // Middleware — accept a well-formed inbound ID (from our own gateway), otherwise generate one
 func RequestIDMiddleware(next http.Handler) http.Handler {
     return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -571,6 +584,13 @@ func (c *httpClient) Do(ctx context.Context, req *http.Request) (*http.Response,
 func RequestIDFromContext(ctx context.Context) string {
     if v, ok := ctx.Value(requestIDKey).(string); ok {
         return v
+    }
+    return ""
+}
+
+func TraceIDFromContext(ctx context.Context) string {
+    if sc := trace.SpanContextFromContext(ctx); sc.HasTraceID() {
+        return sc.TraceID().String()
     }
     return ""
 }

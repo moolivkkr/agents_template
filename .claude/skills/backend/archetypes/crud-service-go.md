@@ -12,7 +12,7 @@ tags:
 
 # CRUD Service Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0, and exercised by the crud-service-test-go.md tests, which were run (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, OpenTelemetry v1.46.0, and exercised by the crud-service-test-go.md tests (including page-size rejection), which were run (tests/archetype-compile/go/run.sh).
 
 Complete, production-ready Go service layer template. Every generated service MUST follow this pattern.
 
@@ -397,12 +397,14 @@ func (s *service) List(ctx context.Context, filters domain.ListFilters) (*domain
         return nil, apperr.NewUnauthenticatedError()
     }
 
-    // Enforce pagination defaults and maximums
-    if filters.PageSize <= 0 {
+    // Page size: 0 means "not set" (a caller other than the handler) and gets the default. Anything
+    // else outside 1..100 is 400 VALIDATION_FAILED, never rewritten: a silent clamp hides the caller's
+    // bug and returns a page the client didn't ask for (api/response-envelope.md).
+    if filters.PageSize == 0 {
         filters.PageSize = 20
     }
-    if filters.PageSize > 100 {
-        filters.PageSize = 100
+    if filters.PageSize < 1 || filters.PageSize > 100 {
+        return nil, apperr.NewValidationError("limit", "out_of_range", "Limit must be a whole number from 1 to 100.")
     }
     if filters.SortBy == "" {
         filters.SortBy = "created_at"
@@ -542,6 +544,6 @@ func (i CreateInput) Validate() error {
 - Errors MUST be wrapped with context at every boundary: `fmt.Errorf("widget create: %w", err)`
 - Max 40 lines of logic per function — extract helpers for complex steps
 - Accept interfaces, return structs — constructor takes interfaces, returns concrete type
-- Never return unbounded lists — always enforce PageSize max (100)
+- Never return unbounded lists: PageSize 0 gets the default (20); outside 1..100 is 400 `VALIDATION_FAILED` with a `limit` detail — never clamped
 - Every service method MUST extract `request_id` from context via `RequestIDFromContext(ctx)` and include it in all structured log lines
 - The `request_id` is set by auth middleware and MUST propagate through service → repository layers for end-to-end traceability

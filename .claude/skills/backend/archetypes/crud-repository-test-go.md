@@ -15,7 +15,7 @@ tags:
 
 # CRUD Repository Test Archetype
 
-> Go samples compile-checked 2026-09-30 with Go 1.27.1, pgx v5.11.0, testcontainers-go v0.44.0, testify v1.12.1, and run once against postgres:16-alpine (26 tests passed) (tests/archetype-compile/go/run.sh); run.sh only compiles them unless ARCHETYPE_DB_TESTS=1 (needs Docker).
+> Go samples compile-checked 2026-09-30 with Go 1.27.1, pgx v5.11.0, testcontainers-go v0.44.0, testify v1.12.1, and run against postgres:16-alpine (29 tests, all passed) (tests/archetype-compile/go/run.sh); run.sh only compiles them unless ARCHETYPE_DB_TESTS=1 (needs Docker).
 
 Complete integration test template for the repository layer using a real PostgreSQL database. Every generated repository test MUST follow this pattern.
 
@@ -222,6 +222,10 @@ func withVersion(v int) func(*widget.Widget) {
 
 func withCreatedAt(t time.Time) func(*widget.Widget) {
     return func(w *widget.Widget) { w.CreatedAt = t.Truncate(time.Microsecond) }
+}
+
+func withUpdatedAt(t time.Time) func(*widget.Widget) {
+    return func(w *widget.Widget) { w.UpdatedAt = t.Truncate(time.Microsecond) }
 }
 
 // seedWidgets bulk-inserts widgets into the database for test setup.
@@ -469,6 +473,111 @@ func TestList_SortOrder(t *testing.T) {
     require.Len(t, result.Items, 3)
     assert.Equal(t, w3.ID, result.Items[0].ID, "first item should be newest")
     assert.Equal(t, w1.ID, result.Items[2].ID, "last item should be oldest")
+}
+
+// collectPages follows next_cursor from the first page to the last and returns every item in
+// order, checking has_more and the cursor on each page.
+func collectPages(t *testing.T, ctx context.Context, repo *widgetRepo, tenantID uuid.UUID, sortBy, sortDir string, pageSize int) []widget.Widget {
+    t.Helper()
+    var all []widget.Widget
+    cursor := ""
+    for page := 1; ; page++ {
+        require.LessOrEqual(t, page, 100, "pagination did not end")
+        res, err := repo.List(ctx, tenantID, domain.ListFilters{
+            PageSize: pageSize, Cursor: cursor, SortBy: sortBy, SortDir: sortDir,
+        })
+        require.NoError(t, err, "page %d", page)
+        all = append(all, res.Items...)
+        if !res.HasMore {
+            assert.Empty(t, res.Cursor, "the last page has no next cursor")
+            return all
+        }
+        require.NotEmpty(t, res.Cursor, "has_more=true needs a cursor")
+        cursor = res.Cursor
+    }
+}
+
+func TestList_CursorPagination_SortByName(t *testing.T) {
+    pool, cleanup := testTx(t)
+    defer cleanup()
+    ctx := context.Background()
+    repo := newTestRepo(t, pool)
+
+    // Name order is the reverse of creation order: a created_at cursor would page this wrongly.
+    tenantID := uuid.New()
+    base := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+    for i := 0; i < 25; i++ {
+        seedWidgets(t, ctx, repo, makeWidget(t,
+            withTenant(tenantID),
+            withName(fmt.Sprintf("widget-%03d", i)),
+            withCreatedAt(base.Add(time.Duration(25-i)*time.Second)),
+        ))
+    }
+
+    all := collectPages(t, ctx, repo, tenantID, "name", "asc", 10)
+    require.Len(t, all, 25, "every widget exactly once across 3 pages")
+    for i := 1; i < len(all); i++ {
+        assert.Less(t, all[i-1].Name, all[i].Name, "names strictly ascending across pages")
+    }
+}
+
+func TestList_CursorPagination_SortByUpdatedAt(t *testing.T) {
+    pool, cleanup := testTx(t)
+    defer cleanup()
+    ctx := context.Background()
+    repo := newTestRepo(t, pool)
+
+    // updated_at order is unrelated to created_at, and pairs share an updated_at, so the id
+    // tie-breaker decides their order — including across a page boundary.
+    tenantID := uuid.New()
+    base := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+    for i := 0; i < 25; i++ {
+        seedWidgets(t, ctx, repo, makeWidget(t,
+            withTenant(tenantID),
+            withCreatedAt(base.Add(time.Duration(i)*time.Second)),
+            withUpdatedAt(base.Add(time.Duration(i%13)*time.Minute)),
+        ))
+    }
+
+    all := collectPages(t, ctx, repo, tenantID, "updated_at", "desc", 10)
+    require.Len(t, all, 25)
+    seen := make(map[uuid.UUID]bool)
+    for i, w := range all {
+        assert.False(t, seen[w.ID], "widget %s appears twice", w.ID)
+        seen[w.ID] = true
+        if i > 0 {
+            prev := all[i-1]
+            inOrder := prev.UpdatedAt.After(w.UpdatedAt) ||
+                (prev.UpdatedAt.Equal(w.UpdatedAt) && prev.ID.String() > w.ID.String())
+            assert.True(t, inOrder, "items %d and %d are out of (updated_at, id) DESC order", i-1, i)
+        }
+    }
+}
+
+func TestList_CursorFromAnotherSort_IsValidationError(t *testing.T) {
+    pool, cleanup := testTx(t)
+    defer cleanup()
+    ctx := context.Background()
+    repo := newTestRepo(t, pool)
+
+    tenantID := uuid.New()
+    for i := 0; i < 3; i++ {
+        seedWidgets(t, ctx, repo, makeWidget(t, withTenant(tenantID)))
+    }
+    first, err := repo.List(ctx, tenantID, domain.ListFilters{PageSize: 2, SortBy: "created_at", SortDir: "desc"})
+    require.NoError(t, err)
+    require.True(t, first.HasMore)
+
+    for name, f := range map[string]domain.ListFilters{
+        "another column":    {PageSize: 2, Cursor: first.Cursor, SortBy: "name", SortDir: "desc"},
+        "another direction": {PageSize: 2, Cursor: first.Cursor, SortBy: "created_at", SortDir: "asc"},
+        "not a cursor":      {PageSize: 2, Cursor: "not-a-cursor", SortBy: "created_at", SortDir: "desc"},
+    } {
+        t.Run(name, func(t *testing.T) {
+            _, err := repo.List(ctx, tenantID, f)
+            assertAppErrorCode(t, err, "VALIDATION_FAILED") // → 400, never a silently different page
+        })
+    }
 }
 ```
 
@@ -928,7 +1037,7 @@ func TestCache_Update_InvalidatesCache(t *testing.T) {
 - Every test MUST clean up its data (transaction rollback or truncation) for isolation
 - Time values MUST be truncated to microseconds: `time.Now().UTC().Truncate(time.Microsecond)` (Postgres microsecond precision)
 - Test factories MUST generate unique names/IDs to prevent constraint violations between tests
-- Pagination tests MUST verify: item count, has_more flag, cursor presence, no duplicates between pages
+- Pagination tests MUST verify: item count, has_more flag, cursor presence, no duplicates between pages — for every sortable column (a created_at-only test hides a cursor that ignores the sort), plus ties on the sort key and a cursor from another sort (400)
 - Tenant isolation tests MUST verify: GET returns NotFound, LIST returns empty, UPDATE fails, DELETE fails
 - Optimistic locking tests MUST simulate two concurrent reads and verify second update fails
 - Soft delete tests MUST verify: row exists with deleted_at set, but excluded from queries

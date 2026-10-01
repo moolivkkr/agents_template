@@ -21,6 +21,8 @@ Property-based testing generates random inputs and verifies that invariants (pro
 ## Go: testing/quick and gopter
 
 ### testing/quick (stdlib — simple cases)
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, gopter v0.2.11, and run: the JSON round-trip property (tests/archetype-compile/go/run.sh).
+
 ```go
 import "testing/quick"
 

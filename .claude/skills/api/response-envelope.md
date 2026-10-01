@@ -107,6 +107,8 @@ export type FieldError = { field: string; code: string; message: string };
 
 **Go (server):**
 
+> Go types compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1 (tests/archetype-compile/go/run.sh).
+
 ```go
 type Meta struct {
 	RequestID  string      `json:"request_id"`
@@ -131,6 +133,11 @@ type APIError struct {
 	Details   []FieldError `json:"details,omitempty"`
 	RequestID string       `json:"request_id"`
 	Retryable bool         `json:"retryable"`
+}
+type FieldError struct {
+	Field   string `json:"field"`
+	Code    string `json:"code"` // lower_snake, stable
+	Message string `json:"message"`
 }
 ```
 

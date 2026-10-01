@@ -20,6 +20,8 @@ Architectural principles and patterns for building maintainable, extensible, pro
 
 One struct/class should have one reason to change. If a struct handles both business logic and persistence, it has two reasons to change.
 
+> Go samples: the complete pattern examples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, pgx v5.11.0 (tests/archetype-compile/go/run.sh); BAD/GOOD sketches and outlines with elided bodies are not compiled (each is listed with its reason in units.json).
+
 ```go
 // BAD — UserService does validation, business logic, persistence, and notifications
 type UserService struct {
@@ -300,11 +302,12 @@ const service = new UserService(repo, cache, logger);
 Encapsulate all data access behind an interface. Business logic never touches SQL, ORM, or storage API directly.
 
 ```go
+// tenantID is always the verified tenant from the auth middleware's context, never a request value.
 type OrderRepository interface {
-    FindByID(ctx context.Context, id string) (*Order, error)
+    FindByID(ctx context.Context, tenantID, id string) (*Order, error)
     FindByTenant(ctx context.Context, tenantID string, filter OrderFilter) ([]*Order, error)
     Save(ctx context.Context, order *Order) error
-    Delete(ctx context.Context, id string) error
+    Delete(ctx context.Context, tenantID, id string) error
 }
 
 type postgresOrderRepo struct {
@@ -315,8 +318,8 @@ func NewPostgresOrderRepo(pool *pgxpool.Pool) OrderRepository {
     return &postgresOrderRepo{pool: pool}
 }
 
-func (r *postgresOrderRepo) FindByID(ctx context.Context, id string) (*Order, error) {
-    row := r.pool.QueryRow(ctx, `SELECT id, tenant_id, status, total FROM orders WHERE id = $1`, id)
+func (r *postgresOrderRepo) FindByID(ctx context.Context, tenantID, id string) (*Order, error) {
+    row := r.pool.QueryRow(ctx, `SELECT id, tenant_id, status, total FROM orders WHERE tenant_id = $1 AND id = $2`, tenantID, id)
     var o Order
     if err := row.Scan(&o.ID, &o.TenantID, &o.Status, &o.Total); err != nil {
         if errors.Is(err, pgx.ErrNoRows) {
@@ -325,6 +328,48 @@ func (r *postgresOrderRepo) FindByID(ctx context.Context, id string) (*Order, er
         return nil, fmt.Errorf("scanning order: %w", err)
     }
     return &o, nil
+}
+
+// FindByTenant returns one keyset page: filter.Limit is 1..100 (validated by the handler, never
+// clamped) and filter.After is the decoded cursor, nil on the first page. Never OFFSET.
+func (r *postgresOrderRepo) FindByTenant(ctx context.Context, tenantID string, filter OrderFilter) ([]*Order, error) {
+    query := `SELECT id, tenant_id, status, total FROM orders WHERE tenant_id = $1`
+    args := []any{tenantID}
+    if filter.After != nil {
+        query += ` AND (created_at, id) < ($2, $3)`
+        args = append(args, filter.After.CreatedAt, filter.After.ID)
+    }
+    query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT %d`, filter.Limit+1) // +1 tells has_more
+    rows, err := r.pool.Query(ctx, query, args...)
+    if err != nil {
+        return nil, fmt.Errorf("listing orders: %w", err)
+    }
+    return pgx.CollectRows(rows, func(row pgx.CollectableRow) (*Order, error) {
+        var o Order
+        err := row.Scan(&o.ID, &o.TenantID, &o.Status, &o.Total)
+        return &o, err
+    })
+}
+
+func (r *postgresOrderRepo) Save(ctx context.Context, order *Order) error {
+    _, err := r.pool.Exec(ctx,
+        `INSERT INTO orders (id, tenant_id, status, total, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, $6)`,
+        order.ID, order.TenantID, order.Status, order.Total, order.CreatedAt, order.UpdatedAt)
+    if err != nil {
+        return fmt.Errorf("inserting order: %w", err)
+    }
+    return nil
+}
+
+func (r *postgresOrderRepo) Delete(ctx context.Context, tenantID, id string) error {
+    tag, err := r.pool.Exec(ctx, `DELETE FROM orders WHERE tenant_id = $1 AND id = $2`, tenantID, id)
+    if err != nil {
+        return fmt.Errorf("deleting order: %w", err)
+    }
+    if tag.RowsAffected() == 0 {
+        return ErrOrderNotFound // another tenant's order is "not found", never "forbidden"
+    }
+    return nil
 }
 ```
 
@@ -349,12 +394,13 @@ func NewOrderService(orders OrderRepository, inventory InventoryService,
         payments: payments, events: events, logger: logger}
 }
 
-func (s *OrderService) PlaceOrder(ctx context.Context, req PlaceOrderRequest) (*Order, error) {
+// tenantID: the verified tenant (the handler reads it from the auth middleware's context).
+func (s *OrderService) PlaceOrder(ctx context.Context, tenantID string, req PlaceOrderRequest) (*Order, error) {
     // Business logic lives here — not in handlers, not in repositories
     if err := s.inventory.Reserve(ctx, req.Items); err != nil {
         return nil, fmt.Errorf("reserving inventory: %w", err)
     }
-    order := NewOrder(req)
+    order := NewOrder(tenantID, req)
     if err := s.orders.Save(ctx, order); err != nil {
         return nil, fmt.Errorf("saving order: %w", err)
     }
@@ -402,10 +448,10 @@ type OrderService struct {
 Use when object creation involves validation, defaults, or conditional logic that shouldn't live in the caller.
 
 ```go
-func NewOrder(req PlaceOrderRequest) *Order {
+func NewOrder(tenantID string, req PlaceOrderRequest) *Order {
     return &Order{
         ID:        uuid.New().String(),
-        TenantID:  req.TenantID,
+        TenantID:  tenantID, // the verified tenant — a request body never chooses it
         Status:    OrderStatusPending,
         Items:     req.Items,
         Total:     calculateTotal(req.Items),
@@ -445,6 +491,10 @@ type EventHandler func(ctx context.Context, event Event) error
 type EventBus struct {
     mu       sync.RWMutex
     handlers map[string][]EventHandler
+}
+
+func NewEventBus() *EventBus {
+    return &EventBus{handlers: make(map[string][]EventHandler)}
 }
 
 func (b *EventBus) Subscribe(eventType string, handler EventHandler) {
@@ -507,9 +557,9 @@ func (cb *CircuitBreaker) Execute(fn func() error) error {
 Wrap existing functionality with additional behavior (logging, metrics, caching) without changing the original.
 
 ```go
-// Base interface
+// Base interface — tenantID is the verified tenant from the auth middleware's context
 type UserRepository interface {
-    FindByID(ctx context.Context, id string) (*User, error)
+    FindByID(ctx context.Context, tenantID, id string) (*User, error)
 }
 
 // Logging decorator
@@ -522,42 +572,52 @@ func NewLoggingUserRepo(next UserRepository, logger *slog.Logger) UserRepository
     return &loggingUserRepo{next: next, logger: logger}
 }
 
-func (r *loggingUserRepo) FindByID(ctx context.Context, id string) (*User, error) {
+func (r *loggingUserRepo) FindByID(ctx context.Context, tenantID, id string) (*User, error) {
     r.logger.InfoContext(ctx, "finding user", "id", id)
-    user, err := r.next.FindByID(ctx, id)
+    user, err := r.next.FindByID(ctx, tenantID, id)
     if err != nil {
         r.logger.ErrorContext(ctx, "find user failed", "id", id, "error", err)
     }
     return user, err
 }
 
-// Caching decorator
+// Caching decorator — the key includes the tenant: keyed by id alone, it would serve one tenant's
+// row to another tenant that asks for the same id
 type cachingUserRepo struct {
     next  UserRepository
     cache Cache
     ttl   time.Duration
 }
 
-func (r *cachingUserRepo) FindByID(ctx context.Context, id string) (*User, error) {
-    if cached, ok := r.cache.Get(ctx, "user:"+id); ok {
-        return cached.(*User), nil
+func NewCachingUserRepo(next UserRepository, cache Cache, ttl time.Duration) UserRepository {
+    return &cachingUserRepo{next: next, cache: cache, ttl: ttl}
+}
+
+func (r *cachingUserRepo) FindByID(ctx context.Context, tenantID, id string) (*User, error) {
+    key := "user:" + tenantID + ":" + id
+    if cached, ok := r.cache.Get(ctx, key); ok {
+        if u, ok := cached.(*User); ok {
+            return u, nil
+        }
     }
-    user, err := r.next.FindByID(ctx, id)
+    user, err := r.next.FindByID(ctx, tenantID, id)
     if err != nil {
         return nil, err
     }
-    r.cache.Set(ctx, "user:"+id, user, r.ttl)
+    r.cache.Set(ctx, key, user, r.ttl)
     return user, nil
 }
 
 // Composition — stack decorators
-repo := NewLoggingUserRepo(
-    NewCachingUserRepo(
-        NewPostgresUserRepo(pool),
-        redisCache, 5*time.Minute,
-    ),
-    logger,
-)
+func newUserRepo(pool *pgxpool.Pool, redisCache Cache, logger *slog.Logger) UserRepository {
+    return NewLoggingUserRepo(
+        NewCachingUserRepo(
+            NewPostgresUserRepo(pool),
+            redisCache, 5*time.Minute,
+        ),
+        logger,
+    )
+}
 ```
 
 **When to use:** Cross-cutting concerns (logging, caching, metrics, retry). When you want to add behavior to existing implementations without modifying them.
@@ -567,13 +627,13 @@ repo := NewLoggingUserRepo(
 Use when objects have many optional fields and construction needs validation.
 
 ```go
+// No OFFSET: pages are keyset (cursor) conditions added with Where.
 type QueryBuilder struct {
     table      string
     conditions []string
     args       []interface{}
     orderBy    string
     limit      int
-    offset     int
 }
 
 func NewQuery(table string) *QueryBuilder {
@@ -586,6 +646,7 @@ func (q *QueryBuilder) Where(condition string, args ...interface{}) *QueryBuilde
     return q
 }
 
+// OrderBy takes a constant or an allowlisted column — never a request value (it is concatenated).
 func (q *QueryBuilder) OrderBy(field string) *QueryBuilder {
     q.orderBy = field
     return q
@@ -604,17 +665,20 @@ func (q *QueryBuilder) Build() (string, []interface{}) {
     if q.orderBy != "" {
         sql += " ORDER BY " + q.orderBy
     }
-    sql += fmt.Sprintf(" LIMIT %d OFFSET %d", q.limit, q.offset)
+    sql += fmt.Sprintf(" LIMIT %d", q.limit)
     return sql, q.args
 }
 
-// Usage
-query, args := NewQuery("orders").
-    Where("tenant_id = $1", tenantID).
-    Where("status = $2", "active").
-    OrderBy("created_at DESC").
-    Limit(50).
-    Build()
+// Usage — the page after the cursor's (created_at, id); fetch limit+1 rows to compute has_more
+func activeOrdersPage(tenantID string, afterCreatedAt time.Time, afterID string, limit int) (string, []interface{}) {
+    return NewQuery("orders").
+        Where("tenant_id = $1", tenantID).
+        Where("status = $2", "active").
+        Where("(created_at, id) < ($3, $4)", afterCreatedAt, afterID).
+        OrderBy("created_at DESC, id DESC").
+        Limit(limit + 1).
+        Build()
+}
 ```
 
 **When to use:** Objects with many optional fields. Multi-step construction that needs validation. Fluent configuration APIs.
@@ -691,12 +755,11 @@ func (h *OrderHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
     if err != nil {
         switch {
         case errors.Is(err, ErrOrderNotFound):
-            respondError(w, http.StatusNotFound, err)
+            err = apperr.NewNotFoundError("order")
         case errors.Is(err, ErrForbidden):
-            respondError(w, http.StatusForbidden, err)
-        default:
-            respondError(w, http.StatusInternalServerError, err)
+            err = apperr.NewForbiddenError()
         }
+        apperr.ErrorMapper(w, r, err) // the one error envelope; anything unmapped is a 500, detail logged only
         return
     }
     respondJSON(w, http.StatusOK, order)
