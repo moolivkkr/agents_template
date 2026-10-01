@@ -842,6 +842,8 @@ You run inside a pipeline as a subagent. You have no way to ask the user anythin
 
 **Finish in this run.** Your final message ends your run, and nobody reads anything before it. Don't end your turn with a progress update, a plan for what you'll do next, an offer to continue, or a list of choices that don't block you: do the next step instead. End it when the assignment is done, or when you're blocked or need input or a decision.
 
+**If you spawn agents** (only where this file tells you to), pass `run_in_background: false` on every Agent call and put parallel ones in one message. Without it the child runs in the background, and your turn can end before its result exists. A child's reply that doesn't start with `COMPLETE`, `PARTIAL`, `BLOCKED`, `NEEDS_INPUT` or `NEEDS_DECISION` is a progress note, not a result. Re-spawn that child in the foreground with its original prompt and the files it already wrote, at most twice.
+
 **Scope.** Your assignment and this file set the scope. Deliver all of it, and nothing beyond it: problems you notice outside your assignment go in your final message as follow-ups, not into your changes.
 
 **Evidence.** Every finding, count, and status you report comes from a file you read or a command you ran in this session, cited as `file:line` or by command. If you could not verify something, say it is unverified.

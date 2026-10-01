@@ -204,7 +204,8 @@ check("DL-11", sorted(crit), sorted(crit & anchored), "every rubric criterion ha
 check("DL-12", True, "security_posture 35" in proto.replace("**", ""), "the security rubric weighs security posture heaviest")
 
 contract = read(".claude/skills/core/agent-common.md")
-check("DL-13", True, "NEEDS_DECISION <topic>" in contract and "Finish in this run" in contract, "the operating contract has the NEEDS_DECISION hand-back and finish-in-this-run")
+check("DL-13", True, "NEEDS_DECISION <topic>" in contract and "Finish in this run" in contract and "run_in_background: false" in contract,
+      "the operating contract has the NEEDS_DECISION hand-back, finish-in-this-run and foreground spawning")
 agents = glob.glob(os.path.join(REPO, ".claude/agents/core/*.md")) + glob.glob(os.path.join(REPO, ".claude/agents/templates/*.tmpl"))
 missing = [os.path.basename(a) for a in agents if "NEEDS_DECISION <topic>" not in open(a).read()]
 check("DL-14", [], missing, "every agent carries the synced contract (run .claude/agents/_sync-contract.sh)")
