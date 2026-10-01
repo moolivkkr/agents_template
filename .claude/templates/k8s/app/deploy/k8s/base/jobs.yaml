@@ -1,10 +1,56 @@
 # Suspended CronJobs used as digest-pinned Job TEMPLATES (Jobs are immutable, so re-applying a Job with
 # a new image fails; `kubectl create job <name> --from=cronjob/db-migrate` always uses the current digest).
-#   db-migrate  forward-only schema migrations — run by deploy.sh before the rollout
-#   db-seed     static/reference data, idempotent — run by deploy.sh after migrate, and by seed.sh
+#   db-roles    create/converge the migrator and app roles (db-roles.sh, as the superuser) — run by
+#               deploy.sh before every migrate; prints "no changes" on a converged database
+#   db-migrate  forward-only schema migrations, as the MIGRATOR — run by deploy.sh before the rollout
+#   db-seed     static/reference data, idempotent, as the MIGRATOR — run by deploy.sh after migrate, and by seed.sh
+# Credentials: each container reads only its own role's keys from db-credentials (deploylib.py db-access
+# refuses anything else): the superuser only here in db-roles, the migrator only in the db-* templates.
 # wait-for-db: a NEW pod's first connections are refused for a few seconds while k3s's network-policy
 # controller programs its IP (measured: 3/3 refused at t+0, 3/3 ok at t+5s under the env-isolation
 # policy). Job retries don't help (each retry is a new pod, new IP); waiting inside the pod does.
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: db-roles}
+spec:
+  suspend: true
+  schedule: "0 0 1 1 *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 3600   # results live in agent_state/deploy/*/history.jsonl
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+          initContainers:
+          - name: wait-for-db
+            image: postgres:17-alpine
+            command: [sh, -c, 'for i in $(seq 1 120); do pg_isready -h postgres -p 5432 -q && exit 0; sleep 1; done; echo "postgres unreachable after 120s" >&2; exit 1']
+            securityContext: {runAsUser: 70, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          containers:
+          - name: roles
+            image: postgres:17-alpine     # psql 15+ (db-roles.sh uses \getenv); same major as postgres.yaml
+            command: [bash, /db-roles/db-roles.sh]
+            env:
+            - {name: PGHOST, value: postgres}
+            - {name: PGDATABASE, value: app}
+            - {name: PGUSER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_SUPERUSER_USER}}}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_SUPERUSER_PASSWORD}}}
+            - {name: DB_MIGRATOR_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_USER}}}
+            - {name: DB_MIGRATOR_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_PASSWORD}}}
+            - {name: DB_APP_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_APP_USER}}}
+            - {name: DB_APP_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_APP_PASSWORD}}}
+            securityContext: {runAsUser: 70, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            volumeMounts:
+            - {name: db-roles, mountPath: /db-roles, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          volumes:
+          - {name: db-roles, configMap: {name: db-roles, defaultMode: 0555}}
+          - {name: tmp, emptyDir: {}}
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata: {name: db-migrate}
@@ -30,9 +76,9 @@ spec:
           - name: migrate
             image: api
             args: [migrate]
-            env:
-            - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_USER}}}
-            - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_PASSWORD}}}
+            env:   # the MIGRATOR: owns what it creates, BYPASSRLS (data migrations never lift FORCE RLS)
+            - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_USER}}}
+            - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_PASSWORD}}}
             - {name: DATABASE_URL, value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/app?sslmode=disable"}
             securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
 ---
@@ -61,8 +107,8 @@ spec:
           - name: seed
             image: api
             args: [seed]
-            env:
-            - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_USER}}}
-            - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_PASSWORD}}}
+            env:   # the MIGRATOR: reference data for every tenant, without a tenant context
+            - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_USER}}}
+            - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_PASSWORD}}}
             - {name: DATABASE_URL, value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/app?sslmode=disable"}
             securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}

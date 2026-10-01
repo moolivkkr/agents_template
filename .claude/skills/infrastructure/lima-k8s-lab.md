@@ -42,7 +42,7 @@ errors.
 - `deploy/k8s/app.env`: APP, REGISTRY, INGRESS_PORT, SMOKE_PATHS, VERSION_PATH.
 - `deploy/k8s/images.txt`: `<image-name> <build-context> [dockerfile]` for each built service.
 - `deploy/k8s/base/`: one `<service>.yaml` per stateless service, plus `postgres.yaml`, `jobs.yaml`
-  and `ingress.yaml`.
+  (the `db-roles`, `db-migrate` and `db-seed` Job templates), `ingress.yaml` and `db-roles.sh` (rule 10).
 - `deploy/k8s/overlays/{dev,qa}/kustomization.yaml`: namespace, host, `APP_ENV`, replicas, and the
   **managed images block**. Only `deploylib.py set-images` writes that block, and only with digests.
 - `scripts/k8s/*`: identical in every project. Don't fork them; fix the template instead.
@@ -66,15 +66,63 @@ errors.
    Schema is forward-only: rollback redeploys code, not schema.
 6. **Readiness must check what the release needs.** For example, the fixture's `/readyz` checks
    the schema version. New pods then stay unready until migrations land, and old pods keep serving.
-7. **DB credentials live in the namespace.**
-   - `secrets.env` is gitignored.
-   - deploy.sh recovers the oldest `db-credentials-*` secret when `secrets.env` is missing, so a
-     fresh checkout doesn't lock itself out of the existing volume.
-   - Only `env-reset.sh` rotates credentials, because it deletes the volume too.
+7. **Three database credentials in one secret; each workload reads only its own.** The overlay's
+   gitignored `secrets.env` becomes the secret `db-credentials` with three user/password pairs:
+
+   | Keys | Role | Who reads them |
+   |---|---|---|
+   | `DB_SUPERUSER_USER/_PASSWORD` | bootstrap superuser (`postgres`; `app` on a volume made before the two roles) | Postgres itself and the `db-roles` Job, nobody else |
+   | `DB_MIGRATOR_USER/_PASSWORD` | `app_migrator`: NOSUPERUSER BYPASSRLS, owns the database and every object in it | `db-migrate`, `db-seed` (the `db-*` Job templates) |
+   | `DB_APP_USER/_PASSWORD` | `app_runtime`: NOSUPERUSER NOBYPASSRLS, owns nothing; CONNECT, USAGE on `public`, DML via default privileges | every service (`api.yaml`) |
+
+   - The app role is what makes `FORCE ROW LEVEL SECURITY` real: it isn't the owner and can't bypass
+     RLS, so a tenant query without a WHERE clause still returns one tenant's rows. It can't CREATE,
+     ALTER, DROP, TRUNCATE or `SET ROLE` the migrator. The migrator's BYPASSRLS lets data migrations
+     and seeds reach every tenant without lifting FORCE RLS, so they take no table-wide exclusive locks
+     (`backend/archetypes/migration-pattern-python.md`, `infrastructure/saas-tenancy-models.md`).
+   - **deploy.sh enforces who reads what** on every render, before anything is applied
+     (`deploylib.py db-access`): superuser keys only in Postgres and `db-roles`, migrator keys only in
+     Postgres and `db-*` Job templates (never a Deployment), no `envFrom` or volume of the whole
+     secret, no old `DB_USER`/`DB_PASSWORD`. The apply step fails and names the container otherwise.
+   - `secrets.env` is gitignored, and deploy.sh refuses to write passwords into one git would track.
+     When it's missing, deploy.sh rebuilds it from the namespace so a fresh checkout doesn't lock
+     itself out of the volume: from the newest three-role secret, or, in a namespace from before the
+     two roles, from the OLDEST `DB_USER`/`DB_PASSWORD` secret (the pair the volume was initialised
+     with), which becomes the superuser pair. An old-layout `secrets.env` is upgraded in place the
+     same way. Missing passwords are generated (48 random hex characters).
+   - Only `env-reset.sh` rotates the superuser, because it deletes the volume too. The migrator and app
+     passwords follow the secret: the `db-roles` Job sets whatever it holds (rule 10).
+   - Debug as the service sees it: `kubectl -n <app>-dev exec postgres-0 -- psql -U postgres -d app`
+     (`-U app` on an old-layout volume), then `SET ROLE app_runtime;` (the superuser may; the app role
+     can't go the other way).
 8. **No NodePort or LoadBalancer Services in app namespaces** (quota 0). Traffic enters through the
    Traefik ingress, host `<app>-<env>.localhost`.
 9. **dev and qa are isolated** by the `env-isolation` NetworkPolicy, which allows ingress only from
    the same namespace and from kube-system. Don't delete it, even though `admin` technically can.
+10. **The roles converge on every deploy; no reset needed.** (Proven on throwaway Postgres 17
+    containers by `tests/k8s-db-roles.sh`; `tests/k8s-e2e.sh` checks it on the cluster.) One script,
+    `deploy/k8s/base/db-roles.sh` (ConfigMap `db-roles`), has two callers:
+    - Postgres runs it from `/docker-entrypoint-initdb.d` once, on an empty data directory.
+    - The `db-roles` Job runs it as the superuser on every deploy, after Postgres is ready and before
+      `db-migrate` (deploy step `roles`).
+    It creates or resets both roles' attributes, revokes any membership that would let the app role
+    become the migrator, makes the migrator own the database, revokes CONNECT/TEMP from PUBLIC, sets the
+    default privileges, and hands every object someone else owns (tables, partitions, sequences, views,
+    types, routines, statistics, schemas; extension members excepted) to the migrator, granting the app
+    role what the default privileges would have. So a volume from the one-superuser era converges on its
+    next deploy. It checks before it changes: on a converged database it prints
+    `db-roles: no changes` and leaves the catalog byte-identical, passwords included (it tries a login
+    first). Passwords come from the environment (`\getenv`), and the session that sets them turns
+    statement logging off. It never prints one.
+    - Migrations must run as the migrator. Tables a superuser creates are out of the app role's default
+      privileges, and `/readyz` stays 503 until the next deploy's `db-roles` hands them over. The
+      fixture's `migrate` refuses both the superuser and the app role (the archetypes' `env.py`
+      refuses the app role).
+    - Default privileges cover schema `public`. A migration that creates another schema grants the
+      app role `USAGE` and sets that schema's default privileges itself.
+    - The app role gets DML on every table the migrator creates, including the schema-version table
+      (which `/readyz` must read). A migration may `REVOKE INSERT, UPDATE, DELETE` on a table from it;
+      `db-roles` never re-grants on objects the migrator already owns.
 
 ## Keeping it clean (automatic — don't add ad-hoc cleanup)
 
@@ -84,7 +132,7 @@ errors.
 | Registry images for the app | `scripts/k8s/registry-prune.sh`. Keeps digests in use in `<app>-dev`/`<app>-qa` plus the newest 5 HEALTHY deploys per env (rollback targets), and deletes failed, dirty and superseded builds | after every HEALTHY deploy; by hand with `--dry-run` / `--keep N` |
 | Registry disk (layers of deleted images) | CronJob `sdlc-system/registry-gc` (`registry garbage-collect --delete-untagged`) | nightly 04:30 |
 | Old generated ConfigMaps/Secrets (`<name>-<hash>`) | `deploy.sh` deletes those of its own generators that the current render doesn't reference | after every HEALTHY deploy |
-| Finished migrate/seed Jobs and their pods | `ttlSecondsAfterFinished: 3600` (results are in `history.jsonl`) | 1 h after finishing |
+| Finished roles/migrate/seed Jobs and their pods | `ttlSecondsAfterFinished: 3600` (results are in `history.jsonl`) | 1 h after finishing |
 | Old ReplicaSets | `revisionHistoryLimit: 3` (rollback is by digest, not ReplicaSet) | on rollout |
 | `-dirty` image tags | only produced when a *build context* has uncommitted changes. Keep logs and outputs out of `services/*` | — |
 
@@ -111,9 +159,15 @@ header, or `port-forward` to a fixed local port.
 | Docker can't push to `localhost:5001` | Expected. Docker Desktop's daemon can't reach host loopback; deploy.sh pushes with `crane` |
 | Pod `CreateContainerConfigError` | Numeric USER (rule 2), or a missing secret/configmap key |
 | migrate: `connection refused` right after start | Rule 4: the `wait-for-db` init container is missing from the Job template |
-| migrate: `password authentication failed` | Rule 7: `secrets.env` doesn't match the volume. Delete `secrets.env` and redeploy (recovers the oldest), or `env-reset.sh` |
+| roles: `superuser login refused` | Rule 7: the superuser pair in `secrets.env` doesn't match the volume. Delete `secrets.env` and redeploy (it is rebuilt from the namespace), or `env-reset.sh` |
+| migrate/seed/API: `password authentication failed` for `app_migrator`/`app_runtime` | The `roles` step didn't run or failed (it sets those passwords from the secret). Read `kubectl logs job/roles-…` |
+| apply fails with `db-access: … reads DB_MIGRATOR_…` (or `DB_SUPERUSER_`, `envFrom`, `DB_PASSWORD`) | Rule 7: a workload is wired to a role it must not have. Services use `DB_APP_*`; only `db-*` Job templates get the migrator |
+| migrate: `must run as the migration role` | The migrate Job got the app or superuser keys. Use `DB_MIGRATOR_*` (`jobs.yaml`) |
+| `/readyz` 503, `permission denied for table …` in the API log | Tables made by someone other than the migrator (a migration run by hand as `postgres`). The next deploy's `roles` step hands them over (rule 10) |
 | A node `NotReady` | The laptop slept or the link dropped. Pods reschedule after ~5 min; Traefik, CoreDNS and the registry are pinned to the server node |
 | Anything else in the VM | `limactl shell sdlc-agent sudo journalctl -u k3s-agent`; on the server Mac `limactl shell sdlc-server sudo journalctl -u k3s` |
 
 Verify the whole path at any time with `scripts/cluster-check.sh` (admin). For the framework itself,
-run `tests/k8s-e2e.sh`.
+run `tests/k8s-e2e.sh` (live cluster), `tests/k8s-db-roles.sh` (the two roles on throwaway local
+Postgres containers, no cluster: fresh and old-layout volumes, RLS, idempotence, no password in any
+log) and `tests/k8s-templates.test.sh` (offline, in `run-all.sh`).

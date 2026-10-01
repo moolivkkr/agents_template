@@ -6,8 +6,11 @@
 # PATH so every kubectl inside the scripts is re-checked by the guard. Prereqs (human, once):
 # cluster-up.sh, app-namespaces.sh hello.
 #
-#   1 deploy dev (build)          HEALTHY, seeded data served through the ingress, phase sidecar PASS
-#   2 deploy qa (promote)         HEALTHY, same digest as dev, own database, env=qa
+#   1 deploy dev (build)          HEALTHY, seeded data served through the ingress, phase sidecar PASS;
+#                                 two DB roles: the API reads only DB_APP_* and runs under FORCE RLS (a
+#                                 tenant sees only its notes), app_migrator owns every table, app_runtime
+#                                 is NOSUPERUSER NOBYPASSRLS, the db-roles Job found nothing to change
+#   2 deploy qa (promote)         HEALTHY, same digest as dev, own database, env=qa, RLS-scoped notes
 #   3 isolation                   a pod in hello-dev cannot reach hello-qa's Postgres; can reach its own
 #   4 guard                       shim refuses `delete ns` and bulk deletes from a script (exit 126)
 #   5 env-reset qa                volume replaced, data re-seeded, HEALTHY
@@ -23,6 +26,9 @@ ok()  { echo "  ✓ $1"; PASS=$((PASS+1)); }
 bad() { echo "  ✗ FAIL: $1"; FAIL=$((FAIL+1)); }
 last() { tail -1 "$W/agent_state/deploy/$1/history.jsonl" | python3 -c "import json,sys; e=json.load(sys.stdin); print($2)"; }
 items() { curl -s -m 5 "http://hello-$1.localhost:18080/api/items" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["items"]))' 2>/dev/null; }
+notes() { curl -s -m 5 "http://hello-$1.localhost:18080/api/tenants/$2/notes" | python3 -c 'import json,sys; print(",".join(json.load(sys.stdin)["notes"]))' 2>/dev/null; }
+pgq()   { kubectl -n "hello-$1" exec postgres-0 -c postgres -- psql -U postgres -d app -tA -F ' ' -c "$2" 2>/dev/null | tr '\n' ' ' | sed 's/ *$//'; }   # superuser over the pod's socket
+rolesjob() { kubectl -n "hello-$1" logs "$(kubectl -n "hello-$1" get jobs -o name | grep '/roles-' | sort | tail -1)" 2>/dev/null | tail -1; }
 
 W="$(mktemp -d "${TMPDIR:-/tmp}/k8s-e2e.XXXXXX")"; L="$(mktemp -d "${TMPDIR:-/tmp}/k8s-e2e-logs.XXXXXX")"   # logs OUTSIDE the project: an untracked file there would make every build "-dirty"
 cp -R "$REPO/tests/fixtures/k8s-hello/services" "$W/"
@@ -45,6 +51,16 @@ python3 -c "import json; d=json.load(open('$V')); assert d['schema']=='sdlc.test
   && ok "gate evidence deploy_dev.json: v1 schema, PASS, bound to the code commit" || bad "deploy_dev.json missing or not a clean PASS"
 grep -q '"agent": "deploy_dev".*"status": "completed"' agent_state/phases/1/execution.jsonl \
   && ok "deploy logged itself to the phase's execution.jsonl (the gate reads it)" || bad "no deploy_dev line in execution.jsonl"
+[ "$(last dev 'e["steps"].get("roles")')" = ok ] && ok "deploy ran the db-roles Job (step roles: ok)" || bad "no roles step in the dev deploy"
+[ "$(notes dev acme)" = "acme roadmap" ] && [ "$(notes dev globex)" = "globex payroll" ] \
+  && ok "dev API runs under FORCE row-level security: each tenant sees only its own note" || bad "dev tenant notes: acme='$(notes dev acme)' globex='$(notes dev globex)'"
+r="$(pgq dev "SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname IN ('app_migrator', 'app_runtime') ORDER BY 1")"
+[ "$r" = "app_migrator f t app_runtime f f" ] && ok "roles: app_migrator NOSUPERUSER BYPASSRLS, app_runtime NOSUPERUSER NOBYPASSRLS" || bad "role attributes: '$r'"
+r="$(pgq dev "SELECT string_agg(DISTINCT tableowner, ',') FROM pg_tables WHERE schemaname = 'public'")"
+[ "$r" = app_migrator ] && ok "every table is owned by app_migrator" || bad "table owners: '$r'"
+r="$(kubectl -n hello-dev get deploy api -o jsonpath='{.spec.template.spec.containers[*].env[*].valueFrom.secretKeyRef.key}')"
+[ "$r" = "DB_APP_USER DB_APP_PASSWORD" ] && ok "the API Deployment reads only DB_APP_USER/DB_APP_PASSWORD" || bad "API secret keys: '$r'"
+case "$(rolesjob dev)" in "db-roles: no changes"*) ok "db-roles Job after initdb: no changes" ;; *) bad "db-roles Job: '$(rolesjob dev)'" ;; esac
 DEV1="$(last dev 'e["images"]["api"]')"
 
 echo "== 2 promote to qa"
@@ -54,6 +70,7 @@ bash scripts/k8s/deploy.sh qa >/dev/null 2>"$L/qa1.log" && ok "deploy.sh qa exit
 [ "$(curl -s -m 5 http://hello-qa.localhost:18080/api/version | python3 -c 'import json,sys; print(json.load(sys.stdin)["env"])')" = qa ] \
   && ok "qa reports env=qa" || bad "qa /api/version env"
 [ "$(items qa)" = "alpha,beta,gamma" ] && ok "qa has its own seeded database" || bad "qa items: '$(items qa)'"
+[ "$(notes qa globex)" = "globex payroll" ] && ok "qa API runs under row-level security too" || bad "qa globex notes: '$(notes qa globex)'"
 
 echo "== 3 env isolation (NetworkPolicy)"
 probe() {  # $1 name, $2 target host — tries for 12s (past the policy-sync window), prints ok|blocked
@@ -86,6 +103,7 @@ bash scripts/k8s/deploy.sh dev >/dev/null 2>"$L/dev2.log" && ok "deploy.sh dev (
 DEV2="$(last dev 'e["images"]["api"]')"
 [ "$DEV2" != "$DEV1" ] && ok "v2 has a new digest" || bad "v2 digest unchanged"
 [ "$(items dev)" = "alpha,beta,gamma,delta" ] && ok "v2 seed applied" || bad "dev items v2: '$(items dev)'"
+case "$(rolesjob dev)" in "db-roles: no changes"*) ok "db-roles Job on the second deploy: no changes (idempotent)" ;; *) bad "db-roles Job v2: '$(rolesjob dev)'" ;; esac
 bash scripts/k8s/deploy.sh dev --rollback >/dev/null 2>"$L/rb.log" && ok "deploy.sh dev --rollback exit 0" || bad "rollback: $(tail -5 "$L/rb.log")"
 [ "$(last dev 'e["images"]["api"]')" = "$DEV1" ] && [ "$(last dev 'e["mode"]')" = rollback ] && ok "dev rolled back to the v1 digest" || bad "rollback digest $(last dev 'e["images"]["api"]')"
 [ "$(python3 -c "import json; print(json.load(open('agent_state/deploy/last-deploy-status.json'))['status'])")" = HEALTHY ] \

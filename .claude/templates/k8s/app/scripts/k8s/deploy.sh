@@ -29,19 +29,19 @@ IMAGES=()
 log "preflight ($NS via $KUBECONFIG)"
 kubectl get --raw /readyz >/dev/null 2>&1 || die "cluster API not reachable — is the lab cluster up? (limactl list)"
 kc get serviceaccount default >/dev/null 2>&1 || die "namespace $NS missing — a human runs: app-namespaces.sh $APP"
-if [ ! -f "$OVERLAY/secrets.env" ]; then
-  # The database volume outlives any one checkout: reuse the credentials already in the namespace so a
-  # fresh clone does not lock itself out of its own Postgres. New ones only for an empty env.
-  umask 077
-  cur="$(kc get secrets --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | grep '^secret/db-credentials-' | head -1 || true)"   # oldest = the one the volume was initialised with
-  if [ -n "$cur" ]; then
-    { printf 'DB_USER=%s\n' "$(kc get "$cur" -o jsonpath='{.data.DB_USER}' | base64 -d)"
-      printf 'DB_PASSWORD=%s\n' "$(kc get "$cur" -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)"; } > "$OVERLAY/secrets.env"
-    log "recovered $OVERLAY/secrets.env from ${cur#secret/} (gitignored)"
-  else
-    printf 'DB_USER=app\nDB_PASSWORD=%s\n' "$(openssl rand -hex 24)" > "$OVERLAY/secrets.env"
-    log "created $OVERLAY/secrets.env (gitignored)"
-  fi
+# Database credentials: three Postgres roles in one gitignored secrets.env -> secret db-credentials
+# (superuser for Postgres and db-roles only; migrator for migrate/seed; app for the services).
+SECRETS="$OVERLAY/secrets.env"
+if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1 && ! git -C "$ROOT" check-ignore -q "$SECRETS"; then
+  die "$SECRETS is not gitignored (or is tracked): add 'deploy/k8s/overlays/*/secrets.env' to .gitignore before passwords are written to it"
+fi
+if [ -f "$SECRETS" ]; then
+  python3 "$DL" db-secrets "$SECRETS"   # upgrades the old DB_USER/DB_PASSWORD layout in place; else a no-op
+else
+  # The database volume outlives any one checkout: rebuild secrets.env from the secret already in the
+  # namespace, so a fresh clone does not lock itself out of its own Postgres. New passwords only for an
+  # empty env. The secret list goes through a pipe, never a file or the log.
+  kc get secrets -o json | python3 "$DL" db-secrets "$SECRETS" --recover - || die "could not read or rebuild $SECRETS"
 fi
 
 # ── images ───────────────────────────────────────────────────────────────────────────────────────
@@ -122,12 +122,17 @@ wait_rollout() {  # $1 deployment.apps/<name> — fails fast when a new-digest p
   done
   return 1
 }
-if kubectl kustomize "$OVERLAY" > "$TMP/rendered.yaml" && kubectl apply -n "$NS" -k "$OVERLAY" >/dev/null; then
+# db-access: refuse a render in which a workload can read a database role it must not have (a service
+# with the migrator or superuser keys, envFrom the whole secret, ...) before anything reaches the cluster.
+if kubectl kustomize "$OVERLAY" > "$TMP/rendered.yaml" \
+  && kc create --dry-run=client -o json -f "$TMP/rendered.yaml" | python3 "$DL" db-access \
+  && kubectl apply -n "$NS" -k "$OVERLAY" >/dev/null; then
   step apply ok
 else step apply fail; VERDICT=FAILED; fi
 if [ "$VERDICT" = HEALTHY ]; then
   kc rollout status statefulset/postgres --timeout=240s >/dev/null && step database ok || { step database fail; VERDICT=FAILED; }
 fi
+[ "$VERDICT" = HEALTHY ] && { run_job db-roles roles || VERDICT=FAILED; }   # before migrate: it needs the migrator
 [ "$VERDICT" = HEALTHY ] && { run_job db-migrate migrate || VERDICT=FAILED; }
 [ "$VERDICT" = HEALTHY ] && { run_job db-seed seed || VERDICT=FAILED; }
 if [ "$VERDICT" = HEALTHY ]; then
