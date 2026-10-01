@@ -42,20 +42,28 @@ _EPHEMERAL_OK = {"local", "dev", "test"}  # exact values; an unset APP_ENV is NO
 
 class Settings(BaseSettings):
     """
-    Config from the environment only (APP_ENV, JWT_SECRET_KEY, JWT_ISSUER, JWT_AUDIENCE), checked at
-    start-up. Outside APP_ENV=local|dev|test, a missing JWT secret, issuer or audience stops the
-    process (security/secure-coding.md §5 — fail closed): without an issuer and audience to check,
-    any token signed with the key would be accepted, including one minted for another service.
+    Config from the environment only (APP_ENV, JWT_SECRET_KEY, JWT_ISSUER, JWT_AUDIENCE,
+    ALLOWED_ORIGINS, REDIS_URL), checked at start-up. Outside APP_ENV=local|dev|test, a missing JWT
+    secret, issuer or audience stops the process (security/secure-coding.md §5 — fail closed): without
+    an issuer and audience to check, any token signed with the key would be accepted, including one
+    minted for another service.
     """
 
     app_env: str = ""
     jwt_secret_key: str = ""
     jwt_issuer: str = ""
     jwt_audience: str = ""
+    # Browser origins allowed to call the API (CORS) and to open a WebSocket, as a JSON list:
+    # ALLOWED_ORIGINS='["https://app.example.com"]'. Empty outside local/dev/test means no browser origin.
+    allowed_origins: list[str] = []
+    # Shared state for more than one process (per-tenant rate limits); empty = this process only
+    redis_url: str = ""
 
     @model_validator(mode="after")
     def _fail_closed(self) -> Self:
         local = self.app_env in _EPHEMERAL_OK
+        if local and not self.allowed_origins:
+            self.allowed_origins = ["http://localhost:3000"]  # the local frontend dev server
         if len(self.jwt_secret_key) < 32:
             if not local:
                 raise ValueError("JWT_SECRET_KEY must be set (>= 32 bytes) when APP_ENV is not local|dev|test")
@@ -399,7 +407,7 @@ class TenantRateLimiter:
     Per-tenant rate limiting; each tenant gets an independent token bucket.
 
     Buckets live in this process: with N workers or pods a tenant can get up to N times the limit.
-    Use a shared store (e.g. Redis) when the limit must be global.
+    RedisTenantRateLimiter (below) shares one bucket per tenant across all of them.
 
     Usage:
         limiter = TenantRateLimiter(rate=100.0, burst=200)
@@ -427,6 +435,96 @@ class TenantRateLimiter:
             raise RateLimitError(retry_after_seconds=bucket.retry_after())
         response.headers["X-RateLimit-Limit"] = str(self._burst)
         response.headers["X-RateLimit-Remaining"] = str(int(bucket.tokens))
+```
+
+### More than one process — the bucket in Redis
+
+**Which one to use.** `TenantRateLimiter` keeps its buckets in the process: right for one process
+(a single uvicorn worker in a single replica) and for tests, and free of any network hop. With N
+workers or replicas each process has its own bucket, so a tenant gets up to N times the limit, and
+requests land on processes unevenly. When the API runs more than one process — any production
+deployment with `--workers` > 1 or more than one replica — and the limit protects something
+(noisy neighbours, a plan's quota), use `RedisTenantRateLimiter`: one bucket per tenant in Redis,
+refilled and spent by one Lua script, so the check and the update are a single atomic step on the
+server. It costs one Redis round trip per request. `create_app()` picks it whenever `REDIS_URL` is set.
+
+If Redis is unreachable it lets the request through and logs a warning: a rate limiter outage
+shouldn't take the API down with it. Short socket timeouts keep a slow Redis from stalling requests.
+
+```python
+# app/dependencies/rate_limit_redis.py
+
+from __future__ import annotations
+
+import logging
+import math
+
+from fastapi import Depends, Response
+from redis.asyncio import Redis
+from redis.exceptions import RedisError
+
+from app.dependencies.auth import CurrentUser, get_current_user
+from app.errors import RateLimitError
+
+logger = logging.getLogger(__name__)
+
+# Refill and spend in one step on the Redis server; scripts run atomically, so concurrent requests from
+# any number of processes can't both take the last token. Time comes from Redis's TIME, one clock for
+# all app servers. Returns {allowed (1|0), whole tokens left, ms until the next token}.
+TOKEN_BUCKET = """
+local rate = tonumber(ARGV[1])
+local burst = tonumber(ARGV[2])
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+local state = redis.call('HMGET', KEYS[1], 'tokens', 'ts')
+local tokens = tonumber(state[1]) or burst
+local ts = tonumber(state[2]) or now
+tokens = math.min(burst, tokens + math.max(0, now - ts) / 1000 * rate)
+local allowed = 0
+if tokens >= 1 then
+  tokens = tokens - 1
+  allowed = 1
+end
+redis.call('HSET', KEYS[1], 'tokens', tostring(tokens), 'ts', tostring(now))
+redis.call('PEXPIRE', KEYS[1], math.ceil(burst / rate * 1000) + 1000)
+local wait_ms = 0
+if allowed == 0 then
+  wait_ms = math.ceil((1 - tokens) / rate * 1000)
+end
+return {allowed, math.floor(tokens), wait_ms}
+"""
+
+
+class RedisTenantRateLimiter:
+    """
+    Per-tenant token bucket shared by every worker and replica: together they allow `burst` requests,
+    then `rate` per second. Keys are `ratelimit:<tenant_id>` (the tenant from the verified token) and
+    expire once a bucket would be full again, so idle tenants cost nothing.
+
+    Usage:
+        redis = Redis.from_url(settings.redis_url, socket_timeout=0.25, socket_connect_timeout=0.25)
+        app.include_router(widgets.router, prefix="/api/v1", dependencies=[Depends(RedisTenantRateLimiter(redis))])
+    """
+
+    def __init__(self, redis: Redis, rate: float = 100.0, burst: int = 200) -> None:
+        self._rate = rate
+        self._burst = burst
+        self._script = redis.register_script(TOKEN_BUCKET)
+
+    async def __call__(self, response: Response, user: CurrentUser = Depends(get_current_user)) -> None:
+        try:
+            allowed, remaining, wait_ms = await self._script(
+                keys=[f"ratelimit:{user.tenant_id}"], args=[self._rate, self._burst]
+            )
+        except RedisError:
+            # Fail open: an unreachable limiter must not turn every request into an error
+            logger.warning("rate limiter unavailable; request allowed", exc_info=True)
+            return
+        if not allowed:
+            logger.warning("rate limit exceeded", extra={"tenant_id": str(user.tenant_id)})
+            raise RateLimitError(retry_after_seconds=max(1, math.ceil(wait_ms / 1000)))
+        response.headers["X-RateLimit-Limit"] = str(self._burst)
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
 ```
 
 ## CORS Configuration
@@ -580,18 +678,31 @@ class AccessLogMiddleware(BaseHTTPMiddleware):
 from __future__ import annotations
 
 from fastapi import Depends, FastAPI
+from redis.asyncio import Redis
 
 from app.api.v1 import widgets
 from app.config import settings
 from app.dependencies.auth import JWTConfig, configure_jwt
 from app.dependencies.rate_limit import TenantRateLimiter
+from app.dependencies.rate_limit_redis import RedisTenantRateLimiter
 from app.errors.handlers import register_exception_handlers
 from app.middleware.cors import CORSConfig, setup_cors
 from app.middleware.logging import AccessLogMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 
+RateLimiter = TenantRateLimiter | RedisTenantRateLimiter
 
-def create_app(*, rate_limiter: TenantRateLimiter | None = None) -> FastAPI:
+
+def default_rate_limiter() -> RateLimiter:
+    """REDIS_URL set (more than one worker or replica): one bucket per tenant shared by all of them.
+    Otherwise buckets in this process. See "More than one process" for when each is right."""
+    if settings.redis_url:
+        redis = Redis.from_url(settings.redis_url, socket_timeout=0.25, socket_connect_timeout=0.25)
+        return RedisTenantRateLimiter(redis, rate=100.0, burst=200)
+    return TenantRateLimiter(rate=100.0, burst=200)
+
+
+def create_app(*, rate_limiter: RateLimiter | None = None) -> FastAPI:
     app = FastAPI(title="Widget API", version="1.0.0")
 
     # ---------------------------------------------------------------------------
@@ -605,9 +716,7 @@ def create_app(*, rate_limiter: TenantRateLimiter | None = None) -> FastAPI:
 
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIDMiddleware)
-    setup_cors(app, CORSConfig(
-        allowed_origins=["http://localhost:3000", "https://app.example.com"],
-    ))
+    setup_cors(app, CORSConfig(allowed_origins=settings.allowed_origins))  # ALLOWED_ORIGINS
 
     # ---------------------------------------------------------------------------
     # JWT configuration
@@ -632,7 +741,7 @@ def create_app(*, rate_limiter: TenantRateLimiter | None = None) -> FastAPI:
     # Routes — every route of the router is rate-limited per tenant, after authentication
     # ---------------------------------------------------------------------------
 
-    limiter = rate_limiter or TenantRateLimiter(rate=100.0, burst=200)
+    limiter = rate_limiter or default_rate_limiter()
     app.include_router(widgets.router, prefix="/api/v1", dependencies=[Depends(limiter)])
 
     return app
@@ -654,12 +763,14 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 from pydantic import ValidationError
+from redis.asyncio import Redis
 
 from app.api.v1.widgets import get_widget_service
 from app.config import Settings, settings
 from app.dependencies.rate_limit import TenantRateLimiter
+from app.dependencies.rate_limit_redis import RedisTenantRateLimiter
 from app.errors import NotFoundError
-from app.main import create_app
+from app.main import create_app, default_rate_limiter
 
 
 def make_token(tenant_id: uuid.UUID, **overrides: object) -> str:
@@ -710,6 +821,27 @@ async def test_rate_limit_is_per_tenant(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_redis_limiter_fails_open_when_redis_is_down() -> None:
+    down = Redis.from_url("redis://127.0.0.1:1/0", socket_connect_timeout=0.25)  # nothing listens on port 1
+    app = create_app(rate_limiter=RedisTenantRateLimiter(down, rate=0.001, burst=1))
+    app.dependency_overrides[get_widget_service] = NoWidgets
+    try:
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            token = make_token(uuid.uuid4())
+            for _ in range(3):  # past the burst of 1: with no bucket to spend, every request goes through
+                assert (await get_widget(ac, token)).status_code == 404
+    finally:
+        await down.aclose()
+
+
+def test_redis_url_selects_the_shared_limiter(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "redis_url", "redis://redis.internal:6379/0")  # never connected to here
+    assert isinstance(default_rate_limiter(), RedisTenantRateLimiter)
+    monkeypatch.setattr(settings, "redis_url", "")
+    assert isinstance(default_rate_limiter(), TenantRateLimiter)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "overrides",
     [{"iss": "https://someone-else.example"}, {"aud": "another-service"}, {"iss": None}, {"aud": None}],
@@ -745,6 +877,8 @@ def test_settings_need_issuer_and_audience_too(monkeypatch: pytest.MonkeyPatch) 
 - Tenant ID MUST come from the validated token, NEVER from request params or body
 - API keys MUST be stored as hashes (SHA-256 minimum for lookup, bcrypt/argon2 for higher security)
 - Rate limiters MUST be per-tenant — shared limits allow noisy neighbor abuse — and run as a dependency after authentication (a middleware runs before auth and never sees the tenant)
+- More than one worker or replica: the bucket lives in Redis (`RedisTenantRateLimiter`, set `REDIS_URL`) and is refilled and spent in one atomic script. In-process buckets give each process its own limit
+- Allowed browser origins (CORS, WebSocket `Origin`) come from `ALLOWED_ORIGINS`, never a literal list in code
 - CORS MUST NOT use `allow_origins=["*"]` with `allow_credentials=True` — browsers reject this
 - Request ID MUST be set on response headers for client-side correlation
 - The structured logger MUST include: user_id, tenant_id, request_id, method, path, status, duration

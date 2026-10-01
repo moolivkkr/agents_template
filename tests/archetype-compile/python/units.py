@@ -95,7 +95,7 @@ WS = "websocket-pattern-python.md"
 WK = "worker-pattern-python.md"
 
 EXPECTED = {
-    AM: 10, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
+    AM: 11, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
     EH: 7, GR: 5, MG: 10, OB: 23, PF: 28, WS: 8, WK: 8,
 }
 
@@ -171,7 +171,7 @@ def auth_pkg() -> dict[str, list[B | T | S | MD]]:
             B(AM, 1, "# app/dependencies/auth.py"),
             B(AM, 2, "# app/dependencies/auth.py (continued)"),
         ],
-        "app/middleware/request_id.py": [B(AM, 6, "# app/middleware/request_id.py")],
+        "app/middleware/request_id.py": [B(AM, 7, "# app/middleware/request_id.py")],
     }
 
 
@@ -304,10 +304,9 @@ UNITS.append(Unit(
 ))
 
 # ── auth-middleware (composed with the real widgets router, service and error handlers) ────────────
-UNITS.append(Unit(
-    name="auth-middleware",
-    own=[AM],
-    files={
+def auth_app_files() -> dict[str, list[B | T | S | MD]]:
+    """auth-middleware-python.md's create_app() with the real widgets router, service and errors."""
+    return {
         **errors_pkg(),
         **domain_pkg(),
         **service_pkg(),
@@ -320,15 +319,38 @@ UNITS.append(Unit(
         **auth_pkg(),
         "app/dependencies/api_key.py": [B(AM, 3, "# app/dependencies/api_key.py")],
         "app/dependencies/rate_limit.py": [B(AM, 4, "# app/dependencies/rate_limit.py")],
-        "app/middleware/cors.py": [B(AM, 5, "# app/middleware/cors.py")],
-        "app/middleware/logging.py": [B(AM, 7, "# app/middleware/logging.py")],
-        "app/main.py": [B(AM, 8, "# app/main.py")],
-        "tests/test_auth.py": [B(AM, 9, "# tests/test_auth.py")],
+        "app/dependencies/rate_limit_redis.py": [B(AM, 5, "# app/dependencies/rate_limit_redis.py")],
+        "app/middleware/cors.py": [B(AM, 6, "# app/middleware/cors.py")],
+        "app/middleware/logging.py": [B(AM, 8, "# app/middleware/logging.py")],
+        "app/main.py": [B(AM, 9, "# app/main.py")],
+    }
+
+
+UNITS.append(Unit(
+    name="auth-middleware",
+    own=[AM],
+    files={
+        **auth_app_files(),
+        "tests/test_auth.py": [B(AM, 10, "# tests/test_auth.py")],
     },
     # no JWT_* variables: Settings takes the local/dev/test path (ephemeral key, per-env issuer/audience)
     env={"APP_ENV": "test"},
     pytest="run",
     smoke=smoke("smoke_auth_middleware.py"),
+))
+
+# --live only: RedisTenantRateLimiter shared by two uvicorn processes on Redis 7, against the in-process
+# TenantRateLimiter in the same two processes. Same blocks as above (checked there), so it owns none.
+UNITS.append(Unit(
+    name="auth-middleware-shared-limit",
+    own=[],
+    files={
+        **auth_app_files(),
+        "harness_ratelimit_app.py": [S("ratelimit_app.py")],
+        "tests/test_rate_limit_redis_live.py": [S("test_rate_limit_redis_live.py")],
+    },
+    live="run",
+    pytest_args=["tests/test_rate_limit_redis_live.py"],
 ))
 
 # ── crud-repository ────────────────────────────────────────────────────────────────────────────────
