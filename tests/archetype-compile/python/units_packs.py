@@ -191,7 +191,7 @@ UNITS.append(Unit(
     pytest_args=["tests/test_aws_endpoint.py", "-k", "dynamodb"],
 ))
 
-# ── infrastructure/localstack-aws-local.md: client factory; --live: S3, KMS and SQS on LocalStack ─────
+# ── infrastructure/localstack-aws-local.md: client factory; S3, KMS and SQS over HTTP (moto server) ────
 UNITS.append(Unit(
     name="pack-localstack",
     own=[LS],
@@ -214,4 +214,117 @@ UNITS.append(Unit(
     smoke=smoke("smoke_localstack.py"),
     pytest="run",
     pytest_args=["tests/test_aws_endpoint.py", "-k", "localstack"],
+))
+
+# ── testing/property-based.md: the properties run under real Hypothesis ───────────────────────────────
+UNITS.append(Unit(
+    name="pack-property-based",
+    own=[PB],
+    files={
+        "harness_stubs/props.py": [stub("props.py")],
+        "tests/test_properties.py": [
+            T("from harness_stubs.props import (  # harness: the app functions and model under test\n"
+              "    ParseError, Widget, decode, encode, is_valid_email, normalize_email, parse,\n)"),
+            B(PB, 0, "from hypothesis import given, strategies as st, settings, assume"),
+        ],
+    },
+    pytest="run",
+))
+
+# ── testing/external-service-mocks.md: the pytest-httpx fixtures, each used by a test ──────────────────
+UNITS.append(Unit(
+    name="pack-external-service-mocks",
+    own=[EM],
+    files={
+        "tests/conftest.py": [stub("payments_conftest.py")],
+        "tests/test_external_mocks.py": [
+            T("import re  # harness: the S3 fixture's regex URLs (the doc shows the fixtures without imports)"),
+            B(EM, 0, "import pytest"),
+            B(EM, 1, "@pytest.fixture"),
+            B(EM, 2, "@pytest.fixture"),
+            stub("test_mocks_harness.py"),
+        ],
+    },
+    pytest="run",
+    pytest_args=["-o", "asyncio_mode=auto"],  # the doc's async test has no marker (testing/pytest.md: auto)
+))
+
+# ── testing/contract-testing.md: a real Pact V4 mock provider (pact-python 3, Rust FFI, localhost) ──────
+UNITS.append(Unit(
+    name="pack-contract-testing",
+    own=[CT],
+    files={
+        "harness_stubs/widget_client.py": [stub("widget_client.py")],
+        "tests/test_widget_contract.py": [
+            T("from harness_stubs.widget_client import WidgetClient  # harness: the consumer's API client"),
+            B(CT, 0, "from pact import Pact, match  # pact-python 3 (the Consumer/Provider API is the deprecated "
+                     "pact.v2)"),
+        ],
+    },
+    pytest="run",
+    post=[["{py}", "-c",
+           "import json; d = json.load(open('pacts/widget-dashboard-widget-service.json'))\n"
+           "(i,) = d['interactions']\n"
+           "assert d['metadata']['pactSpecification']['version'].startswith('4'), d['metadata']\n"
+           "assert i['request']['path'] == '/api/v1/widgets/abc-123', i['request']\n"
+           "body = i['response']['body']['content']\n"
+           "assert set(body) == {'data', 'meta'}, body\n"
+           "assert '$.data.name' in i['response']['matchingRules']['body'], i['response']['matchingRules']\n"
+           "print('pact file: 1 interaction, envelope body with type matchers')"]],
+))
+
+# ── testing/load-testing.md: the locustfile, run headless by real locust against a local stand-in API ──
+UNITS.append(Unit(
+    name="pack-load-testing",
+    own=[LT],
+    files={
+        "locustfile.py": [B(LT, 0, "import os")],
+        "harness_run_locust.py": [stub("run_locust.py")],
+    },
+    imports=["locustfile"],
+    env={"APP_BASE_URL": "http://127.0.0.1:1"},  # read at class definition; the post step sets the real one
+    post=[["{py}", "harness_run_locust.py"]],
+))
+
+# ── testing/test-case-traceability.md: TC-named tests against a small orders API ───────────────────────
+UNITS.append(Unit(
+    name="pack-test-case-traceability",
+    own=[TT],
+    files={
+        "harness_stubs/order_helpers.py": [stub("order_helpers.py")],
+        "tests/conftest.py": [stub("orders_conftest.py")],
+        "tests/test_orders_tc.py": [
+            T("import pytest\n\nfrom tests.conftest import VALID_ORDER, auth  # harness: the suite's helpers"),
+            B(TT, 0, '@pytest.mark.parametrize("token,status", ['),
+        ],
+        "docs_fragments/test_change.py": [
+            T("from httpx import Response\n\n"
+              "from harness_stubs.order_helpers import assert_order_envelope  # harness: tests/helpers.py"),
+            B(TT, 1, "# TEST-CHANGE 2026-09-30 phase 3: envelope checks moved into a shared helper, same "
+                     "assertions (moved: tests/helpers.py:40)",
+              wrap="def _fragment(resp: Response) -> None:"),
+        ],
+    },
+    imports=["docs_fragments.test_change"],
+    smoke=smoke("smoke_test_change.py"),
+    pytest="run",
+    pytest_args=["tests/test_orders_tc.py"],
+))
+
+# ── frameworks/graphql.md: the Strawberry Query/Widget types in a real schema, executed ────────────────
+UNITS.append(Unit(
+    name="pack-graphql",
+    own=[GQ],
+    files={
+        "harness_stubs/strawberry_app.py": [stub("strawberry_app.py")],
+        "app/auth/context.py": [T("from harness_stubs.strawberry_app import get_current_user  # noqa: F401")],
+        "app/graphql/dataloaders.py": [
+            T("from harness_stubs.strawberry_app import TagLoader, UserLoader  # noqa: F401")],
+        "app/graphql/schema.py": [
+            T("from harness_stubs.strawberry_app import Tag, User, WidgetConnection, WidgetFilter, WidgetStatus  "
+              "# harness: the schema's other types"),
+            B(GQ, 0, "# app/graphql/schema.py"),
+        ],
+    },
+    smoke=smoke("smoke_graphql.py"),
 ))

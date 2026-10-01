@@ -206,11 +206,13 @@ from pytest_httpx import HTTPXMock
 
 @pytest.fixture
 def mock_stripe(httpx_mock: HTTPXMock):
-    """Mock Stripe API endpoints."""
+    """Mock Stripe API endpoints. is_optional: a test may call only some of them (pytest-httpx otherwise
+    fails the test at teardown for every registered response it didn't request)."""
 
     httpx_mock.add_response(
         method="POST",
         url="https://api.stripe.com/v1/payment_intents",
+        is_optional=True,
         json={
             "id": "pi_test_123",
             "object": "payment_intent",
@@ -224,6 +226,7 @@ def mock_stripe(httpx_mock: HTTPXMock):
     httpx_mock.add_response(
         method="POST",
         url="https://api.stripe.com/v1/customers",
+        is_optional=True,
         json={
             "id": "cus_test_123",
             "object": "customer",
@@ -604,10 +607,11 @@ func newS3Server(t *testing.T) *httptest.Server {
 ```python
 @pytest.fixture
 def mock_s3(httpx_mock: HTTPXMock):
-    """Mock S3 upload and download."""
+    """Mock S3 upload and download (each optional: a test may only upload, or only download)."""
     httpx_mock.add_response(
         method="PUT",
         url=re.compile(r"https://test-bucket\.s3\.amazonaws\.com/.*"),
+        is_optional=True,
         status_code=200,
         headers={"ETag": '"test-etag"'},
     )
@@ -615,6 +619,7 @@ def mock_s3(httpx_mock: HTTPXMock):
     httpx_mock.add_response(
         method="GET",
         url=re.compile(r"https://test-bucket\.s3\.amazonaws\.com/.*"),
+        is_optional=True,
         content=b"file content here",
         headers={"Content-Type": "application/octet-stream"},
     )
