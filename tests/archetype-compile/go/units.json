@@ -879,7 +879,7 @@
         {"path": "internal/lang/conc/conc.go", "blocks": ["languages/go.md#11"], "package": "conc"},
         {"path": "internal/lang/conc/stub_app.go", "package": "conc", "code": "type Item struct{ ID string }\n\ntype Job struct{ ID string }\n\ntype Result struct{ JobID string }\n\nfunc fetch(ctx context.Context, id string) (*Item, error) { return &Item{ID: id}, nil }\n\nfunc process(j Job) Result { return Result{JobID: j.ID} }"},
         {"path": "internal/lang/testpat/patterns_test.go", "blocks": ["languages/go.md#12"], "package": "testpat", "imports": ["github.com/testcontainers/testcontainers-go/modules/postgres"]},
-        {"path": "internal/lang/testpat/stub_app.go", "package": "testpat", "code": "import \"github.com/jmoiron/sqlx\"\n\nfunc ParseAmount(s string) (int64, error) { return 0, nil }\n\ntype User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\ntype UserRepository struct{ db *sqlx.DB }\n\nfunc NewUserRepository(db *sqlx.DB) *UserRepository { return &UserRepository{db: db} }\n\nfunc (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error) { return &User{}, nil }\n\nfunc applyMigrations(t *testing.T, db *sqlx.DB) {}\n\nfunc renderTemplate(data any) string { return \"\" }\n\nvar data = map[string]string{\"name\": \"golden\"}"},
+        {"path": "internal/lang/testpat/stub_app.go", "package": "testpat", "code": "// App-level names languages/go.md's tests use. The repository and migrations are minimal real\n// ones, so TestUserRepo_Integration runs against the container (ARCHETYPE_DB_TESTS=1).\nimport (\n\t\"github.com/jmoiron/sqlx\"\n\n\t_ \"github.com/jackc/pgx/v5/stdlib\" // the \"pgx\" database/sql driver sqlx.MustConnect names\n)\n\nfunc ParseAmount(s string) (int64, error) { return 0, nil }\n\ntype User struct {\n\tID    string `db:\"id\"`\n\tEmail string `db:\"email\"`\n}\n\ntype UserRepository struct{ db *sqlx.DB }\n\nfunc NewUserRepository(db *sqlx.DB) *UserRepository { return &UserRepository{db: db} }\n\nfunc (r *UserRepository) FindByID(ctx context.Context, id string) (*User, error) {\n\tvar u User\n\tif err := r.db.GetContext(ctx, &u, \"SELECT id, email FROM users WHERE id = $1\", id); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &u, nil\n}\n\nfunc applyMigrations(t *testing.T, db *sqlx.DB) {\n\tt.Helper()\n\tdb.MustExec(\"CREATE TABLE IF NOT EXISTS users (id text PRIMARY KEY, email text NOT NULL)\")\n}\n\nfunc renderTemplate(data any) string { return \"\" }\n\nvar data = map[string]string{\"name\": \"golden\"}"},
         {"path": "internal/lang/layers/layers.go", "blocks": ["languages/go.md#14"], "package": "layers"},
         {"path": "internal/lang/layers/stub_app.go", "package": "layers", "code": "type CreateOrderRequest struct {\n\tCustomerID string\n\tItems      []string\n}\n\ntype Order struct {\n\tID     string\n\tStatus string\n}\n\ntype OrderHandler struct{ service *OrderService }\n\ntype OrderService struct {\n\trepo interface {\n\t\tSave(ctx context.Context, o *Order) error\n\t}\n\tevents interface {\n\t\tPublish(ctx context.Context, topic string, payload any) error\n\t}\n}\n\ntype OrderRepo struct{ db *sql.DB }\n\nfunc decodeCreateOrder(r *http.Request) (CreateOrderRequest, error) { return CreateOrderRequest{}, nil }\n\nfunc respondJSON(w http.ResponseWriter, r *http.Request, status int, data any) {}"},
         {"path": "internal/lang/ctxlog/values.go", "blocks": ["languages/go.md#15"], "package": "ctxlog"},
@@ -926,7 +926,10 @@
         {"path": "internal/lang/chandir/chandir.go", "blocks": ["languages/go.md#43"], "package": "chandir"},
         {"path": "internal/lang/chandir/stub_app.go", "package": "chandir", "code": "type Item struct{ ID string }\n\ntype Result struct{ ID string }\n\nfunc process(item Item) error { return nil }\n\nfunc transform(item Item) Result { return Result{ID: item.ID} }"}
       ],
-      "tests": true
+      "tests": true,
+      "db_tests": [
+        ["./internal/lang/testpat/", "-run", "^TestUserRepo_Integration$", "-v"]
+      ]
     },
     {
       "name": "skills-frameworks",
@@ -1070,7 +1073,7 @@
     },
     {
       "name": "skills-testcontainers",
-      "doc": "testing/testcontainers.md: postgres/redis module tests, the shared NewTestDB helper, a generic container (wrapped); compiled, not run (they start containers around stubbed app code)",
+      "doc": "testing/testcontainers.md: postgres/redis module tests, the shared NewTestDB helper and the generic LocalStack container; with ARCHETYPE_DB_TESTS=1 they run against real containers (the app's repository/cache/migrations are minimal real stand-ins)",
       "imports": [
         "github.com/testcontainers/testcontainers-go",
         "github.com/testcontainers/testcontainers-go/wait",
@@ -1086,15 +1089,22 @@
       ],
       "files": [
         {"path": "internal/domain/user.go", "package": "domain", "code": "type User struct{ Name string }"},
-        {"path": "internal/repository/user.go", "package": "repository", "code": "import (\n\t\"github.com/jackc/pgx/v5/pgxpool\"\n\n\t\"yourapp/internal/domain\"\n)\n\ntype UserRepository struct{ db *pgxpool.Pool }\n\nfunc NewUserRepository(db *pgxpool.Pool) *UserRepository { return &UserRepository{db: db} }\n\nfunc (r *UserRepository) Save(ctx context.Context, u *domain.User) error { return nil }"},
-        {"path": "internal/cache/redis.go", "package": "cache", "code": "import goredis \"github.com/redis/go-redis/v9\"\n\ntype RedisCache struct{ c *goredis.Client }\n\nfunc NewRedisCache(c *goredis.Client) *RedisCache { return &RedisCache{c: c} }\n\nfunc (r *RedisCache) Set(ctx context.Context, key, value string, ttl time.Duration) error { return nil }"},
+        {"path": "internal/repository/user.go", "package": "repository", "code": "// The app's user repository (a minimal real one) testing/testcontainers.md's test saves through.\nimport (\n\t\"github.com/jackc/pgx/v5/pgxpool\"\n\n\t\"yourapp/internal/domain\"\n)\n\ntype UserRepository struct{ db *pgxpool.Pool }\n\nfunc NewUserRepository(db *pgxpool.Pool) *UserRepository { return &UserRepository{db: db} }\n\nfunc (r *UserRepository) Save(ctx context.Context, u *domain.User) error {\n\t_, err := r.db.Exec(ctx, \"INSERT INTO users (name) VALUES ($1)\", u.Name)\n\treturn err\n}"},
+        {"path": "internal/cache/redis.go", "package": "cache", "code": "// The app's Redis cache (a minimal real one) testing/testcontainers.md's test writes through.\nimport goredis \"github.com/redis/go-redis/v9\"\n\ntype RedisCache struct{ c *goredis.Client }\n\nfunc NewRedisCache(c *goredis.Client) *RedisCache { return &RedisCache{c: c} }\n\nfunc (r *RedisCache) Set(ctx context.Context, key, value string, ttl time.Duration) error {\n\treturn r.c.Set(ctx, key, value, ttl).Err()\n}"},
         {"path": "internal/it/postgres_test.go", "blocks": ["testing/testcontainers.md#1"], "package": "it"},
         {"path": "internal/it/redis_test.go", "blocks": ["testing/testcontainers.md#2"], "package": "it"},
-        {"path": "internal/it/generic_test.go", "blocks": ["testing/testcontainers.md#4"], "package": "it", "wrap": "func _(ctx context.Context, t *testing.T)", "postlude": "\t_ = endpoint"},
-        {"path": "internal/it/stub_test.go", "package": "it", "code": "func runMigrations(t *testing.T, connStr string) {}"},
-        {"path": "internal/testutil/containers.go", "blocks": ["testing/testcontainers.md#3"], "package": "testutil"}
+        {"path": "internal/it/generic_test.go", "blocks": ["testing/testcontainers.md#4"], "package": "it", "wrap": "func TestGenericLocalStack(t *testing.T)", "prelude": "\tctx := context.Background()", "postlude": "\t// HARNESS CHECK: the container answers on the mapped port\n\tresp, err := http.Get(endpoint + \"/_localstack/health\")\n\trequire.NoError(t, err)\n\tdefer resp.Body.Close()\n\trequire.Equal(t, http.StatusOK, resp.StatusCode)"},
+        {"path": "internal/it/stub_test.go", "package": "it", "code": "// The app's migrations, reduced to the table the test writes (a real project runs its own, e.g.\n// backend/archetypes/migration-pattern-go.md).\nimport \"github.com/jackc/pgx/v5\"\n\nfunc runMigrations(t *testing.T, connStr string) {\n\tt.Helper()\n\tconn, err := pgx.Connect(context.Background(), connStr)\n\tif err != nil {\n\t\tt.Fatal(err)\n\t}\n\tdefer conn.Close(context.Background())\n\tif _, err := conn.Exec(context.Background(), \"CREATE TABLE IF NOT EXISTS users (id bigserial PRIMARY KEY, name text NOT NULL)\"); err != nil {\n\t\tt.Fatal(err)\n\t}\n}"},
+        {"path": "internal/testutil/containers.go", "blocks": ["testing/testcontainers.md#3"], "package": "testutil"},
+        {"path": "internal/testutil/containers_test.go", "package": "testutil", "code": "// HARNESS TEST — runs testing/testcontainers.md's NewTestDB: a fresh postgres with the init script\n// applied (testdata/stubs/tc_init.sql, at the ../../migrations/init.sql path the helper names).\nfunc TestNewTestDB(t *testing.T) {\n\tpool := NewTestDB(t)\n\tvar n int\n\tif err := pool.QueryRow(context.Background(), \"SELECT count(*) FROM users\").Scan(&n); err != nil {\n\t\tt.Fatalf(\"init script not applied: %v\", err)\n\t}\n\tif n != 0 {\n\t\tt.Fatalf(\"fresh database has %d users\", n)\n\t}\n}"}
       ],
-      "tests": true
+      "stubs": {
+        "migrations/init.sql": "testdata/stubs/tc_init.sql"
+      },
+      "tests": true,
+      "db_tests": [
+        ["./internal/it/", "./internal/testutil/", "-v"]
+      ]
     },
     {
       "name": "skills-testing-misc",
@@ -1131,7 +1141,7 @@
     },
     {
       "name": "skills-contract-testing",
-      "doc": "testing/contract-testing.md: pact-go v2 consumer + provider tests, type-checked with go vet (pact-go links libpact_ffi through cgo)",
+      "doc": "testing/contract-testing.md: pact-go v2 consumer + provider tests, type-checked with go vet (pact-go links libpact_ffi through cgo); with ARCHETYPE_PACT_TESTS=1 linked and run: the consumer test writes the pact, the provider test verifies a stub widget-service against it",
       "imports": [
         "github.com/pact-foundation/pact-go/v2/provider",
         "github.com/pact-foundation/pact-go/v2/models",
@@ -1141,9 +1151,12 @@
       "files": [
         {"path": "internal/contract/consumer_test.go", "blocks": ["testing/contract-testing.md#1"], "package": "contract"},
         {"path": "internal/contract/provider_test.go", "blocks": ["testing/contract-testing.md#2"], "package": "contract"},
-        {"path": "internal/contract/stub_app.go", "package": "contract", "code": "// App-level names testing/contract-testing.md's consumer and provider tests use.\ntype Widget struct{ ID, Name, Status string }\n\ntype WidgetClient struct{ baseURL string }\n\nfunc NewWidgetClient(baseURL string) *WidgetClient { return &WidgetClient{baseURL: baseURL} }\n\nfunc (c *WidgetClient) GetWidget(id string) (*Widget, error) { return &Widget{}, nil }\n\nfunc startTestServer() *httptest.Server { return httptest.NewServer(http.NotFoundHandler()) }\n\nfunc seedWidget(id, name, status string) {}"}
+        {"path": "internal/contract/stub_app.go", "package": "contract", "code": "// App-level code testing/contract-testing.md's tests call: the dashboard's widget client (the\n// consumer) and a small widget-service provider whose data the state handler seeds.\ntype Widget struct {\n\tID     string `json:\"id\"`\n\tName   string `json:\"name\"`\n\tStatus string `json:\"status\"`\n}\n\ntype WidgetClient struct{ baseURL string }\n\nfunc NewWidgetClient(baseURL string) *WidgetClient { return &WidgetClient{baseURL: baseURL} }\n\nfunc (c *WidgetClient) GetWidget(id string) (*Widget, error) {\n\treq, err := http.NewRequest(http.MethodGet, c.baseURL+\"/api/v1/widgets/\"+url.PathEscape(id), nil)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\treq.Header.Set(\"Authorization\", \"Bearer dashboard-token\")\n\tresp, err := http.DefaultClient.Do(req)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n\tdefer resp.Body.Close()\n\tif resp.StatusCode != http.StatusOK {\n\t\treturn nil, fmt.Errorf(\"get widget: status %d\", resp.StatusCode)\n\t}\n\tvar body struct {\n\t\tData Widget `json:\"data\"`\n\t}\n\tif err := json.NewDecoder(resp.Body).Decode(&body); err != nil {\n\t\treturn nil, err\n\t}\n\treturn &body.Data, nil\n}\n\nvar (\n\twidgetsMu sync.Mutex\n\twidgets   = map[string]Widget{}\n)\n\nfunc seedWidget(id, name, status string) {\n\twidgetsMu.Lock()\n\tdefer widgetsMu.Unlock()\n\twidgets[id] = Widget{ID: id, Name: name, Status: status}\n}\n\nfunc startTestServer() *httptest.Server {\n\tmux := http.NewServeMux()\n\tmux.HandleFunc(\"GET /api/v1/widgets/{id}\", func(w http.ResponseWriter, r *http.Request) {\n\t\twidgetsMu.Lock()\n\t\twd, ok := widgets[r.PathValue(\"id\")]\n\t\twidgetsMu.Unlock()\n\t\tw.Header().Set(\"Content-Type\", \"application/json\")\n\t\tif !ok {\n\t\t\tw.WriteHeader(http.StatusNotFound)\n\t\t\t_, _ = w.Write([]byte(`{\"error\":{\"code\":\"NOT_FOUND\",\"message\":\"Widget not found.\",\"request_id\":\"req-1\",\"retryable\":false}}`))\n\t\t\treturn\n\t\t}\n\t\t_ = json.NewEncoder(w).Encode(map[string]any{\"data\": wd, \"meta\": map[string]any{\"request_id\": \"req-1\"}})\n\t})\n\treturn httptest.NewServer(mux)\n}"}
       ],
-      "cgo_typecheck_only": true
+      "cgo_typecheck_only": true,
+      "pact_tests": [
+        ["./internal/contract/", "-v"]
+      ]
     }
   ]
 }
