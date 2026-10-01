@@ -14,7 +14,7 @@ tags:
 
 # Rust patterns and conventions for safe, performant applications.
 
-> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0 (query! macros checked against this file's own migration on Postgres 17), actix-web 4.15.0, mockall 0.15.0, testcontainers-modules 0.15.0. Run (run-tests.sh): the unit and mockall tests and the testcontainers test (a real postgres:17-alpine) pass; harness tests on top show an out-of-range `limit` is a 400, the tenant comes from the verified token, the keyset cursor neither skips nor repeats rows, short stock rolls the whole order back, and a stale version is a 409.
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0 (query! macros checked against this file's own migration on Postgres 17), actix-web 4.15.0, mockall 0.15.0, testcontainers-modules 0.15.0. Run (run-tests.sh): the unit and mockall tests and the testcontainers test (a real postgres:17-alpine) pass; harness tests on top show an out-of-range `limit` is a 400, the tenant comes from the verified token, the keyset cursor neither skips nor repeats rows, short stock rolls the whole order back, and a stale version is a 409. The repository tests run as a NOSUPERUSER NOBYPASSRLS role that owns nothing: with the migration's RLS, a tenant sees only its own rows even without a WHERE clause, and a query with no tenant set — or after the tenant transaction ended — errors.
 
 ## Project Structure
 ```text
@@ -55,7 +55,7 @@ use serde::Serialize;
 use thiserror::Error;
 use uuid::Uuid;
 
-/// One entry of error.details[] (api/response-envelope.md): stable lower_snake `code`, catalog `message`.
+/// One entry of error.details[] (api/response-envelope.md): `code` from its closed set, catalog `message`.
 #[derive(Debug, Clone, Serialize)]
 pub struct FieldError {
     pub field: String,
@@ -68,10 +68,12 @@ impl FieldError {
         let message = match code {
             "required" => "This field is required.",
             "invalid_format" => "This value has the wrong format.",
+            "too_short" => "This value is too short.",
             "too_long" => "This value is too long.",
-            "invalid_reference" => "This refers to something that doesn't exist.",
             "out_of_range" => "This value is out of range.",
-            _ => "This value is invalid.",
+            "invalid_cursor" => "This cursor is not valid. Start from the first page.",
+            "already_exists" => "This already exists.",
+            _ => "This value is invalid.", // invalid_value
         };
         Self { field: field.into(), code, message }
     }
@@ -143,7 +145,8 @@ impl From<sqlx::Error> for DomainError {
         let pg_code = err.as_database_error().and_then(|e| e.code()).map(|c| c.into_owned());
         match pg_code.as_deref() {
             Some("23505") => DomainError::Conflict("This already exists.".into()),
-            Some("23503") => DomainError::Validation(vec![FieldError::new("reference", "invalid_reference")]),
+            // a reference to a row that does not exist (foreign key)
+            Some("23503") => DomainError::Validation(vec![FieldError::new("reference", "invalid_value")]),
             // Anything else: the driver's text stays in the source chain for the log, never in the body
             _ => DomainError::Internal(err.into()),
         }
@@ -538,15 +541,28 @@ impl Order {
 ```rust
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
-// EVERY query includes tenant_id — no exceptions
+/// A transaction for one tenant. The RLS policies on orders and inventory (migration below) read
+/// app.current_tenant_id; set_config(.., true) sets it for THIS transaction only. Never at session
+/// level (SET, or set_config(.., false)): the pool hands the connection to another request next, with
+/// this tenant still set. Without the setting, every query on those tables errors.
+pub async fn begin_tenant_tx(pool: &PgPool, tenant_id: Uuid) -> Result<Transaction<'static, Postgres>, DomainError> {
+    let mut tx = pool.begin().await?;
+    sqlx::query!("SELECT set_config('app.current_tenant_id', $1, true)", tenant_id.to_string())
+        .fetch_one(&mut *tx)
+        .await?;
+    Ok(tx)
+}
+
+// EVERY query includes tenant_id — no exceptions. RLS is the second line of defence, not the first.
 pub async fn find_by_id(
     pool: &PgPool,
     tenant_id: Uuid,
     order_id: Uuid,
 ) -> Result<Option<Order>, DomainError> {
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
     let order = sqlx::query_as!(
         Order,
         r#"
@@ -557,8 +573,9 @@ pub async fn find_by_id(
         tenant_id,
         order_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
+    tx.commit().await?;
 
     Ok(order)
 }
@@ -571,7 +588,9 @@ pub async fn list_paginated(
     cursor: Option<&str>, // meta.pagination.next_cursor of the previous page, opaque to clients
     limit: i64,           // already checked to be in 1..=100 by the handler
 ) -> Result<(Vec<Order>, Option<String>), DomainError> {
-    let mut orders = match cursor.map(decode_cursor).transpose()? {
+    let after = cursor.map(decode_cursor).transpose()?; // a bad cursor is a 400 before any query
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
+    let mut orders = match after {
         Some((after_created_at, after_id)) => sqlx::query_as!(
             Order,
             r#"
@@ -582,7 +601,7 @@ pub async fn list_paginated(
             LIMIT $4
             "#,
             tenant_id, after_created_at, after_id, limit + 1,
-        ).fetch_all(pool).await?,
+        ).fetch_all(&mut *tx).await?,
         None => sqlx::query_as!(
             Order,
             r#"
@@ -593,8 +612,9 @@ pub async fn list_paginated(
             LIMIT $2
             "#,
             tenant_id, limit + 1,
-        ).fetch_all(pool).await?,
+        ).fetch_all(&mut *tx).await?,
     };
+    tx.commit().await?;
 
     let has_more = orders.len() as i64 > limit;
     orders.truncate(limit as usize);
@@ -609,7 +629,7 @@ fn encode_cursor(last: &Order) -> String {
 
 /// A tampered or garbled cursor is a 400 VALIDATION_FAILED on `cursor` — not a 500, not page one.
 fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), DomainError> {
-    let invalid = || DomainError::Validation(vec![FieldError::new("cursor", "invalid_format")]);
+    let invalid = || DomainError::Validation(vec![FieldError::new("cursor", "invalid_cursor")]);
     let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| invalid())?;
     let text = String::from_utf8(bytes).map_err(|_| invalid())?;
     let (created_at, id) = text.split_once('|').ok_or_else(invalid)?;
@@ -641,6 +661,7 @@ impl OrderRepository {
     }
 
     pub async fn save(&self, order: &Order) -> Result<Order, DomainError> {
+        let mut tx = begin_tenant_tx(&self.pool, order.tenant_id).await?; // RLS WITH CHECK: the row's own tenant
         let saved = sqlx::query_as!(
             Order,
             r#"
@@ -653,8 +674,9 @@ impl OrderRepository {
             order.status as OrderStatus,
             order.total_cents,
         )
-        .fetch_one(&self.pool)
+        .fetch_one(&mut *tx)
         .await?;
+        tx.commit().await?;
 
         Ok(saved)
     }
@@ -666,6 +688,7 @@ impl OrderRepository {
         status: OrderStatus,
         expected_version: i32,
     ) -> Result<Order, DomainError> {
+        let mut tx = begin_tenant_tx(&self.pool, tenant_id).await?;
         let result = sqlx::query_as!(
             Order,
             r#"
@@ -679,8 +702,9 @@ impl OrderRepository {
             order_id,
             expected_version,
         )
-        .fetch_optional(&self.pool)
+        .fetch_optional(&mut *tx)
         .await?;
+        tx.commit().await?;
 
         match result {
             Some(order) => Ok(order),
@@ -693,14 +717,16 @@ impl OrderRepository {
     }
 
     pub async fn soft_delete(&self, tenant_id: Uuid, order_id: Uuid) -> Result<(), DomainError> {
+        let mut tx = begin_tenant_tx(&self.pool, tenant_id).await?;
         let rows = sqlx::query!(
             "UPDATE orders SET deleted_at = NOW() WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL",
             tenant_id,
             order_id,
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?
         .rows_affected();
+        tx.commit().await?;
 
         if rows == 0 {
             return Err(DomainError::NotFound { resource: "Order", id: order_id });
@@ -744,9 +770,9 @@ pub async fn create_order_with_inventory(
     tenant_id: Uuid,
     request: CreateOrderRequest,
 ) -> Result<Order, DomainError> {
-    let mut tx = pool.begin().await?;
+    // All operations in one transaction, for one tenant (RLS: begin_tenant_tx above)
+    let mut tx = begin_tenant_tx(pool, tenant_id).await?;
 
-    // All operations in one transaction
     let order = sqlx::query_as!(
         Order,
         r#"INSERT INTO orders (id, tenant_id, status, total_cents) VALUES ($1, $2, 'pending', $3)
