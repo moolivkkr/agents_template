@@ -1,53 +1,78 @@
 # Fastify framework patterns for TypeScript high-performance HTTP APIs.
 
+> TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Fastify 5.12, fastify-plugin 6.0, Prisma 7.10 + @prisma/adapter-pg. The `inject()` tests below are also run (node:test, 5/5) against this page's app, plugins, routes, schemas and error handler, with an in-memory widget service and test-token verifier standing in for the project's (tests/archetype-compile/typescript/run.sh).
+
 ## App Setup and Plugin Architecture
 ```typescript
-import Fastify from "fastify";
-import { widgetRoutes } from "./routes/widgets";
+// src/app.ts — the app factory: server.ts listens, tests call build() + app.inject()
+import { randomUUID } from "node:crypto";
+import Fastify, { type FastifyInstance } from "fastify";
+import { AppError, errorBody, errorHandler } from "./errors";
 import { authPlugin } from "./plugins/auth";
 import { dbPlugin } from "./plugins/database";
+import { servicesPlugin } from "./plugins/services";
+import { widgetRoutes } from "./routes/widgets";
 
-const app = Fastify({
-  logger: {
-    level: process.env.LOG_LEVEL ?? "info",
-    transport: process.env.NODE_ENV === "development"
-      ? { target: "pino-pretty" }
-      : undefined,
-  },
-  requestIdHeader: "x-request-id",
-  genReqId: () => crypto.randomUUID(),
-});
+// An inbound X-Request-Id is reused only when well formed (bounded charset and length); else a new one
+const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
 
-// Register plugins (order matters — dependencies first)
-await app.register(dbPlugin);
-await app.register(authPlugin);
+export async function build(opts: { testing?: boolean } = {}): Promise<FastifyInstance> {
+  const app = Fastify({
+    logger: opts.testing ? false : {
+      level: process.env.LOG_LEVEL ?? "info",
+      ...(process.env.NODE_ENV === "development" ? { transport: { target: "pino-pretty" } } : {}),
+    },
+    // requestIdHeader would take the client's header VERBATIM — read and validate it here instead
+    requestIdHeader: false,
+    genReqId: (req) => {
+      const inbound = req.headers["x-request-id"];
+      return typeof inbound === "string" && VALID_ID.test(inbound) ? inbound : randomUUID();
+    },
+    // Fastify's Ajv defaults to removeAdditional: true, which silently DROPS unknown body fields;
+    // false makes `additionalProperties: false` reject them (400 VALIDATION_FAILED)
+    ajv: { customOptions: { removeAdditional: false } },
+  });
 
-// Every response echoes the id its body carries (meta.request_id / error.request_id)
-app.addHook("onRequest", async (request, reply) => {
-  reply.header("x-request-id", request.id);
-});
+  // Register plugins (order matters — dependencies first)
+  await app.register(dbPlugin);
+  await app.register(authPlugin);
+  await app.register(servicesPlugin);
 
-// Global error handler + unknown routes — both answer with the error envelope (see Error Handling).
-// Set them before registering routes so every route plugin inherits them.
-app.setErrorHandler(errorHandler);
-app.setNotFoundHandler((request, reply) => {
-  reply.status(404).send(errorBody(new AppError("NOT_FOUND", "Not found.", 404), request.id));
-});
+  // Every response echoes the id its body carries (meta.request_id / error.request_id)
+  app.addHook("onRequest", async (request, reply) => {
+    reply.header("x-request-id", request.id);
+  });
 
-// Register route modules with prefix
-await app.register(widgetRoutes, { prefix: "/api/v1/widgets" });
+  // Global error handler + unknown routes — both answer with the error envelope (see Error Handling).
+  // Set them before registering routes so every route plugin inherits them.
+  app.setErrorHandler(errorHandler);
+  app.setNotFoundHandler((request, reply) => {
+    reply.status(404).send(errorBody(new AppError("NOT_FOUND", "Not found.", 404), request.id));
+  });
 
-await app.listen({ port: 8080, host: "0.0.0.0" });
+  // Register route modules with prefix
+  await app.register(widgetRoutes, { prefix: "/api/v1/widgets" });
+  return app;
+}
+
+// src/server.ts
+import { build } from "./app";
+
+const app = await build();
+await app.listen({ port: Number(process.env.PORT ?? 8080), host: "0.0.0.0" });
 ```
 - Fastify uses a plugin-based architecture — everything is a plugin
 - `register()` creates an encapsulated context — plugins don't leak to siblings
 - Plugin order matters: database before auth, auth before routes
 - Built-in Pino logger — structured JSON logging with zero overhead
+- Request ids: don't set `requestIdHeader` to a header name — Fastify then uses the client's value verbatim
+  (any length, any characters). Validate it in `genReqId`, as above
 
 ## Plugin Architecture
 ```typescript
+// src/plugins/database.ts
 import fp from "fastify-plugin";
-import { FastifyPluginAsync } from "fastify";
+import type { FastifyPluginAsync } from "fastify";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
@@ -69,15 +94,24 @@ export const dbPlugin = fp(dbPluginImpl, {
   name: "database",
 });
 
+// src/plugins/auth.ts
+import fp from "fastify-plugin";
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
+import { AppError } from "../errors";
+import { verifyJwt } from "../lib/jwt"; // signature, exp, iss, aud — backend/archetypes/auth-middleware-typescript.md
+
 // Auth plugin — adds authenticate decorator
 const authPluginImpl: FastifyPluginAsync = async (fastify) => {
-  fastify.decorate("authenticate", async (request: FastifyRequest, reply: FastifyReply) => {
-    const token = request.headers.authorization?.replace("Bearer ", "");
-    if (!token) {
+  fastify.decorate("authenticate", async (request: FastifyRequest, _reply: FastifyReply) => {
+    const [scheme, token] = request.headers.authorization?.split(" ") ?? [];
+    if (scheme !== "Bearer" || !token) {
       throw new AppError("UNAUTHENTICATED", "Sign in to continue.", 401);
     }
-    const claims = await verifyJwt(token);
-    request.user = claims;
+    try {
+      request.user = await verifyJwt(token);
+    } catch {
+      throw new AppError("UNAUTHENTICATED", "Sign in to continue.", 401); // bad signature, expired, wrong iss/aud
+    }
   });
 };
 
@@ -93,12 +127,14 @@ export const authPlugin = fp(authPluginImpl, {
 
 ## Type Augmentation
 ```typescript
-// types/fastify.d.ts — extend Fastify types with custom decorators
-import { PrismaClient } from "@prisma/client";
+// src/types/fastify.d.ts — extend Fastify types with custom decorators
+import type { PrismaClient } from "@prisma/client";
+import type { WidgetService } from "../services/widget.service";
 
 declare module "fastify" {
   interface FastifyInstance {
     db: PrismaClient;
+    widgetService: WidgetService;
     authenticate: (request: FastifyRequest, reply: FastifyReply) => Promise<void>;
   }
 
@@ -108,6 +144,7 @@ declare module "fastify" {
       tenantId: string;
       roles: string[];
     };
+    startTime: number;
   }
 }
 ```
@@ -116,9 +153,10 @@ declare module "fastify" {
 
 ## Schema Validation (JSON Schema)
 ```typescript
-import { FastifySchema } from "fastify";
+// src/schemas/widget.ts
+import type { FastifySchema } from "fastify";
 
-const createWidgetSchema: FastifySchema = {
+export const createWidgetSchema: FastifySchema = {
   body: {
     type: "object",
     required: ["name"],
@@ -156,7 +194,7 @@ const createWidgetSchema: FastifySchema = {
 };
 
 // List query params: cursor pagination only — ?cursor=<opaque>&limit=<n>
-const listWidgetsSchema: FastifySchema = {
+export const listWidgetsSchema: FastifySchema = {
   querystring: {
     type: "object",
     properties: {
@@ -168,7 +206,7 @@ const listWidgetsSchema: FastifySchema = {
   },
 };
 
-const getWidgetSchema: FastifySchema = {
+export const getWidgetSchema: FastifySchema = {
   params: {
     type: "object",
     required: ["id"],
@@ -182,13 +220,18 @@ const getWidgetSchema: FastifySchema = {
   handler turns a schema failure into 400 `VALIDATION_FAILED` with `details[]`
 - A response schema strips any property it doesn't list — every envelope key (`meta.request_id`,
   `meta.pagination`) must be in it
-- `additionalProperties: false` rejects unexpected fields — catches typos early
+- `additionalProperties: false` rejects unexpected fields — catches typos early — but only with
+  `ajv: { customOptions: { removeAdditional: false } }` (App Setup). Fastify's default (`removeAdditional:
+  true`) silently strips them and the request succeeds
 - Response schemas enable serialization optimization — Fastify compiles fast serializers
 - Ajv validates request schemas; fast-json-stringify serializes responses
 
 ## Route Definitions with TypeScript Generics
 ```typescript
-import { FastifyPluginAsync } from "fastify";
+// src/routes/widgets.ts
+import type { FastifyPluginAsync } from "fastify";
+import { AppError } from "../errors";
+import { createWidgetSchema, getWidgetSchema, listWidgetsSchema } from "../schemas/widget";
 
 // Type-safe route definition
 interface CreateWidgetBody {
@@ -216,8 +259,7 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
     "/",
     { schema: createWidgetSchema },
     async (request, reply) => {
-      const widget = await WidgetService.create(
-        fastify.db,
+      const widget = await fastify.widgetService.create(
         request.user.tenantId,
         request.user.userId,
         request.body,
@@ -233,8 +275,7 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
     "/:id",
     { schema: getWidgetSchema },
     async (request, reply) => {
-      const widget = await WidgetService.get(
-        fastify.db,
+      const widget = await fastify.widgetService.get(
         request.user.tenantId,
         request.params.id,
       );
@@ -251,8 +292,7 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
     { schema: listWidgetsSchema },
     async (request, reply) => {
       const { cursor, limit = 20, sort_by = "created_at", sort_dir = "desc" } = request.query;
-      const result = await WidgetService.list(
-        fastify.db,
+      const result = await fastify.widgetService.list(
         request.user.tenantId,
         { cursor, limit, sortBy: sort_by, sortDir: sort_dir },
       );
@@ -274,8 +314,7 @@ export const widgetRoutes: FastifyPluginAsync = async (fastify) => {
     "/:id",
     { schema: getWidgetSchema },
     async (request, reply) => {
-      await WidgetService.softDelete(
-        fastify.db,
+      await fastify.widgetService.softDelete(
         request.user.tenantId,
         request.params.id,
       );
@@ -335,15 +374,23 @@ fastify.addHook("onError", async (request, reply, error) => {
 
 ## Decorators (DI Pattern)
 ```typescript
-// Decorate fastify instance with services
-fastify.decorate("widgetService", new WidgetService(fastify.db));
-fastify.decorate("cacheService", new CacheService(redisClient));
+// src/plugins/services.ts — decorate the instance with services (one per app, shared by every route)
+import fp from "fastify-plugin";
+import type { FastifyPluginAsync } from "fastify";
+import { WidgetService } from "../services/widget.service";
 
-// Decorate request with per-request context
-fastify.decorateRequest("startTime", 0);
-fastify.addHook("onRequest", async (request) => {
-  request.startTime = Date.now();
-});
+const servicesPluginImpl: FastifyPluginAsync = async (fastify) => {
+  fastify.decorate("widgetService", new WidgetService(fastify.db));
+
+  // Per-request value: declare it with an initial primitive (or null — never a shared object), so every
+  // request object has the same shape
+  fastify.decorateRequest("startTime", 0);
+  fastify.addHook("onRequest", async (request) => {
+    request.startTime = Date.now();
+  });
+};
+
+export const servicesPlugin = fp(servicesPluginImpl, { name: "services", dependencies: ["database"] });
 ```
 - `fastify.decorate()` for instance-level singletons (services, DB connections)
 - `fastify.decorateRequest()` for per-request values
@@ -353,11 +400,12 @@ fastify.addHook("onRequest", async (request) => {
 Every error body is the envelope in `api/response-envelope.md`:
 `{ error: { code, message, details?, request_id, retryable } }` — no `data`, no `meta`, no exception text.
 ```typescript
-import type { FastifyError, FastifySchemaValidationError } from "fastify";
+// src/errors.ts
+import type { FastifyError, FastifyReply, FastifyRequest, FastifySchemaValidationError } from "fastify";
 
-type FieldError = { field: string; code: string; message: string }; // code is lower_snake
+export type FieldError = { field: string; code: string; message: string }; // code is lower_snake
 
-class AppError extends Error {
+export class AppError extends Error {
   constructor(
     public code: string,                // UPPER_SNAKE, stable: NOT_FOUND, CONFLICT, …
     message: string,                    // user-safe catalog text — never a caught error's message
@@ -371,7 +419,7 @@ class AppError extends Error {
 }
 
 // The only shape an error body takes
-function errorBody(err: AppError, requestId: string) {
+export function errorBody(err: AppError, requestId: string) {
   return {
     error: {
       code: err.code,
@@ -417,7 +465,7 @@ function fromStatus(status: number): AppError {
   }
 }
 
-function errorHandler(error: FastifyError, request: FastifyRequest, reply: FastifyReply): void {
+export function errorHandler(error: FastifyError, request: FastifyRequest, reply: FastifyReply): void {
   let appErr: AppError;
   if (error instanceof AppError) {
     appErr = error;
@@ -437,9 +485,7 @@ function errorHandler(error: FastifyError, request: FastifyRequest, reply: Fasti
   if (appErr.statusCode === 401) reply.header("www-authenticate", "Bearer");
   reply.status(appErr.statusCode).send(errorBody(appErr, request.id));
 }
-
-// Register globally
-app.setErrorHandler(errorHandler);
+// Registered globally in build(): app.setErrorHandler(errorHandler) — before the routes
 ```
 - `setErrorHandler` catches all thrown/rejected errors from handlers and hooks
 - Fastify validation errors have a `validation` property — map to 400 `VALIDATION_FAILED` with `details[]`
@@ -449,9 +495,13 @@ app.setErrorHandler(errorHandler);
 
 ## Testing with inject()
 ```typescript
-import { build } from "./app"; // factory function that creates Fastify instance
+// src/widgets.test.ts
+import { randomUUID } from "node:crypto";
 import { test, describe, beforeEach, afterEach } from "node:test";
 import assert from "node:assert";
+import type { FastifyInstance } from "fastify";
+import { build } from "./app"; // the app factory (App Setup)
+import { testToken } from "./test/helpers"; // signs a JWT for the seeded test user
 
 describe("Widget API", () => {
   let app: FastifyInstance;
@@ -482,7 +532,7 @@ describe("Widget API", () => {
   test("GET /api/v1/widgets/:id — not found returns 404", async () => {
     const response = await app.inject({
       method: "GET",
-      url: `/api/v1/widgets/${crypto.randomUUID()}`,
+      url: `/api/v1/widgets/${randomUUID()}`,
       headers: { authorization: `Bearer ${testToken()}` },
     });
 
@@ -509,6 +559,20 @@ describe("Widget API", () => {
     ]);
   });
 
+  test("POST /api/v1/widgets — an unknown field is rejected, not silently dropped", async () => {
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/widgets",
+      headers: { authorization: `Bearer ${testToken()}` },
+      payload: { name: "New Widget", nmae: "typo" },
+    });
+
+    assert.strictEqual(response.statusCode, 400);
+    assert.deepStrictEqual(JSON.parse(response.body).error.details, [
+      { field: "nmae", code: "unknown_field", message: "This field is not allowed." },
+    ]);
+  });
+
   test("GET /api/v1/widgets — unauthenticated returns 401", async () => {
     const response = await app.inject({
       method: "GET",
@@ -521,6 +585,7 @@ describe("Widget API", () => {
 });
 ```
 - `app.inject()` sends requests without starting an HTTP server — fast, no port conflicts
+- Test that an unknown field gets 400: with Fastify's default Ajv options it is stripped and the request passes
 - Returns a `Response` object with `statusCode`, `body`, `headers`
 - Build a factory function that creates the Fastify instance — inject test config
 - Close the app after each test to clean up hooks and connections

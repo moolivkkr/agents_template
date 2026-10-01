@@ -108,7 +108,7 @@ class CircuitBreaker {
     if (this.state === CircuitState.Open) {
       if (Date.now() - this.lastFailure > this.resetTimeoutMs) {
         this.state = CircuitState.HalfOpen;
-        this.logger.info(`circuit half-open: ${this.name}`);
+        this.logger.info({ breaker: this.name }, "circuit half-open"); // pino: fields first, message second
       } else {
         throw new CircuitOpenError(this.name);
       }
@@ -124,7 +124,7 @@ class CircuitBreaker {
       this.lastFailure = Date.now();
       if (this.failures >= this.maxFailures) {
         this.state = CircuitState.Open;
-        this.logger.warn(`circuit opened: ${this.name}`, { failures: this.failures });
+        this.logger.warn({ breaker: this.name, failures: this.failures }, "circuit opened");
       }
       throw err;
     }
@@ -711,8 +711,11 @@ import { RateLimiterMemory } from 'rate-limiter-flexible';
 
 const rateLimiter = new RateLimiterMemory({ points: 100, duration: 60, blockDuration: 0 });
 
+// Mount it on the route — router.get(path, rateLimitMiddleware, handler) — so req.route is set: in an
+// app.use() middleware routing hasn't happened yet and req.route is undefined
 async function rateLimitMiddleware(req: Request, res: Response, next: NextFunction) {
-  const key = `${req.user.tenantId}:${req.route?.path ?? "unmatched"}`; // verified tenant + route template
+  const who = req.user?.tenantId ?? `ip:${req.ip}`;        // the verified tenant (anonymous: client IP)
+  const key = `${who}:${req.route?.path ?? "unmatched"}`;  // + the route template — never a raw path
   try {
     const result = await rateLimiter.consume(key);
     res.set('X-RateLimit-Limit', '100');

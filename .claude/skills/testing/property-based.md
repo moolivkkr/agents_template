@@ -280,6 +280,8 @@ quickcheck! {
 
 ```typescript
 import fc from "fast-check";
+import { describe, expect, test } from "vitest";
+import { paginate } from "./paginate"; // the code under test: (items, cursor, limit) → { items, cursor, hasMore }
 
 describe("Property-based tests", () => {
   test("encode/decode roundtrip", () => {
@@ -309,9 +311,9 @@ describe("Property-based tests", () => {
     fc.assert(
       fc.property(fc.array(fc.integer(), { minLength: 2 }), (arr) => {
         const sorted = [...arr].sort((a, b) => a - b);
-        for (let i = 0; i < sorted.length - 1; i++) {
-          expect(sorted[i]).toBeLessThanOrEqual(sorted[i + 1]);
-        }
+        sorted.slice(1).forEach((next, i) => {
+          expect(sorted[i]).toBeLessThanOrEqual(next); // sorted[i] is next's predecessor
+        });
       }),
     );
   });

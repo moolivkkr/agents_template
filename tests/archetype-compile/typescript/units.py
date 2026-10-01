@@ -29,7 +29,7 @@ FILES = {
     "backend/archetypes/migration-pattern-typescript.md": 7,
     "backend/archetypes/observability-typescript.md": 33,
     "backend/archetypes/performance-typescript.md": 32,
-    "backend/archetypes/websocket-pattern-typescript.md": 5,
+    "backend/archetypes/websocket-pattern-typescript.md": 6,
     "backend/archetypes/worker-pattern-typescript.md": 7,
     "ui/archetypes/component-test.md": 10,
     "ui/archetypes/dashboard-page.md": 1,
@@ -37,6 +37,24 @@ FILES = {
     "ui/archetypes/form-page.md": 3,
     "ui/archetypes/list-page.md": 2,
     "ui/archetypes/settings-page.md": 3,
+    # the backend packs agents copy from
+    "languages/typescript.md": 12,
+    "frameworks/express.md": 5,
+    "frameworks/fastify.md": 10,
+    "frameworks/nestjs.md": 5,
+    "frameworks/trpc.md": 4,
+    "frameworks/graphql.md": 2,
+    "testing/vitest.md": 7,
+    "testing/contract-testing.md": 1,
+    "testing/property-based.md": 1,
+    "testing/load-testing.md": 5,
+    "core/api-excellence.md": 2,
+    "core/code-quality.md": 5,
+    "core/observability-patterns.md": 6,
+    "core/resiliency-patterns.md": 7,
+    "core/software-architecture.md": 5,
+    "core/testing-principles.md": 1,
+    "api/response-envelope.md": 1,
 }
 
 
@@ -118,8 +136,10 @@ UNITS = [
     },
     {
         "name": "websocket",
-        "blocks": refs("websocket-pattern-typescript", 1, 2, 3, 4, 5),
-        "shims": ["project-auth"],
+        "blocks": refs("websocket-pattern-typescript", 1, 2, 3, 4, 5, 6),
+        "shims": ["project-auth", "ws-test"],
+        # both servers over real sockets: Origin allowlist, single-use tickets, tenant rooms (shims/ws-test)
+        "vitest": ["src/ws/ws-authz.test.ts"],
     },
     {
         "name": "worker-bullmq",
@@ -431,9 +451,382 @@ UNITS = [
     },
 ]
 
+# =========================================================================== the backend packs
+# languages/typescript.md, frameworks/*, testing/*, core/*, api/* — the code agents copy from. Fragments get
+# their project names from a `prelude` (declarations only: the PROJECT's types and services, never the
+# library API the sample shows); "modules": every file is a module, as it is in a project.
+
+def lines(*ls):
+    return "\n".join(ls)
+
+
+PINO_LOGGER = 'declare const logger: import("pino").Logger;'
+EXPRESS_TYPES = 'import type { NextFunction, Request, Response } from "express";'
+
+PACK_UNITS = [
+    {
+        # languages/typescript.md under the doc's OWN "non-negotiable" tsconfig set (strict,
+        # noUncheckedIndexedAccess, exactOptionalPropertyTypes, noImplicitReturns, noFallthroughCasesInSwitch);
+        # Stage 3 decorators, i.e. no experimentalDecorators
+        "name": "lang-typescript",
+        "blocks": refs("typescript", 2, 3, 4, 5, 6, 7, 8, 10, 12),
+        "place": {
+            "typescript#2": {"path": "src/result.ts", "prelude": lines(
+                'import type { z } from "zod";',
+                "interface Config { port: number }",
+                "declare const ConfigSchema: z.ZodType<Config>;",
+                "type FieldError = { field: string; code: string; message: string };",
+                "declare class ValidationError extends Error { constructor(details: FieldError[]); }",
+                "declare function toFieldErrors(issues: z.core.$ZodIssue[]): FieldError[];",
+            )},
+            "typescript#3": "src/user-schema.ts",
+            "typescript#4": {"path": "src/strict.ts", "prelude": lines(
+                "interface LineItem { price: number; quantity: number }",
+                "interface User { id: string; name: string }",
+                "type FieldError = { field: string; code: string; message: string };",
+                "declare class AppError extends Error { constructor(code: string, message: string); }",
+            )},
+            "typescript#5": {"path": "src/performance.tsx", "prelude": lines(
+                "declare function Skeleton(): React.JSX.Element;",
+                "interface Item { id: string; name: string }",
+                "interface RawData { id: string; value: number }",
+                "declare function isValid(row: RawData): boolean;",
+                "declare function transform(row: RawData): Item;",
+                "declare function ChildComponent(props: { items: Item[]; onClick: (id: string) => void }): React.JSX.Element;",
+                "type Data = { widgets: Item[] };",
+                'declare const DataSchema: import("zod").ZodType<Data>;',
+                "declare class HttpError extends Error { constructor(status: number); }",
+            )},
+            "typescript#6": {"path": "src/error-boundary.ts", "prelude": lines(
+                'import type { Express } from "express";',
+                'import type { z } from "zod";',
+                "declare const app: Express;",
+                PINO_LOGGER,
+                "declare const userService: { create(tenantId: string, body: unknown): Promise<{ id: string }> };",
+                "interface Config { port: number }",
+                "declare const ConfigSchema: z.ZodType<Config>;",
+                "declare function toFieldErrors(issues: z.core.$ZodIssue[]): FieldError[];",
+                "declare function reportToErrorTracker(error: Error, componentStack: string | null | undefined): void;",
+            )},
+            "typescript#7": {"path": "src/async.ts", "prelude": lines(
+                "interface Order { id: string; userId: string }",
+                "interface CreateOrderInput { userId: string; reference: string }",
+                'declare const CreateOrderSchema: import("zod").ZodType<CreateOrderInput>;',
+                "declare const orderRepo: { create(input: CreateOrderInput): Promise<Order> };",
+                "declare const notificationService: {",
+                "  send(userId: string, event: string): Promise<void>;",
+                "  getUnread(userId: string): Promise<string[]>;",
+                "};",
+                "declare class UniqueConstraintError extends Error {}",
+                "declare class ConflictError extends Error { constructor(message: string); }",
+                "interface Dashboard { profile: { name: string }; orders: Order[]; notifications: string[] }",
+                "declare const userService: { getProfile(userId: string): Promise<{ name: string }> };",
+                "declare const orderService: { listRecent(userId: string, n: number): Promise<Order[]> };",
+                "declare const emailService: { send(email: string): Promise<void> };",
+                PINO_LOGGER,
+                "declare class HttpError extends Error { constructor(status: number, body?: string); }",
+                "declare const WIDGETS_API_URL: string;",
+                "interface Widget { id: string }",
+                "declare const widgetService: {",
+                "  list(tenantId: string, page: { cursor: string; limit: number }): Promise<{ items: Widget[]; cursor: string; hasMore: boolean }>;",
+                "};",
+                "declare const tenantId: string;",
+                "declare function processBatch(batch: Widget[]): Promise<void>;",
+                "declare function processItem(item: string): Promise<void>;",
+            )},
+            "typescript#8": {"path": "src/types-deep.ts", "prelude": lines(
+                "interface Widget { id: string; tenantId: string; name: string; status: string; createdAt: Date; updatedAt: Date }",
+                "interface Component { id: string; tenantId: string; name: string }",
+            )},
+            "typescript#10": {"path": "src/decorators.ts", "prelude": lines(
+                PINO_LOGGER,
+                "declare class AppError extends Error { readonly retryable: boolean; }",
+                "interface Widget { id: string; tenantId: string; name: string }",
+                "interface WidgetRepository { findById(tenantId: string, id: string): Promise<Widget> }",
+            )},
+            "typescript#12": {"path": "src/error-hierarchy.ts", "prelude": lines(
+                "interface Widget { id: string; tenantId: string; name: string }",
+                "interface CreateInput { name: string }",
+                "interface Config { port: number }",
+                'declare const ConfigSchema: import("zod").ZodType<Config>;',
+                "declare const repo: {",
+                "  findById(tenantId: string, id: string): Promise<Widget | null>;",
+                "  create(input: CreateInput): Promise<Widget>;",
+                "};",
+                PINO_LOGGER,
+            )},
+        },
+        "modules": True,
+        "shims": ["lang-ts", "packs-express"],
+        "compilerOptions": {
+            "exactOptionalPropertyTypes": True,
+            "noImplicitReturns": True,
+            "noFallthroughCasesInSwitch": True,
+            "lib": ["es2023", "dom", "dom.iterable"],
+            "types": ["node"],
+        },
+    },
+    {
+        # the NestJS half of the decorators section: legacy decorators, as a NestJS project compiles them
+        "name": "lang-typescript-nest",
+        "blocks": ["typescript#11"],
+        "place": {"typescript#11": {"path": "src/nest-decorators.ts", "prelude": lines(
+            "interface AuthUser { id: string; tenantId: string; roles: string[] }",
+            "interface Widget { id: string; name: string }",
+            "interface WidgetPage { items: Widget[]; nextCursor: string | null }",
+            "declare class WidgetService {",
+            "  get(tenantId: string, id: string): Promise<Widget>;",
+            "  list(tenantId: string, page: { cursor?: string | undefined; limit: number }): Promise<WidgetPage>;",
+            "}",
+        )}},
+        "decorators": "legacy",
+        "compilerOptions": {"exactOptionalPropertyTypes": True, "noImplicitReturns": True,
+                            "noFallthroughCasesInSwitch": True},
+    },
+    {
+        # frameworks/express.md against the archetype modules it names: AppError + constructors, the request-id
+        # middleware, the pino logger and AuthenticatedRequest
+        "name": "pack-express",
+        "blocks": refs("express", 1, 2, 3, 4, 5) + refs("error-handling-typescript", 1, 2)
+        + ["crud-service-typescript#9", "auth-middleware-typescript#2", "crud-handler-typescript#6"],
+        "shims": ["pack-express"],
+    },
+    {
+        # frameworks/nestjs.md on the archetype NestJS stack (JwtAuthGuard, CurrentUser, AppErrorFilter,
+        # validationExceptionFactory, conflict()); the spec is type-checked (Jest types)
+        "name": "pack-nestjs",
+        "blocks": NEST_STACK + refs("nestjs", 1, 2, 3, 4, 5),
+        "place": {"nestjs#3": {"path": "src/main.pipes.ts", "wrap": "function", "prelude": lines(
+            'import { ValidationPipe, type INestApplication } from "@nestjs/common";',
+            'import { AppErrorFilter, validationExceptionFactory } from "./filters/app-error.filter";',
+            "declare const app: INestApplication;",
+        )}},
+        "decorators": "legacy",
+        "prisma": True,
+        "shims": ["crud-stack", "nest-stack", "pack-nestjs"],
+        "compilerOptions": {"types": ["node", "jest"]},
+    },
+    {
+        # frameworks/fastify.md as one app: build(), plugins, schemas, routes, error handler — and its inject()
+        # tests RUN with node:test (WidgetService and verifyJwt are in-memory project stubs, shims/pack-fastify)
+        "name": "pack-fastify",
+        "blocks": refs("fastify", *range(1, 11)),
+        "place": {
+            "fastify#6": {"path": "src/plugins/hooks.ts", "prelude": lines(
+                'import type { FastifyPluginAsync } from "fastify";',
+                "declare function setTenantContext(db: import(\"@prisma/client\").PrismaClient, tenantId: string): Promise<void>;",
+                "export const hooksPlugin: FastifyPluginAsync = async (fastify) => {",
+            ), "postlude": "};"},
+            "fastify#10": {"path": "src/plugins/shared-schemas.ts", "prelude": lines(
+                'import type { FastifyPluginAsync } from "fastify";',
+                "export const sharedSchemasPlugin: FastifyPluginAsync = async (fastify) => {",
+            ), "postlude": "};"},
+        },
+        "prisma": True,
+        "shims": ["pack-fastify"],
+        "node_test": {"entry": "src/widgets.test.ts", "files": ["src/types/fastify.d.ts"],
+                      "env": {"DATABASE_URL": "postgresql://harness:harness@127.0.0.1:1/harness"}},
+    },
+    {
+        # frameworks/trpc.md: server (init, router, context) + the @trpc/tanstack-react-query client
+        "name": "pack-trpc",
+        "blocks": refs("trpc", 1, 2, 3, 4),
+        "place": {
+            "trpc#1": "src/server/trpc.ts",
+            "trpc#2": "src/server/routers/user.ts",
+            "trpc#3": "src/server/context.ts",
+            "trpc#4": "src/client/trpc.tsx",
+        },
+        "shims": ["pack-trpc"],
+        "compilerOptions": {"lib": ["es2023", "dom", "dom.iterable"], "types": ["node"]},
+    },
+    {
+        # frameworks/graphql.md's TypeScript blocks: Apollo-style resolvers + per-request DataLoaders
+        "name": "pack-graphql",
+        "blocks": refs("graphql", 1, 2),
+        "shims": ["pack-graphql"],
+    },
+    {
+        # testing/vitest.md: config, setup, unit/component/mock/hook/snapshot samples (type-checked; the
+        # components they render are the project's)
+        "name": "pack-vitest",
+        "kind": "ui",
+        "blocks": refs("vitest", *range(1, 8)),
+        "place": {
+            "vitest#3": "src/utils/format.test.ts",
+            "vitest#4": "src/components/UserCard.test.tsx",
+            "vitest#5": "src/components/UserProfile.test.tsx",
+            "vitest#6": "src/hooks/useCounter.test.ts",
+            "vitest#7": "src/components/Badge.test.tsx",
+        },
+        "shims": ["pack-vitest"],
+        "compilerOptions": {"types": ["vitest/globals"]},
+    },
+    {
+        # testing/contract-testing.md's pact-js consumer test, RUN: Pact's mock server answers the consumer's
+        # client (shims/pack-pact) and the pact file is written
+        "name": "pack-pact",
+        "blocks": ["contract-testing#1"],
+        "place": {"contract-testing#1": "tests/widget.pact.test.ts"},
+        "shims": ["pack-pact"],
+        "vitest": ["tests/widget.pact.test.ts"],
+    },
+    {
+        # testing/property-based.md's fast-check properties, RUN (paginate is a project stub)
+        "name": "pack-fastcheck",
+        "blocks": ["property-based#1"],
+        "place": {"property-based#1": "src/properties.test.ts"},
+        "shims": ["pack-fastcheck"],
+        "vitest": ["src/properties.test.ts"],
+    },
+    {
+        # testing/load-testing.md's k6 scripts: JavaScript, type-checked (checkJs) against @types/k6
+        "name": "pack-k6",
+        "blocks": refs("load-testing", 1, 2, 3, 4, 5),
+        "place": {
+            "load-testing#2": "tests/perf/load.js",
+            "load-testing#3": "tests/perf/stress.js",
+            "load-testing#4": "tests/perf/spike.js",
+            "load-testing#5": "tests/perf/ci-thresholds.js",
+        },
+        "compilerOptions": {"types": ["k6"], "lib": ["es2023"]},
+    },
+    {
+        # core/observability-patterns.md: request logger, pino setup, OTel metrics + tracing, redaction,
+        # request ids (src/lib/logger.ts = crud-service-typescript.md's pino logger)
+        "name": "core-observability",
+        "blocks": refs("observability-patterns", 1, 2, 3, 4, 5, 6) + ["crud-service-typescript#9"],
+        "place": {
+            "observability-patterns#1": {"path": "src/obs/context-logger.ts", "prelude": lines(
+                EXPRESS_TYPES,
+                'import { logger } from "../lib/logger";',
+                "declare function getTraceId(req: Request): string;",
+                "declare const req: Request; // the usage line below runs inside a handler",
+                "declare const order: { id: string; totalCents: number };",
+            )},
+            "observability-patterns#2": {"path": "src/obs/pino-setup.ts", "prelude": lines(
+                "declare const req: { tenantId: string; id: string };",
+                "declare function getTraceId(req: unknown): string;",
+                "declare const order: { id: string; items: unknown[]; total: number };",
+            )},
+            "observability-patterns#3": {"path": "src/obs/metrics.ts", "prelude": EXPRESS_TYPES},
+            "observability-patterns#4": {"path": "src/obs/tracing.ts", "prelude": lines(
+                "interface Context { tenantId: string }",
+                "interface CreateOrderReq { items: { sku: string; qty: number }[] }",
+                "interface Order { id: string }",
+                "declare const repo: { save(ctx: Context, order: Order): Promise<Order> };",
+                "declare function buildOrder(req: CreateOrderReq): Order;",
+            )},
+            "observability-patterns#5": {"path": "src/obs/redaction.ts", "prelude": 'import pino from "pino";'},
+            "observability-patterns#6": {"path": "src/obs/request-id.ts", "prelude": lines(
+                "interface RequestContext { requestId: string; serviceToken: string; signal: AbortSignal }",
+            )},
+        },
+        "modules": True,
+        "shims": ["packs-express"],
+    },
+    {
+        # core/resiliency-patterns.md: circuit breaker, idempotent-only retry, degradation, health + graceful
+        # shutdown (one server file), bulkhead, per-tenant rate limit
+        "name": "core-resiliency",
+        "blocks": refs("resiliency-patterns", 1, 2, 3, 4, 5, 6, 7) + ["crud-service-typescript#9"],
+        "place": {
+            "resiliency-patterns#1": {"path": "src/res/circuit-breaker.ts", "prelude": lines(
+                'import type { Logger } from "pino";',
+                "declare class CircuitOpenError extends Error { constructor(name: string); }",
+            )},
+            "resiliency-patterns#2": {"path": "src/res/retry.ts", "prelude": lines(
+                "declare class HttpError extends Error { status: number; retryAfterMs?: number }",
+                "declare function sleep(ms: number, signal?: AbortSignal): Promise<void>;",
+            )},
+            "resiliency-patterns#3": {"path": "src/res/degrade.ts", "prelude": lines(
+                "interface Product { id: string }",
+                "interface ProductPage { product: Product; recommendations: Product[]; reviews: string[]; degraded: boolean }",
+                "declare const productRepo: { findById(id: string): Promise<Product> };",
+                "declare const recommendationService: { getFor(id: string): Promise<Product[]> };",
+                "declare const reviewService: { getFor(id: string): Promise<string[]> };",
+            )},
+            "resiliency-patterns#4": {"path": "src/res/server.ts", "prelude": lines(
+                'import express from "express";',
+                'import type { Pool } from "pg";',
+                'import { logger } from "../lib/logger";',
+                "const app = express();",
+                "declare const pool: Pool;",
+                "declare function withTimeout<T>(p: Promise<T>, ms: number): Promise<T>;",
+            )},
+            "resiliency-patterns#5": {"path": "src/res/bulkhead.ts", "prelude": lines(
+                "declare class BulkheadFullError extends Error { constructor(name: string, max: number); }",
+            )},
+            "resiliency-patterns#6": {"path": "src/res/rate-limit.ts", "prelude": EXPRESS_TYPES},
+            "resiliency-patterns#7": {"path": "src/res/server.ts", "prelude": lines(
+                "declare function sleep(ms: number): Promise<void>;",
+                "declare const consumer: { stop(): Promise<void> };",
+                "declare const redis: { quit(): Promise<unknown> };",
+                "declare const meterProvider: { shutdown(): Promise<void> };",
+                "declare const tracerProvider: { shutdown(): Promise<void> };",
+            )},
+        },
+        "modules": True,
+        "shims": ["packs-express"],
+    },
+    {
+        # core/ design samples that are real code: interface segregation, a factory, a test-data builder
+        "name": "core-design",
+        "blocks": ["software-architecture#3", "software-architecture#5", "testing-principles#1"],
+        "place": {
+            "software-architecture#3": {"path": "src/isp.ts", "prelude": lines(
+                "interface Entity { id: string }",
+                "interface Filter { tenantId: string }",
+            )},
+            "software-architecture#5": {"path": "src/notification-factory.ts", "prelude": lines(
+                "type NotificationChannel = 'email' | 'sms' | 'push';",
+                "interface NotificationPayload { to: string; body: string }",
+                "interface Notification { send(): Promise<void> }",
+                "declare class EmailNotification implements Notification { constructor(p: NotificationPayload); send(): Promise<void>; }",
+                "declare class SMSNotification implements Notification { constructor(p: NotificationPayload); send(): Promise<void>; }",
+                "declare class PushNotification implements Notification { constructor(p: NotificationPayload); send(): Promise<void>; }",
+            )},
+            "testing-principles#1": {"path": "src/factories.ts", "prelude": lines(
+                "interface User { id: string; tenantId: string; email: string; name: string; role: 'member' | 'admin' }",
+            )},
+        },
+        "modules": True,
+    },
+    {
+        # api/response-envelope.md's TS types, core/api-excellence.md's restatement of them (must be IDENTICAL:
+        # shims/api-envelope/src/types/envelope-parity.ts) and its openapi-typescript usage
+        "name": "api-envelope",
+        "blocks": ["response-envelope#1", "api-excellence#1", "api-excellence#2"],
+        "place": {
+            "response-envelope#1": "src/types/api.ts",
+            "api-excellence#1": "src/list-users.ts",
+            "api-excellence#2": {"path": "src/types/api-excellence.ts",
+                                 "postlude": "export type { ApiSuccess, Pagination, ApiErrorBody };"},
+        },
+        "shims": ["api-envelope"],
+    },
+]
+UNITS += PACK_UNITS
+
+
 SKIP = {
     "performance-typescript#31": "barrel-export illustration: `export * from './orders'` etc. name the reader's own "
     "modules; there is no library API in it to check.",
     "observability-typescript#24": "intentionally elided body: createOrder(): Promise<Order> ends in `// ...`, so it "
     "can't type-check (TS2355). The nestjs-pino API it shows (LoggerModule, Logger) is compiled by observability-nest.",
+    # --- backend packs: illustrations, not code to copy (none has a library API in it)
+    "typescript#1": "Good/Bad signature pair for the no-`any` rule: both are named processUser and both bodies "
+    "are elided (`{ ... }`).",
+    "typescript#9": "a catalogue of alternative module forms side by side (one name exported as named, default and "
+    "re-export, then imported) — deliberately not one module, so tsc reports the duplicates. Its tsconfig advice "
+    "(`paths` without `baseUrl`, removed in TS 7: TS5102) was checked with this harness's tsc.",
+    "code-quality#1": "BAD/GOOD refactoring sketch: both are named processPayment and the BAD body is elided.",
+    "code-quality#2": "BAD/GOOD parameter-design sketch: two body-less createUser signatures.",
+    "code-quality#3": "BAD/GOOD guard-clause sketch: both are named handleRequest, over hypothetical helpers.",
+    "code-quality#4": "BAD/GOOD sketch with an elided factory body (`/* switch on 5 types, only 1 used */`).",
+    "code-quality#5": "naming-convention listing: body-less signatures and sample declarations.",
+    "software-architecture#1": "SRP BAD/GOOD sketch: classes whose method bodies are elided (`/* ... */`).",
+    "software-architecture#2": "LSP BAD example, broken on purpose (undeclared width/height; Rectangle and Square "
+    "are each declared twice, BAD and GOOD).",
+    "software-architecture#4": "DIP BAD/GOOD sketch: UserService declared twice and an elided `query(...)` call.",
 }

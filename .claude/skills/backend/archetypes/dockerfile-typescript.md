@@ -15,7 +15,7 @@ tags:
 # Dockerfile Archetype — TypeScript / Node.js
 
 > TypeScript samples compile-checked 2026-09-30: TS 7.0.2 strict + noUncheckedIndexedAccess, Express 5.2, Prisma 7.10 (the health route; its /healthz, /readyz and /api/version were also run against Postgres 16) (tests/archetype-compile/typescript/run.sh).
-> The npm and pnpm Dockerfiles were built and run once on 2026-09-30 (not part of run.sh): `node:26-slim` from `.nvmrc`, npm 11 / pnpm 12.8.1, a service made of these archetypes (migration-pattern-typescript.md's schema and `prisma.config.ts`, this health router). The image loads the generated client, runs as uid 65532 on a read-only root filesystem, answers `/healthz` 200 with the Docker HEALTHCHECK `healthy`, runs `prisma migrate deploy` itself, and `/readyz` turns 200 after it against Postgres 16.
+> The npm, pnpm and Bun Dockerfiles were built and run once on 2026-09-30 (not part of run.sh): `node:26-slim` from `.nvmrc` (npm 11, pnpm 12.8.1) and `oven/bun:1.4.2-slim` from `.bun-version`, on a service made of these archetypes (migration-pattern-typescript.md's schema and `prisma.config.ts`, this health router). Each image loads the generated client, runs as uid 65532 on a read-only root filesystem, answers `/healthz` 200 with the Docker HEALTHCHECK `healthy`, runs `prisma migrate deploy` itself, and `/readyz` turns 200 after it against Postgres 16. The development compose was run too: the `migrate` one-shot exits 0, the `dev` target serves through the project's `tsx watch` as uid 65532 with `/readyz` 200, and editing the mounted source restarts it.
 
 > **Canonical reference**: This is the TypeScript counterpart to `backend/archetypes/dockerfile.md` (Go, if it exists). Covers multi-stage builds for npm, pnpm, and Bun runtimes.
 
@@ -27,7 +27,7 @@ Complete, production-optimized Dockerfile templates for TypeScript/Node.js appli
 
 ```dockerfile
 # Dockerfile — TypeScript/Node.js with npm
-# Multi-stage build: build → production
+# Multi-stage build: deps → dev (docker compose, watch mode) | builder → production
 #   docker build --build-arg NODE_VERSION="$(cat .nvmrc)" --build-arg GIT_SHA="$(git rev-parse HEAD)" .
 
 # The Node major from the project's version file (.nvmrc / engines) — the same value as
@@ -35,9 +35,9 @@ Complete, production-optimized Dockerfile templates for TypeScript/Node.js appli
 ARG NODE_VERSION
 
 # =============================================================================
-# Stage 1: Build
+# Stage 1: Dependencies — every dependency + the generated Prisma client (shared by dev and builder)
 # =============================================================================
-FROM node:${NODE_VERSION}-slim AS builder
+FROM node:${NODE_VERSION}-slim AS deps
 
 WORKDIR /app
 
@@ -52,9 +52,28 @@ COPY prisma.config.ts ./
 COPY prisma/ ./prisma/
 RUN npx prisma generate
 
-# Build TypeScript → JavaScript
 COPY tsconfig.json ./
 COPY src/ ./src/
+
+# =============================================================================
+# Stage 2: Development — `docker compose` target. Keeps devDependencies; compose mounts src/ over the copy.
+# =============================================================================
+FROM deps AS dev
+
+ENV NODE_ENV=development
+ENV PORT=3000
+# npm writes its cache and logs under $HOME; the numeric user has no home directory of its own
+ENV HOME=/tmp
+USER 65532:65532
+EXPOSE 3000
+# The project's watch command, e.g. "dev": "tsx watch src/index.ts" in package.json
+CMD ["npm", "run", "dev"]
+
+# =============================================================================
+# Stage 3: Build
+# =============================================================================
+FROM deps AS builder
+
 RUN npm run build
 
 # Drop devDependencies IN PLACE. Never `npm ci --omit=dev` here: re-installing deletes node_modules/.prisma,
@@ -62,7 +81,7 @@ RUN npm run build
 RUN npm prune --omit=dev && npm cache clean --force
 
 # =============================================================================
-# Stage 2: Production
+# Stage 4: Production
 # =============================================================================
 FROM node:${NODE_VERSION}-slim AS production
 
@@ -167,52 +186,58 @@ CMD ["node", "dist/index.js"]
 
 ```dockerfile
 # Dockerfile — TypeScript with Bun runtime
-# Bun compiles TypeScript natively — no separate build step needed
+# Bun runs TypeScript directly — no separate build step needed
+#   docker build --build-arg BUN_VERSION="$(cat .bun-version)" --build-arg GIT_SHA="$(git rev-parse HEAD)" .
+
+# The Bun version from the project's version file (.bun-version) — the same value as
+# IMPLEMENTATION_GUIDELINES §Commands and versions. No default: a missing build arg fails the build.
+ARG BUN_VERSION
 
 # =============================================================================
-# Stage 1: Install dependencies
+# Stage 1: Production dependencies + the generated Prisma client
 # =============================================================================
-FROM oven/bun:1 AS builder
+FROM oven/bun:${BUN_VERSION}-slim AS deps
 
 WORKDIR /app
 
-# Copy dependency manifests
-COPY package.json bun.lockb ./
+# bun.lock (text, Bun >= 1.2) or bun.lockb (older Bun)
+COPY package.json bun.lock* ./
 
-# Install all dependencies
-RUN bun install --frozen-lockfile
+# Bun has no `prune`: install production dependencies FIRST, then generate the client into them. A later
+# `bun install --production` would re-create node_modules without the generated client. Scripts off.
+# ("prisma" and "dotenv" are dependencies when this image also runs the migrate Job.)
+RUN bun install --frozen-lockfile --production --ignore-scripts
+COPY prisma.config.ts ./
+COPY prisma/ ./prisma/
+RUN bunx prisma generate
 
-# Copy source
-COPY tsconfig.json ./
-COPY src/ ./src/
-
-# Optional: type-check (Bun runs TS directly but doesn't type-check)
-# RUN bun run tsc --noEmit
-
-# Install production dependencies only (separate layer)
-RUN bun install --frozen-lockfile --production
+# Bun runs TypeScript without type-checking it: run `bunx tsc --noEmit` in CI, not in this image
 
 # =============================================================================
 # Stage 2: Production
 # =============================================================================
-FROM oven/bun:1-alpine AS production
-
-# Bun images include a non-root 'bun' user
-USER bun
-WORKDIR /app
-
-COPY --from=builder --chown=bun:bun /app/node_modules ./node_modules
-COPY --from=builder --chown=bun:bun /app/src ./src
-COPY --from=builder --chown=bun:bun /app/package.json ./package.json
-COPY --from=builder --chown=bun:bun /app/tsconfig.json ./tsconfig.json
+FROM oven/bun:${BUN_VERSION}-slim AS production
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ARG GIT_SHA=unknown
+ENV GIT_SHA=$GIT_SHA
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/prisma ./prisma
+COPY --from=deps /app/prisma.config.ts ./prisma.config.ts
+COPY package.json tsconfig.json ./
+COPY src/ ./src/
+
+# Numeric non-root user (runAsNonRoot needs a numeric UID); no trailing comment on this line
+USER 65532:65532
 
 EXPOSE 3000
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD bun --eval "fetch('http://localhost:3000/healthz').then(r => { if (!r.ok) process.exit(1) })" || exit 1
+  CMD ["bun", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3000) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
 
 # Bun runs TypeScript directly — no transpilation needed
 CMD ["bun", "run", "src/index.ts"]
@@ -288,13 +313,16 @@ temp/
 
 ```yaml
 # docker-compose.yml — Local development stack
+# Run: NODE_VERSION="$(cat .nvmrc)" docker compose up
 
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-      target: builder  # Use builder stage for development (includes devDeps)
+      target: dev  # devDependencies + the project's `npm run dev` watcher (the builder stage ends pruned)
+      args:
+        NODE_VERSION: ${NODE_VERSION:?set NODE_VERSION from .nvmrc}
     ports:
       - "3000:3000"
     environment:
@@ -308,11 +336,28 @@ services:
       - ./src:/app/src:ro
       - ./prisma:/app/prisma:ro
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       cache:
         condition: service_healthy
     restart: unless-stopped
+
+  # One-shot: apply migrations before the app starts (so /readyz can pass), then exit
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: deps  # has the prisma CLI and prisma.config.ts
+      args:
+        NODE_VERSION: ${NODE_VERSION:?set NODE_VERSION from .nvmrc}
+    command: ["npx", "prisma", "migrate", "deploy"]
+    environment:
+      DATABASE_URL: postgresql://app:app@db:5432/appdb
+    volumes:
+      - ./prisma:/app/prisma:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:16-alpine
@@ -357,6 +402,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: production
+      args:
+        NODE_VERSION: ${NODE_VERSION:?set NODE_VERSION from .nvmrc}
+        GIT_SHA: ${GIT_SHA:-unknown}
     ports:
       - "3000:3000"
     environment:
@@ -493,7 +541,8 @@ RUN npm run build
 
 - Multi-stage builds are MANDATORY — never ship devDependencies or source TypeScript in production images
 - Use `npm ci` (not `npm install`) for reproducible builds from lockfile
-- Use `--frozen-lockfile` (pnpm) or `--frozen-lockfile` (bun) for reproducibility
+- Use `--frozen-lockfile` (pnpm) or `--frozen-lockfile` (bun) for reproducibility; Bun >= 1.2 writes a text `bun.lock` (older: `bun.lockb`), so copy `bun.lock*`
+- Development runs the `dev` stage (all devDependencies + the project's watch script) — never the `builder` stage, which ends pruned; the compose `migrate` one-shot applies migrations before the app starts
 - Non-root user is MANDATORY — a numeric `USER 65532:65532` on its own line (a named user fails `runAsNonRoot`)
 - The Node base image is `node:${NODE_VERSION}-slim`, with `NODE_VERSION` from the project's version file (`.nvmrc` / `engines`), passed as a build arg — never a hard-coded tag
 - `NODE_ENV=production` MUST be set — frameworks use it for optimizations and security

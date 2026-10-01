@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Type-check every TypeScript/TSX sample in .claude/skills/{backend,ui}/archetypes/*.md.
+# Type-check every TypeScript/TSX sample in .claude/skills/{backend,ui}/archetypes/*.md and in the backend
+# packs agents copy from: languages/typescript.md, frameworks/{express,fastify,nestjs,trpc,graphql}.md,
+# testing/{vitest,testcontainers,contract-testing,property-based,load-testing}.md (k6 scripts: checkJs against
+# @types/k6), core/, security/ and api/ (harness.py SCAN_GLOBS). Some units also RUN their test samples
+# in-process (Vitest, node:test): Express handlers, services, WebSocket authz, Fastify inject(), pact, fast-check.
 #
 #   bash tests/archetype-compile/typescript/run.sh              # the gate: every unit, every block
 #   bash tests/archetype-compile/typescript/run.sh --unit NAME  # one unit (repeatable); --list shows them
@@ -11,7 +15,8 @@
 # is either compiled or listed in units.SKIP with a reason AND each file's block count matches units.FILES.
 #
 # Needs node + npm (first run: `npm ci` into ./node_modules, ~20s; repeated only when package-lock.json
-# changes) and python3 >= 3.8. Not part of tests/run-all.sh: it needs the npm registry once.
+# changes) and python3 >= 3.8. The compile is not part of tests/run-all.sh (it needs the npm registry once);
+# its offline coverage check is: tests/archetype-compile-typescript-inventory.test.sh (harness.py --inventory-only).
 set -euo pipefail
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$DIR"
