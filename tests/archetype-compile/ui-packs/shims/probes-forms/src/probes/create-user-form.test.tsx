@@ -35,7 +35,7 @@ describe("form-patterns.md — CreateUserForm", () => {
       posts.push({ body, key: request.headers.get("idempotency-key") });
       if (posts.length === 1) {
         return HttpResponse.json({ error: { code: "VALIDATION_FAILED", message: "Some fields are invalid.", request_id: "r", retryable: false,
-          details: [{ field: "email", code: "already_taken", message: "That email is already registered." }] } }, { status: 400 });
+          details: [{ field: "email", code: "already_exists", message: "That email is already registered." }] } }, { status: 400 });
       }
       return created(body);
     }));

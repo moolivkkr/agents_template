@@ -485,7 +485,7 @@ const submit = (fields: Record<string, string>) => {
 describe("create order action", () => {
   it("TC-FORM-20113 puts the API's details[] on the field and rotates the idempotency key", async () => {
     server.use(http.post("http://localhost/api/v1/orders", () => apiError(400, "VALIDATION_FAILED", "Some fields are invalid.",
-      { details: [{ field: "customer_email", code: "taken", message: "That email already has an open order." }] })))
+      { details: [{ field: "customer_email", code: "already_exists", message: "That email already has an open order." }] })))
     const key = crypto.randomUUID()
     const result = await submit({ customer_email: "bob@example.com", quantity: "1", idempotency_key: key })
     expect(result).toMatchObject({ status: 400, data: { form: { errors: { customer_email: ["That email already has an open order."] } } } })

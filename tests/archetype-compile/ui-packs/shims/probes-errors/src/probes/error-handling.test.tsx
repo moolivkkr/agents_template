@@ -36,7 +36,7 @@ describe("error-handling-patterns.md — submit handler", () => {
       () => err(503, "UNAVAILABLE", "Try again shortly."),                                  // 1st action, attempt 1
       () => HttpResponse.json({ data: user("u1", "Ada"), meta: { request_id: "r" } }, { status: 201 }), // attempt 2
       () => err(400, "VALIDATION_FAILED", "Some fields are invalid.",                       // 2nd action, attempt 1
-        [{ field: "email", code: "already_taken", message: "That email is already registered." }]),
+        [{ field: "email", code: "already_exists", message: "That email is already registered." }]),
       () => HttpResponse.json({ data: user("u2", "Bo"), meta: { request_id: "r" } }, { status: 201 }),  // attempt 2
     ];
     server.use(http.post("/api/v1/users", ({ request }) => {
