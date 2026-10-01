@@ -48,12 +48,13 @@ async list(ctx: RequestContext): Promise<Resource[]> {
 }
 ```
 ```python
-# Python example
+# Python example (SQLAlchemy 2.0 select(); Session.query() is the legacy API)
 def list(self, tenant_id: UUID) -> list[Resource]:
-    return self.session.query(Resource).filter(
+    stmt = select(Resource).where(
         Resource.tenant_id == tenant_id,
-        Resource.deleted_at.is_(None)
-    ).all()
+        Resource.deleted_at.is_(None),
+    )
+    return list(self.session.scalars(stmt))
 ```
 
 **Layer 2 — PostgreSQL Row-Level Security (DEFENSE-IN-DEPTH):**

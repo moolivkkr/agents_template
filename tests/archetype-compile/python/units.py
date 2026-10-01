@@ -667,3 +667,15 @@ UNITS.append(Unit(
     },
     smoke=smoke("smoke_worker.py"),
 ))
+
+
+# ── packs outside backend/archetypes: units_packs.py (keep this block LAST; it imports the names above) ──
+from units_packs import COMMENT_ONLY as _PACKS_COMMENT_ONLY  # noqa: E402
+from units_packs import EXPECTED as _PACKS_EXPECTED  # noqa: E402
+from units_packs import SKIPS as _PACKS_SKIPS  # noqa: E402
+from units_packs import UNITS as _PACKS_UNITS  # noqa: E402
+
+UNITS.extend(_PACKS_UNITS)
+EXPECTED.update(_PACKS_EXPECTED)
+COMMENT_ONLY.extend(_PACKS_COMMENT_ONLY)
+SKIPS.update(_PACKS_SKIPS)

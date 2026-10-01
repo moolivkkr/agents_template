@@ -23,11 +23,12 @@ Always namespace with app prefix. Colon-separated hierarchy. Lowercase.
 ## Cache-Aside Pattern
 ```python
 # Read
-value = redis.get(key)
-if value is None:
-    value = db.query(...)
-    redis.setex(key, ttl_seconds, serialize(value))
-return deserialize(value)
+cached = redis.get(key)
+if cached is not None:
+    return deserialize(cached)
+value = db.query(...)
+redis.set(key, serialize(value), ex=ttl_seconds)  # SET ... EX; redis-py deprecates setex()
+return value
 
 # Write
 db.update(...)
@@ -37,10 +38,10 @@ Always set TTL on every key — no immortal cache keys.
 
 ## Session Storage
 ```python
-redis.setex(
+redis.set(
     f"session:{token}",
-    SESSION_TTL_SECONDS,
-    json.dumps({"user_id": str(user.id), "role": user.role})
+    json.dumps({"user_id": str(user.id), "role": user.role}),
+    ex=SESSION_TTL_SECONDS,
 )
 ```
 
