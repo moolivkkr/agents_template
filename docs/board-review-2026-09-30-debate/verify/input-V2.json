@@ -1,0 +1,109 @@
+{
+  "schema": "sdlc.board-verify-input/v1",
+  "verifier": "V2",
+  "hats": [
+    "ai_engineer"
+  ],
+  "findings": [
+    {
+      "id": "AI-03",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 53,
+      "evidence": "debate_moderator.md:53-56 'The parent session spawns you ... An agent that needs a decision returns `NEEDS_DECISION <topic>` to its parent, and the parent spawns you'. agent-common.md:34 (inlined into every agent) tells every agent to return NEEDS_DECISION for a blocking contested choice. `grep -rln NEEDS_DECISION .claude/commands` \u2192 only develop-orchestrator.md. grep -c 'debate|NEEDS_DECISION' per command: plan 0, discuss 0, init 0, design 0, hotfix 0, diagnose 0, recon 0, deploy 0 (accept 1 and autonomous 2 only read debate-status). plan.md has no first-line return handling at all (grep 'first line' = 0, 'NEEDS_' = 0).",
+      "problem": "Architecture and data-model choices come up mostly in /plan (spec_writer, adr_agent, project_planner) and /discuss. Those agents follow their contract: write the request, return `NEEDS_DECISION <topic>` with a half-finished spec. The /plan parent has no rule for that reply, so it treats it as a finished result or improvises. No moderator runs until /develop's Wave 6 dispatcher (develop-orchestrator.md:1219-1229), after the code was built on the unfinished spec. The same holds for agents under /hotfix, /diagnose, /accept and /design. The hand-back target the moderator relies on exists in one command only.",
+      "fix": "Move the 'Spawning agents and reading what they return' table (develop-orchestrator.md:269-289) into a shared skill that every command that spawns agents loads (plan, discuss, init, design, accept, hotfix, diagnose, recon, deploy, test, review). Add a lint to tests/lib/debate_cases.py that fails when a command that spawns agents doesn't handle NEEDS_DECISION."
+    },
+    {
+      "id": "AI-09",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 189,
+      "evidence": "debate_moderator.md:189-191 'Independent ones can share a message, within `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` (default 20; at the limit, a spawn fails and should not be retried)'; develop-orchestrator.md:1228-1229 'spawn one `debate_moderator` per request ... Independent requests can share a message'; debate-protocol.md:180 allows up to 10 requests per phase; each moderator spawns up to 4 children in one message (:96, :182). code.claude.com/docs/en/sub-agents (fetched 2026-09-30): 'when 20 subagents are running in a session, spawning another with the Agent tool fails with `Concurrent subagent limit reached`, and the error tells Claude not to retry'. Step 4 (:105-121) has no case for a spawn error.",
+      "problem": "At a Wave 6 gate with six pending HIGH debates of three or four options, the parent spawns six moderators in one message, and they try to start 18\u201324 researchers at once, 24\u201330 subagents against a limit of 20 ([unverified] that nested subagents count toward the session's limit; the doc says 'subagents running in a session'). Some spawns fail with 'don't retry'. The moderator either re-spawns against that instruction or records the options as gaps, and the result is INCOMPLETE or LOW verdicts that reflect slot exhaustion, not evidence.",
+      "fix": "Spell out the arithmetic in the moderator's Limits and in develop-orchestrator 0c: each moderator holds 1 + (number of options) slots, so run at most floor(limit / 5) = 4 moderators at once. In step 4, a 'Concurrent subagent limit reached' error isn't a gap: spawn the remaining children in a later message, after the running ones return."
+    },
+    {
+      "id": "AI-14",
+      "type": "a",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 29,
+      "evidence": "debate_moderator.md:28-29 skill_packs include auto-research.md; :75-77 'Missing data or an ambiguous requirement ... return `NEEDS_INPUT`'. auto-research.md:17 'Any agent running in `--auto` mode that encounters a question it would normally ask the user. Instead of blocking, the agent researches the answer'; :119 'NEVER skip a question \u2014 every gap gets an answer at SOME confidence level'; Level 4 'SENSIBLE DEFAULT' and Level 5 'use best guess'.",
+      "problem": "Under /autonomous the moderator carries two opposite rules for the same situation, and the all-caps one is in the pack. Following it, the moderator researches or defaults the missing fact itself and runs the debate on that fact, instead of returning NEEDS_INPUT so the parent records a LOW default in unresolved.json for the checkpoint. The verdict then rests on an invented fact and isn't marked as an assumption.",
+      "fix": "Drop auto-research.md from the moderator's skill_packs (the moderator doesn't answer questions), or add to step 1: 'auto-research.md doesn't apply here; missing data returns NEEDS_INPUT under --auto too.'"
+    },
+    {
+      "id": "AI-19",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 78,
+      "evidence": "debate_moderator.md:78-79 'Already resolved: a valid verdict exists and the request hasn't changed since. Return it as is'. Neither the verdict format (debate-protocol.md:107-139) nor debate-status.py records anything about the request it judged (no hash, no timestamp).",
+      "problem": "The moderator has no countable way to tell that a request 'hasn't changed since'. A requesting agent that re-files the same topic with changed labels, context or a new option under an existing id gets the stale verdict back as if it answered the new request.",
+      "fix": "Store the request's sha256 in the verdict (`request_sha`), and have debate-status.py flag a verdict whose request_sha doesn't match the current request. The moderator re-runs on a mismatch."
+    },
+    {
+      "id": "AI-07",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 160,
+      "evidence": "debate_arbitrator.md:160 second-opinion template hard-codes `\"model\":\"fable\"`; debate-status.py:151 and :254 only echo the `model` field. code.claude.com/docs/en/model-config (fetched 2026-09-30), content-based fallback: 'Fable 5.1, Fable 5, Opus 5.5: Biology-flagged \u2192 Opus 5; Cybersecurity-flagged \u2192 Opus 4.8'. A spawn without the `model` parameter runs on the frontmatter's `model: opus` (code.claude.com/docs/en/sub-agents, model resolution order).",
+      "problem": "The only record that the second opinion came from a different model is a literal the arbitrator copies from its template. A security debate (token storage, auth, crypto) that trips the cybersecurity classifier falls back to Opus 4.8, and a moderator that left out the parameter runs it on Opus 5.5. Both write `model: fable`, so the checkpoint treats a same-family judge as an independent one.",
+      "fix": "Change the template to `\"model\": \"<the exact model id in your system prompt>\"`. Have the moderator record in the transcript the `model` parameter it passed. Add a review reason in debate-status.py when the second opinion's model isn't a Fable id or equals the primary's."
+    },
+    {
+      "id": "AI-05",
+      "type": "a",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 119,
+      "evidence": "debate_moderator.md:107-109 PARTIAL counts as a finished result; :119-121 only a missing file after two re-spawns becomes a recorded gap; step 6 (:134-138) passes the arbitrator only 'any gaps from step 4'. debate_arbitrator.md:75-76 caps the verdict at INCOMPLETE only for 'an option with no research or argument'. The 8-anchors in debate-protocol.md:243-261 require 'cited', 'measured' or 'precedent cited' evidence.",
+      "problem": "One researcher returns PARTIAL with a thin brief (it used up its 10 searches), another returns a full one. The arbitrator isn't told, and it scores the well-documented option higher on every criterion whose anchor needs cited or measured evidence. Evidence depth, not the option, decides, and the verdict can come out RESOLVED with HIGH confidence. General LLM-as-judge practice: unequal evidence across options biases the judge toward the better-documented one.",
+      "fix": "Treat PARTIAL as a gap. Record it in the transcript and pass 'EVIDENCE INCOMPLETE: <option>: <what is missing>' to the arbitrator, which caps confidence at MEDIUM, or writes INCOMPLETE when the incomplete option's decisive criterion has no evidence."
+    },
+    {
+      "id": "AI-01",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 44,
+      "evidence": "debate_arbitrator.md:44-46 second-opinion mode: 'Judge the same inputs in the reverse order, without reading `<topic>.verdict.json`' (only that one file is excluded). :35 Required Reading 0b: 'docs/DECISIONS.md ... Do not re-litigate an active decision without new evidence'. :62-63 step 1: 'read the PROJECT_FACTS and DECISIONS entries it touches'. :162-175 the PRIMARY run records the D-NNN with remember.sh decide (step 8), and debate_moderator.md:140-141 has that happen in step 6, before step 7 (:145-153) spawns the second opinion. remember.sh:88-90 writes '### D-NNN \u2014 <title>', '- status: active', '- decision: > <what was chosen>', '- rationale: > <decisive factor; why the runner-up lost>'. <topic>.verdict-detailed.md, in the same directory, isn't excluded either. develop-orchestrator.md:259 GROUND TRUTH line also tells every spawn to read DECISIONS.md first.",
+      "problem": "In every close HIGH-impact debate the Fable second opinion starts, as its required reading tells it, by reading docs/DECISIONS.md. There it finds an active D-NNN for this very topic naming the primary's choice and why the runner-up lost, plus an instruction not to re-litigate active decisions. It then judges anchored on, or deferring to, the verdict it was meant to check independently. The disagreement signal the second opinion exists to produce (order sensitivity, same-model blind spots, D8.5) is suppressed, debate-status.py sees agreement, and the close call reaches the checkpoint looking confirmed.",
+      "fix": "Don't write the ledger entry before the second opinion: when a second opinion is required, the primary arbitrator writes the verdict without calling remember.sh, and the moderator (or a short final arbitrator step) records the D-NNN after the second opinion returns. In MODE second-opinion, say explicitly: skip any DECISIONS.md entry whose link is agent_state/debates/<topic>.*, and don't open <topic>.verdict.json, <topic>.verdict-detailed.md or <topic>.transcript.md. The moderator passes that exclusion list in the spawn prompt."
+    },
+    {
+      "id": "AI-02",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 139,
+      "evidence": "debate_arbitrator.md:93-94 'Compute each weighted total ... and the gap between the top two' (by hand), :110 'Gap and confidence: > 1.0 \u2192 HIGH; 0.3\u20131.0 \u2192 MEDIUM; < 0.3 \u2192 LOW'. debate-status.py:111-136 checks only that confidence is in {HIGH,MEDIUM,LOW} and scores is a non-empty dict; :139-141 second_opinion_required() keys off the self-reported confidence. Reproduced in a scratch dir: request 'store' (HIGH, data_model); verdict {verdict A, scores A total 6.9, B total 7.1, gap 0.2, confidence HIGH, claims_checked []}, promoted with remember.sh decide (CLAUDE_PROJECT_DIR=<scratch>); `debate-status.py --root <scratch> --check` printed 'RESOLVED store HIGH data_model A doc store HIGH D-001', exit=0, no review reason, no second opinion required.",
+      "problem": "The judge computes the totals, gap and confidence band in prose, and that self-assigned confidence decides whether the independent Fable check runs and whether the checkpoint lists the topic for review. An arithmetic slip or a rationalised HIGH on a close call, even a verdict for the lower-scoring option with no claim checked at source, skips the second opinion and the review list, and the gate's check (f) passes. The rule exists in the prompt but nothing enforces it.",
+      "fix": "In verdict_problems(): recompute each option's total from its per-criterion scores and the domain's weights (the rubric table is already parsed in tests DL-09/DL-10), derive the gap and the confidence band, require verdict = top total unless hardened_default, none_ideal or the tie rule is cited, and require at least one claims_checked entry with a source; any mismatch makes the verdict invalid. Key second_opinion_required() off the recomputed gap, not the self-reported confidence."
+    }
+  ],
+  "note": "severity removed on purpose: rate each finding yourself from the evidence"
+}

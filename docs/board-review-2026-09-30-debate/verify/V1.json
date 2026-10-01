@@ -1,0 +1,257 @@
+{
+  "schema": "sdlc.board-verification/v1",
+  "verifier": "V1",
+  "model": "fable",
+  "hats": ["architect", "tester"],
+  "repo_commit": "77f221c",
+  "verdicts": [
+    {
+      "id": "TEST-14",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:169-176: promoted() returns True when any '### <decision_id>' heading exists, else when the verdict's rel path or basename is a substring of the ledger. In-memory calls on the imported module: promoted({decision_id:D-004,topic:cache}, '### D-004 - Session cache backend / link: agent_state/debates/session_cache.verdict.json', 'agent_state/debates/cache.verdict.json') -> True; same with no decision_id -> True (substring 'cache.verdict.json' in 'session_cache.verdict.json'); promoted({decision_id:D-001}, '### D-001 - Use Go for the backend / link: docs/adr/1.md', ...) -> True. Gate fixture S09 (full_phase + cache request + v1 verdict decision_id D-001, ledger holding only '### D-001 - Use Go for the backend'): verify-gate.sh 1 -> exit 0 RESULT PASS; S09b (no decision_id, ledger links session_cache.verdict.json) -> exit 0.",
+      "note": "Holds as stated. Rated MEDIUM on its own: in normal use remember.sh returns the right id, so this check is wrong only when the arbitrator copied an id or the decide call failed; ARCH-03 shows the parallel case where that happens.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-03",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened debate-status.py:154-157 (appends a review string only) and blocking_reason 281-297 (never reads that string). Protocol text at debate-protocol.md:279-281 and debate_arbitrator.md:114-116 confirmed: 'When the confidence isn't HIGH, the verdict is hardened_default unless a cited MUST requirement rules it out'. Fixture S07: security request token_storage, v1 verdict A, confidence MEDIUM, hardened_default B, promoted, fable second opinion verdict A -> verify-gate.sh 1 exit 0 RESULT PASS with only '? security decision is not the hardened default (B)'. S07b: second opinion verdict B -> exit 0 with '? second opinion (fable) chose B' added. Neither case blocks.",
+      "note": "The code cannot tell whether a MUST requirement was cited, so a plain block would false-positive; the fix needs a must_override field as the finding proposes.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-08",
+      "verdict": "narrowed",
+      "severity": "MEDIUM",
+      "reproduction": "Fixture S08: MEDIUM-impact request + v1 verdict status INCOMPLETE, confidence LOW, reason set, promoted -> verify-gate.sh 1 exit 0 RESULT PASS with review notes '? LOW confidence' and '? INCOMPLETE: ...' only. Fixture S08-sec (ARCH-10 case): security request, INCOMPLETE/LOW, no hardened_default, promoted, with second opinion -> exit 2, '! verdict: security verdict names no hardened_default', INVALID. Read debate-protocol.md:141-142 and 276-282: INCOMPLETE is defined as a flagged outcome carried to the checkpoint, and 'the parent stops for the user' is stated only for the security no-hardened-option case.",
+      "note": "Narrowed: a non-security INCOMPLETE passing --check is what the protocol describes (a review reason for the checkpoint), not a missing enforcement; and the security INCOMPLETE-without-hardened-option case already fails the gate (as INVALID, see ARCH-10). What remains: a security INCOMPLETE that does name a hardened_default passes with a note, there is no machine signal that maps to run.json awaiting_human, and under /autonomous nobody reads the review notes (ARCH-04).",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-27",
+      "verdict": "confirmed",
+      "severity": "LOW",
+      "reproduction": "Opened agent_state/eval/suite/T-007-debate/rubric.json:18 (R5 cmd greps 'weighted total|score \\(1-10\\)|self-assessed'). Scratch dir with an argument file containing '| security_posture | strong, I rate it 9/10 |' and 'Overall score: 8.5/10': R5's command exits 0 (passes). The proposed regex '[0-9]+(\\.[0-9]+)? ?/ ?10|score[s]? *[:=] *[0-9]' matches both lines.",
+      "note": "Eval rubric only; nothing in the gate depends on it, so LOW.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-10",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened verify-gate.sh:357-361: the case on $report path runs before the test-agent sidecar branch (363-372) and is keyed on the path string, not the agent. Fixture S14 (full_phase; test_runner sidecar verdict FAIL failed=4; execution.jsonl report 'agent_state/debates/../phases/1/reports/test_runner.md'; agent_state/debates/ exists): verify-gate.sh 1 -> exit 0 RESULT PASS, prints 'debate artifact exists: agent_state/debates/../phases/1/reports/test_runner.md (agent test_runner; validated by check (f))'. Variant: security_reviewer report 'agent_state/debates/sec.md' containing 'BLOCKING:3 WARNING:0 INFO:0' -> exit 0 PASS. Control S14c (same FAIL sidecar, normal path) -> exit 2 'test_runner results verdict is FAIL'. Note: when agent_state/debates/ does not exist, the '..' form fails the file-exists check instead (exit 2), so the traversal form needs a project with at least one debate; the direct-file form (ARCH-07) needs nothing.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-03",
+      "verdict": "narrowed",
+      "severity": "HIGH",
+      "reproduction": "Opened remember.sh:71-97: next id from a plain read (L76-77), fixed tmp name path+'.tmp' and os.replace (L93-95), no lock. Parallel moderators confirmed at debate_moderator.md:189-191 and develop-orchestrator.md:1228-1229. Scratch repo under the scratchpad (ledger seeded through remember.sh decide, D-001): 20 trials of two concurrent 'remember.sh decide' calls -> 20/20 trials ended with only 2 headings (one decision lost); 3/20 both callers printed 'D-002 recorded' (silent loss, duplicate id); 17/20 one caller crashed with a Python traceback on the shared .tmp (loud loss). promoted() with the surviving '### D-002' heading returns True for the lost topic (TEST-14 in-memory check).",
+      "note": "Narrowed on 'silently': in most trials (17/20) one caller fails loudly with a traceback, which the arbitrator would see and could retry; the silent case (both succeed, same D-NNN, one entry gone, gate passes) occurred in 3/20 trials. The race, the lost entry and the duplicate id hold as stated.",
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-28",
+      "verdict": "confirmed",
+      "severity": "LOW",
+      "reproduction": "Opened debate_researcher.md:186, debate_advocate.md:179, debate_arbitrator.md:260: each says 'This completion line may be written on my behalf by/through debate_moderator'. debate_moderator.md:102-103 lists the child prompt contents (ground truth, request path, option id and label, output path) with no phase; L269-273 logs only the moderator's own line. grep PHASE in debate_moderator.md hits only the {{PHASE}} template lines (249, 254, 257, 269, 272).",
+      "note": "The children are not rostered, so the gate does not depend on these lines; the ambiguity costs duplicate or missing lines in execution.jsonl and an undefined {{PHASE}} for ad-hoc debates. LOW.",
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-29",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened develop-orchestrator.md:1166 (order: Layer 0 -> 0b roster + debate dispatch -> ...), 1186-1190 (0b runs verify-gate.sh and on failure prints 'Re-spawn any missing/failed agents (roster.required vs execution.jsonl)' and exit 1), 1219-1233 (0c dispatches pending debates). verify-gate.sh:493-509 runs check (f) in every explicit-phase run, so a pending debate fails 0b before 0c runs.",
+      "note": "The hook's own failure line does say 'debate X is pending ... (run debate_moderator ...)', so the parent has a visible workaround; the script's order and message are still wrong. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-05",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate_moderator.md:78-79 and debate-status.py:191-197 (join on topic only), 229 (phase from request), 131/140 (domain and impact from the verdict first). Fixture: phase-5 HIGH/security blocking request 'caching' with options A 'In-process LRU' / B 'CDN edge cache' plus a phase-3 MEDIUM/architecture verdict 'caching' A 'Redis read-through' D-001, promoted -> debate-status.py --phase 5 --check: 'RESOLVED caching HIGH security A Redis read-through HIGH D-001', exit 0; with the verdict's confidence set to MEDIUM still exit 0 (the verdict's impact MEDIUM wins at L140, so no second opinion is demanded). DS-03 covers the non-overlapping-option-id case (INVALID, exit 2).",
+      "note": "Needs a reused slug or a rewritten request, so MEDIUM; the consequence when it happens (an undebated HIGH security decision passes) is serious.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-05",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened debate-status.py:79 (classify: any *.second-opinion.json is 'second'), 150-153 (only 'second is None' adds the required-but-missing reason; a verdict is compared only when present). Fixture S06: HIGH-impact MEDIUM-confidence promoted verdict + db.second-opinion.json = '{}' -> verify-gate.sh 1 exit 0 RESULT PASS, status RESOLVED, no review note. S06b: {schema v1, topic db, model opus, presentation_order [B,A], no verdict} -> exit 0. Control (file removed) -> exit 2 'close HIGH-impact call with no second opinion'.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-04",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:139-141 (second_opinion_required keyed on the confidence label) and 111-136 (verdict_problems never reads scores totals or gap). Fixture S05: HIGH-impact v1 verdict scores A 7.0 / B 6.9, gap 0.1, confidence 'HIGH', promoted, no second opinion -> verify-gate.sh 1 exit 0 RESULT PASS, no review note. Control S05c (confidence MEDIUM) -> exit 2 'close HIGH-impact call with no second opinion'. Bands at debate_arbitrator.md:110 and debate-protocol.md:267-271.",
+      "note": "Fails only when the arbitrator mislabels its own confidence against its own scores; the data to check it is already in the verdict. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-07",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Same bypass as TEST-10. Fixture: full_phase + unit_test_agent in roster, execution.jsonl report 'agent_state/debates/unit.md' (content 'nothing here'), no sidecar -> verify-gate.sh 1 exit 0 RESULT PASS, prints 'debate artifact exists: agent_state/debates/unit.md (agent unit_test_agent; validated by check (f))' and 'no debates recorded' under (f).",
+      "note": "Same problem as TEST-10 (path-keyed exemption at verify-gate.sh:359-361), reproduced with a direct file instead of a '..' path.",
+      "duplicate_of": "TEST-10"
+    },
+    {
+      "id": "ARCH-01",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "grep -ln NEEDS_DECISION .claude/commands/*.md -> develop-orchestrator.md only. grep -ln debate_moderator .claude/commands/*.md -> develop.md, develop-orchestrator.md, health.md. grep 'first line|COMPLETE|BLOCKED|NEEDS' .claude/commands/plan.md -> no match at all (plan.md has no return-status handling; it spawns spec_writer at L238-245 and in security-merge mode at L383). test.md spawns 7 agent types with no return table. agent-common.md:34-49 gives every agent NEEDS_DECISION as a valid return and has no rule for a sub-orchestrator to pass it upward. debate-protocol.md:166 names 'the orchestrator or command that spawned the subagent' as the runner.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-06",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:263-264 (resolved whenever a verdict exists) and verify-gate.sh:493-509 (check (f) only calls debate-status). Fixture S10: HIGH-impact request + well-formed promoted v1 verdict, no research-*.md, argument-*.md or transcript.md, no debate_* execution lines -> verify-gate.sh 1 exit 0 RESULT PASS. grep debates|verdict ~/.claude/hooks/sdlc-guard.sh -> no match, so the guard does not restrict who writes verdict.json either.",
+      "note": "A fabricated verdict requires an agent to break its own instructions (moderator L38-39, protocol L61); the gate simply cannot tell. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-01",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened debate-status.py:186-188 (unparseable -> unrecognized), 210-211 (unclassified -> unrecognized), 281-297 (blocking_reason never reads unrecognized). Fixture S01: blocking HIGH security request with a trailing comma in options -> verify-gate.sh 1 exit 0 RESULT PASS; check (f) prints '(ignored: agent_state/debates/token_storage.request.json (not valid JSON))' then 'every blocking debate for phase 1 has a verdict'; debate-status.py --check exit 0 with 0 topics. S01b (schema 'sdlc.debate-request/v1.0', type 'debate-request') -> exit 0, '(ignored: ...)'. Control S00 (well-formed pending) -> exit 2.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-16",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:213-219: the suffix match runs for every request topic not in verdicts, with no check that the request lacks a topic field or v1 schema. Fixture S12: pending blocking v1 request 'auth-token' + request-less v1 verdict 'token' (label 'JWT in the API gateway'), promoted -> verify-gate.sh 1 exit 0 RESULT PASS; --json shows {topic: token, status: resolved, request: agent_state/debates/auth-token.request.json, verdict_file: agent_state/debates/token.verdict.json}.",
+      "note": "Needs a request-less verdict whose topic is a '-' suffix of a pending v1 topic; rare, so MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-15",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate_moderator.md:78-79 and debate-protocol.md:107-139 (verdict format has no request hash or version). Fixture S13: request 'cache' with options A, B, C; v1 verdict scoring A and B only, promoted -> verify-gate.sh 1 exit 0 RESULT PASS, status RESOLVED.",
+      "note": "Same problem as ARCH-05 (a verdict is not bound to the request version it answered); ARCH-05 also covers the cross-phase slug reuse and the impact/domain precedence.",
+      "duplicate_of": "ARCH-05"
+    },
+    {
+      "id": "ARCH-02",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened debate_moderator.md:140 (step 6: primary writes verdict, detailed md and the D-NNN entry) then 143-154 (step 7 spawns the second opinion afterwards; 'must not read the primary verdict'). debate_arbitrator.md:35 (Required Reading: docs/DECISIONS.md, 'Do not re-litigate an active decision without new evidence'), 62-63 (step 1 reads the DECISIONS entries it touches), 44-47 (second-opinion mode forbids only <topic>.verdict.json). remember.sh:88-90 writes decision, rationale and link into the entry.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-04",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "grep -n debate-status .claude/commands/autonomous.md -> no match. autonomous.md:233-235 (Step 3 is the one required human interaction, before implementation), 444-473 (Post-Phase review reads only auto-resolved.jsonl), 548-562 (Step 7 report reads only auto-resolved.jsonl). debate_moderator.md:172-175 and develop-orchestrator.md:284 route review reasons to 'the checkpoint'. Gate fixtures S07/S07b/S08 pass with review notes only. accept.md:713 does run debate-status.py --json, which is the first reader, after all phases.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-26",
+      "verdict": "confirmed",
+      "severity": "LOW",
+      "reproduction": "Opened debate-protocol.md:180-181 and develop-orchestrator.md:284 step 2. grep -c from_step .claude/hooks/debate-status.py -> 0; the --json output has counts by status only (debate-status.py:300-302), no per-step or per-phase totals.",
+      "note": "Changes no gate behaviour; the limit is a cost control the orchestrator counts by hand. LOW.",
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-06",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened develop-orchestrator.md:1230-1231, debate_moderator.md:218, step-0-orient.md:473-474 ('continue with your recommended default and say so in your final message'). Request schema at debate-protocol.md:76-93 and step-0-orient.md:449-466 has no default/recommended field; grep default debate-status.py finds none in request_problems (88-108).",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-14",
+      "verdict": "narrowed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened develop-orchestrator.md:280-286: the NEEDS_DECISION row handles only the moderator's COMPLETE; the BLOCKED row says 'The wave's own handling below' and no wave text handles a moderator; the NEEDS_INPUT row is generic ('ask the user ... relaunch the same agent with its original prompt plus the answers'). debate_moderator.md:61, 73-74, 80-81 return BLOCKED; 75-77 NEEDS_INPUT. Wave 6 0c (L1228) re-spawns a moderator for every pending request.",
+      "note": "Narrowed: the generic NEEDS_INPUT row does apply to the moderator (ask the user, relaunch the moderator), so that return is handled, if awkwardly. The BLOCKED returns (invalid request, already decided by a D-NNN, wrong depth) remain unhandled, with the stall loop as described.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-13",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened verify-gate.sh:265-269 (SECURITY_AGENTS list), 469 and 408 (SECURITY_FAILS counted only from those agents' reports), 588-594 (acknowledgement check keyed on SECURITY_FAILS). Fixture S21: full_phase + pending blocking request token_storage with domain security + gate.forced {blockers:[...], user_rationale:'approved_non_security'} and no security_acknowledged -> verify-gate.sh 1 exit 0, 'RESULT: FORCED PASS ... 1. (overridden) debate token_storage is pending'. autonomous.md:332-335 force-gates 'non-security blockers' after 3 cycles and defines security blockers only as BLOCKING counts in the three security reports (L336-337).",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "ARCH-19",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate_moderator.md:193-200 and debate-protocol.md:318-320 (override writes override.json, overrides.jsonl, remember.sh --reverses). debate-status.py:272-276 sets status overridden and keeps verdict/verdict_label from the arbitrator's file. worklog.md:93-94 prints '[DEBATE] {verdict_label}' for status resolved or overridden. grep -rn 'reversed_by|status: reversed' over commands/agents/skills/hooks -> remember.sh (writer) and adr_agent.md:114,124,175 only; no reader.",
+      "note": "Overrides happen only in interactive runs (a human writes them), so the 'already-built code with no rework path' case is a missing instruction rather than a silent ship. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-02",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Opened debate-status.py:291-292 (blocking_reason returns None for a non-v1 verdict), 139-141 and 123-135 (keyed on the schema field), 162-163 ('legacy verdict format' is a review note). Fixture S04: v1 request token_storage (security, HIGH, blocking) + verdict '{topic, verdict A, confidence LOW}' with no schema key, no hardened_default, no second opinion, no ledger entry -> verify-gate.sh 1 exit 0 RESULT PASS; debate-status lists '? LOW confidence / ? legacy verdict format / ? not promoted to docs/DECISIONS.md' and --check exits 0.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-09",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:77-78 (classify: any 'user_override' key), 272-276 (status overridden set unconditionally after pending/invalid), 281-288 (blocking_reason reads only pending/invalid/resolved). Fixture S11: pending blocking request + cache.override.json '{topic: cache, user_override: B}' -> verify-gate.sh 1 exit 0 RESULT PASS, status OVERRIDDEN. S11b: one-option request + same override -> exit 0 although '! request: fewer than 2 options' is printed.",
+      "note": "The override file is written by the parent on a human's instruction, so the actor is not an unattended agent; the check still validates nothing. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-11",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:281-283 (blocking_reason returns None for non-blocking), debate-protocol.md:102-103 ('the debate still runs before the gate') and 175-177, develop-orchestrator.md:1228 ('Pending, blocking or not: spawn one debate_moderator'). Fixture S03: request cache with blocking:false, no verdict -> verify-gate.sh 1 exit 0 RESULT PASS, 'PENDING ... non-blocking'. tests/lib/debate_cases.py:150-152 (DS-22) and tests/verify-gate.test.sh:354-355 assert exit 0 for this case.",
+      "note": "The pass is a codified design choice (DS-22), but the protocol's own sentence that the debate 'still runs before the gate' has no enforcement; the risk is real only when the parent skips Wave 6 0c. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-07",
+      "verdict": "confirmed",
+      "severity": "HIGH",
+      "reproduction": "Same evidence as ARCH-04: grep -n debate-status .claude/commands/autonomous.md -> no match; autonomous.md:444-473 and 548-562 read auto-resolved.jsonl only; develop-orchestrator.md:1219-1233 (Wave 6 0c) has no instruction to show review reasons, only the NEEDS_DECISION row (L284) does and only interactively. Fixtures S07, S07b, S08 pass the gate with review notes only.",
+      "note": "Same problem as ARCH-04: the review reasons have no consumer under /autonomous.",
+      "duplicate_of": "ARCH-04"
+    },
+    {
+      "id": "ARCH-10",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate_arbitrator.md:114-117, debate-protocol.md:279-282 and debate-status.py:131-133 (a security verdict without hardened_default is a problem regardless of status). Fixture S08-sec: security request cors + v1 verdict status INCOMPLETE, confidence LOW, reason 'no option is clearly the hardened one', no hardened_default, promoted, fable second opinion present -> verify-gate.sh 1 exit 2 with '! verdict: security verdict names no hardened_default' and status INVALID. debate_arbitrator.md:229 (DoD: 'debate-status.py lists no problem for it') confirmed; develop-orchestrator.md:21-22 and autonomous.md:85-86 promise awaiting_human for this case.",
+      "note": "The gate fails closed here, so a human does see a block, just with the wrong reason; the pressure on the arbitrator to invent a hardened_default is a plausible but not demonstrated effect. MEDIUM.",
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-17",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:204-209 (any entry with topic and auto_resolved_with is accepted) and 265-269 (status auto_resolved, verdict and confidence copied from the entry, one review note). Fixture S15: security request token_storage + unresolved.json entry auto_resolved_with 'Z', confidence HIGH -> verify-gate.sh 1 exit 0 RESULT PASS, status AUTO 'Z HIGH', only '? auto-resolved with a default: x'. Rules at debate-protocol.md:303-304 confirmed.",
+      "note": null,
+      "duplicate_of": null
+    },
+    {
+      "id": "TEST-12",
+      "verdict": "confirmed",
+      "severity": "MEDIUM",
+      "reproduction": "Opened debate-status.py:111-136: the v1 block checks topic/verdict_label/rationale/decisive_factor/status, INCOMPLETE->LOW, security hardened_default, and that scores is a non-empty dict; it never reads rubric, presentation_order, claims_checked or per-option coverage. Fixture S16: data_model request orders + v1 verdict rubric 'feature', scores {A:{total:9}} only, no presentation_order, claims_checked [{claim, source:'', result:'unverifiable'}], confidence HIGH, promoted -> verify-gate.sh 1 exit 0 RESULT PASS, no review note. The eval rubric T-007 R6 checks some of this for the eval fixtures only, not at the gate.",
+      "note": null,
+      "duplicate_of": null
+    }
+  ]
+}

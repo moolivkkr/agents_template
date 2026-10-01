@@ -221,9 +221,12 @@ bash .claude/hooks/remember.sh decide --title "<topic, as a decision statement>"
 
 It prints `D-NNN recorded`. Put that id in the verdict as `"decision_id"`. The gate blocks a v1
 verdict whose `D-NNN` block doesn't link to it.
-- **LOW or INCOMPLETE:** still record it, and add `(confidence: LOW, revisit if <reconsider_if>)` to
-  the rationale so future sessions know it's soft.
-- **Assumption:** add `(assumption: confirm with the product owner)`.
+- **LOW or INCOMPLETE:** still record it. End the title with `[provisional: LOW]`, and add
+  `(confidence: LOW, revisit if <reconsider_if>)` to the rationale. Every session sees ledger
+  headings, so the marker has to be in the title, or a soft call reads as settled (board review
+  AI-17).
+- **Assumption:** end the title with `[provisional: assumption]`, and add `(assumption: confirm with
+  the product owner)` to the rationale.
 
 ## Rules
 

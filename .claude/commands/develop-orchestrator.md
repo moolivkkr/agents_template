@@ -1537,6 +1537,16 @@ deviations that weren't promoted). This is what makes decisions survive into the
 Record each missing entry with `bash .claude/hooks/remember.sh decide … --source agent:<name> --confidence reported` —
 the guard denies direct edits to the ledger.
 
+Defaults applied without a debate are decisions too. Record each `agent_state/debates/unresolved.json`
+entry for this phase that has no `D-NNN` yet:
+- title ending `[provisional: auto-resolved]`
+- `--source agent:develop-orchestrator`
+- `--link agent_state/debates/unresolved.json`
+- the entry's `reason` as the rationale
+
+Otherwise the next session never learns a default was taken, and decides it again (board review
+2026-09-30-debate, ARCH-21).
+
 ### 5. Record the requirement → acceptance baseline
 
 The gate proved every FR delivered so far passes its acceptance tests. Record what the BRD said when it
