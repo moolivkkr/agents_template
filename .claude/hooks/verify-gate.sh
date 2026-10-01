@@ -35,8 +35,8 @@
 #   (g)  Stitch baseline     — only when docs/design/stitch.json exists (Stitch is the project's designer):
 #                             every UI route this phase changed (ui_developer / mobile_developer manifest
 #                             screens[].route) has a Stitch screen that is approved or conformant at its
-#                             latest revision, whose stored render (docs/design/stitch/<key>/) still matches
-#                             its sha256; no screen is pending_approval, sync_back_pending or in drift; every
+#                             latest revision, whose stored render (docs/design/stitch/<key>/) and every
+#                             archived per-version render (<key>/<version>/) still match their sha256; no screen is pending_approval, sync_back_pending or in drift; every
 #                             stitch_deviations[] entry in those manifests was fixed or accepted and synced
 #                             back (stitch-state.py gate; skills/ui/stitch-design.md §6).
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold

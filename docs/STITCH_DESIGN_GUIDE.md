@@ -105,9 +105,32 @@ One file holds the project, the design system, and one entry per screen (`<slug>
 its Stitch screen id, device, app, route, status, who approved which revision and when, the render's
 paths and sha256 hashes, the fidelity record for imports, recorded deviations, and the full history of
 prompts sent to Stitch. Schema: `.claude/skills/ui/stitch-state.schema.json`. Only
-`.claude/hooks/stitch-state.py` writes it (`revise`, `render`, `approve`, `owner-review`, `defer`,
-`deviation`, `status-set`) and checks it (`validate --check-files`, `ready`, `gate`, `review-list`).
-Commit it and `docs/design/stitch/`.
+`.claude/hooks/stitch-state.py` writes it (`revise`, `render`, `label`, `approve`, `owner-review`, `defer`,
+`deviation`, `status-set`) and checks it (`validate --check-files`, `ready`, `gate`, `review-list`,
+`versions`, `diff`). Commit it and `docs/design/stitch/`.
+
+### Versions: keep "as it was" next to "as improved"
+
+Each revision can carry a version label, and each version keeps its own render on disk:
+`docs/design/stitch/<key>/v0.1/screenshot.png|screen.html`, `.../v0.2/...` (the latest is also copied to
+`docs/design/stitch/<key>/` so the old paths keep working). Convention:
+
+- **`v0.1` = the as-is baseline.** `/stitch import` and `/stitch adopt` record the existing design as
+  `v0.1`; for a new screen, the first generation is `v0.1`.
+- **`v0.2`, `v0.3` ... = improvements** before approval, one label per reviewable result. When one
+  improvement takes several small Stitch edits, only the last is labelled; the rest are `rev-N`.
+- **`v1.0` = approved:** `stitch-state.py approve <key> --by owner --promote` relabels the approved
+  revision `v1.0` (or the next major).
+- Labels are `v<major>.<minor>`, unique per screen and increasing in revision order; the tool refuses
+  anything else.
+
+```
+python3 .claude/hooks/stitch-state.py versions orders-list.desktop          # table (add --json)
+python3 .claude/hooks/stitch-state.py diff orders-list.desktop v0.1 v0.2    # screenIds, prompts between, hashes, % pixels
+```
+
+The gate also re-hashes every archived version, so editing an older render blocks it. A `stitch.json`
+from before versions keeps working; its next revision becomes `v0.1`.
 
 | Status | Meaning |
 |---|---|
@@ -166,10 +189,23 @@ approved render, and every recorded deviation resolved. WCAG and native-platform
 /startup:stitch sync-back                # push accepted code deviations to Stitch, approve, re-baseline
 /startup:stitch generate|variants|edit|theme|sync --phase=N
 /startup:stitch status                   # offline: statuses, coverage, owner-review list, queue
+python3 .claude/hooks/stitch-state.py versions|diff|label ...   # version history (see Versions in section 5)
 /startup:design --phase=N                # Stitch designs the phase (default); --source=wireframe without it
 ```
 
 ## 9. What was verified, and what wasn't
+
+**Verified against the real Stitch API (2026-10-01)** — observed in one live session:
+`generate_screen_from_text` / `edit_screens` return the screen inline when done (download URLs, `width` /
+`height` at 2×, `screenMetadata.status: COMPLETE`); a large single-shot dashboard prompt timed out twice and
+produced no screen while a small prompt on `GEMINI_3_5_FLASH_LITE` returned at once, so build a screen as
+one small generate plus small single-concern edits; the lighter model can leave "[Line Chart: …]"
+placeholders where `GEMINI_3_8_FLASH` renders charts (scan the HTML after each edit); `edit_screens` returns
+a new id and the old screen stays; `screenshot.downloadUrl` is a 512 px thumbnail unless `=w2560` is appended;
+Stitch rewrites prompts and invents content (say "do not add content not listed", and use an as-is design
+system for recreations); `create_design_system` expands `designMd`, `update_design_system` needs the full
+object; `list_screens` returns `{}` until a screen completes. **Still unverified:** download URL lifetime,
+polling timing for slow generations, `generate_variants`, `apply_design_system`.
 
 Verified against the connected Stitch MCP on 2026-09-29 (one scratch project, one MOBILE screen): the
 tool list, project creation, design system Path A, `generate_screen_from_text` → `get_screen` → HTML

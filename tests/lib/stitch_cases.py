@@ -14,6 +14,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -119,8 +120,12 @@ def now():
     return "2026-10-01T10:00:00Z"
 
 
-def make_project(tmp, screens=("orders-list.desktop",)):
-    """A project root with a valid stitch.json and real render files for each screen key."""
+def make_project(tmp, screens=("orders-list.desktop",), versioned=False):
+    """A project root with a valid stitch.json and real render files for each screen key.
+
+    Default = the format the previous tool version wrote (no version labels, one render per screen).
+    versioned=True labels rev 1 v0.1 and rev 2 v0.2, each with its own archived render under <key>/<label>/,
+    and the top-level render being a copy of v0.2."""
     state = {"schema": st.SCHEMA, "projectId": "4044680601076201931", "projectTitle": "Acme — UI",
              "designSystem": {"assetId": "15996705518239280238", "source": "docs/design/DESIGN.md", "updated": "2026-10-01"},
              "screens": {}, "queue": [], "log": []}
@@ -132,6 +137,21 @@ def make_project(tmp, screens=("orders-list.desktop",)):
         with open(os.path.join(d, "screen.html"), "w") as f:
             f.write(f"<html><body><main><h1>{slug}</h1><button>New order</button></main></body></html>")
         rel = f"docs/design/stitch/{key}"
+        arch = {}
+        if versioned:
+            for lab, shade in (("v0.1", 40), ("v0.2", 90)):
+                ad = os.path.join(d, lab)
+                os.makedirs(ad, exist_ok=True)
+                write_png(os.path.join(ad, "screenshot.png"), 16, 16, lambda x, y, sh=shade: (x * 8, y * 8, sh))
+                with open(os.path.join(ad, "screen.html"), "w") as f:
+                    f.write(f"<html><body><main><h1>{slug} {lab}</h1></main></body></html>")
+                arch[lab] = {"dir": f"{rel}/{lab}", "screenshot": f"{rel}/{lab}/screenshot.png",
+                             "html": f"{rel}/{lab}/screen.html",
+                             "screenshot_sha256": st.sha256_file(os.path.join(ad, "screenshot.png")),
+                             "html_sha256": st.sha256_file(os.path.join(ad, "screen.html")),
+                             "fetched_at": now()}
+            for fn in ("screenshot.png", "screen.html"):      # the top-level copy = the latest (v0.2)
+                shutil.copyfile(os.path.join(d, "v0.2", fn), os.path.join(d, fn))
         state["screens"][key] = {
             "screenKey": key, "screenId": "98b50e2d11", "deviceType": dev.upper(),
             "app": "mobile" if dev == "mobile" else "web", "route": "/" + slug.split("-")[0],
@@ -147,6 +167,12 @@ def make_project(tmp, screens=("orders-list.desktop",)):
                 {"rev": 2, "ts": "2026-10-01T09:30:00Z", "op": "edit", "screenId": "98b50e2d11",
                  "prompt": "Make the status column a badge", "prompt_source": "owner", "phase": 1, "by": "/stitch request",
                  "previous_screenId": "11aa"}]}
+        if versioned:
+            h = state["screens"][key]["history"]
+            h[0].update(version="v0.1", render=arch["v0.1"])
+            h[1].update(version="v0.2", render=arch["v0.2"])
+            state["screens"][key]["render"].update(
+                screenshot_sha256=arch["v0.2"]["screenshot_sha256"], html_sha256=arch["v0.2"]["html_sha256"])
     os.makedirs(os.path.join(tmp, "docs", "design"), exist_ok=True)
     save(tmp, state)
     return state
@@ -420,6 +446,16 @@ def cases_gate():
         s["screens"]["orders-list.desktop"].update(approved_by="design_quality_reviewer", owner_review={"status": "pending", "at": None})
         save(t, s)
         manifest(t, 1, "ui_developer", web)
+    def archived_tamper(t, s):
+        make_project(t, ("orders-list.desktop", "orders-list.mobile"), versioned=True)
+        with open(os.path.join(t, "docs/design/stitch/orders-list.desktop/v0.1/screen.html"), "a") as f:
+            f.write("<!-- edited -->")
+        manifest(t, 1, "ui_developer", web)
+    gate_case("BLOCK: an archived (older version's) render no longer matches its hash", archived_tamper, 2, "archived render html")
+    gate_case("PASS: versioned screens with intact archived renders",
+              lambda t, s: (make_project(t, ("orders-list.desktop", "orders-list.mobile"), versioned=True), manifest(t, 1, "ui_developer", web)),
+              0, "approved")
+
     gate_case("PASS: an autonomous approval passes and is listed for the owner", dqr, 0, "owner-review list")
 
     print("── stitch-state.py ready (develop pre-Wave-2 check) ──")
@@ -437,6 +473,193 @@ def cases_gate():
         check(rc == 2 and "NOT READY  orders-list.mobile" in out, "a pending_approval render blocks UI implementation", out)
         rc, out = run(["ready", "--phase", "3"], tmp)
         check(rc == 2 and "stitch-baseline.md is missing" in out, "a phase never designed in Stitch is NOT READY", out)
+
+
+# ------------------------------------------------------------------------------------------- versions
+def jload(tmp):
+    return json.load(open(os.path.join(tmp, "docs", "design", "stitch.json")))
+
+
+def cases_versions():
+    print("── version labels, per-revision renders, versions / diff ──")
+    k = "invoices.desktop"
+    with tempfile.TemporaryDirectory() as tmp:
+        os.makedirs(os.path.join(tmp, "docs", "design"))
+        save(tmp, {"schema": st.SCHEMA, "projectId": "123", "screens": {}, "queue": [], "log": []})
+        imgs = {}
+        for n, shade in (("a", 30), ("b", 120), ("c", 200), ("d", 250)):
+            imgs[n] = (os.path.join(tmp, n + ".png"), os.path.join(tmp, n + ".html"))
+            write_png(imgs[n][0], 8, 8, lambda x, y, sh=shade: (sh, x * 10, y * 10))
+            open(imgs[n][1], "w").write(f"<html><body><h1>Invoices {n}</h1></body></html>")
+        new = ["--device", "DESKTOP", "--app", "web", "--route", "/invoices"]
+        sdir = f"docs/design/stitch/{k}"
+
+        def rev(*a):
+            n = len(jload(tmp)["screens"].get(k, {}).get("history", [])) + 1
+            return run(["revise", k, "--screen-id", f"s{n}", "--prompt", "p", "--source", "owner"] + list(a), tmp)
+
+        def render(n):
+            return run(["render", k, "--screenshot", imgs[n][0], "--html", imgs[n][1]], tmp)
+
+        def sha(rel):
+            return st.sha256_file(os.path.join(tmp, rel))
+
+        rc, out = rev("--op", "adopt", *new)
+        check(rc == 0 and jload(tmp)["screens"][k]["history"][0].get("version") == "v0.1",
+              "revise without --version labels the first revision v0.1", out)
+        rc, out = render("a")
+        s = jload(tmp)["screens"][k]
+        r1 = s["history"][0]["render"]
+        check(rc == 0 and r1["dir"] == f"{sdir}/v0.1" and os.path.isfile(os.path.join(tmp, sdir, "v0.1", "screenshot.png"))
+              and os.path.isfile(os.path.join(tmp, sdir, "v0.1", "screen.html"))
+              and r1["screenshot_sha256"] == st.sha256_file(imgs["a"][0]),
+              "render archives the labelled revision under <key>/v0.1/ with its sha256 in the revision", out)
+        check(s["render"]["rev"] == 1 and s["render"]["screenshot"] == f"{sdir}/screenshot.png"
+              and sha(s["render"]["screenshot"]) == r1["screenshot_sha256"],
+              "the top-level render keeps its shape and the top-level files stay as a copy of the latest")
+        run(["approve", k, "--by", "owner"], tmp)
+        rc, out = rev("--op", "edit")
+        check(jload(tmp)["screens"][k]["history"][1].get("version") == "v0.2", "the next revision is auto-labelled v0.2", out)
+        rc, out = render("b")
+        s = jload(tmp)["screens"][k]
+        check(sha(f"{sdir}/v0.1/screenshot.png") == st.sha256_file(imgs["a"][0])
+              and sha(f"{sdir}/v0.2/screenshot.png") == st.sha256_file(imgs["b"][0])
+              and sha(f"{sdir}/screenshot.png") == st.sha256_file(imgs["b"][0]),
+              "two renders archived side by side (v0.1 kept, v0.2 added) with correct hashes; top-level = v0.2")
+        check(s["render"]["rev"] == 2 and s["history"][0]["render"]["screenshot_sha256"] == st.sha256_file(imgs["a"][0]),
+              "re-rendering did not touch v0.1's recorded hash")
+        rc, out = run(["validate", "--check-files"], tmp)
+        check(rc == 0, "two archived versions validate with files + hashes", out)
+
+        before = jload(tmp)["screens"][k]["history"]
+        for name, args, needle in (("a duplicate label", ["--version", "v0.2"], "already used"),
+                                   ("an older label (out of order)", ["--version", "v0.1"], "already used"),
+                                   ("an out-of-order label that is new", ["--version", "v0.0"], "must be greater than v0.2"),
+                                   ("a malformed label", ["--version", "0.3"], "must look like"),
+                                   ("--version with --no-version", ["--version", "v0.3", "--no-version"], "mutually exclusive")):
+            rc, out = rev("--op", "edit", *args)
+            check(rc != 0 and needle in out and jload(tmp)["screens"][k]["history"] == before,
+                  f"revise rejects {name} and writes nothing", out)
+        rc, out = rev("--op", "edit", "--version", "v0.5")
+        check(rc == 0, "an explicit label above the latest is accepted (v0.5)", out)
+        render("c")
+        rc, out = rev("--op", "edit", "--no-version")       # rev 4: intermediate, unlabelled
+        check(jload(tmp)["screens"][k]["history"][3].get("version") is None, "--no-version leaves an intermediate edit unlabelled", out)
+        render("d")
+        s = jload(tmp)["screens"][k]
+        check(s["history"][3]["render"]["dir"] == f"{sdir}/rev-4" and os.path.isfile(os.path.join(tmp, sdir, "rev-4", "screenshot.png")),
+              "an unlabelled revision archives under rev-<N>/")
+        rc, out = rev("--op", "edit")                        # rev 5: next minor of the latest LABEL (v0.5)
+        check(jload(tmp)["screens"][k]["history"][4].get("version") == "v0.6", "auto label = next minor of the latest labelled revision", out)
+        render("b")
+        rc, out = run(["versions", k], tmp)
+        lines = out.splitlines()
+        check(rc == 0 and lines[1].split()[0] == "VERSION" and any(l.startswith("v0.1 ") for l in lines)
+              and any(l.startswith("v0.6 ") and "5 (+4)" in l for l in lines) and not any(l.startswith("- ") for l in lines),
+              "versions: a table with the unlabelled rev 4 collapsed under the v0.6 it leads to", out)
+        check(any(l.startswith("v0.1 ") and "yes (owner)" in l for l in lines) and "RENDER" in out and "APPROVED" in out,
+              "versions marks the approved revision and shows the render column", out)
+        rc, out = run(["versions", k, "--json"], tmp)
+        j = json.loads(out)
+        v06 = next(v for v in j["versions"] if v["version"] == "v0.6")
+        check(rc == 0 and [v["version"] for v in j["versions"]] == ["v0.1", "v0.2", "v0.5", "v0.6"] and v06["intermediate_revs"] == [4]
+              and v06["render"] is True and next(v for v in j["versions"] if v["version"] == "v0.1")["approved"] is True,
+              "versions --json lists labelled versions with intermediate_revs, render and approved", out)
+        # label: release the final edit of a multi-step change after an unlabelled loop
+        rc, out = rev("--op", "edit", "--no-version")
+        render("a")
+        rc, out = run(["label", k], tmp)
+        s = jload(tmp)["screens"][k]
+        check(rc == 0 and s["history"][5]["version"] == "v0.7" and s["history"][5]["render"]["dir"].endswith("/v0.7")
+              and os.path.isdir(os.path.join(tmp, sdir, "v0.7")) and not os.path.isdir(os.path.join(tmp, sdir, "rev-6")),
+              "label releases the final edit of a multi-step change as v0.7 (archive folder renamed rev-6 -> v0.7)", out)
+        rc, out = run(["validate", "--check-files"], tmp)
+        check(rc == 0, "the state after unlabelled edits + label validates with files + hashes", out)
+        rc, out = run(["diff", k, "v0.1", "v0.2"], tmp)
+        check(rc == 0 and "s1 -> s2" in out and "1 revision(s) between them" in out and "screenshot" in out and "CHANGED" in out,
+              "diff prints screenIds, the revisions/prompts between and which hashes changed", out)
+        try:
+            import PIL  # noqa: F401
+            check("% of pixels differ" in out and not re.search(r"(?<![0-9.])0\.00%", out), "diff reports a pixel-difference percentage (Pillow present)", out)
+        except ImportError:
+            check("Pillow is not installed" in out, "diff notes Pillow is missing instead of failing", out)
+        rc, out = run(["diff", k, "v0.1", "v9.9"], tmp)
+        check(rc == 3 and "no version/revision 'v9.9'" in out, "diff on an unknown version is a usage error", out)
+        # promotion
+        rc, out = run(["approve", k, "--by", "owner", "--promote"], tmp)
+        s = jload(tmp)["screens"][k]
+        check(rc == 0 and s["history"][-1]["version"] == "v1.0" and s["approved_rev"] == 6
+              and os.path.isfile(os.path.join(tmp, sdir, "v1.0", "screenshot.png")),
+              "approve --promote labels the approved revision v1.0", out)
+        rc, out = run(["validate", "--check-files"], tmp)
+        check(rc == 0, "a promoted state validates with files + hashes", out)
+        rev("--op", "edit")
+        check(jload(tmp)["screens"][k]["history"][-1]["version"] == "v1.1", "after v1.0 the next auto label is v1.1")
+        render("c")
+        run(["approve", k, "--by", "owner", "--promote"], tmp)
+        check(jload(tmp)["screens"][k]["history"][-1]["version"] == "v2.0", "promoting again takes the next major (v1.0 is taken -> v2.0)")
+
+    print("── version rules in validate ──")
+    with tempfile.TemporaryDirectory() as tmp:
+        good = make_project(tmp, ("orders-list.desktop",), versioned=True)
+        o = "orders-list.desktop"
+        errs = st.validate(good, tmp, check_files=True)
+        check(not errs, "the versioned fixture (v0.1 + v0.2, archived renders) validates with files + hashes", "; ".join(errs))
+
+        def bad(name, mutate, needle, files=False):
+            x = copy.deepcopy(good)
+            mutate(x)
+            errs = st.validate(x, tmp, check_files=files)
+            check(any(needle in e for e in errs), f"rejects: {name}", f"wanted '{needle}', got {errs[:3]}")
+        h = lambda x: x["screens"][o]["history"]  # noqa: E731
+        bad("a duplicate version label", lambda x: (h(x)[1].update(version="v0.1"),
+            h(x)[1]["render"].update(dir=f"docs/design/stitch/{o}/v0.1")), "already used")
+        bad("labels out of order", lambda x: (h(x)[0].update(version="v0.3"), h(x)[1].update(version="v0.2")),
+            "not greater than the previous label")
+        bad("a malformed label", lambda x: h(x)[0].update(version="0.1"), "must look like v<major>.<minor>")
+        bad("an archived render dir that doesn't match the label",
+            lambda x: h(x)[0]["render"].update(dir=f"docs/design/stitch/{o}/v0.9"), "render.dir must be")
+        bad("an archived screenshot hash that doesn't match the file (tamper)",
+            lambda x: h(x)[0]["render"].update(screenshot_sha256="0" * 64), "archived render screenshot", files=True)
+        bad("a labelled earlier revision with no archived render",
+            lambda x: h(x)[0].pop("render"), "has no archived render", files=True)
+        bad("a top-level render that differs from the latest archived render",
+            lambda x: x["screens"][o]["render"].update(html_sha256="1" * 64), "differs from revision 2's archived render")
+        os.remove(os.path.join(tmp, f"docs/design/stitch/{o}/v0.1/screen.html"))
+        errs = st.validate(good, tmp, check_files=True)
+        check(any("archived render html file is missing" in e for e in errs), "rejects: an archived render file that was deleted", "; ".join(errs[:2]))
+        try:
+            import jsonschema
+            v = jsonschema.Draft202012Validator(json.load(open(SCHEMA_FILE)))
+            check(not list(v.iter_errors(good)), "the JSON Schema accepts the versioned fixture")
+            b = copy.deepcopy(good)
+            b["screens"][o]["history"][0]["version"] = "0.1"
+            check(bool(list(v.iter_errors(b))), "the JSON Schema rejects a malformed version label")
+        except ImportError:
+            pass
+
+    print("── back-compat: a stitch.json written by the previous tool version ──")
+    with tempfile.TemporaryDirectory() as tmp:
+        shutil.copytree(os.path.join(FIX, "legacy"), tmp, dirs_exist_ok=True)
+        rc, out = run(["validate", "--check-files"], tmp)
+        check(rc == 0, "an old-format file (no labels, one render per screen) still validates with files + hashes", out)
+        manifest(tmp, 1, "ui_developer", [{"route": "/orders"}])
+        rc, out = run(["gate", "--phase", "1"], tmp)
+        check(rc == 0 and "approved" in out, "an old-format file still passes the gate unchanged", out)
+        rc, out = run(["versions", "orders-list.desktop"], tmp)
+        check(rc == 0 and "yes (owner)" in out, "versions works on an old-format screen (unlabelled revisions, the stored render shown)", out)
+        shot, html = os.path.join(tmp, "n.png"), os.path.join(tmp, "n.html")
+        write_png(shot, 8, 8, lambda x, y: (1, 2, 3))
+        open(html, "w").write("<html><body>n</body></html>")
+        run(["revise", "orders-list.desktop", "--op", "edit", "--screen-id", "999", "--prompt", "add filter", "--source", "owner"], tmp)
+        run(["render", "orders-list.desktop", "--screenshot", shot, "--html", html], tmp)
+        rc, out = run(["validate", "--check-files"], tmp)
+        s = json.load(open(os.path.join(tmp, "docs/design/stitch.json")))["screens"]["orders-list.desktop"]
+        check(rc == 0 and s["history"][2]["version"] == "v0.1" and s["render"]["rev"] == 3
+              and os.path.isfile(os.path.join(tmp, "docs/design/stitch/orders-list.desktop/v0.1/screen.html")),
+              "an old-format screen upgrades in place: its next revision is v0.1 and archives beside the old top-level files", out)
+        rc, out = run(["gate", "--phase", "1"], tmp)
+        check(rc == 2 and "pending_approval" in out, "…and the gate then waits for approval as before", out)
 
 
 # ------------------------------------------------------------------------------------------- fidelity
@@ -488,6 +711,7 @@ if __name__ == "__main__":
     cases_validate()
     cases_writers()
     cases_gate()
+    cases_versions()
     cases_fidelity()
     print(f"stitch_cases.py: {PASS} passed, {FAIL} failed")
     sys.exit(1 if FAIL else 0)

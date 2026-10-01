@@ -389,7 +389,7 @@ import importlib.util, json, os, sys
 root, mutation = sys.argv[1], sys.argv[2]
 spec = importlib.util.spec_from_file_location("sc", os.environ["STITCH_CASES"]); sc = importlib.util.module_from_spec(spec)
 sys.argv = ["x"]; spec.loader.exec_module(sc)
-state = sc.make_project(root, ("orders-list.desktop",))
+state = sc.make_project(root, ("orders-list.desktop",), versioned=bool(os.environ.get("STITCH_VERSIONED")))
 s = state["screens"]["orders-list.desktop"]
 if mutation: exec(mutation)
 sc.save(root, state)
@@ -405,6 +405,12 @@ D=$(new_phase stitch_pending); full_phase "$D"; stitch_fixture "$D" 's["status"]
 LAST_OUT="$(run_hook "$D" 1)"; check "(g) a render still pending_approval BLOCKs" 2 "$?" "pending_approval"
 D=$(new_phase stitch_tampered); full_phase "$D"; stitch_fixture "$D"; echo "<!-- edited -->" >> "$D/docs/design/stitch/orders-list.desktop/screen.html"
 LAST_OUT="$(run_hook "$D" 1)"; check "(g) a render changed after approval (hash mismatch) BLOCKs" 2 "$?" "does not match its stored sha256"
+D=$(new_phase stitch_ver_ok); full_phase "$D"; STITCH_VERSIONED=1 stitch_fixture "$D"
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) versioned screen (v0.1 + v0.2 archived renders, intact) PASSes" 0 "$?" "current, approved Stitch baseline"
+D=$(new_phase stitch_ver_tampered); full_phase "$D"; STITCH_VERSIONED=1 stitch_fixture "$D"; echo "<!-- edited -->" >> "$D/docs/design/stitch/orders-list.desktop/v0.1/screen.html"
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) an archived older-version render changed after it was recorded BLOCKs" 2 "$?" "archived render html"
+D=$(new_phase stitch_ver_order); full_phase "$D"; STITCH_VERSIONED=1 stitch_fixture "$D" 's["history"][1]["version"] = "v0.1"'
+LAST_OUT="$(run_hook "$D" 1)"; check "(g) a duplicate version label BLOCKs" 2 "$?" "already used"
 D=$(new_phase stitch_syncback); full_phase "$D"; stitch_fixture "$D" 's.update(status="sync_back_pending", deviations=[{"id":"DEV-1-001","phase":1,"what":"rows are 48px","why":"touch targets","source":"ui_developer","resolution":"accepted"}])'
 LAST_OUT="$(run_hook "$D" 1)"; check "(g) an accepted deviation not synced back to Stitch BLOCKs" 2 "$?" "/stitch sync-back"
 D=$(new_phase stitch_forced); full_phase "$D"; stitch_fixture "$D" 's["status"] = "drift"'

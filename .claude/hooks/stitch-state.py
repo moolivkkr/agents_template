@@ -13,10 +13,21 @@ Subcommands
                                            no pending_approval / sync_back_pending / drift anywhere; every
                                            stitch_deviations[] entry in the phase's developer manifests resolved
   revise KEY --op OP --screen-id ID --prompt P --source S [--phase N] [--by WHO] [--device D --app A --route R]
-                                           append a revision (new screen or new Stitch screen id) -> pending_approval
-  render KEY --screenshot PNG --html HTML  copy the fetched render into docs/design/stitch/KEY/ and hash it
-  approve KEY --by owner|design_quality_reviewer [--note N]
-                                           approve the latest revision (dqr approvals join the owner-review list)
+                [--version vM.m | --no-version]
+                                           append a revision (new screen or new Stitch screen id) -> pending_approval.
+                                           It gets a version label: --version, else the next minor of the latest
+                                           labelled revision (v0.1 for the first). --no-version leaves an
+                                           intermediate edit unlabelled (archived as rev-N)
+  render KEY --screenshot PNG --html HTML  archive the fetched render of the LATEST revision under
+                                           docs/design/stitch/KEY/<version|rev-N>/ (+ sha256 in the revision), and
+                                           copy it to docs/design/stitch/KEY/ as the current render
+  label KEY [--version vM.m] [--rev N]     label a revision (default: the latest; version default: next minor)
+  approve KEY --by owner|design_quality_reviewer [--note N] [--promote]
+                                           approve the latest revision (dqr approvals join the owner-review list);
+                                           --promote relabels it v1.0 (or the next major)
+  versions KEY [--json]                    the screen's versions: version, rev, date, op, screenId, who, prompt,
+                                           render present, approved; unlabelled edits collapse under the label they lead to
+  diff KEY vA vB                           metadata differences (+ pixel difference when Pillow is installed)
   owner-review KEY --decision accepted|changes_requested [--note N]
   defer KEY --detail D [--run autonomous|interactive] [--device D --app A --route R] [--prompt P]
                                            Stitch unreachable: no_baseline + deferral + queue entry
@@ -48,6 +59,7 @@ SCHEMA = "sdlc.stitch-state/v2"
 DEFAULT_FILE = "docs/design/stitch.json"
 RENDER_ROOT = "docs/design/stitch"
 KEY_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\.(desktop|mobile|tablet)$")
+VER_RE = re.compile(r"^v(\d+)\.(\d+)$")
 ISO_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$")
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
 DEV_RE = re.compile(r"^DEV-\d+-\d{3,}$")
@@ -89,6 +101,17 @@ def is_int(v):
 
 def is_num(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
+def ver_key(v):
+    m = VER_RE.match(str(v))
+    return (int(m.group(1)), int(m.group(2))) if m else None
+
+
+def rev_dirname(r):
+    """Archive folder of a revision: its version label when it has a valid one, else rev-<N>."""
+    v = r.get("version")
+    return v if isinstance(v, str) and VER_RE.match(v) else f"rev-{r.get('rev')}"
 
 
 # --------------------------------------------------------------------------------------------- validate
@@ -196,11 +219,54 @@ def validate_screen(key, s, root, check_files):
     if sid and not hist:
         e("a screen with a Stitch screenId needs its revision history (the prompts that produced it)")
     last_rev = 0
+    seen_ver, last_ver = set(), (-1, -1)
     for i, r in enumerate(hist):
         rp = f"history[{i}]"
         if not isinstance(r, dict):
             e(f"{rp} must be an object")
             continue
+        ver = r.get("version")
+        if ver is not None:
+            vk = ver_key(ver)
+            if vk is None:
+                e(f"{rp}.version must look like v<major>.<minor> (e.g. v0.1), got {ver!r}")
+            elif ver in seen_ver:
+                e(f"{rp}.version {ver} is already used by an earlier revision of this screen")
+            elif vk <= last_ver:
+                e(f"{rp}.version {ver} is not greater than the previous label v{last_ver[0]}.{last_ver[1]} — "
+                  "versions increase in revision order")
+            else:
+                seen_ver.add(ver)
+                last_ver = vk
+        rr = r.get("render")
+        if rr is not None:
+            if not isinstance(rr, dict):
+                e(f"{rp}.render must be an object")
+            else:
+                want = f"{RENDER_ROOT}/{key}/{rev_dirname(r)}"
+                for f in ("dir", "screenshot", "html", "screenshot_sha256", "html_sha256", "fetched_at"):
+                    if f not in rr:
+                        e(f"{rp}.render.{f} is required")
+                if rr.get("dir") and rr["dir"] != want:
+                    e(f"{rp}.render.dir must be {want} (the revision's version label, or rev-<N> when unlabelled)")
+                for f in ("screenshot", "html"):
+                    v2 = str(rr.get(f, ""))
+                    if v2 and not v2.startswith(want + "/"):
+                        e(f"{rp}.render.{f} must live under {want}/")
+                for f in ("screenshot_sha256", "html_sha256"):
+                    if f in rr and not SHA_RE.match(str(rr[f])):
+                        e(f"{rp}.render.{f} must be a lowercase sha256 hex digest")
+                if check_files and root:
+                    for f, hf in (("screenshot", "screenshot_sha256"), ("html", "html_sha256")):
+                        path = os.path.join(root, str(rr.get(f, "")))
+                        if not rr.get(f) or not os.path.isfile(path):
+                            e(f"{rp} ({rev_dirname(r)}) archived render {f} file is missing: {rr.get(f)}")
+                        elif rr.get(hf) and sha256_file(path) != rr[hf]:
+                            e(f"{rp} ({rev_dirname(r)}) archived render {f} {rr[f]} does not match its stored "
+                              "sha256 — the archived file changed after it was recorded")
+        elif check_files and ver is not None and i != len(hist) - 1:
+            e(f"{rp} is labelled {ver} but has no archived render ({RENDER_ROOT}/{key}/{ver}/) — "
+              "render each labelled version before moving on to the next revision")
         if not is_int(r.get("rev")) or r["rev"] <= last_rev:
             e(f"{rp}.rev must be an integer greater than the previous revision ({last_rev})")
         else:
@@ -238,6 +304,16 @@ def validate_screen(key, s, root, check_files):
                 e(f"render.{f} must be a lowercase sha256 hex digest")
         if "rev" in render and (not is_int(render["rev"]) or (hist and render["rev"] > last_rev)):
             e(f"render.rev {render.get('rev')} is not a revision in history")
+        rendered = [r for r in hist if isinstance(r, dict) and isinstance(r.get("render"), dict)]
+        if rendered:
+            latest = rendered[-1]
+            if render.get("rev") != latest.get("rev"):
+                e(f"render.rev {render.get('rev')} is not the latest rendered revision ({latest.get('rev')}) — "
+                  "the top-level render points at the newest archived render")
+            else:
+                for f in ("screenshot_sha256", "html_sha256"):
+                    if f in render and render[f] != latest["render"].get(f):
+                        e(f"render.{f} differs from revision {latest.get('rev')}'s archived render")
         if check_files and root:
             for f, hf in (("screenshot", "screenshot_sha256"), ("html", "html_sha256")):
                 path = os.path.join(root, str(render.get(f, "")))
@@ -462,13 +538,68 @@ def ensure_screen(state, key, a):
     return s
 
 
+def next_minor(hist):
+    """The next auto label: the next minor after the latest labelled revision (v0.1 when none)."""
+    keys = [ver_key(r["version"]) for r in hist if isinstance(r, dict) and ver_key(r.get("version", ""))]
+    if not keys:
+        return "v0.1"
+    mj, mn = max(keys)
+    return f"v{mj}.{mn + 1}"
+
+
+def check_label(hist, label, upto=None):
+    """Error text (or None) if `label` can't label a revision placed after hist[:upto] (default: a new last one)."""
+    vk = ver_key(label)
+    if vk is None:
+        return f"version '{label}' must look like v<major>.<minor> (e.g. v0.1)"
+    if any(r.get("version") == label for r in hist):
+        return f"version {label} is already used by another revision of this screen"
+    prior = [r for r in (hist if upto is None else hist[:upto]) if ver_key(r.get("version", ""))]
+    if prior and vk <= max(ver_key(r["version"]) for r in prior):
+        top = max(prior, key=lambda r: ver_key(r["version"]))["version"]
+        return (f"version {label} must be greater than {top}, the latest earlier label "
+                "(versions increase in revision order)")
+    later = [r for r in (hist[upto + 1:] if upto is not None else []) if ver_key(r.get("version", ""))]
+    if later and vk >= min(ver_key(r["version"]) for r in later):
+        return f"version {label} must be smaller than the later label {later[0]['version']}"
+    return None
+
+
+def relabel(root, key, r, new):
+    """Give revision r the label `new`, moving its archived render folder (if any)."""
+    old_dir = rev_dirname(r)
+    r["version"] = new
+    rr = r.get("render")
+    if isinstance(rr, dict) and old_dir != new:
+        src = os.path.join(root, RENDER_ROOT, key, old_dir)
+        dst = os.path.join(root, RENDER_ROOT, key, new)
+        if os.path.isdir(src):
+            if os.path.exists(dst):
+                raise SystemExit(f"stitch-state: {os.path.relpath(dst, root)} already exists")
+            os.replace(src, dst)
+        base = f"{RENDER_ROOT}/{key}/{new}"
+        rr.update({"dir": base, "screenshot": f"{base}/screenshot.png", "html": f"{base}/screen.html"})
+
+
 def cmd_revise(a, path):
     state = load(path)
     s = ensure_screen(state, a.key, a)
     hist = s.setdefault("history", [])
     rev = (hist[-1]["rev"] + 1) if hist else 1
+    if a.version and a.no_version:
+        raise SystemExit("stitch-state: --version and --no-version are mutually exclusive")
+    version = None
+    if a.version:
+        err = check_label(hist, a.version)
+        if err:
+            raise SystemExit(f"stitch-state: {err}")
+        version = a.version
+    elif not a.no_version:
+        version = next_minor(hist)
     entry = {"rev": rev, "ts": now(), "op": a.op, "screenId": a.screen_id, "by": a.by,
              "previous_screenId": s.get("screenId")}
+    if version:
+        entry["version"] = version
     if a.prompt:
         entry["prompt"] = a.prompt
     if a.source:
@@ -487,7 +618,7 @@ def cmd_revise(a, path):
     state["queue"] = [q for q in state.get("queue", []) if q.get("screenKey") != a.key]
     log(state, a.op, a.key, f"rev {rev} screen {a.screen_id} pending approval")
     save(path, state)
-    print(f"{a.key}: rev {rev} ({a.op}) → screen {a.screen_id}, pending_approval")
+    print(f"{a.key}: rev {rev}{' ' + version if version else ''} ({a.op}) → screen {a.screen_id}, pending_approval")
 
 
 def cmd_render(a, path, root):
@@ -495,23 +626,182 @@ def cmd_render(a, path, root):
     s = state.get("screens", {}).get(a.key)
     if not s or not s.get("history"):
         raise SystemExit(f"stitch-state: {a.key} has no revision — run revise first")
-    d = os.path.join(root, RENDER_ROOT, a.key)
-    os.makedirs(d, exist_ok=True)
+    r = s["history"][-1]
+    sub = rev_dirname(r)
+    base = f"{RENDER_ROOT}/{a.key}"
+    ad = os.path.join(root, base, sub)             # archive: one folder per version (or rev-N)
+    os.makedirs(ad, exist_ok=True)
+    ashot, ahtml = os.path.join(ad, "screenshot.png"), os.path.join(ad, "screen.html")
+    for src, dst in ((a.screenshot, ashot), (a.html, ahtml)):
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copyfile(src, dst)
+    d = os.path.join(root, base)                   # current render: a copy of the latest at the old paths
     shot, html = os.path.join(d, "screenshot.png"), os.path.join(d, "screen.html")
-    if os.path.abspath(a.screenshot) != os.path.abspath(shot):
-        shutil.copyfile(a.screenshot, shot)
-    if os.path.abspath(a.html) != os.path.abspath(html):
-        shutil.copyfile(a.html, html)
-    rel = f"{RENDER_ROOT}/{a.key}"
-    s["render"] = {"dir": rel, "screenshot": f"{rel}/screenshot.png", "html": f"{rel}/screen.html",
-                   "screenshot_sha256": sha256_file(shot), "html_sha256": sha256_file(html),
-                   "rev": s["history"][-1]["rev"], "fetched_at": now()}
-    log(state, "render", a.key, f"rev {s['render']['rev']} stored")
+    for src, dst in ((ashot, shot), (ahtml, html)):
+        if os.path.abspath(src) != os.path.abspath(dst):
+            shutil.copyfile(src, dst)
+    ts = now()
+    r["render"] = {"dir": f"{base}/{sub}", "screenshot": f"{base}/{sub}/screenshot.png",
+                   "html": f"{base}/{sub}/screen.html", "screenshot_sha256": sha256_file(ashot),
+                   "html_sha256": sha256_file(ahtml), "fetched_at": ts}
+    s["render"] = {"dir": base, "screenshot": f"{base}/screenshot.png", "html": f"{base}/screen.html",
+                   "screenshot_sha256": r["render"]["screenshot_sha256"], "html_sha256": r["render"]["html_sha256"],
+                   "rev": r["rev"], "fetched_at": ts}
+    log(state, "render", a.key, f"rev {r['rev']} stored ({sub})")
     save(path, state)
-    print(f"{a.key}: render rev {s['render']['rev']} stored in {rel}/ (sha256 {s['render']['screenshot_sha256'][:12]}…)")
+    print(f"{a.key}: render rev {r['rev']} archived in {base}/{sub}/ and copied to {base}/ "
+          f"(sha256 {s['render']['screenshot_sha256'][:12]}…)")
 
 
-def cmd_approve(a, path):
+def cmd_label(a, path, root):
+    state = load(path)
+    s = state.get("screens", {}).get(a.key)
+    if not s or not s.get("history"):
+        raise SystemExit(f"stitch-state: {a.key} has no revision to label")
+    hist = s["history"]
+    idx = len(hist) - 1 if a.rev is None else next((i for i, r in enumerate(hist) if r.get("rev") == a.rev), None)
+    if idx is None:
+        raise SystemExit(f"stitch-state: {a.key} has no revision {a.rev}")
+    r = hist[idx]
+    if r.get("version"):
+        raise SystemExit(f"stitch-state: {a.key} rev {r['rev']} is already labelled {r['version']}")
+    if idx != len(hist) - 1 and not isinstance(r.get("render"), dict):
+        raise SystemExit(f"stitch-state: {a.key} rev {r['rev']} has no archived render, so it can't be released retroactively")
+    new = a.version or (next_minor(hist) if idx == len(hist) - 1 else None)
+    if new is None:
+        raise SystemExit("stitch-state: labelling an earlier revision needs --version")
+    err = check_label(hist, new, upto=idx)
+    if err:
+        raise SystemExit(f"stitch-state: {err}")
+    relabel(root, a.key, r, new)
+    log(state, "label", a.key, f"rev {r['rev']} = {new}")
+    save(path, state)
+    print(f"{a.key}: rev {r['rev']} labelled {new}")
+
+
+def promote_label(hist):
+    """v1.0 if it's free and above every earlier label, else the next major above all of them."""
+    keys = [ver_key(r["version"]) for r in hist[:-1] if ver_key(r.get("version", ""))]
+    top = max(keys) if keys else (0, 0)
+    return "v1.0" if top < (1, 0) else f"v{top[0] + 1}.0"
+
+
+def find_rev(s, ref):
+    """Resolve v0.2 / rev-3 / 3 to a history entry."""
+    for r in s.get("history", []):
+        if ref == r.get("version") or ref in (f"rev-{r.get('rev')}", str(r.get("rev"))):
+            return r
+    return None
+
+
+def versions_rows(s):
+    """One row per labelled revision (unlabelled edits collapse under the label they lead to), then one per
+    trailing unlabelled revision."""
+    rows, pending = [], []
+    for r in s.get("history", []):
+        if r.get("version"):
+            rows.append(("labelled", r, pending))
+            pending = []
+        else:
+            pending.append(r)
+    rows += [("unreleased", r, []) for r in pending]
+    return rows
+
+
+def cmd_versions(a, path, root):
+    state = load(path)
+    s = state.get("screens", {}).get(a.key)
+    if not s or not s.get("history"):
+        print(f"stitch-state: {a.key} has no revisions", file=sys.stderr)
+        return 3
+    approved_rev = s.get("approved_rev") if s.get("status") in APPROVED or s.get("approved_by") else None
+    legacy = not any(isinstance(x.get("render"), dict) for x in s["history"])
+    out = []
+    for kind, r, inter in versions_rows(s):
+        rr = r.get("render") if isinstance(r.get("render"), dict) else None
+        if rr is None and legacy and (s.get("render") or {}).get("rev") == r["rev"]:
+            rr = s["render"]       # pre-version file: the one stored render belongs to this revision
+        out.append({"version": r.get("version"), "rev": r["rev"], "date": r.get("ts"), "op": r.get("op"),
+                    "screenId": r.get("screenId"), "by": r.get("by"), "prompt": r.get("prompt", ""),
+                    "intermediate_revs": [x["rev"] for x in inter], "unreleased": kind == "unreleased",
+                    "render": bool(rr), "render_dir": rr.get("dir") if rr else None,
+                    "screenshot_sha256": rr.get("screenshot_sha256") if rr else None,
+                    "approved": r["rev"] == approved_rev,
+                    "approved_by": s.get("approved_by") if r["rev"] == approved_rev else None})
+    if a.json:
+        print(json.dumps({"screenKey": a.key, "status": s.get("status"), "versions": out}, indent=2, ensure_ascii=False))
+        return 0
+    hdr = ("VERSION", "REV", "DATE", "OP", "SCREEN ID", "WHO", "PROMPT", "RENDER", "APPROVED")
+    table = [hdr]
+    for v in out:
+        rev = str(v["rev"]) + (f" (+{','.join(map(str, v['intermediate_revs']))})" if v["intermediate_revs"] else "")
+        prompt = " ".join(v["prompt"].split())
+        prompt = (prompt[:37] + "...") if len(prompt) > 40 else (prompt or "-")
+        table.append((v["version"] or "-", rev, (v["date"] or "")[:10], v["op"] or "", v["screenId"] or "", v["by"] or "",
+                      prompt, "Y" if v["render"] else "N", f"yes ({v['approved_by']})" if v["approved"] else ""))
+    w = [max(len(str(r[i])) for r in table) for i in range(len(hdr))]
+    print(f"{a.key}  status: {s.get('status')}")
+    for r in table:
+        print("  ".join(str(c).ljust(w[i]) for i, c in enumerate(r)).rstrip())
+    if any(v["intermediate_revs"] for v in out):
+        print("(+N) = unlabelled intermediate edits collapsed under the version they lead to")
+    return 0
+
+
+def cmd_diff(a, path, root):
+    state = load(path)
+    s = state.get("screens", {}).get(a.key)
+    if not s or not s.get("history"):
+        print(f"stitch-state: {a.key} has no revisions", file=sys.stderr)
+        return 3
+    ra, rb = find_rev(s, a.va), find_rev(s, a.vb)
+    for ref, r in ((a.va, ra), (a.vb, rb)):
+        if r is None:
+            print(f"stitch-state: {a.key} has no version/revision '{ref}'", file=sys.stderr)
+            return 3
+    if ra["rev"] > rb["rev"]:
+        ra, rb = rb, ra
+    name = lambda r: r.get("version") or f"rev-{r['rev']}"  # noqa: E731
+    print(f"{a.key}: {name(ra)} (rev {ra['rev']}) -> {name(rb)} (rev {rb['rev']})")
+    print(f"  screenId     {ra.get('screenId')} -> {rb.get('screenId')}"
+          f"{'' if ra.get('screenId') != rb.get('screenId') else '  (unchanged)'}")
+    print(f"  recorded     {ra.get('ts')} -> {rb.get('ts')}")
+    between = [r for r in s["history"] if ra["rev"] < r["rev"] <= rb["rev"]]
+    print(f"  {len(between)} revision(s) between them:")
+    for r in between:
+        p = " ".join(str(r.get("prompt", "")).split()) or "(no prompt)"
+        print(f"    rev {r['rev']}{' ' + r['version'] if r.get('version') else ''} {r.get('op')} by {r.get('by')}: "
+              f"{p[:160]}{'...' if len(p) > 160 else ''}")
+    da, db = ra.get("render"), rb.get("render")
+    if not isinstance(da, dict) or not isinstance(db, dict):
+        miss = name(ra) if not isinstance(da, dict) else name(rb)
+        print(f"  hashes       no archived render for {miss} — nothing to compare")
+        return 0
+    for f, label in (("screenshot_sha256", "screenshot"), ("html_sha256", "html")):
+        same = da[f] == db[f]
+        print(f"  {label:<12} {da[f][:12]} -> {db[f][:12]}  {'unchanged' if same else 'CHANGED'}")
+    pa, pb = os.path.join(root, da["screenshot"]), os.path.join(root, db["screenshot"])
+    if not (os.path.isfile(pa) and os.path.isfile(pb)):
+        print("  pixels       a screenshot file is missing — not compared")
+        return 0
+    try:
+        from PIL import Image, ImageChops
+    except ImportError:
+        print("  pixels       not compared: Pillow is not installed (pip install Pillow)")
+        return 0
+    ia, ib = Image.open(pa).convert("RGB"), Image.open(pb).convert("RGB")
+    note = ""
+    if ia.size != ib.size:
+        w, h = min(ia.size[0], ib.size[0]), min(ia.size[1], ib.size[1])
+        note = f" (sizes differ {ia.size[0]}x{ia.size[1]} vs {ib.size[0]}x{ib.size[1]}; compared the overlapping {w}x{h})"
+        ia, ib = ia.crop((0, 0, w, h)), ib.crop((0, 0, w, h))
+    same_px = ImageChops.difference(ia, ib).convert("L").histogram()[0]
+    total = ia.size[0] * ia.size[1]
+    print(f"  pixels       {100.0 * (total - same_px) / total:.2f}% of pixels differ{note}")
+    return 0
+
+
+def cmd_approve(a, path, root):
     state = load(path)
     s = state.get("screens", {}).get(a.key)
     if not s or not s.get("history"):
@@ -522,6 +812,10 @@ def cmd_approve(a, path):
     fid = s.get("fidelity") or {}
     if a.by != "owner" and fid and fid.get("score", 1) < fid.get("threshold", 0):
         raise SystemExit(f"stitch-state: {a.key} is a low-fidelity import ({fid.get('score')}) — only the owner may approve it")
+    promoted = None
+    if a.promote:
+        promoted = promote_label(s["history"])
+        relabel(root, a.key, s["history"][-1], promoted)
     s.update({"status": "approved", "approved_by": a.by, "approved_at": now(), "approved_rev": last})
     if a.by == "design_quality_reviewer":
         s["owner_review"] = {"status": "pending", "at": None}
@@ -529,9 +823,9 @@ def cmd_approve(a, path):
         s.pop("owner_review", None)
     if a.note:
         s.setdefault("owner_review", {"status": "accepted", "at": now()})["note"] = a.note
-    log(state, "approve", a.key, f"rev {last} by {a.by}")
+    log(state, "approve", a.key, f"rev {last} by {a.by}" + (f", promoted to {promoted}" if promoted else ""))
     save(path, state)
-    print(f"{a.key}: rev {last} approved by {a.by}")
+    print(f"{a.key}: rev {last} approved by {a.by}" + (f", promoted to {promoted}" if promoted else ""))
 
 
 def cmd_owner_review(a, path):
@@ -669,6 +963,8 @@ def main(argv=None):
     r.add_argument("--phase", type=int)
     r.add_argument("--by", default="parent")
     r.add_argument("--fidelity", type=float)
+    r.add_argument("--version", help="version label vM.m (default: next minor of the latest labelled revision)")
+    r.add_argument("--no-version", action="store_true", help="leave this (intermediate) revision unlabelled")
     rd = sub.add_parser("render")
     rd.add_argument("key")
     rd.add_argument("--screenshot", required=True)
@@ -677,6 +973,18 @@ def main(argv=None):
     apv.add_argument("key")
     apv.add_argument("--by", required=True, choices=APPROVERS)
     apv.add_argument("--note")
+    apv.add_argument("--promote", action="store_true", help="relabel the approved revision v1.0 (or the next major)")
+    lb = sub.add_parser("label")
+    lb.add_argument("key")
+    lb.add_argument("--version")
+    lb.add_argument("--rev", type=int)
+    vs = sub.add_parser("versions")
+    vs.add_argument("key")
+    vs.add_argument("--json", action="store_true")
+    df2 = sub.add_parser("diff")
+    df2.add_argument("key")
+    df2.add_argument("va")
+    df2.add_argument("vb")
     orv = sub.add_parser("owner-review")
     orv.add_argument("key")
     orv.add_argument("--decision", required=True, choices=["accepted", "changes_requested"])
@@ -752,11 +1060,15 @@ def main(argv=None):
             print(f"{k}\t{s.get('route')}\t{why}\t{shot}")
         print(f"{len(rows)} screen(s) awaiting the owner's review", file=sys.stderr)
         return 0
+    if a.cmd == "versions":
+        return cmd_versions(a, path, root)
+    if a.cmd == "diff":
+        return cmd_diff(a, path, root)
     if a.cmd is None:
         ap.print_help()
         return 3
     handlers = {"revise": lambda: cmd_revise(a, path), "render": lambda: cmd_render(a, path, root),
-                "approve": lambda: cmd_approve(a, path), "owner-review": lambda: cmd_owner_review(a, path),
+                "approve": lambda: cmd_approve(a, path, root), "label": lambda: cmd_label(a, path, root), "owner-review": lambda: cmd_owner_review(a, path),
                 "defer": lambda: cmd_defer(a, path), "deviation": lambda: cmd_deviation(a, path),
                 "status-set": lambda: cmd_status_set(a, path)}
     handlers[a.cmd]()

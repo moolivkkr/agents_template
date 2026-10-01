@@ -1,0 +1,61 @@
+{
+  "schema": "sdlc.stitch-state/v2",
+  "projectId": "4044680601076201931",
+  "projectTitle": "Acme \u2014 UI",
+  "designSystem": {
+    "assetId": "15996705518239280238",
+    "source": "docs/design/DESIGN.md",
+    "updated": "2026-10-01"
+  },
+  "screens": {
+    "orders-list.desktop": {
+      "screenKey": "orders-list.desktop",
+      "screenId": "98b50e2d11",
+      "deviceType": "DESKTOP",
+      "app": "web",
+      "route": "/orders",
+      "title": "orders-list",
+      "origin": "generated",
+      "status": "approved",
+      "approved_by": "owner",
+      "approved_at": "2026-10-01T10:00:00Z",
+      "approved_rev": 2,
+      "phase": 1,
+      "render": {
+        "dir": "docs/design/stitch/orders-list.desktop",
+        "screenshot": "docs/design/stitch/orders-list.desktop/screenshot.png",
+        "html": "docs/design/stitch/orders-list.desktop/screen.html",
+        "screenshot_sha256": "b232e5bb7306a97f38f52b1f86a820101019eade07d846551dbe10de47d2a7b0",
+        "html_sha256": "cf1872e6c94c77017c47ad595a8ad77c29af537ad3d5a6083251f3b3b6fbbec0",
+        "rev": 2,
+        "fetched_at": "2026-10-01T10:00:00Z"
+      },
+      "wireframe": "docs/design/phases/1/specs/orders-list.wireframe.md",
+      "history": [
+        {
+          "rev": 1,
+          "ts": "2026-10-01T09:00:00Z",
+          "op": "generate",
+          "screenId": "11aa",
+          "prompt": "Orders list\u2026",
+          "prompt_source": "requirement",
+          "phase": 1,
+          "by": "/design"
+        },
+        {
+          "rev": 2,
+          "ts": "2026-10-01T09:30:00Z",
+          "op": "edit",
+          "screenId": "98b50e2d11",
+          "prompt": "Make the status column a badge",
+          "prompt_source": "owner",
+          "phase": 1,
+          "by": "/stitch request",
+          "previous_screenId": "11aa"
+        }
+      ]
+    }
+  },
+  "queue": [],
+  "log": []
+}

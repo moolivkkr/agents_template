@@ -121,7 +121,14 @@ the file by hand: use its subcommands, then `stitch-state.py validate --check-fi
           "prompt": "Recreate the Orders page exactly: header with …", "prompt_source": "import_capture", "fidelity": 0.69 },
         { "rev": 2, "ts": "2026-10-01T09:50:00Z", "op": "import_correction", "screenId": "98b50e2d11", "by": "/stitch import",
           "prompt": "Add the 'Export CSV' button left of 'New order'; the table has 4 columns …",
-          "prompt_source": "import_correction", "previous_screenId": "5521aa", "fidelity": 0.86 }
+          "prompt_source": "import_correction", "previous_screenId": "5521aa", "fidelity": 0.86,
+          "version": "v0.1",
+          "render": { "dir": "docs/design/stitch/orders-list.desktop/v0.1",
+                      "screenshot": "docs/design/stitch/orders-list.desktop/v0.1/screenshot.png",
+                      "html": "docs/design/stitch/orders-list.desktop/v0.1/screen.html",
+                      "screenshot_sha256": "9f2c8a51e6b0c4d3a7f1e2b5c8d9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7",
+                      "html_sha256": "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
+                      "fetched_at": "2026-10-01T09:58:00Z" } }
       ]
     },
     "orders-list.mobile": {
@@ -144,16 +151,63 @@ the file by hand: use its subcommands, then `stitch-state.py validate --check-fi
   (`orders-list.desktop`, `orders-list.mobile`): different designs, never one reused for the other.
 - **Every screen has `route` and `app`** (only an `orphan` may lack a route). This is the all-pages
   baseline map: the gate finds a changed route's screen through it, and `/ui-audit` measures coverage.
-- **Render + hash.** `stitch-state.py render <key> --screenshot <png> --html <html>` copies both
-  downloads into `docs/design/stitch/<key>/` and records their sha256. Commit them (they're small,
-  and `ui_developer` reads them). The gate re-hashes them: a render changed after approval blocks.
+- **Render + hash.** `stitch-state.py render <key> --screenshot <png> --html <html>` archives both
+  downloads of the latest revision under `docs/design/stitch/<key>/<version or rev-N>/` (the sha256
+  goes into that revision's `render`), and copies them to `docs/design/stitch/<key>/` as the current
+  render, which the screen's top-level `render` describes (always the LATEST rendered revision; its
+  shape is unchanged). Commit them (they're small, and `ui_developer` reads them). The gate re-hashes
+  the current render AND every archived render: a file changed after it was recorded blocks.
 - **`approved_rev` must be the latest revision.** A newer revision (an edit, a sync-back) puts the
   screen back to `pending_approval` until it's approved.
+- **Versions** (§2.1) label the revisions that are reviewable results.
 - **`history`** records every prompt sent to Stitch with its source (`owner`, `requirement`,
   `change_request`, `design_review`, `deviation`, `import_capture`, `import_correction`, `audit`,
   `hotfix`, `recon`, `theme`) and the screen id it produced.
 - Reuse the stored `projectId` (verify with `get_project`). If it's missing, `list_projects` and match
   the title before `create_project`, so a reinstall doesn't create duplicates.
+
+### 2.1 Versions: v0.1 as-is, v0.2 improved, v1.0 approved
+
+Stitch keeps every screen it ever made, and `history[]` keeps every prompt, but a reviewer thinks in
+*versions*: "the design as it was" and "the design as improved". A revision may carry a `version`
+label so the project can keep both renders side by side, compare them and say which one shipped.
+
+**Label rules** (enforced by `stitch-state.py validate`, so a hand edit can't break them):
+- Format `v<major>.<minor>` (`v0.1`, `v0.12`, `v1.0`), unique per screen, and **strictly increasing by
+  (major, minor) in revision order**.
+- `revise` takes `--version vM.m`. Omitted, the tool assigns the next minor of the latest labelled
+  revision (`v0.1` for the first labelled one). An explicit label that is a duplicate, malformed or out of
+  order is an error and writes nothing. `--no-version` leaves a revision unlabelled.
+- `label <key> [--version vM.m] [--rev N]` labels a revision afterwards (default: the latest, next minor).
+- Unlabelled revisions are **intermediate edits**; their render is archived as `rev-<N>/`.
+
+**Lifecycle** (convention):
+
+| Label | Meaning |
+|---|---|
+| `v0.1` | the **as-is baseline**: when a screen is imported (`/stitch import`) or adopted (`/stitch adopt`) its recorded recreation / uploaded screen is `v0.1`; for a new screen the first generation is `v0.1` |
+| `v0.2`, `v0.3` ... | pre-approval iterations: each reviewable improvement is the next minor |
+| `v1.0` | the owner's approval of a revision **promotes** it: `approve --by owner --promote` relabels the approved revision `v1.0` if that label is free, else the next major (`v2.0`); its archive folder is renamed to match |
+
+**Multi-step edits.** Stitch returns a NEW screen id for every edit and keeps the old one (so
+`previous_screenId` chains the screens). When several small `edit_screens` calls make up one reviewable
+improvement (§6.7: one concern per edit), record each edit as a revision (`revise --no-version`), and
+label only the final one as the release (`revise` without the flag, or `label <key>` afterwards). The
+intermediates stay `rev-N`.
+
+**Commands**
+- `stitch-state.py versions <key> [--json]`: one row per labelled version: version, rev, date, op,
+  screenId, who, prompt excerpt, render present Y/N, and the approved marker. Unlabelled edits are collapsed
+  under the version they lead to (`5 (+3,4)`); trailing unlabelled revisions are listed as `-`.
+- `stitch-state.py diff <key> <vA> <vB>` (labels, `rev-N` or numbers): screenIds, the revisions and prompts
+  between them, which sha256 changed, and, when Pillow is installed, the percentage of differing pixels
+  (a note is printed, never a failure, without Pillow).
+- Typical record: `revise <key> --op adopt --version v0.1` + `render` (the baseline), then
+  `revise <key> --op edit --screen-id <new> --prompt ...` (auto `v0.2`) + `render`.
+
+Back-compat: a `stitch.json` written before versions (no `version`, no per-revision `render`) validates
+and gates exactly as before; the next `revise` on such a screen is labelled `v0.1` and archives beside the
+old top-level files.
 
 **Statuses**
 
@@ -357,6 +411,8 @@ Then `stitch-state.py revise <key> --op generate|edit --screen-id <id> --prompt 
 
 ### 6.3 Fetch the render
 
+(§6.7 lists what was observed live on 2026-10-01: the screenshot URL needs `=w2560` for full size.)
+
 **Verified response shape** (`generate_screen_from_text` and `edit_screens`, 2026-09-29):
 ```text
 outputComponents[0].design.screens[0] = {
@@ -455,6 +511,39 @@ data) is recorded in their manifest:
 ```
 Each screen entry in the manifest also names its `stitch_screen` key and the `stitch_rev` it was built from.
 
+### 6.7 Verified against the real Stitch API (2026-10-01)
+
+Observed in one live session on 2026-10-01 (a scratch project). Everything here is **observed on
+2026-10-01**; the last list says what is still unverified.
+
+- `generate_screen_from_text` and `edit_screens` return the screen **inline when they finish**:
+  `htmlCode.downloadUrl`, `screenshot.downloadUrl`, `width` / `height` (2560 wide = 2× the 1280 px
+  design), `screenMetadata.status: COMPLETE`, and `id` / `name`.
+- **Large single-shot prompts time out.** A full dashboard (sidebar, KPI cards, charts, table; a 40+ line
+  prompt) TIMED OUT twice and produced NO screen (`list_screens` stayed empty for 15+ minutes), while a
+  small prompt on `modelId: GEMINI_3_5_FLASH_LITE` returned immediately. So build a screen with **one
+  small generate, then several small `edit_screens` calls, one concern per edit** (each edit is a
+  revision; label only the last, §2.1).
+- **Chart placeholders.** The lighter model sometimes leaves text placeholders ("[Line Chart: …]",
+  "[Donut Chart]") instead of rendering charts; the stronger `GEMINI_3_8_FLASH` rendered them. After each
+  edit scan the downloaded HTML for `[... Chart` / `placeholder` strings and re-edit that concern with the
+  stronger model (the `/stitch` approval loop has this as a step).
+- `edit_screens` returns a **new screen id** and the **old screen stays**.
+- `screenshot.downloadUrl` returns a **512 px thumbnail by default**; append `=w2560` for the full-size
+  render (`${url}=w2560`). `htmlCode.downloadUrl` returns the full HTML (Tailwind via CDN + Material
+  Symbols). Never use the bare screenshot URL as the stored render.
+- **Stitch rewrites and enriches prompts** (it adds "Use the existing SideNavBar and TopNavBar
+  components" and invents content). When fidelity matters (an as-is recreation) state **"do not add
+  content not listed"**, and apply an **as-is design system** (`designMd`: "recreate faithfully; do not
+  improve") so the baseline isn't restyled.
+- `create_design_system` echoes the theme back, and Stitch expands `designMd` into `styleGuidelines`,
+  named colors and a typography scale. `update_design_system` needs the **full** `designSystem` object
+  and keeps the style guidelines.
+- Polling: `list_screens` returned `{}` for a project with no completed screen.
+
+**Still unverified:** how long download URLs stay valid, polling timing for slow generations (how long a
+timed-out request may still complete), `generate_variants`, and `apply_design_system`.
+
 ## 7. Reverse: code and requirements → Stitch
 
 **Requirements first, then code.** Whenever a requirement change touches a screen, the change goes to
@@ -526,7 +615,8 @@ result is a new revision that needs approval and re-normalization before it coun
 
 When `docs/design/stitch.json` exists, `stitch-state.py gate --phase N` (called by `verify-gate.sh`)
 blocks unless:
-- the file validates (schema, cross-field rules) and **every stored render still matches its sha256**;
+- the file validates (schema, cross-field rules) and **every stored render, current and archived (per
+  version), still matches its sha256**; version labels are unique and increasing;
 - every route in this phase's `ui_developer/manifest.json` and `mobile_developer/manifest.json`
   (`screens[].route`, or the explicit `stitch_screen`) has a Stitch screen whose status is `approved`
   or `conformant` at its latest revision;
@@ -559,11 +649,13 @@ only through a user-approved `gate.forced`.
 
 ## 12. What the first live run must confirm
 
-The tooling is built on the 2026-09-29 smoke test plus the tool schemas. The first live
+The tooling is built on the 2026-09-29 smoke test, the 2026-10-01 live session (§6.7) and the tool
+schemas. Items 1, 3 (partly) and 4 were observed on 2026-10-01; 2, 6, `generate_variants` and
+`apply_design_system` remain open. The first live
 `/stitch import` (or `/stitch request`) must check, and record in `docs/DECISIONS.md` or here:
 1. `get_screen` field names: `htmlCode.downloadUrl`, `screenshot.downloadUrl` (and that the screenshot
    is a PNG; its scale; whether it is full-page or viewport-only).
-2. How long the download URLs stay valid (decides whether `refresh` is needed before an audit).
+2. (still open) How long the download URLs stay valid (decides whether `refresh` is needed before an audit).
 3. Whether generation is synchronous or needs polling at normal load; typical durations.
 4. Whether `edit_screens` always returns a new screen id (verified once) and whether the old screen
    stays in `list_screens`.

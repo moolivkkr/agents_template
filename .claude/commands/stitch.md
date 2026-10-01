@@ -87,17 +87,31 @@ owner-review list, and a Stitch outage defers the screen instead of stopping (§
 For each new revision (stitch-design.md §6.2–6.4):
 1. `stitch-state.py revise <key> --op <op> --screen-id <new id> --prompt "<prompt>" --source <source> --phase <N>`
    (plus `--device --app --route` for a new key). `edit_screens` returns a **new** screen id: always
-   the one from the response.
+   the one from the response. **Version label** (stitch-design.md §2.1): `revise` labels the revision
+   with the next minor automatically (`v0.1` for the first). When several small `edit_screens` calls make
+   up ONE reviewable change, pass `--no-version` on every edit except the last (those archive as
+   `rev-<n>`), or `--no-version` on all of them and run `stitch-state.py label <key>` once the result is
+   final; `stitch-state.py versions <key>` shows the unlabelled edits collapsed under the label they
+   lead to.
 2. Fetch: `mcp__stitch__get_screen`, save the payload to `agent_state/stitch/<key>/rev-<n>.json`,
    download `screenshot.downloadUrl` and `htmlCode.downloadUrl` (`curl -sL`), then
-   `stitch-state.py render <key> --screenshot <png> --html <html>`.
+   `stitch-state.py render <key> --screenshot <png> --html <html>` (archives it under
+   `docs/design/stitch/<key>/<version or rev-n>/` and copies it to `docs/design/stitch/<key>/`). Use
+   `${screenshot.downloadUrl}=w2560` for the full-size screenshot (the bare URL is a 512 px thumbnail).
+   **Placeholder check (every edit, before showing the render):** scan the downloaded HTML for
+   `\[[^]]*Chart`, `[Donut`, `placeholder` and `lorem`. If a chart or block was left as a text
+   placeholder, re-edit that one concern with `modelId: GEMINI_3_8_FLASH` (the lighter
+   `GEMINI_3_5_FLASH_LITE` sometimes leaves them) as a new `--no-version` revision, then fetch again.
+   Build a screen with one small generate and several small single-concern edits, never one 40-line
+   prompt (stitch-design.md §6.7).
 3. **Interactive — the owner approves.** Print the local path
    `docs/design/stitch/<key>/screenshot.png`, Read the image and describe it in two lines, show the
    prompt, Stitch's summary, and any content not in `data-contracts.md`. Ask:
    `Approve <key> rev <n>?  [approve] or type an edit prompt`.
    An edit prompt → `mcp__stitch__edit_screens` (`selectedScreenIds: [screenId]`, same `deviceType`;
    poll, never retry) → back to step 1 with `--op edit --source owner`. Loop until approved.
-   Approve → `stitch-state.py approve <key> --by owner`.
+   Approve → `stitch-state.py approve <key> --by owner` (add `--promote` when the owner is releasing
+   it: the approved revision becomes `v1.0`, or the next major if `v1.0` is taken).
 4. **Auto — design_quality_reviewer approves.** Spawn `design_quality_reviewer`
    (`subagent_type: design_quality_reviewer`) in render-approval mode:
    ```
@@ -130,7 +144,11 @@ For each new revision (stitch-design.md §6.2–6.4):
 ## import — bootstrap from the running app (every page)
 
 Follow stitch-design.md §3.2 exactly. The MCP can't upload images, so each page is recreated from a
-capture and scored:
+capture and scored. **The recreation is the as-is baseline: it is recorded as `v0.1`.** Its generation and
+corrections use `--no-version`; when the final recreation is accepted or scored, run
+`stitch-state.py label <key> --version v0.1`. Say "do not add content not listed" in the prompt and apply
+an as-is design system ("recreate faithfully; do not improve"), stitch-design.md §6.7. The next change
+becomes `v0.2` (`stitch-state.py versions <key>` / `diff <key> v0.1 v0.2` compare them).
 1. **Inventory every page** (routes in code + every phase's UI manifests; `--route` restricts it).
    The app must be running at `APP_BASE_URL` with seeded demo data; parameterized routes get seeded
    ids; logged-in pages get a seeded user's `storageState`.
@@ -170,8 +188,8 @@ Experimental Mode → import screenshot); the MCP can't do that step.
 2. Match each screen to a route by title convention (`<route> <device>`, e.g. `/orders desktop`, or
    the page's title); show one table of the rest and ask the owner for each (route / skip). `--auto`:
    exact matches only; the rest are listed.
-3. Per mapped screen: `get_screen`, store the render, `revise --op adopt`, `approve --by owner` (the
-   owner supplied the image). Pages left without a screen stay `no_baseline` and are offered to `import`.
+3. Per mapped screen: `get_screen`, `revise --op adopt --version v0.1` (the adopted screen is the as-is
+   baseline), store the render, `approve --by owner` (the owner supplied the image). Pages left without a screen stay `no_baseline` and are offered to `import`.
 
 ## request — a new screen or a change, through Stitch first
 
@@ -182,7 +200,11 @@ entry point every UI change uses: owner ideas, change requests (`product_manager
    "FR-012 amended by CR-4", stitch-design.md §6.1) → `mcp__stitch__edit_screens`.
    Unknown key → **new screen**: build the generate prompt from the contract (§6.1; `--route`
    required) → `mcp__stitch__generate_screen_from_text` with `deviceType` and `designSystem`.
-2. The approval loop above (source `owner`, `change_request`, `recon`, `hotfix` or `requirement`).
+2. The approval loop above (source `owner`, `change_request`, `recon`, `hotfix` or `requirement`). A
+   change to an imported/adopted screen keeps its `v0.1` baseline render on disk; the finished
+   improvement is labelled the next minor (`v0.2`), the intermediate edits stay unlabelled. A screen with
+   no recorded baseline (neither imported nor adopted): record its current Stitch screen first
+   (`revise --op adopt --version v0.1`, `render`), then make the change.
 3. **Normalize** the approved render: `sync --screen=<key>` (below).
 4. **Hand-off:** print what the implementer gets:
    ```
@@ -198,7 +220,8 @@ For every screen with status `sync_back_pending` (accepted `stitch_deviations[]`
 1. Build one as-built prompt per screen from its accepted, unsynced deviations ("As built: rows are
    48px tall; row actions are 44px icon buttons. Keep everything else unchanged.") and, where useful,
    a capture of the built page (`stitch-capture.mjs`).
-2. `mcp__stitch__edit_screens` → `revise --op sync_back --source deviation` → fetch + `render`.
+2. `mcp__stitch__edit_screens` → `revise --op sync_back --source deviation` (labelled with the next
+   minor automatically) → fetch + `render`.
 3. The approval loop (the owner confirms the render now shows what shipped).
 4. `stitch-state.py deviation <key> --id <DEV-…> --phase <N> --synced-rev <n>` for each deviation, then
    `sync --screen=<key>` to refresh the wireframe. The screen is `approved` again and the queue entry
@@ -263,11 +286,15 @@ approved rev / by / at, render sha (first 12) and wireframe. Then:
 - the **queue**: deferred screens (Stitch was down) and pending sync-backs;
 - wireframes with no Stitch screen, and approved renders never synced into a wireframe.
 The audit-derived statuses are as fresh as the last `/ui-audit`; its date is shown.
+For a screen's version history: `stitch-state.py versions <key>` (`--json`), and
+`stitch-state.py diff <key> v0.1 v0.2` for what changed between two versions.
 
 ---
 
 ## Definition of Done
 - [ ] Every Stitch mutation is recorded through `stitch-state.py` (new screen id after every edit, prompt and source in `history`), and `stitch-state.py validate --check-files` passes.
+- [ ] Every revision that is a reviewable result carries a version label (`v0.1` as-is baseline for imported/adopted screens, then `v0.2`, ...), intermediate edits of one change are unlabelled, and each labelled version has its archived render (`stitch-state.py versions <key>`).
+- [ ] After every generate/edit the downloaded HTML was scanned for chart/placeholder text and re-edited when found.
 - [ ] Every render that will be implemented is approved at its latest revision: by the owner (interactive) or by `design_quality_reviewer` with the screen on the owner-review list (auto).
 - [ ] Every generate/edit/variants call set `deviceType` (and `designSystem` for generation), and no timed-out call was retried.
 - [ ] `import` covered every page in the inventory and recorded a fidelity score per page; pages below threshold are `import_low_fidelity`, never approved autonomously.

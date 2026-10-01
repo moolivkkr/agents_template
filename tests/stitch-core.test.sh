@@ -83,6 +83,13 @@ if [ -f "$ROOT/tests/lib/stitch_cases.py" ] && [ -f "$H/stitch-state.py" ]; then
   [ "$rc" -eq 0 ] && ok "stitch_cases.py: $(printf '%s' "$out" | tail -1)" || bad "stitch_cases.py failed"
 else bad "tests/lib/stitch_cases.py or .claude/hooks/stitch-state.py missing"; fi
 
+echo "── 5b. version tracking is documented where it is used ──"
+G="$ROOT/docs/STITCH_DESIGN_GUIDE.md"
+has "$SK" '### 2.1 Versions: v0.1 as-is, v0.2 improved, v1.0 approved' && has "$SK" 'stitch-state.py diff <key> <vA> <vB>' && ok "stitch-design.md has the version lifecycle, versions and diff" || bad "stitch-design.md lacks the version lifecycle"
+has "$SK" '### 6.7 Verified against the real Stitch API (2026-10-01)' && has "$SK" '=w2560' && has "$SK" '**Still unverified:**' && ok "stitch-design.md records the 2026-10-01 live observations and what is unverified" || bad "stitch-design.md lacks the live-API section"
+has "$C/stitch.md" 'revise --op adopt --version v0.1' && has "$C/stitch.md" 'stitch-state.py label <key> --version v0.1' && has "$C/stitch.md" 'GEMINI_3_8_FLASH' && ok "/stitch: import/adopt record v0.1, loops label the final result, chart-placeholder check" || bad "/stitch lacks the version / placeholder steps"
+has "$G" 'Versions: keep' && has "$G" 'Verified against the real Stitch API (2026-10-01)' && ok "STITCH_DESIGN_GUIDE.md documents versions and the live verification" || bad "STITCH_DESIGN_GUIDE.md lacks versions / live verification"
+
 echo "── 6b. verify-gate.sh check (g) end to end ──"
 if grep -q '(g) Stitch design baseline' "$H/verify-gate.sh"; then ok "verify-gate.sh has check (g)"; else bad "verify-gate.sh has no Stitch check"; fi
 D="$TMP/gate"; mkdir -p "$D/agent_state/phases/1/ui_developer" "$D/docs/design"
