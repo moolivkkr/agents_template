@@ -31,8 +31,11 @@ import (
     "fmt"
     "log/slog"
     "net/http"
+    "reflect"
     "runtime"
     "strconv"
+    "strings"
+    "unicode/utf8"
 
     "github.com/go-chi/chi/v5"
 )
@@ -115,9 +118,114 @@ func NewMultiValidationError(fields []FieldError) *AppError {
         HTTPStatus: http.StatusBadRequest, Details: fields}
 }
 
-// Map validator output (e.g. go-playground/validator) to stable codes + catalog messages:
-//   for _, fe := range verrs { fields = append(fields, FieldError{Field: jsonName(fe), Code: fe.Tag(), Message: catalog(fe)}) }
-// Never put fe.Error() / err.Error() in Message — it can carry internals and isn't written for users.
+// --- details[].code: the closed set in api/response-envelope.md ---
+// Every field-level code a client sees is one of these. A hand-written check names one directly
+// (NewValidationError("limit", "out_of_range", ...)); a validator's failures go through
+// ValidationDetail, so its own vocabulary ("min", "oneof", "e164", ...) never reaches the wire.
+const (
+    FieldRequired      = "required"
+    FieldInvalidType   = "invalid_type"
+    FieldInvalidFormat = "invalid_format"
+    FieldInvalidValue  = "invalid_value"
+    FieldOutOfRange    = "out_of_range"
+    FieldTooShort      = "too_short"
+    FieldTooLong       = "too_long"
+    FieldUnknown       = "unknown_field"
+    FieldInvalidCursor = "invalid_cursor"
+    FieldAlreadyExists = "already_exists"
+)
+
+// fieldMessages is the fixed catalog behind details[].message — never fe.Error() / err.Error(),
+// which carry internals and aren't written for users.
+var fieldMessages = map[string]string{
+    FieldRequired:      "This field is required.",
+    FieldInvalidType:   "This value has the wrong type.",
+    FieldInvalidFormat: "This value is not in the expected format.",
+    FieldInvalidValue:  "This value is not allowed.",
+    FieldOutOfRange:    "This value is out of range.",
+    FieldTooShort:      "This value is too short.",
+    FieldTooLong:       "This value is too long.",
+    FieldUnknown:       "This field is not accepted.",
+    FieldInvalidCursor: "The page cursor is invalid.",
+    FieldAlreadyExists: "This value is already in use.",
+}
+
+// ValidationRule is one failed rule as a validator reports it. go-playground/validator's FieldError
+// satisfies it, so this package doesn't import the validator.
+type ValidationRule interface {
+    Field() string      // the field (its json name once the validator has a tag-name func)
+    Tag() string        // the rule: "required", "email", "min", ...
+    Param() string      // the rule's parameter: "3" in min=3
+    Kind() reflect.Kind // the field's kind: string, slice, int, ...
+    Value() any         // the value that failed
+}
+
+// ValidationDetail is the details[] entry for one failed rule: field, code from the closed set,
+// catalog message. Build VALIDATION_FAILED from a validator with it:
+//
+//     for _, fe := range verrs { fields = append(fields, apperr.ValidationDetail(fe)) }
+//     return apperr.NewMultiValidationError(fields)
+func ValidationDetail(r ValidationRule) FieldError {
+    code := FieldCode(r)
+    return FieldError{Field: r.Field(), Code: code, Message: fieldMessages[code]}
+}
+
+// FieldCode maps a validator rule onto the closed set.
+func FieldCode(r ValidationRule) string {
+    tag := r.Tag()
+    switch {
+    case strings.HasPrefix(tag, "required"): // required, required_if, required_with, ...
+        return FieldRequired
+    case formatRules[tag]:
+        return FieldInvalidFormat
+    case sizeRules[tag]:
+        return sizeCode(tag, r)
+    }
+    return FieldInvalidValue // oneof, eq, ne, eqfield, unique, ... — the set's fallback
+}
+
+var formatRules = map[string]bool{
+    "email": true, "uuid": true, "uuid3": true, "uuid4": true, "uuid5": true, "ulid": true,
+    "url": true, "uri": true, "http_url": true, "hostname": true, "fqdn": true, "ip": true,
+    "ipv4": true, "ipv6": true, "cidr": true, "e164": true, "datetime": true, "semver": true,
+    "numeric": true, "alpha": true, "alphanum": true, "hexadecimal": true, "base64": true,
+    "jwt": true, "json": true, "iso3166_1_alpha2": true, "bcp47_language_tag": true,
+}
+
+var sizeRules = map[string]bool{"min": true, "max": true, "len": true, "gt": true, "gte": true, "lt": true, "lte": true}
+
+// sizeCode: on a string, slice, array or map the size rules bound a length (too_short/too_long); on
+// a number, a time or anything else they bound the value (out_of_range).
+func sizeCode(tag string, r ValidationRule) string {
+    switch r.Kind() {
+    case reflect.String, reflect.Slice, reflect.Array, reflect.Map:
+    default:
+        return FieldOutOfRange
+    }
+    switch tag {
+    case "min", "gt", "gte":
+        return FieldTooShort
+    case "max", "lt", "lte":
+        return FieldTooLong
+    }
+    want, err := strconv.Atoi(r.Param()) // len=N: shorter or longer than N
+    if err == nil && length(r.Value()) < want {
+        return FieldTooShort
+    }
+    return FieldTooLong
+}
+
+func length(v any) int {
+    if s, ok := v.(string); ok {
+        return utf8.RuneCountInString(s) // the validator counts characters, not bytes
+    }
+    rv := reflect.ValueOf(v)
+    switch rv.Kind() {
+    case reflect.Slice, reflect.Array, reflect.Map, reflect.String:
+        return rv.Len()
+    }
+    return 0
+}
 
 // --- 422 BUSINESS_RULE_VIOLATION: a valid request rejected by a domain rule ---
 
@@ -398,6 +506,65 @@ func TestErrorMapperHidesUnknownErrors(t *testing.T) {
     assert.JSONEq(t, `{"error": {"code": "INTERNAL", "message": "Something went wrong.",
         "request_id": "req-1", "retryable": false}}`, rec.Body.String())
 }
+
+// Validator rules map onto the closed details[].code set (api/response-envelope.md): the
+// validator's own tag names never reach the wire, and a size rule's code follows the field's kind.
+func TestValidationDetail_MapsValidatorRulesOntoTheCodeSet(t *testing.T) {
+    type input struct {
+        Name    string   `validate:"required,min=2,max=5"`
+        Email   string   `validate:"omitempty,email"`
+        ID      string   `validate:"omitempty,uuid"`
+        Website string   `validate:"omitempty,url"`
+        Status  string   `validate:"omitempty,oneof=open closed"`
+        Qty     int      `validate:"min=1,max=10"`
+        Tags    []string `validate:"max=2"`
+        Country string   `validate:"omitempty,len=2"`
+        Confirm string   `validate:"omitempty,eqfield=Name"`
+    }
+    closedSet := map[string]bool{"required": true, "invalid_type": true, "invalid_format": true,
+        "invalid_value": true, "out_of_range": true, "too_short": true, "too_long": true,
+        "unknown_field": true, "invalid_cursor": true, "already_exists": true}
+    cases := []struct {
+        name  string
+        set   func(*input)
+        field string
+        want  string
+    }{
+        {"required", func(in *input) { in.Name = "" }, "Name", "required"},
+        {"string min", func(in *input) { in.Name = "a" }, "Name", "too_short"},
+        {"string max", func(in *input) { in.Name = "abcdef" }, "Name", "too_long"},
+        {"email", func(in *input) { in.Email = "not-an-email" }, "Email", "invalid_format"},
+        {"uuid", func(in *input) { in.ID = "123" }, "ID", "invalid_format"},
+        {"url", func(in *input) { in.Website = "nope" }, "Website", "invalid_format"},
+        {"oneof", func(in *input) { in.Status = "archived" }, "Status", "invalid_value"},
+        {"number min", func(in *input) { in.Qty = 0 }, "Qty", "out_of_range"},
+        {"number max", func(in *input) { in.Qty = 11 }, "Qty", "out_of_range"},
+        {"slice max", func(in *input) { in.Tags = []string{"a", "b", "c"} }, "Tags", "too_long"},
+        {"len, shorter", func(in *input) { in.Country = "U" }, "Country", "too_short"},
+        {"len, longer", func(in *input) { in.Country = "USA" }, "Country", "too_long"},
+        {"len counts characters", func(in *input) { in.Country = "ü" }, "Country", "too_short"},
+        {"fallback", func(in *input) { in.Confirm = "other" }, "Confirm", "invalid_value"},
+    }
+    v := validator.New()
+    valid := input{Name: "abc", Qty: 1}
+    require.NoError(t, v.Struct(valid))
+    for _, tc := range cases {
+        t.Run(tc.name, func(t *testing.T) {
+            in := valid
+            tc.set(&in)
+            var verrs validator.ValidationErrors
+            require.ErrorAs(t, v.Struct(in), &verrs)
+            require.Len(t, verrs, 1)
+
+            d := apperr.ValidationDetail(verrs[0])
+            assert.Equal(t, tc.field, d.Field)
+            assert.Equal(t, tc.want, d.Code)
+            assert.True(t, closedSet[d.Code], "%q is not in the details[].code set", d.Code)
+            assert.NotEmpty(t, d.Message)
+            assert.NotEqual(t, verrs[0].Error(), d.Message) // the catalog message, not the validator's text
+        })
+    }
+}
 ```
 
 ## Error Taxonomy Summary
@@ -420,7 +587,8 @@ func TestErrorMapperHidesUnknownErrors(t *testing.T) {
 - Every error returned from service/repo layers MUST be an `*AppError` or wrapped with `fmt.Errorf("context: %w", err)`
 - Internal error messages (500, 503) MUST NOT leak to clients — always return generic message
 - No client-visible field ever contains `err.Error()`, SQL, a driver/upstream message, a path or a stack trace
-- Validation errors (400 `VALIDATION_FAILED`) carry `details[]` of `{field, code, message}` from a fixed catalog
+- Validation errors (400 `VALIDATION_FAILED`) carry `details[]` of `{field, code, message}` from a fixed catalog; `code`
+  is one of the closed set in `api/response-envelope.md`, and validator output goes through `ValidationDetail`
 - Business-rule rejections are 422 `BUSINESS_RULE_VIOLATION`; malformed bodies are 400 `MALFORMED_REQUEST`
 - Every error body carries `request_id` (= the `X-Request-Id` header) and `retryable`
 - `errors.Is` and `errors.As` MUST work — implement `Unwrap()` on all custom error types

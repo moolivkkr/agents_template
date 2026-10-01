@@ -5,6 +5,7 @@
 ## Router Setup
 ```go
 func NewRouter(handlers *Handlers, middleware *Middleware) *gin.Engine {
+    jsonFieldNames() // details[].field is the json name ("email"), not the Go name ("Email")
     r := gin.New()
     r.Use(middleware.RequestID()) // validated X-Request-ID or a new one, echoed as X-Request-Id
     r.Use(gin.CustomRecovery(func(c *gin.Context, rec any) {
@@ -45,8 +46,8 @@ func (h *Handler) CreateUser(c *gin.Context) {
     Created(c, user)
 }
 
-// bindError: a validation failure is VALIDATION_FAILED with one detail per field (the field's json
-// name once the validator has a tag-name func); anything else is MALFORMED_REQUEST.
+// bindError: a validation failure is VALIDATION_FAILED with one detail per field, its code mapped
+// onto the closed set by apperr.ValidationDetail (never fe.Tag()); anything else is MALFORMED_REQUEST.
 func bindError(err error) error {
     var verrs validator.ValidationErrors
     if !errors.As(err, &verrs) {
@@ -54,9 +55,21 @@ func bindError(err error) error {
     }
     fields := make([]apperr.FieldError, 0, len(verrs))
     for _, fe := range verrs {
-        fields = append(fields, apperr.FieldError{Field: fe.Field(), Code: fe.Tag(), Message: "This value is not valid."})
+        fields = append(fields, apperr.ValidationDetail(fe))
     }
     return apperr.NewMultiValidationError(fields)
+}
+
+// jsonFieldNames makes gin's validator report each field by its json name.
+func jsonFieldNames() {
+    if v, ok := binding.Validator.Engine().(*validator.Validate); ok {
+        v.RegisterTagNameFunc(func(f reflect.StructField) string {
+            if name := strings.SplitN(f.Tag.Get("json"), ",", 2)[0]; name != "-" {
+                return name
+            }
+            return ""
+        })
+    }
 }
 ```
 - `ShouldBindJSON` (not `BindJSON`) — doesn't abort on error, lets you handle it

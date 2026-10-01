@@ -1216,7 +1216,7 @@ if errors.As(err, &valErr) {
         slog.String("field", valErr.Field),
         slog.String("message", valErr.Message),
     )
-    apperr.ErrorMapper(w, r, apperr.NewValidationError(valErr.Field, "invalid", valErr.Message))
+    apperr.ErrorMapper(w, r, apperr.NewValidationError(valErr.Field, valErr.Code, valErr.Message))
     return
 }
 ```
@@ -1239,6 +1239,7 @@ var (
 
 type ValidationError struct {
     Field   string `json:"field"`
+    Code    string `json:"code"` // one of the closed details[].code set (api/response-envelope.md)
     Message string `json:"message"`
 }
 
