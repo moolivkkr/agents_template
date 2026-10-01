@@ -25,6 +25,7 @@ Complete, production-ready Spring Security configuration template. Every generat
 package com.example.app.config;
 
 import com.example.app.security.*;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -42,15 +43,19 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtFilter;
     private final SecurityErrorDelegate securityErrors; // error-handling-java.md
+    // API keys (ApiKeyAuthenticationFilter below): used when the app has an ApiKeyRepository bean
+    private final ObjectProvider<ApiKeyRepository> apiKeys;
 
-    public SecurityConfig(JwtAuthenticationFilter jwtFilter, SecurityErrorDelegate securityErrors) {
+    public SecurityConfig(JwtAuthenticationFilter jwtFilter, SecurityErrorDelegate securityErrors,
+                          ObjectProvider<ApiKeyRepository> apiKeys) {
         this.jwtFilter = jwtFilter;
         this.securityErrors = securityErrors;
+        this.apiKeys = apiKeys;
     }
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        return http
+        http
             // 1. Disable CSRF — stateless JWT auth, no session cookies
             .csrf(csrf -> csrf.disable())
 
@@ -80,9 +85,13 @@ public class SecurityConfig {
                 .anyRequest().denyAll())
 
             // 5. Add JWT filter before Spring's default auth filter
-            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
+            .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class);
 
-            .build();
+        // 6. API keys (if the app stores them): read right after the JWT filter, INSIDE this chain. As a plain
+        //    servlet filter it would run after Spring Security had already answered 401.
+        apiKeys.ifAvailable(repo -> http.addFilterAfter(new ApiKeyAuthenticationFilter(repo), JwtAuthenticationFilter.class));
+
+        return http.build();
     }
 }
 ```
@@ -156,8 +165,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
             // Enrich MDC for structured logging
-            MDC.put("userId", claims.getSubject());
-            MDC.put("tenantId", claims.get("tenant_id", String.class));
+            MDC.put("user_id", claims.getSubject());
+            MDC.put("tenant_id", claims.get("tenant_id", String.class));
 
         } catch (ExpiredJwtException e) {
             log.debug("Expired JWT token");
@@ -170,8 +179,8 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         try {
             filterChain.doFilter(request, response);
         } finally {
-            MDC.remove("userId");
-            MDC.remove("tenantId");
+            MDC.remove("user_id");
+            MDC.remove("tenant_id");
         }
     }
 
@@ -180,7 +189,9 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
      */
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        var path = request.getServletPath();
+        // The path inside the app. Not getServletPath(): that is "" under MockMvc and only the prefix when
+        // spring.mvc.servlet.path is set, so a check on it silently changes meaning.
+        var path = request.getRequestURI().substring(request.getContextPath().length());
         return path.startsWith("/actuator/")
             || path.startsWith("/swagger-ui/")
             || path.startsWith("/v3/api-docs")
@@ -498,56 +509,10 @@ public class CorsConfig {
 
 ## Request ID Filter
 
-```java
-package com.example.app.config;
-
-import jakarta.servlet.*;
-import jakarta.servlet.http.HttpServletRequest;
-import jakarta.servlet.http.HttpServletResponse;
-import org.slf4j.MDC;
-import org.springframework.core.Ordered;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Component;
-
-import java.io.IOException;
-import java.util.UUID;
-
-/**
- * Generates or extracts a unique request ID for distributed tracing.
- * Checks X-Request-ID header first (client correlation), generates UUID if absent.
- * Sets MDC for structured logging and echos back on response header.
- *
- * Order: HIGHEST_PRECEDENCE — must run before all other filters.
- */
-@Component
-@Order(Ordered.HIGHEST_PRECEDENCE)
-public class RequestIdFilter implements Filter {
-
-    private static final String REQUEST_ID_HEADER = "X-Request-ID";
-    private static final String MDC_KEY = "requestId";
-
-    @Override
-    public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
-            throws IOException, ServletException {
-        var httpRequest = (HttpServletRequest) request;
-        var httpResponse = (HttpServletResponse) response;
-
-        var requestId = httpRequest.getHeader(REQUEST_ID_HEADER);
-        if (requestId == null || requestId.isBlank()) {
-            requestId = UUID.randomUUID().toString();
-        }
-
-        MDC.put(MDC_KEY, requestId);
-        httpResponse.setHeader(REQUEST_ID_HEADER, requestId);
-
-        try {
-            chain.doFilter(request, response);
-        } finally {
-            MDC.remove(MDC_KEY);
-        }
-    }
-}
-```
+Use `RequestIdFilter` from `crud-handler-java.md` (package `com.example.app.common`): the app has exactly one.
+A second `@Component` class named `RequestIdFilter`, even in another package, fails at startup with a
+bean-name conflict (`ConflictingBeanDefinitionException`). It runs first (`HIGHEST_PRECEDENCE`), takes a
+well-formed inbound `X-Request-ID` or generates one, and puts it in the MDC as `request_id`.
 
 ## API Key Authentication Filter
 
@@ -561,7 +526,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
@@ -575,12 +539,11 @@ import java.util.List;
  * API keys are stored as SHA-256 hashes in the database — never store plaintext. The lookup is by hash,
  * so no plaintext key is ever compared.
  *
- * Register it in the SecurityFilterChain, after the JWT filter:
- *   http.addFilterAfter(apiKeyFilter, JwtAuthenticationFilter.class)
- * On its own, a @Component filter runs as a plain servlet filter AFTER Spring Security has already
- * answered 401 — the key would never be read.
+ * Not a @Component: SecurityConfig (step 6) creates it inside the SecurityFilterChain, right after the JWT
+ * filter, when the app has an ApiKeyRepository. As a bean, Spring Boot would also run it as a plain servlet
+ * filter — after Spring Security has already answered 401, so the key would never be read — and every
+ * @WebMvcTest slice would have to build it.
  */
-@Component
 public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
 
     private static final String API_KEY_HEADER = "X-API-Key";
@@ -630,7 +593,8 @@ public class ApiKeyAuthenticationFilter extends OncePerRequestFilter {
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
         // Only activate for paths that accept API key auth
-        return !request.getServletPath().startsWith("/api/v1/");
+        var path = request.getRequestURI().substring(request.getContextPath().length()); // not getServletPath()
+        return !path.startsWith("/api/v1/");
     }
 
     private String hashKey(String key) {
@@ -702,7 +666,7 @@ Request → RequestIdFilter (HIGHEST_PRECEDENCE)
 - Rate limiters MUST be per-tenant — shared limits allow noisy neighbor abuse.
 - CORS MUST NOT use `*` with `allowCredentials: true` — browsers reject this combination.
 - Request ID MUST be set on response headers for client-side correlation.
-- MDC MUST be enriched with `userId`, `tenantId`, `requestId` at the auth boundary.
+- MDC MUST be enriched with `user_id` and `tenant_id` at the auth boundary (`request_id` comes from `RequestIdFilter`); keys are snake_case, the set the JSON log encoder includes.
 - `shouldNotFilter()` MUST exclude public endpoints from JWT parsing overhead.
 - Filter ordering: RequestID -> CORS -> JWT -> APIKey -> RateLimit -> Authorization.
 - 401 responses MUST include `WWW-Authenticate: Bearer` header.

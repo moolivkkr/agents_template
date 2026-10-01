@@ -332,40 +332,9 @@ def dep_id(d):
 
 
 def proto_texts(protos):
-    """The .proto blocks as files. Imports/options the protos are missing are added — idempotently, and
-    announced as NOTE lines, because those blocks belong to the language-neutral grpc-pattern.md."""
-    texts = {path: "\n".join(block(bid).lines) for bid, path in protos}
-    notes = []
-    defined = {}
-    for path, text in texts.items():
-        for m in re.finditer(r"^(?:message|enum)\s+(\w+)", text, re.M):
-            defined[m.group(1)] = path
-    java_pkg = next((m.group(1) for t in texts.values()
-                     for m in [re.search(r'option java_package = "([\w.]+)"', t)] if m), None)
-    out = {}
-    for bid, path in protos:
-        lines = texts[path].split("\n")
-        code = "\n".join(re.sub(r"//.*", "", l) for l in lines)
-        pkg_i = next(i for i, l in enumerate(lines) if l.startswith("package "))
-        add = []
-        if java_pkg and "java_package" not in code:
-            add.append(f'option java_package = "{java_pkg}";')
-        if java_pkg and "java_multiple_files" not in code:
-            add.append("option java_multiple_files = true;")
-        wanted = set()
-        if "google.protobuf.Timestamp" in code:
-            wanted.add("google/protobuf/timestamp.proto")
-        for name, where_ in defined.items():
-            if where_ != path and re.search(rf"(?<![\w.]){name}\b", code):
-                wanted.add(where_)
-        for imp in sorted(wanted):
-            if f'import "{imp}";' not in code:
-                add.append(f'import "{imp}";')
-        if add:
-            notes.append(f"NOTE {bid} ({path}): added {' '.join(add)} — missing in grpc-pattern.md, "
-                         f"which this Java harness does not edit")
-        out[path] = "\n".join(lines[:pkg_i + 1] + add + lines[pkg_i + 1:]) + "\n"
-    return out, notes
+    """The .proto blocks of the language-neutral grpc-pattern.md, written exactly as the doc has them (a missing
+    option or import fails protoc or javac — loudly)."""
+    return {path: "\n".join(block(bid).lines) + "\n" for bid, path in protos}
 
 
 def layout_unit(unit, dest):
@@ -419,13 +388,10 @@ def layout_unit(unit, dest):
             o.stub = str(f.relative_to(HERE))
             files[key] = o
     if unit.protos:
-        texts, notes = proto_texts(unit.protos)
-        for path, text in texts.items():
+        for path, text in proto_texts(unit.protos).items():
             p = mod / "src/main/protobuf" / path
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(text)
-        for n in notes:
-            print(n)
     maps = {}
     for key, o in files.items():
         p = mod / key
@@ -586,13 +552,10 @@ def gradle_projects(dest):
         text = build.read_text().replace("@PLUGINS@", "\n".join(plugins)).replace("@SNIPPET@", "\n".join(rest))
         build.write_text(text)
         if chk.protos:
-            texts, notes = proto_texts(chk.protos)
-            for path, t in texts.items():
+            for path, t in proto_texts(chk.protos).items():
                 p = proj / "src/main/proto" / path
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(t)
-            for n in notes:
-                print(n.replace("NOTE", f"NOTE [{chk.name}]"))
         out.append({"name": chk.name, "block": bid, "dir": str(proj), "tasks": list(chk.tasks),
                     "verify": chk.verify})
     return out

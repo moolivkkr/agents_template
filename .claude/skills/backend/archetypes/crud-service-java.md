@@ -76,6 +76,7 @@ import java.util.UUID;
 public class WidgetServiceImpl implements WidgetService {
 
     private static final Logger log = LoggerFactory.getLogger(WidgetServiceImpl.class);
+    private static final int MAX_LIMIT = 100;
 
     private final WidgetRepository repository;
     private final AuditService auditService;
@@ -89,7 +90,7 @@ public class WidgetServiceImpl implements WidgetService {
     @Override
     @Transactional
     public Widget create(CreateWidgetRequest request, UUID tenantId, UUID userId) {
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.info("Creating widget, name={}, tenant={}, requestId={}", request.name(), tenantId, requestId);
 
         // 1. Sanitize input
@@ -126,7 +127,7 @@ public class WidgetServiceImpl implements WidgetService {
     @Override
     @Cacheable(value = "widgets", key = "#tenantId + ':' + #id")
     public Widget findById(UUID id, UUID tenantId) {
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.debug("Fetching widget, id={}, tenant={}, requestId={}", id, tenantId, requestId);
 
         // Missing, soft-deleted or another tenant's: all 404 NOT_FOUND
@@ -138,7 +139,7 @@ public class WidgetServiceImpl implements WidgetService {
     @Transactional
     @CacheEvict(value = "widgets", key = "#tenantId + ':' + #id")
     public Widget update(UUID id, UpdateWidgetRequest request, UUID tenantId, UUID userId) {
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.info("Updating widget, id={}, version={}, tenant={}, requestId={}",
             id, request.version(), tenantId, requestId);
 
@@ -172,7 +173,7 @@ public class WidgetServiceImpl implements WidgetService {
     @Transactional
     @CacheEvict(value = "widgets", key = "#tenantId + ':' + #id")
     public void delete(UUID id, UUID tenantId, UUID userId) {
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.info("Deleting widget, id={}, tenant={}, requestId={}", id, tenantId, requestId);
 
         // 1. Verify exists and belongs to tenant
@@ -190,7 +191,12 @@ public class WidgetServiceImpl implements WidgetService {
 
     @Override
     public Window<Widget> findAll(UUID tenantId, WidgetStatus status, ScrollPosition position, Sort sort, int limit) {
-        var requestId = MDC.get("requestId");
+        // The controller already rejects it; check again so no caller (job, gRPC, another service) gets an
+        // unbounded or silently resized list
+        if (limit < 1 || limit > MAX_LIMIT) {
+            throw new ValidationException("limit", "out_of_range", "Limit must be a whole number from 1 to 100.");
+        }
+        var requestId = MDC.get("request_id");
         log.debug("Listing widgets, tenant={}, status={}, limit={}, requestId={}",
             tenantId, status, limit, requestId);
 
@@ -211,7 +217,7 @@ public class WidgetServiceImpl implements WidgetService {
 ```java
 @Transactional
 public Widget createWithComponents(CreateWidgetWithComponentsRequest request, UUID tenantId, UUID userId) {
-    var requestId = MDC.get("requestId");
+    var requestId = MDC.get("request_id");
     log.info("Creating widget with components, tenant={}, requestId={}", tenantId, requestId);
 
     // Step 1: Create parent widget
@@ -309,6 +315,9 @@ import org.springframework.data.redis.serializer.RedisSerializationContext;
 import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 
 @Configuration
 @EnableCaching
@@ -317,10 +326,16 @@ public class CacheConfig {
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
         // Jackson 3 serializer (the Jackson 2 one is deprecated for removal in Spring Data Redis 4). The type
-        // id lets a cached value come back as its class; the validator only accepts your own classes.
+        // id lets a cached value come back as its class. The validator accepts your own classes and the mutable
+        // JDK collections a cached method returns — named, not "java.util." (that package has gadget classes).
+        // List.of(..)/Stream.toList() results are final JDK types written without a type id and can't be read
+        // back: cache new ArrayList<>(list).
         var serializer = GenericJacksonJsonRedisSerializer.builder()
             .enableDefaultTyping(BasicPolymorphicTypeValidator.builder()
                 .allowIfSubType("com.example.app.")
+                .allowIfSubType(ArrayList.class)
+                .allowIfSubType(HashSet.class)   // and LinkedHashSet
+                .allowIfSubType(HashMap.class)   // and LinkedHashMap
                 .build())
             .build();
         var defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
@@ -426,4 +441,4 @@ public Widget create(CreateWidgetRequest request, UUID tenantId, UUID userId) {
 - Every service method MUST read `requestId` from MDC and include it in log lines.
 - Audit logging is async (`@Async`) — audit failures must NEVER block business operations.
 - Max 30 lines of logic per method — extract private helpers for complex workflows.
-- Never return unbounded collections — list operations take a cursor `ScrollPosition` + `limit` and return a keyset `Window` (no offset pages, no `Page<T>`).
+- Never return unbounded collections — list operations take a cursor `ScrollPosition` + `limit` and return a keyset `Window` (no offset pages, no `Page<T>`). A `limit` outside 1..100 is a `ValidationException` on `limit` (400 `VALIDATION_FAILED`), never clamped.

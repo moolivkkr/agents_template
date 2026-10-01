@@ -256,6 +256,7 @@ public final class CursorCodec {
 package com.example.app.controller;
 
 import com.example.app.common.*;
+import com.example.app.exception.ValidationException;
 import com.example.app.model.dto.*;
 import com.example.app.model.entity.Widget;
 import com.example.app.model.entity.WidgetStatus;
@@ -287,8 +288,7 @@ public class WidgetController {
 
     private static final Logger log = LoggerFactory.getLogger(WidgetController.class);
     private static final Set<String> ALLOWED_SORT_FIELDS = Set.of("createdAt", "updatedAt", "name");
-    private static final int MAX_PAGE_SIZE = 100;
-    private static final int DEFAULT_PAGE_SIZE = 20;
+    private static final int MAX_PAGE_SIZE = 100; // the default (20) is the @RequestParam default below
 
     private final WidgetService widgetService;
 
@@ -304,7 +304,7 @@ public class WidgetController {
             @Valid @RequestBody CreateWidgetRequest request,
             @AuthenticationPrincipal UserPrincipal principal) {
 
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.info("Creating widget, name={}, tenant={}", request.name(), principal.getTenantId());
 
         var widget = widgetService.create(request, principal.getTenantId(), principal.getUserId());
@@ -324,7 +324,7 @@ public class WidgetController {
             @PathVariable UUID id,
             @AuthenticationPrincipal UserPrincipal principal) {
 
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.debug("Fetching widget, id={}, tenant={}", id, principal.getTenantId());
 
         var widget = widgetService.findById(id, principal.getTenantId());
@@ -341,7 +341,7 @@ public class WidgetController {
             @Valid @RequestBody UpdateWidgetRequest request,
             @AuthenticationPrincipal UserPrincipal principal) {
 
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
         log.info("Updating widget, id={}, version={}, tenant={}", id, request.version(), principal.getTenantId());
 
         var widget = widgetService.update(id, request, principal.getTenantId(), principal.getUserId());
@@ -377,10 +377,13 @@ public class WidgetController {
             @Parameter(description = "Filter by status") @RequestParam(required = false) WidgetStatus status,
             @AuthenticationPrincipal UserPrincipal principal) {
 
-        var requestId = MDC.get("requestId");
+        var requestId = MDC.get("request_id");
 
-        // Enforce bounds: default 20 when zero/negative, cap at 100
-        limit = limit <= 0 ? DEFAULT_PAGE_SIZE : Math.min(limit, MAX_PAGE_SIZE);
+        // limit defaults to 20; outside 1..100 it is 400 VALIDATION_FAILED with a details[] entry for limit —
+        // never clamped silently (a client asking for 500 must learn it got fewer). Not a number → also 400.
+        if (limit < 1 || limit > MAX_PAGE_SIZE) {
+            throw new ValidationException("limit", "out_of_range", "Limit must be a whole number from 1 to 100.");
+        }
         if (!ALLOWED_SORT_FIELDS.contains(sortBy)) {
             sortBy = "createdAt";
         }
@@ -423,13 +426,22 @@ import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.util.UUID;
+import java.util.regex.Pattern;
 
+/**
+ * THE request-id filter: auth-middleware-java.md and observability-java.md use this one. Never add a second
+ * class with this name (two @Component RequestIdFilter classes fail at startup with a bean-name conflict).
+ * Takes a well-formed inbound X-Request-ID, otherwise generates one; puts it in the MDC as request_id (what
+ * GlobalExceptionHandler, the envelope's meta.request_id and every log line read) and echoes it on the response.
+ */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE)
 public class RequestIdFilter implements Filter {
 
-    private static final String REQUEST_ID_HEADER = "X-Request-ID";
-    private static final String MDC_KEY = "requestId";
+    public static final String HEADER = "X-Request-ID";
+    public static final String MDC_KEY = "request_id";
+    // Bounded charset and length: an inbound id can't inject log lines or bloat every record
+    private static final Pattern VALID = Pattern.compile("[A-Za-z0-9._-]{8,128}");
 
     @Override
     public void doFilter(ServletRequest request, ServletResponse response, FilterChain chain)
@@ -437,13 +449,13 @@ public class RequestIdFilter implements Filter {
         var httpRequest = (HttpServletRequest) request;
         var httpResponse = (HttpServletResponse) response;
 
-        var requestId = httpRequest.getHeader(REQUEST_ID_HEADER);
-        if (requestId == null || requestId.isBlank()) {
+        var requestId = httpRequest.getHeader(HEADER);
+        if (requestId == null || !VALID.matcher(requestId).matches()) {
             requestId = UUID.randomUUID().toString();
         }
 
         MDC.put(MDC_KEY, requestId);
-        httpResponse.setHeader(REQUEST_ID_HEADER, requestId);
+        httpResponse.setHeader(HEADER, requestId);
 
         try {
             chain.doFilter(request, response);
@@ -539,8 +551,8 @@ public class OpenApiConfig {
 - NEVER expose JPA entities in responses — always map to response DTOs (records).
 - ALWAYS use `@Valid` on `@RequestBody` — let Spring's validator reject invalid input before the service layer.
 - ALWAYS use `@AuthenticationPrincipal` to extract tenant/user — NEVER accept tenant ID from path params or body.
-- ALWAYS use `MDC.get("requestId")` for request tracing — set by the `RequestIdFilter`, which also sets `X-Request-Id` on every response.
-- List endpoints are cursor-only: `?cursor=&limit=` (`limit` defaults to 20, max 100), a keyset `Window` from the service, `meta.pagination` `{next_cursor, has_more, limit}` in the response — never `page`/`size` params or `Page<T>` JSON, never unbounded lists.
+- ALWAYS use `MDC.get("request_id")` for request tracing — set by the `RequestIdFilter`, which also sets `X-Request-Id` on every response.
+- List endpoints are cursor-only: `?cursor=&limit=` (`limit` defaults to 20; outside 1..100 it is 400 `VALIDATION_FAILED` with a `details[]` entry for `limit`, never clamped), a keyset `Window` from the service, `meta.pagination` `{next_cursor, has_more, limit}` in the response — never `page`/`size` params or `Page<T>` JSON, never unbounded lists.
 - Sort fields MUST be allow-listed — never allow sorting by arbitrary columns.
 - DELETE returns 204 No Content — no response body.
 - POST create returns 201 Created with the created resource.

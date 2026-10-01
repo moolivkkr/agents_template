@@ -632,6 +632,22 @@ class FindAllTests {
         verify(cb, never()).equal(any(), isA(WidgetStatus.class));
     }
 
+    @ParameterizedTest(name = "limit {0} → ValidationException on limit")
+    @ValueSource(ints = {0, -1, 101, 500})
+    @DisplayName("limit outside 1..100 is rejected, never clamped, and the repository is not called")
+    void findAll_LimitOutOfRange_ThrowsValidation(int limit) {
+        assertThatThrownBy(() -> widgetService.findAll(TENANT_ID, null, ScrollPosition.keyset(), NEWEST_FIRST, limit))
+            .isInstanceOfSatisfying(ValidationException.class, e -> {
+                assertThat(e.getErrorCode()).isEqualTo("VALIDATION_FAILED");
+                assertThat(e.getDetails()).singleElement().satisfies(d -> {
+                    assertThat(d.field()).isEqualTo("limit");
+                    assertThat(d.code()).isEqualTo("out_of_range");
+                });
+            });
+
+        verifyNoInteractions(repository);
+    }
+
     @ParameterizedTest(name = "status filter: {0}")
     @EnumSource(WidgetStatus.class)
     @DisplayName("each status value is applied to the scroll's Specification")

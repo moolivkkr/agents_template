@@ -111,7 +111,7 @@ BLOCKS = {}
 
 # Expected ```java block count per file — a mismatch means the doc changed: re-map it here.
 JAVA_BLOCKS = {
-    "auth-middleware-java.md": 10,
+    "auth-middleware-java.md": 9,
     "crud-handler-java.md": 9,
     "crud-handler-test-java.md": 11,
     "crud-repository-java.md": 10,
@@ -253,7 +253,7 @@ BLOCKS[f"{SERVICE}#8"] = Split([
 
 # ── auth-middleware-java.md ──
 BLOCKS[f"{AUTH}#4"] = File(transforms=("stub_bodies",))   # @PreAuthorize placement sketch: bodies are `// ...`
-BLOCKS[f"{AUTH}#10"] = Members(
+BLOCKS[f"{AUTH}#9"] = Members(
     cls="CorsSecurityConfigExample", package="com.example.app.config",
     imports=("org.springframework.context.annotation.Bean",
              "org.springframework.security.config.annotation.web.builders.HttpSecurity",
@@ -409,7 +409,7 @@ PREVIEW_POM = """  <build>
 # ── units ──────────────────────────────────────────────────────────────────────────────────────────
 UNITS = [
     Unit("error-handling-java", own=ids(EH, 1, 2, 3, 4, 6),
-         deps=ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3)),
+         deps=ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3, 8), stubs=("auth",)),
     Unit("crud-repository-java", own=rng(REPO, 1, 10), deps=EXCEPTIONS + ENVELOPE, stubs=("crud-repository",)),
     Unit("crud-handler-java-entity", own=ids(HANDLER, 1),
          deps=[(f"{REPO}#2", File(only=("WidgetStatus",)))]),
@@ -417,12 +417,12 @@ UNITS = [
     Unit("crud-service-java", own=ids(SERVICE, 1, 2, 3, 4, 5, 7, 8),
          deps=EXCEPTIONS + ENTITY + REPOSITORY + DTO + SANITIZER, stubs=("crud-service",)),
     Unit("crud-handler-test-java", own=rng("crud-handler-test-java.md", 1, 11),
-         deps=EXCEPTIONS + ERROR_WRITER + ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3),
-         stubs=()),
+         deps=EXCEPTIONS + ERROR_WRITER + ENTITY + DTO + ENVELOPE + CONTROLLER + SERVICE_API + ids(AUTH, 1, 2, 3, 8),
+         stubs=("auth",)),
     Unit("crud-service-test-java", own=rng("crud-service-test-java.md", 1, 10),
          deps=EXCEPTIONS + ENTITY + REPOSITORY + DTO + SANITIZER + SERVICE_API + SERVICE_IMPL, stubs=("crud-service",)),
     Unit("crud-repository-test-java", own=rng("crud-repository-test-java.md", 1, 13), deps=ENTITY + REPOSITORY),
-    Unit("auth-middleware-java", own=rng(AUTH, 1, 10),
+    Unit("auth-middleware-java", own=rng(AUTH, 1, 9),
          deps=EXCEPTIONS + ERROR_WRITER + ENTITY + REPOSITORY + DTO, stubs=("auth",)),
     Unit("observability-java", own=ids(OBS, 1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 15, 16, 17),
          stubs=("observability",)),

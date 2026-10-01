@@ -587,27 +587,53 @@ class ListWidgetTests {
 @DisplayName("Pagination parameter handling")
 class PaginationTests {
 
-    @ParameterizedTest(name = "limit {0} becomes {1}")
-    @CsvSource({
-        "0, 20",      // zero defaults to 20
-        "-5, 20",     // negative defaults to 20
-        "50, 50",     // valid limit passes through
-        "500, 100",   // exceeds max, clamped to 100
-        "100, 100",   // at max, passes through
-    })
-    @DisplayName("limit defaults to 20 and is capped at 100")
-    void list_LimitClamping(int requestedLimit, int expectedLimit) throws Exception {
+    @ParameterizedTest(name = "limit {0} passes through")
+    @ValueSource(ints = {1, 50, 100})
+    @DisplayName("limit inside 1..100 is used as given")
+    void list_LimitInRange_PassesThrough(int limit) throws Exception {
         given(widgetService.findAll(eq(TENANT_ID), isNull(), any(ScrollPosition.class), any(Sort.class), anyInt()))
             .willReturn(window(List.of(), false));
 
         mockMvc.perform(get(BASE_URL)
                 .with(user(testPrincipal()))
-                .param("limit", String.valueOf(requestedLimit)))
+                .param("limit", String.valueOf(limit)))
             .andExpect(status().isOk())
-            .andExpect(jsonPath("$.meta.pagination.limit").value(expectedLimit));
+            .andExpect(jsonPath("$.meta.pagination.limit").value(limit));
 
-        // Verify the service was called with the clamped limit
-        verify(widgetService).findAll(eq(TENANT_ID), isNull(), any(ScrollPosition.class), any(Sort.class), eq(expectedLimit));
+        verify(widgetService).findAll(eq(TENANT_ID), isNull(), any(ScrollPosition.class), any(Sort.class), eq(limit));
+    }
+
+    @Test
+    @DisplayName("no limit — defaults to 20")
+    void list_NoLimit_Defaults20() throws Exception {
+        given(widgetService.findAll(eq(TENANT_ID), isNull(), any(ScrollPosition.class), any(Sort.class), anyInt()))
+            .willReturn(window(List.of(), false));
+
+        mockMvc.perform(get(BASE_URL).with(user(testPrincipal())))
+            .andExpect(status().isOk())
+            .andExpect(jsonPath("$.meta.pagination.limit").value(20));
+    }
+
+    @ParameterizedTest(name = "limit ''{0}'' → 400 VALIDATION_FAILED ({1})")
+    @CsvSource({
+        "0, out_of_range",
+        "-5, out_of_range",
+        "101, out_of_range",
+        "500, out_of_range",       // never clamped to 100: the client would not know it got fewer
+        "abc, invalid_format",     // not a number
+    })
+    @DisplayName("limit outside 1..100 is rejected, never clamped")
+    void list_LimitOutOfRange_Returns400(String limit, String code) throws Exception {
+        mockMvc.perform(get(BASE_URL)
+                .with(user(testPrincipal()))
+                .param("limit", limit))
+            .andExpect(status().isBadRequest())
+            .andExpect(jsonPath("$.error.code").value("VALIDATION_FAILED"))
+            .andExpect(jsonPath("$.error.details[0].field").value("limit"))
+            .andExpect(jsonPath("$.error.details[0].code").value(code))
+            .andExpect(jsonPath("$.data").doesNotExist());
+
+        verifyNoInteractions(widgetService);
     }
 
     @ParameterizedTest(name = "sort field ''{0}'' resolves to ''{1}''")
@@ -939,7 +965,7 @@ class ContentNegotiationTests {
 - DELETE MUST return 204 with empty body — `content().string("")`.
 - POST create MUST return 201 Created.
 - Every response MUST follow `~/.claude/skills/api/response-envelope.md`: `{"data": T, "meta": {"request_id"}}` for success, `{"error": {code, message, details?, request_id, retryable}}` for failure, never both.
-- Lists: `meta.pagination` `{next_cursor, has_more, limit}`, `data` is `[]` when empty, `next_cursor` null when `has_more` is false; `limit` defaults to 20 and is capped at 100; sort fields MUST be allow-listed.
+- Lists: `meta.pagination` `{next_cursor, has_more, limit}`, `data` is `[]` when empty, `next_cursor` null when `has_more` is false; `limit` defaults to 20 and a value outside 1..100 is 400 `VALIDATION_FAILED` with a `details[]` entry for `limit` (never clamped); sort fields MUST be allow-listed.
 - Use `@ParameterizedTest` with `@MethodSource` or `@CsvSource` for table-driven tests.
 - Use `@Nested` classes to group tests by endpoint (improves test output readability).
 - Use `verifyNoInteractions(widgetService)` when the request should fail before reaching the service layer.

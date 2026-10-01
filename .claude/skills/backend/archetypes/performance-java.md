@@ -1239,6 +1239,9 @@ import org.springframework.data.redis.serializer.RedisSerializationContext;
 import tools.jackson.databind.jsontype.BasicPolymorphicTypeValidator;
 
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
 
 @Configuration
@@ -1247,11 +1250,15 @@ public class RedisCacheConfig {
 
     @Bean
     public RedisCacheManager cacheManager(RedisConnectionFactory connectionFactory) {
-        // Jackson 3 serializer (GenericJackson2JsonRedisSerializer is deprecated for removal); type ids restore
-        // the cached class, and the validator only accepts your own classes
+        // Jackson 3 serializer (GenericJackson2JsonRedisSerializer is deprecated for removal). Type ids restore
+        // the cached class; the validator accepts your own classes and the mutable JDK collections, by name (not
+        // "java.util."). List.of(..)/Stream.toList() can't be read back: cache new ArrayList<>(list).
         var serializer = GenericJacksonJsonRedisSerializer.builder()
                 .enableDefaultTyping(BasicPolymorphicTypeValidator.builder()
                         .allowIfSubType("com.example.app.")
+                        .allowIfSubType(ArrayList.class)
+                        .allowIfSubType(HashSet.class)
+                        .allowIfSubType(HashMap.class)
                         .build())
                 .build();
         RedisCacheConfiguration defaultConfig = RedisCacheConfiguration.defaultCacheConfig()
