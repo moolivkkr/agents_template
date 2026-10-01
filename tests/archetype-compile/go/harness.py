@@ -9,6 +9,11 @@ stubs listed for the unit, then runs:
     go test -count=1 -run '^$' ./...     (compiles and links the test binaries; units with "tests")
     go vet ./...
     go test -count=1 <pkgs>              (units that list "run_tests": no external service needed)
+    go test ... "db_tests"               (ARCHETYPE_DB_TESTS=1: testcontainers start Docker containers)
+    go test ... "pact_tests"             (ARCHETYPE_PACT_TESTS=1, CGO_ENABLED=1: needs libpact_ffi,
+                                          e.g. `pact-go -l DEBUG install --libDir /tmp`, and a cgo
+                                          linker; on macOS 27 with Command Line Tools 27, whose ld
+                                          can't read the 27.0 SDK, set SDKROOT to MacOSX26.5.sdk)
 
 Files are named by key: an archetype by its base name ("crud-handler-go.md"), any other skill file
 by its path under .claude/skills ("languages/go.md").
@@ -353,26 +358,33 @@ def check_unit(unit, by_ref, workdir, env):
     _, err = assemble(unit, by_ref, root, env)
     if err:
         return False, err
+    def args(pkgs):  # "./pkg/" or ["./pkg/", "-run", "^TestX$"]
+        return pkgs if isinstance(pkgs, list) else [pkgs]
+
+    cgo_env = dict(env, CGO_ENABLED="1")
     if unit.get("cgo_typecheck_only"):
-        # The package links a native library through cgo (pact-go: libpact_ffi), which this harness
-        # neither installs nor links. `go vet` runs cgo and type-checks every file, tests included,
-        # without linking — so the API use is still checked against the pinned module.
-        env = dict(env, CGO_ENABLED="1")
-        steps = [["go", "vet", "./..."]]
+        # The package links a native library through cgo (pact-go: libpact_ffi). `go vet` runs cgo
+        # and type-checks every file, tests included, without linking — so the API use is checked
+        # against the pinned module even where the library isn't installed. "pact_tests" below
+        # links and runs them when it is.
+        steps = [(["go", "vet", "./..."], cgo_env)]
     else:
-        steps = [["go", "build", "-gcflags=-e", "./..."]]
+        steps = [(["go", "build", "-gcflags=-e", "./..."], env)]
         if unit.get("tests", False):
-            steps.append(["go", "test", "-count=1", "-run", "^$", "-gcflags=-e", "./..."])
-        steps.append(["go", "vet", "./..."])
-    for pkgs in unit.get("run_tests", []):  # "./pkg/" or ["./pkg/", "-run", "^TestX$"]
-        steps.append(["go", "test", "-count=1"] + (pkgs if isinstance(pkgs, list) else [pkgs]))
+            steps.append((["go", "test", "-count=1", "-run", "^$", "-gcflags=-e", "./..."], env))
+        steps.append((["go", "vet", "./..."], env))
+    for pkgs in unit.get("run_tests", []):
+        steps.append((["go", "test", "-count=1"] + args(pkgs), env))
     for pkgs in unit.get("bench_once", []):  # run each benchmark body once: it must not fail
-        steps.append(["go", "test", "-count=1", "-run", "^$", "-bench", ".", "-benchtime", "1x", pkgs])
-    if os.environ.get("ARCHETYPE_DB_TESTS") == "1":
+        steps.append((["go", "test", "-count=1", "-run", "^$", "-bench", ".", "-benchtime", "1x", pkgs], env))
+    if os.environ.get("ARCHETYPE_DB_TESTS") == "1":  # Docker: testcontainers start postgres/redis/...
         for pkgs in unit.get("db_tests", []):
-            steps.append(["go", "test", "-count=1", "-p=1", pkgs])
-    for cmd in steps:
-        rc, out = run(cmd, root, env)
+            steps.append((["go", "test", "-count=1", "-p=1"] + args(pkgs), env))
+    if os.environ.get("ARCHETYPE_PACT_TESTS") == "1":  # libpact_ffi installed + a working cgo linker
+        for pkgs in unit.get("pact_tests", []):
+            steps.append((["go", "test", "-count=1", "-p=1"] + args(pkgs), cgo_env))
+    for cmd, step_env in steps:
+        rc, out = run(cmd, root, step_env)
         if rc != 0:
             return False, f"$ {' '.join(cmd)}\n{shorten(out)}"
     return True, ""
@@ -430,7 +442,9 @@ def main():
             if unit.get("cgo_typecheck_only"):
                 ran_pkgs.append("type-check only: cgo")
             if os.environ.get("ARCHETYPE_DB_TESTS") == "1":
-                ran_pkgs += [f"DB {p}" for p in unit.get("db_tests", [])]
+                ran_pkgs += [f"DB {' '.join(p) if isinstance(p, list) else p}" for p in unit.get("db_tests", [])]
+            if os.environ.get("ARCHETYPE_PACT_TESTS") == "1":
+                ran_pkgs += [f"pact {' '.join(p) if isinstance(p, list) else p}" for p in unit.get("pact_tests", [])]
             ran = f" (+ ran {', '.join(ran_pkgs)})" if ran_pkgs else ""
             print(f"PASS  {unit['name']}{ran}")
         else:

@@ -30,7 +30,7 @@ Contract testing verifies that two services (consumer and provider) agree on the
 ## Consumer Side (Define Expectations)
 
 ### Go (pact-go v2)
-> Go samples type-checked (go vet, cgo) 2026-09-30 with Go 1.27.1, pact-go v2.8.0 — not linked or run: pact-go links the native libpact_ffi, which the harness does not install (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go vet, cgo) 2026-09-30 with Go 1.27.1, pact-go v2.8.0, and linked against libpact_ffi 0.5.8 (installed with `pact-go -l DEBUG install --libDir /tmp`) and run (ARCHETYPE_PACT_TESTS=1): the consumer test writes the V4 pact and the provider test below verifies a stub widget-service against it (tests/archetype-compile/go/run.sh).
 
 ```go
 import (
@@ -75,7 +75,9 @@ func TestWidgetConsumer(t *testing.T) {
             // Test your client against the mock provider
             client := NewWidgetClient(fmt.Sprintf("http://%s:%d", config.Host, config.Port))
             widget, err := client.GetWidget("abc-123")
-            assert.NoError(t, err)
+            if err != nil {
+                return err // fails the test; widget is nil
+            }
             assert.Equal(t, "My Widget", widget.Name)
             return nil
         })
@@ -203,13 +205,9 @@ func TestWidgetProvider(t *testing.T) {
     server := startTestServer()
     defer server.Close()
 
-    err := verifier.VerifyProvider(t, provider.VerifyRequest{
+    request := provider.VerifyRequest{
         ProviderBaseURL: server.URL,
         Provider:        "widget-service",
-        // Pull contracts from Pact Broker
-        BrokerURL:       "https://pact-broker.example.com",
-        BrokerToken:     os.Getenv("PACT_BROKER_TOKEN"),
-        PublishVerificationResults: os.Getenv("CI") == "true", // only CI publishes to the broker
         ProviderVersion: os.Getenv("GIT_SHA"),
         // State handlers set up test data for provider states
         StateHandlers: map[string]models.StateHandler{
@@ -220,8 +218,17 @@ func TestWidgetProvider(t *testing.T) {
                 return models.ProviderStateResponse{}, nil
             },
         },
-    })
-    assert.NoError(t, err)
+    }
+    if brokerURL := os.Getenv("PACT_BROKER_URL"); brokerURL != "" {
+        // CI: pull the contracts from the Pact Broker; only CI publishes the verification result
+        request.BrokerURL = brokerURL
+        request.BrokerToken = os.Getenv("PACT_BROKER_TOKEN")
+        request.PublishVerificationResults = os.Getenv("CI") == "true"
+    } else {
+        // Locally: the pact file the consumer test wrote (its ./pacts directory)
+        request.PactFiles = []string{filepath.Join("pacts", "widget-dashboard-widget-service.json")}
+    }
+    assert.NoError(t, verifier.VerifyProvider(t, request))
 }
 ```
 

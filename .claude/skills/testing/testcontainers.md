@@ -1,6 +1,6 @@
 # testcontainers-go patterns for container-based integration testing.
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testcontainers-go v0.44.0 (compiled; not run here, they start containers) (tests/archetype-compile/go/run.sh).
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, testcontainers-go v0.44.0, and run live with Docker (ARCHETYPE_DB_TESTS=1): postgres:16-alpine, redis:7-alpine, localstack/localstack:4.4, and NewTestDB with its init script (tests/archetype-compile/go/run.sh).
 
 ## Install
 ```bash
@@ -109,7 +109,10 @@ func NewTestDB(t *testing.T) *pgxpool.Pool {
 ## Custom Container (Generic)
 ```go
 req := testcontainers.ContainerRequest{
-    Image:        "localstack/localstack:latest",
+    // The tag the compose stack pins (infrastructure/localstack-aws-local.md). Never :latest — since
+    // March 2026 it is the unified image, which exits with code 55 ("License activation failed")
+    // unless LOCALSTACK_AUTH_TOKEN is set; the 4.x Community images start without a token.
+    Image:        "localstack/localstack:4.4",
     ExposedPorts: []string{"4566/tcp"},
     Env:          map[string]string{"SERVICES": "s3,sqs"},
     WaitingFor:   wait.ForHTTP("/_localstack/health").WithPort("4566/tcp"),

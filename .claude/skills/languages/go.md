@@ -14,7 +14,7 @@ tags:
 
 # Go Language Patterns
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, sqlx v1.4.0, x/sync v0.23.0, testify v1.12.1, testcontainers-go v0.44.0 (tests/archetype-compile/go/run.sh); the two ✅/❌ contrasts that declare one function twice are not compiled.
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, sqlx v1.4.0, x/sync v0.23.0, testify v1.12.1, testcontainers-go v0.44.0; TestUserRepo_Integration run live against postgres:16-alpine (tests/archetype-compile/go/run.sh); the two ✅/❌ contrasts that declare one function twice are not compiled.
 
 Idiomatic Go for production services. Prioritize clarity, explicit error handling, and composability.
 
