@@ -84,7 +84,10 @@ type requestValidator struct{ v *validator.Validate }
 func newRequestValidator() *requestValidator {
     v := validator.New()
     v.RegisterTagNameFunc(func(f reflect.StructField) string {
-        return strings.SplitN(f.Tag.Get("json"), ",", 2)[0]
+        if name := strings.SplitN(f.Tag.Get("json"), ",", 2)[0]; name != "-" {
+            return name
+        }
+        return ""
     })
     return &requestValidator{v: v}
 }
@@ -97,7 +100,7 @@ func (rv *requestValidator) Validate(i any) error {
     }
     fields := make([]apperr.FieldError, 0, len(verrs))
     for _, fe := range verrs {
-        fields = append(fields, apperr.FieldError{Field: fe.Field(), Code: fe.Tag(), Message: "This value is not valid."})
+        fields = append(fields, apperr.ValidationDetail(fe)) // code from the closed set, never fe.Tag()
     }
     return apperr.NewMultiValidationError(fields)
 }
