@@ -12,6 +12,8 @@ tags:
 
 # Pytest Patterns
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked and run with `asyncio_mode = "auto"` against the real crud-service, crud-repository and error-handling archetypes (`backend/archetypes/`): the parametrized, mocking and async tests run; the testcontainers fixtures and the rollback test run against PostgreSQL 16 (`run.sh --live`). pytest 9.1.1, pytest-asyncio 1.4.0, pytest-mock 3.16.0, testcontainers 4.15.0, httpx 0.28.1, SQLAlchemy 2.1.1.
+
 ## Fixtures — Scoping and Composition
 
 ```python
@@ -26,15 +28,15 @@ def tenant_id():
 # Module scope — shared across all tests in the file. Use for expensive read-only setup.
 @pytest.fixture(scope="module")
 def api_client():
-    from httpx import AsyncClient
+    from httpx import ASGITransport, AsyncClient
     from app.main import create_app
     app = create_app()
-    return AsyncClient(app=app, base_url="http://test")
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")  # httpx 0.28: no app=
 
 # Session scope — shared across the entire test run. Use for DB containers.
 @pytest.fixture(scope="session")
 def pg_container():
-    from testcontainers.postgres import PostgresContainer
+    from testcontainers.community.postgres import PostgresContainer  # testcontainers.postgres is deprecated
     with PostgresContainer("postgres:16-alpine") as pg:
         yield pg
 
@@ -61,9 +63,9 @@ import pytest
     "name, description, expected_error",
     [
         ("Valid Widget", "A description", None),
-        ("", "A description", "name is required"),
-        ("x" * 256, "desc", "name must be 255 characters or fewer"),
-        ("Widget", "x" * 2001, "description must be 2000 characters or fewer"),
+        ("", "A description", "Name is required"),
+        ("x" * 256, "desc", "Name must be 255 characters or fewer"),
+        ("Widget", "x" * 2001, "Description must be 2000 characters or fewer"),
     ],
     ids=["valid", "empty_name", "name_too_long", "desc_too_long"],
 )
@@ -72,8 +74,9 @@ async def test_create_validation(svc, name, description, expected_error):
         result = await svc.create(tenant_id=TID, user_id=UID, name=name, description=description)
         assert result.name == name
     else:
-        with pytest.raises(ValidationError, match=expected_error):
+        with pytest.raises(ValidationFailedError) as exc_info:  # 400 VALIDATION_FAILED
             await svc.create(tenant_id=TID, user_id=UID, name=name, description=description)
+        assert exc_info.value.details[0].message.startswith(expected_error)
 ```
 
 - Always provide `ids` for readable test output: `test_create_validation[empty_name] FAILED`
@@ -103,6 +106,7 @@ async def sample_widget(widget_service, tenant_id, user_id):
 
 # Testing async generators / context managers:
 async def test_transaction_rollback(session_factory):
+    from sqlalchemy import select
     from app.db.transaction import transaction
 
     with pytest.raises(ValueError):
@@ -119,6 +123,8 @@ async def test_transaction_rollback(session_factory):
 ## Mocking with unittest.mock and pytest-mock
 
 ```python
+import json
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 # pytest-mock's mocker fixture — auto-cleanup after each test
@@ -138,7 +144,11 @@ async def test_create_calls_repo(mocker):
 # Mock a specific return value
 async def test_get_returns_cached(mocker):
     mock_cache = mocker.AsyncMock(spec=Cache)
-    mock_cache.get.return_value = b'{"id": "...", "name": "Cached"}'
+    mock_cache.get.return_value = json.dumps({  # the service's own cache format (WidgetService._cache_set)
+        "id": str(WID), "tenant_id": str(TID), "name": "Cached", "description": "", "status": "active",
+        "created_at": "2026-01-15T10:00:00+00:00", "updated_at": "2026-01-15T10:00:00+00:00",
+        "deleted_at": None, "created_by": str(UID), "updated_by": str(UID), "version": 1,
+    }).encode()
 
     svc = WidgetService(repo=mocker.AsyncMock(), cache=mock_cache, audit_writer=mocker.AsyncMock())
     result = await svc.get(tenant_id=TID, widget_id=WID)
@@ -147,10 +157,10 @@ async def test_get_returns_cached(mocker):
 # Mock side effects for error paths
 async def test_create_handles_duplicate(mocker):
     mock_repo = mocker.AsyncMock(spec=WidgetRepository)
-    mock_repo.create.side_effect = ConflictError(resource="widget", reason="duplicate")
+    mock_repo.create.side_effect = ConflictError("A widget with this name already exists.")
 
     svc = WidgetService(repo=mock_repo, cache=mocker.AsyncMock(), audit_writer=mocker.AsyncMock())
-    with pytest.raises(ConflictError, match="duplicate"):
+    with pytest.raises(ConflictError, match="already exists"):
         await svc.create(tenant_id=TID, user_id=UID, name="Dup")
 
 # Patching module-level functions
@@ -164,9 +174,14 @@ async def test_with_patched_time(mocker):
 ## Database Fixtures with Testcontainers
 
 ```python
+from collections.abc import AsyncIterator
+
 import pytest
-from testcontainers.postgres import PostgresContainer
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+from testcontainers.community.postgres import PostgresContainer
 
 @pytest.fixture(scope="session")
 def pg_container():
@@ -176,33 +191,40 @@ def pg_container():
 
 @pytest.fixture(scope="session")
 def pg_url(pg_container):
-    """Async connection URL for the test database."""
-    host = pg_container.get_container_host_ip()
-    port = pg_container.get_exposed_port(5432)
-    return f"postgresql+asyncpg://test:test@{host}:{port}/test"
+    """Async connection URL for the test database (the container's own user, password and db)."""
+    return pg_container.get_connection_url(driver="asyncpg")
 
-@pytest.fixture(scope="session")
-async def engine(pg_url):
+# A session-scoped async fixture needs the session's event loop (loop_scope). NullPool: each test runs on
+# its own loop, and an asyncpg connection can't move between loops.
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def engine(pg_url) -> AsyncIterator[AsyncEngine]:
     """Create the async engine and run migrations."""
-    eng = create_async_engine(pg_url)
+    eng = create_async_engine(pg_url, poolclass=NullPool)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield eng
     await eng.dispose()
 
 @pytest.fixture
-async def session(engine) -> AsyncSession:
+def session_factory(engine) -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(engine, expire_on_commit=False)
+
+@pytest.fixture
+async def session(session_factory) -> AsyncIterator[AsyncSession]:
     """Per-test session with automatic rollback — each test gets a clean slate."""
-    async_session = async_sessionmaker(engine, expire_on_commit=False)
-    async with async_session() as session:
+    async with session_factory() as session:
         async with session.begin():
             yield session
             await session.rollback()
 
 @pytest.fixture
-def widget_repo(session):
-    """Repository wired to the test session."""
-    return WidgetRepository(session_factory=lambda: session)
+async def widget_repo(session_factory) -> AsyncIterator[WidgetRepository]:
+    """The repository opens and commits its own sessions (one per call), so the rollback above can't undo
+    its writes: give it the session factory and empty the table after the test."""
+    yield WidgetRepository(session_factory=session_factory)
+    async with session_factory() as s:
+        await s.execute(text("DELETE FROM widgets"))
+        await s.commit()
 ```
 
 ## Coverage Configuration
@@ -245,7 +267,7 @@ Run: `pytest --cov=app --cov-report=term-missing --cov-report=html`
 
 ```python
 import pytest
-from app.errors import AppError, NotFoundError, ConflictError, ValidationError
+from app.errors import AppError, ConflictError, NotFoundError, ValidationFailedError
 
 # Exact match
 assert result.name == "Expected"
@@ -255,21 +277,22 @@ assert len(result.items) == 5
 assert widget in result.items
 assert all(w.tenant_id == TID for w in result.items)
 
-# Error type + message pattern
-with pytest.raises(NotFoundError, match="widget.*not found"):
+# Error type + message pattern (match= searches str(exc): the user-safe message)
+with pytest.raises(NotFoundError, match="Widget not found"):
     await svc.get(tenant_id=TID, widget_id=MISSING_ID)
 
 # Error attribute inspection
 with pytest.raises(ConflictError) as exc_info:
-    await svc.update(tenant_id=TID, widget_id=WID, version=0, name="New")
+    await svc.update(tenant_id=TID, user_id=UID, widget_id=WID, name="New", description="", version=0)
 assert exc_info.value.code == "CONFLICT"
-assert exc_info.value.http_status == 409
-assert exc_info.value.details["resource"] == "widget"
+assert exc_info.value.status == 409
+assert exc_info.value.retryable is False
 
 # isinstance checks for error hierarchy
 with pytest.raises(AppError) as exc_info:
     await svc.create(tenant_id=TID, user_id=UID, name="")
-assert isinstance(exc_info.value, ValidationError)
+assert isinstance(exc_info.value, ValidationFailedError)
+assert [(d.field, d.code) for d in exc_info.value.details] == [("name", "required")]
 
 # Approximate comparisons (floats, timestamps)
 from pytest import approx
@@ -284,7 +307,8 @@ assert result is not None
 
 - Use `asyncio_mode = "auto"` in pyproject.toml — no need for `@pytest.mark.asyncio` on every test
 - Use `scope="session"` for testcontainers — spinning up a container per test is too slow
-- Use per-test session rollback for database isolation — each test gets a clean slate
+- Use per-test session rollback for database isolation — each test gets a clean slate; code that opens
+  and commits its own sessions (a repository taking a session factory) needs the table emptied instead
 - Use `mocker.AsyncMock(spec=Protocol)` to enforce interface contracts in mocks
 - Use `pytest.raises(ErrorType, match=...)` for error assertions — check both type and message
 - Use `ids` in `@pytest.mark.parametrize` for readable test output

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from units import CH, B, S, T, Unit, errors_pkg
+from units import CH, B, S, T, Unit, domain_pkg, errors_pkg, handler_pkg, repository_pkg, service_pkg
 
 _HERE = Path(__file__).parent
 
@@ -505,4 +505,71 @@ UNITS.append(Unit(
     ],
     smoke=smoke("smoke_drf.py"),
     post=[["{py}", "-m", "django", "test", "tests", "--noinput", "-v", "2"]],
+))
+
+# ── testing/pytest.md: the doc's tests against the REAL crud-service / crud-repository / error-handling
+# archetypes (in-memory implementations of the service's protocols; PostgreSQL 16 with --live) ────────
+def pytest_pack_files() -> dict[str, list[B | T | S]]:
+    return {
+        **errors_pkg(), **domain_pkg(), **service_pkg(), **handler_pkg(), **repository_pkg(),
+        "harness_stubs/pytest_pack.py": [stub("pytest_pack.py")],
+        "tests/conftest.py": [B(PT, 0, "import pytest"), stub("pytest_pack_conftest.py")],
+        "tests/test_parametrize.py": [
+            T("from app.errors import ValidationFailedError\n"
+              "from harness_stubs.pytest_pack import TID, UID  # harness: the suite's ids"),
+            B(PT, 1, "import pytest"),
+        ],
+        "tests/test_mocking.py": [
+            T("import pytest\n\nfrom app.errors import ConflictError\n"
+              "from app.services.protocols import AuditWriter, Cache, WidgetRepository\n"
+              "from app.services.widget import WidgetService\n"
+              "from harness_stubs.pytest_pack import TID, UID, WID  # harness: the suite's ids"),
+            B(PT, 3, "import json"),
+        ],
+        "tests/test_pytest_harness.py": [stub("test_pytest_harness.py")],
+        "tests/db/conftest.py": [
+            T("from app.models.widget import Base\nfrom app.repositories.widget import WidgetRepository"),
+            B(PT, 4, "from collections.abc import AsyncIterator"),
+        ],
+        "tests/db/test_async_patterns.py": [
+            T("from harness_stubs.pytest_pack import SomeModel, some_model  # harness: the doc's placeholders"),
+            B(PT, 2, "# pyproject.toml"),
+        ],
+        "tests/db/test_db_fixtures_live.py": [stub("test_pytest_db_live.py")],
+        "docs_fragments/assertions.py": [
+            T("from typing import Any\n\nfrom app.domain.widget import Widget\n"
+              "from app.services.widget import WidgetService\n"
+              "from harness_stubs.pytest_pack import MISSING_ID, TID, UID, WID"),
+            B(PT, 5, "import pytest",
+              wrap="async def _fragment(svc: WidgetService, result: Any, widget: Widget) -> None:"),
+        ],
+    }
+
+
+PYTEST_PACK_TYPECHECK = [
+    "tests/conftest.py", "tests/test_parametrize.py", "tests/test_mocking.py", "tests/db/conftest.py",
+    "tests/db/test_async_patterns.py", "docs_fragments/assertions.py",
+]
+UNITS.append(Unit(
+    name="pack-pytest",
+    own=[PT],
+    files=pytest_pack_files(),
+    typecheck=PYTEST_PACK_TYPECHECK,
+    imports=["docs_fragments.assertions"],
+    smoke=smoke("smoke_pytest_assertions.py"),
+    pytest="run",
+    # the doc's own setting (asyncio_mode = "auto"); the database tests run in pack-pytest-live
+    pytest_args=["-o", "asyncio_mode=auto", "--ignore=tests/db/test_db_fixtures_live.py",
+                 "-k", "not test_transaction_rollback"],
+))
+
+UNITS.append(Unit(
+    name="pack-pytest-live",
+    own=[PT],
+    files=pytest_pack_files(),
+    typecheck=[],  # pack-pytest type-checks the same files
+    imports=[],
+    pytest="collect",
+    live="run",
+    pytest_args=["-o", "asyncio_mode=auto", "tests/db"],
 ))
