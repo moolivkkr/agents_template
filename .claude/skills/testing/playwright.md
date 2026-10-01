@@ -266,7 +266,7 @@ npx playwright test e2e/login.spec.ts     # specific file
 npx playwright test e2e/login.spec.ts --repeat-each=5   # prove a new test is stable
 npx playwright test --ui                  # interactive UI mode (local debugging only)
 npx playwright show-report                # view HTML report
-npx playwright show-trace test-results/<test>/trace.zip   # inspect a failure's trace
+npx playwright show-trace "test-results/<test>/trace.zip"   # inspect a failure's trace (<test>: its folder)
 npx playwright codegen "$APP_BASE_URL"    # record actions
 ```
 
@@ -279,3 +279,5 @@ npx playwright codegen "$APP_BASE_URL"    # record actions
 - Target `APP_BASE_URL` (the deployed build); never start a dev server for pipeline runs
 - Every test creates its own data with run-unique identifiers (e.g. an email with the run id), so tests stay independent and re-runnable against a shared qa environment
 - Run `npx playwright install` in CI to ensure browsers are present
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

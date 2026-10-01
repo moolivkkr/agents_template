@@ -40,10 +40,12 @@ Same tools as other SQL databases work: Alembic, Goose, Flyway (with SQLite driv
 -- Column addition safe (SQLite supports ADD COLUMN)
 ALTER TABLE users ADD COLUMN phone TEXT;
 
--- Column removal: NOT supported directly — recreate table
--- CREATE TABLE users_new AS SELECT id, email FROM users;
--- DROP TABLE users;
--- ALTER TABLE users_new RENAME TO users;
+-- Column removal (the contract step, once no deployed code reads it): SQLite >= 3.35 has DROP COLUMN.
+-- It fails on PRIMARY KEY and UNIQUE columns and on a column an index, view, trigger, CHECK or
+-- table-level FOREIGN KEY still names: drop those first, or rebuild the table with its full
+-- CREATE TABLE (constraints included), INSERT ... SELECT, DROP the old one, RENAME the new one.
+-- CREATE TABLE ... AS SELECT is not a rebuild: it drops every constraint and index.
+ALTER TABLE users DROP COLUMN phone;
 ```
 
 ## Indexes (same principles as PostgreSQL)
@@ -58,3 +60,5 @@ CREATE INDEX idx_orders_user_id ON orders(user_id);
 - In-memory (`:memory:`) for test databases — never share between test cases
 - File-based SQLite: ensure only one process writes at a time
 - Use parameterized queries — same SQL injection risks as any DB
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 SQL blocks executed on SQLite 3.45.3; 5 claims in the text proven on SQLite 3.45.3.

@@ -73,8 +73,8 @@ ALTER TABLE resources FORCE ROW LEVEL SECURITY;
 
 -- Policy enforces isolation even if WHERE clause is missing
 CREATE POLICY tenant_isolation ON resources
-    USING (tenant_id = current_setting('app.tenant_id')::uuid)
-    WITH CHECK (tenant_id = current_setting('app.tenant_id')::uuid);
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
 ```
 
 **Layer 3 — Tenant context per transaction (on the connection that runs the queries):**
@@ -93,7 +93,7 @@ func (r *Repo) WithTenantTx(ctx context.Context, fn func(tx pgx.Tx) error) error
     }
     return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
         // set_config(name, value, is_local=true) is the parameterisable, transaction-scoped form of SET LOCAL
-        if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
+        if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID.String()); err != nil {
             return err
         }
         return fn(tx) // every query in fn runs under RLS for this tenant; the setting ends with the tx
@@ -102,8 +102,11 @@ func (r *Repo) WithTenantTx(ctx context.Context, fn func(tx pgx.Tx) error) error
 ```
 - The application's DB role is not the table owner and has no `BYPASSRLS`. `FORCE ROW LEVEL SECURITY`
   (above) also covers owners.
-- `current_setting('app.tenant_id')` with no default raises an error when the setting is missing, so
-  a query outside `WithTenantTx` fails closed rather than returning every tenant's rows.
+- `current_setting('app.current_tenant_id')` with no default raises an error when the setting is
+  missing, so a query outside `WithTenantTx` fails closed rather than returning every tenant's rows. On
+  a pooled connection that already ran a tenant transaction the setting reads `''` instead, and
+  `''::uuid` errors too: closed either way. (One name everywhere: `app.current_tenant_id`, as in the
+  archetypes.)
 
 ### Composite Unique Constraints
 All uniqueness constraints MUST be tenant-scoped:
@@ -246,10 +249,15 @@ metadata:
   namespace: app-tenant-${TENANT_SLUG}
 spec:
   replicas: 3
+  selector:                       # required for apps/v1; must match the template's labels
+    matchLabels: { app: api-server }
   template:
+    metadata:
+      labels: { app: api-server }
     spec:
       containers:
       - name: api
+        image: ${API_IMAGE}       # the same digest-pinned image as the shared tier
         resources:
           requests: { cpu: "2", memory: "4Gi" }
           limits: { cpu: "4", memory: "8Gi" }
@@ -409,3 +417,5 @@ KEK (Key Encryption Key)
 6. **ALWAYS** encrypt tenant-specific secrets with per-tenant keys (not a shared key)
 7. **NEVER** expose one tenant's data in another tenant's error messages or logs
 8. Test with at least 3 tenants: one pooled, one dedicated, one in migration
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 SQL blocks parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 1 YAML block parsed (duplicate keys fail), kubeconform -strict (Kubernetes 1.37.1 schemas); 4 claims in the text proven on PostgreSQL 17.11.

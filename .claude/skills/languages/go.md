@@ -234,12 +234,14 @@ func main() {
 Enable at minimum: `errcheck`, `govet`, `staticcheck`, `revive`, `gosec`, `exhaustive`
 
 ```yaml
-# .golangci.yml
+# .golangci.yml — golangci-lint v2 refuses a config without the version key
+version: "2"
 linters:
   enable:
     - errcheck
     - govet
     - staticcheck
+    - revive
     - gosec
     - exhaustive
     - godot
@@ -1888,3 +1890,5 @@ func Transform(ctx context.Context, in <-chan Item) <-chan Result {
 - Use generics for type-safe collection utilities; use interfaces for behavioral polymorphism
 - Prefer `errgroup` over manual `sync.WaitGroup` + channels for parallel tasks with errors
 - Channel direction in signatures prevents misuse — always specify `<-chan` or `chan<-` in parameters
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail), golangci-lint 2.12.2 config verify.

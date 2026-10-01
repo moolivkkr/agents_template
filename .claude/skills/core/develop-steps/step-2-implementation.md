@@ -27,6 +27,7 @@ Build-step B1-gate (sequential gate — validates migrations before applying):
       3. DOWN migration reverses the UP cleanly
       4. UP re-applies after DOWN (idempotency)
       If validation fails → block Build-step B2a, surface error to migration_agent for fix (max 1 retry)
+```
 
 ### Migration Failure Auto-Recovery
 
@@ -52,6 +53,7 @@ and Phase N re-development tries to add the same table again.
 - Irreversible migrations explicitly acknowledged in migration metadata
 - If any CRITICAL finding: STOP — do not apply migration until resolved
 
+```
 Build-step B2a (sequential — api_developer depends on backend service interfaces):
   └─ backend_developer  → domain models, services, repositories
        ↓ writes manifest with service method return types (list/single/none)
@@ -61,6 +63,7 @@ Build-step B2a-check (COMPILE/TYPECHECK GATE — BLOCKING):
        See "Build-step B2a-check — Compile/Typecheck Gate" section below
        If FAILS → route back to backend_developer for fix (max 2 attempts)
        Do NOT proceed to Build-step B2b on broken code
+```
 
 ### Build-step B2a-check — Compile/Typecheck Gate (BLOCKING)
 
@@ -82,7 +85,8 @@ that row typically holds per language; when the project's row differs, the row w
 ```bash
 V=agent_state/config/verify-commands.json
 CMD="$(jq -r '.commands.typecheck // .commands.build // empty' "$V")"
-[ -n "$CMD" ] || echo "⛔ BLOCKED: no typecheck/build row in $V"
+# no row (or no file) must stop here: `bash -c ""` exits 0 and the gate would pass having run nothing
+[ -n "$CMD" ] || { echo "⛔ BLOCKED: no typecheck/build row in $V"; exit 1; }
 PHASE="${PHASE}" bash -o pipefail -c "$CMD"
 # What such a row typically holds:
 #   Go:         go build ./...
@@ -109,7 +113,7 @@ PHASE="${PHASE}" bash -o pipefail -c "$CMD"
 
 **Log to execution.jsonl:**
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2a-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2a-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
 ### Agent Handoff Protocol (Build-step B2a → B2b)
@@ -139,6 +143,7 @@ Before api_developer starts:
 
 This pattern applies to ALL wave transitions where one agent depends on another's output. The **atomic write + verified ready signal** prevents race conditions where a downstream agent reads a partial or corrupt manifest.
 
+```
 Build-step B2b (depends on B2a passing build + backend_developer ready signal):
   └─ api_developer      → API handlers, routes, middleware, DTOs, api-contracts.md
        ↓ reads data-contracts.md from /plan as MANDATORY source of truth for response shapes
@@ -151,6 +156,7 @@ Build-step B2b-check (API LAYER COMPILE CHECK — BLOCKING):
        Same compile/typecheck command as Build-step B2a-check
        Verifies api_developer's changes compile cleanly WITH backend_developer's code
        If FAILS → route back to api_developer for fix (max 2 attempts), then STOP
+```
 
 ### Build-step B2b-check — API Layer Compile Check (BLOCKING)
 
@@ -175,15 +181,16 @@ Build-step B2b-check (API LAYER COMPILE CHECK — BLOCKING):
 
 **Log to execution.jsonl:**
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2b-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"compile_check\",\"step\":\"B2b-check\",\"status\":\"passed|failed\",\"language\":\"<lang>\",\"attempt\":${ATTEMPT:-1}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
+```
 Build-step B2-contract (sequential gate, UI phases only):
   └─ Contract Validation → verify api-contracts.md exists, all endpoints documented, shapes are unambiguous
 
 Build-step B2-smoke (SMOKE TEST — before expensive UI implementation):
   └─ Quick smoke test: does the app start? Does GET /health respond?
-       docker compose up -d && curl -sf http://localhost:PORT/health
+       docker compose up -d && curl -sf http://localhost:PORT/healthz   (the runtime contract's liveness path)
        If FAILS → route back to api_developer for fix (max 1 retry)
        This catches catastrophic failures before spending tokens on UI + test agents
 
@@ -194,6 +201,7 @@ Build-step B3-check (FRONTEND BUILD CHECK — BLOCKING, UI phases only):
   └─ Build verification: full frontend build after ui_developer's changes
        See "Build-step B3-check — Frontend Build Check" section below
        If FAILS → route back to ui_developer for fix (max 2 attempts), then STOP
+```
 
 ### Build-step B3-check — Frontend Build Check (BLOCKING, if UI phase)
 
@@ -230,7 +238,7 @@ table defines for the UI). Typical rows:
 # Additional TypeScript check (if tsconfig.json exists):
 #   npx tsc --noEmit
 #
-# ESLint check (if .eslintrc exists or eslint in package.json):
+# ESLint check (if eslint.config.* exists — ESLint 10 ignores .eslintrc*):
 #   npx eslint src/ --max-warnings 0
 ```
 
@@ -253,9 +261,10 @@ table defines for the UI). Typical rows:
 
 **Log to execution.jsonl:**
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"frontend_build_check\",\"step\":\"B3-check\",\"status\":\"passed|failed\",\"framework\":\"<framework>\",\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"frontend_build_check\",\"step\":\"B3-check\",\"status\":\"passed|failed\",\"framework\":\"<framework>\",\"attempt\":${ATTEMPT:-1}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
+```
 Build-step B4 (parallel — test agents read BOTH specs AND implementation code):
   ├─ unit_test_agent     → unit tests for all new code (reads actual functions, not just specs)
   └─ integration_test_agent → integration tests for service↔infra + contract shape tests
@@ -272,3 +281,5 @@ Each agent:
 4. Writes an agent-level manifest to `agent_state/phases/${PHASE}/<agent>/manifest.json`
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 5 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 run in fixture scenarios on macOS bash 3.2.57; 1 block not checked (pseudo-step).

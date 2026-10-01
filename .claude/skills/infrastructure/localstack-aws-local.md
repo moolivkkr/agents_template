@@ -1,4 +1,6 @@
-# LocalStack — Local AWS Service Simulation
+if ! { curl -sf -o /dev/null http://localhost:8080/healthz && curl -sf -o /dev/null http://localhost:8081/healthz; }; then
+  echo "⛔ HA stack not healthy after 120s"; exit 1
+fi# LocalStack — Local AWS Service Simulation
 
 ## Purpose
 LocalStack replicates core AWS services locally for development and testing. This eliminates the need for real AWS accounts during development and CI/CD while maintaining API compatibility.
@@ -20,7 +22,7 @@ services:
       EDGE_PORT: 4566
       DEBUG: 0
     volumes:
-      - "./localstack/init:/etc/localstack/init/ready.d"  # Auto-run scripts on startup
+      - "./localstack/init/ready.d:/etc/localstack/init/ready.d"  # Auto-run scripts on startup
       - "localstack-data:/var/lib/localstack"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
@@ -167,8 +169,9 @@ sqs = create_aws_client('sqs')
 
 ### S3 (Object Storage)
 ```bash
-# Init script: localstack/init/ready.d/01-s3.sh
 #!/bin/bash
+# Init script: localstack/init/ready.d/01-s3.sh
+set -euo pipefail
 awslocal s3 mb s3://app-uploads
 awslocal s3 mb s3://app-backups
 awslocal s3 mb s3://app-exports
@@ -190,21 +193,22 @@ awslocal s3api put-bucket-versioning --bucket app-backups \
 
 ### KMS (Key Management)
 ```bash
-# Init script: localstack/init/ready.d/02-kms.sh
 #!/bin/bash
+# Init script: localstack/init/ready.d/02-kms.sh
+set -euo pipefail
 
 # Create master key for tenant encryption
 KEY_OUTPUT=$(awslocal kms create-key --description "Tenant Master Key" --key-usage ENCRYPT_DECRYPT)
-KEY_ID=$(echo $KEY_OUTPUT | jq -r '.KeyMetadata.KeyId')
+KEY_ID=$(echo "$KEY_OUTPUT" | jq -r '.KeyMetadata.KeyId')
 
 # Create alias for easy reference
-awslocal kms create-alias --alias-name alias/tenant-master-key --target-key-id $KEY_ID
+awslocal kms create-alias --alias-name alias/tenant-master-key --target-key-id "$KEY_ID"
 
 # Create per-tenant keys (for testing)
 for TENANT in "tenant-small" "tenant-medium" "tenant-large"; do
     TENANT_KEY=$(awslocal kms create-key --description "KEK for $TENANT")
-    TENANT_KEY_ID=$(echo $TENANT_KEY | jq -r '.KeyMetadata.KeyId')
-    awslocal kms create-alias --alias-name "alias/$TENANT-kek" --target-key-id $TENANT_KEY_ID
+    TENANT_KEY_ID=$(echo "$TENANT_KEY" | jq -r '.KeyMetadata.KeyId')
+    awslocal kms create-alias --alias-name "alias/$TENANT-kek" --target-key-id "$TENANT_KEY_ID"
 done
 
 echo "KMS keys initialized"
@@ -212,8 +216,9 @@ echo "KMS keys initialized"
 
 ### IAM (Identity & Access Management)
 ```bash
-# Init script: localstack/init/ready.d/03-iam.sh
 #!/bin/bash
+# Init script: localstack/init/ready.d/03-iam.sh
+set -euo pipefail
 
 # Create application role
 awslocal iam create-role --role-name app-service-role \
@@ -261,17 +266,18 @@ awslocal iam put-role-policy --role-name app-service-role \
 
 ### Route 53 (DNS & Geo-Routing)
 ```bash
-# Init script: localstack/init/ready.d/04-route53.sh
 #!/bin/bash
+# Init script: localstack/init/ready.d/04-route53.sh
+set -euo pipefail
 
 # Create hosted zone
 ZONE_OUTPUT=$(awslocal route53 create-hosted-zone \
     --name app.local \
     --caller-reference "local-$(date +%s)")
-ZONE_ID=$(echo $ZONE_OUTPUT | jq -r '.HostedZone.Id' | cut -d'/' -f3)
+ZONE_ID=$(echo "$ZONE_OUTPUT" | jq -r '.HostedZone.Id' | cut -d'/' -f3)
 
 # Geo-routing: US East
-awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
+awslocal route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" \
     --change-batch '{
       "Changes": [{
         "Action": "CREATE",
@@ -287,7 +293,7 @@ awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
     }'
 
 # Geo-routing: US West
-awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
+awslocal route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" \
     --change-batch '{
       "Changes": [{
         "Action": "CREATE",
@@ -316,8 +322,9 @@ awslocal route53 create-health-check --caller-reference "east-health" \
 
 ### Secrets Manager
 ```bash
-# Init script: localstack/init/ready.d/05-secrets.sh
 #!/bin/bash
+# Init script: localstack/init/ready.d/05-secrets.sh
+set -euo pipefail
 
 # Database credentials
 awslocal secretsmanager create-secret \
@@ -337,8 +344,9 @@ awslocal secretsmanager create-secret \
 
 ### SQS (Message Queues)
 ```bash
-# Init script: localstack/init/ready.d/06-sqs.sh
 #!/bin/bash
+# Init script: localstack/init/ready.d/06-sqs.sh
+set -euo pipefail
 
 # Standard queues
 awslocal sqs create-queue --queue-name app-events
@@ -349,9 +357,9 @@ awslocal sqs create-queue --queue-name app-events-dlq
 
 # Configure DLQ redrive policy
 EVENTS_URL=$(awslocal sqs get-queue-url --queue-name app-events --output text --query 'QueueUrl')
-DLQ_ARN=$(awslocal sqs get-queue-attributes --queue-url $(awslocal sqs get-queue-url --queue-name app-events-dlq --output text --query 'QueueUrl') --attribute-names QueueArn --output text --query 'Attributes.QueueArn')
+DLQ_ARN=$(awslocal sqs get-queue-attributes --queue-url "$(awslocal sqs get-queue-url --queue-name app-events-dlq --output text --query 'QueueUrl')" --attribute-names QueueArn --output text --query 'Attributes.QueueArn')
 
-awslocal sqs set-queue-attributes --queue-url $EVENTS_URL \
+awslocal sqs set-queue-attributes --queue-url "$EVENTS_URL" \
     --attributes "{\"RedrivePolicy\":\"{\\\"deadLetterTargetArn\\\":\\\"$DLQ_ARN\\\",\\\"maxReceiveCount\\\":\\\"3\\\"}\"}"
 
 # FIFO queue (for ordered processing)
@@ -489,6 +497,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Wait for LocalStack
+        timeout-minutes: 3          # fail the job instead of looping until the 6h job limit
         run: |
           until curl -s http://localhost:4566/_localstack/health | jq -e '.services.s3 == "running"'; do
             sleep 2
@@ -558,7 +567,7 @@ services:
       DATABASE_URL: postgres://calc:calc@postgres-west:5432/calc?sslmode=disable
       APP_ENV: development
       SESSION_SECRET: ${SESSION_SECRET_WEST:?generate into .env (gitignored)}
-      OTEL_EXPORTER_OTLP_ENDPOINT: otel-collector:4317
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317   # a URL: the OTel spec requires the scheme
       CORS_ALLOWED_ORIGINS: http://localhost:3001
     depends_on:
       postgres-west:
@@ -592,7 +601,7 @@ services:
       SERVICES: route53
       DEFAULT_REGION: us-east-1
     volumes:
-      - "./localstack/init:/etc/localstack/init/ready.d"
+      - "./localstack/init/ready.d:/etc/localstack/init/ready.d"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
       interval: 10s
@@ -615,39 +624,39 @@ echo "Setting up Route 53 active-active routing..."
 ZONE_OUTPUT=$(awslocal route53 create-hosted-zone \
     --name app.local \
     --caller-reference "ha-$(date +%s)")
-ZONE_ID=$(echo $ZONE_OUTPUT | jq -r '.HostedZone.Id' | cut -d'/' -f3)
+ZONE_ID=$(echo "$ZONE_OUTPUT" | jq -r '.HostedZone.Id' | cut -d'/' -f3)
 echo "Hosted zone created: $ZONE_ID"
 
 # Health check: us-east-1 (primary)
 EAST_HC=$(awslocal route53 create-health-check \
     --caller-reference "east-health-$(date +%s)" \
     --health-check-config '{
-      "IPAddress": "host.docker.internal",
+      "FullyQualifiedDomainName": "host.docker.internal",
       "Port": 8080,
       "Type": "HTTP",
       "ResourcePath": "/healthz",
       "RequestInterval": 10,
       "FailureThreshold": 2
     }')
-EAST_HC_ID=$(echo $EAST_HC | jq -r '.HealthCheck.Id')
+EAST_HC_ID=$(echo "$EAST_HC" | jq -r '.HealthCheck.Id')
 echo "East health check: $EAST_HC_ID"
 
 # Health check: us-west-2 (secondary)
 WEST_HC=$(awslocal route53 create-health-check \
     --caller-reference "west-health-$(date +%s)" \
     --health-check-config '{
-      "IPAddress": "host.docker.internal",
+      "FullyQualifiedDomainName": "host.docker.internal",
       "Port": 8081,
       "Type": "HTTP",
       "ResourcePath": "/healthz",
       "RequestInterval": 10,
       "FailureThreshold": 2
     }')
-WEST_HC_ID=$(echo $WEST_HC | jq -r '.HealthCheck.Id')
+WEST_HC_ID=$(echo "$WEST_HC" | jq -r '.HealthCheck.Id')
 echo "West health check: $WEST_HC_ID"
 
 # Weighted routing: 50/50 active-active
-awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
+awslocal route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" \
     --change-batch "{
       \"Changes\": [{
         \"Action\": \"CREATE\",
@@ -663,7 +672,7 @@ awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
       }]
     }"
 
-awslocal route53 change-resource-record-sets --hosted-zone-id $ZONE_ID \
+awslocal route53 change-resource-record-sets --hosted-zone-id "$ZONE_ID" \
     --change-batch "{
       \"Changes\": [{
         \"Action\": \"CREATE\",
@@ -696,6 +705,9 @@ PASS=0
 FAIL=0
 
 log_pass() { echo "  ✓ $1"; PASS=$((PASS+1)); }
+# HTTP status of a health probe, "000" when nothing answers. "|| true": with set -e, a curl that
+# fails inside $(...) would abort the suite before it reports anything
+code() { curl -s -o /dev/null -w "%{http_code}" --max-time 5 "http://localhost:$1/healthz" || true; }
 log_fail() { echo "  ✗ $1"; FAIL=$((FAIL+1)); }
 
 echo "═══ HA Failover Test Suite ═══"
@@ -703,8 +715,8 @@ echo ""
 
 # Test 1: Both regions healthy
 echo "Test 1: Both regions healthy"
-EAST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
-WEST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
+EAST=$(code 8080)
+WEST=$(code 8081)
 [ "$EAST" = "200" ] && log_pass "East healthy ($EAST)" || log_fail "East unhealthy ($EAST)"
 [ "$WEST" = "200" ] && log_pass "West healthy ($WEST)" || log_fail "West unhealthy ($WEST)"
 
@@ -712,7 +724,7 @@ WEST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
 echo ""
 echo "Test 2: Route 53 weighted records"
 RECORDS=$(awslocal route53 list-resource-record-sets \
-    --hosted-zone-id $(awslocal route53 list-hosted-zones | jq -r '.HostedZones[0].Id' | cut -d'/' -f3) \
+    --hosted-zone-id "$(awslocal route53 list-hosted-zones | jq -r '.HostedZones[0].Id' | cut -d'/' -f3)" \
     | jq '.ResourceRecordSets | length')
 [ "$RECORDS" -ge 2 ] && log_pass "Both regions in Route 53 ($RECORDS records)" || log_fail "Missing records ($RECORDS)"
 
@@ -721,11 +733,11 @@ echo ""
 echo "Test 3: Primary failure → secondary serves"
 docker stop calc-backend-1 2>/dev/null || true
 sleep 5
-WEST_AFTER=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
+WEST_AFTER=$(code 8081)
 [ "$WEST_AFTER" = "200" ] && log_pass "West still healthy after east stopped" || log_fail "West also failed"
 
 # Verify east is actually down
-EAST_DOWN=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz 2>/dev/null || echo "000")
+EAST_DOWN=$(code 8080)
 [ "$EAST_DOWN" != "200" ] && log_pass "East confirmed down ($EAST_DOWN)" || log_fail "East still up"
 
 # Test 4: Restart primary → both healthy again
@@ -733,7 +745,7 @@ echo ""
 echo "Test 4: Primary recovery"
 docker start calc-backend-1 2>/dev/null || true
 sleep 10  # Wait for health check to recover
-EAST_RECOVERED=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+EAST_RECOVERED=$(code 8080)
 [ "$EAST_RECOVERED" = "200" ] && log_pass "East recovered ($EAST_RECOVERED)" || log_fail "East failed to recover"
 
 # Test 5: Stop secondary → primary still serves
@@ -741,7 +753,7 @@ echo ""
 echo "Test 5: Secondary failure → primary serves"
 docker stop calc-backend-west-1 2>/dev/null || true
 sleep 5
-EAST_ALONE=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
+EAST_ALONE=$(code 8080)
 [ "$EAST_ALONE" = "200" ] && log_pass "East still healthy after west stopped" || log_fail "East also failed"
 
 # Test 6: Restart secondary → both healthy
@@ -749,15 +761,15 @@ echo ""
 echo "Test 6: Full recovery"
 docker start calc-backend-west-1 2>/dev/null || true
 sleep 10
-BOTH_EAST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8080/healthz)
-BOTH_WEST=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8081/healthz)
+BOTH_EAST=$(code 8080)
+BOTH_WEST=$(code 8081)
 [ "$BOTH_EAST" = "200" ] && [ "$BOTH_WEST" = "200" ] && log_pass "Both regions recovered" || log_fail "Recovery incomplete"
 
 # Summary
 echo ""
 echo "═══ Results: $PASS passed, $FAIL failed ═══"
-[ $FAIL -eq 0 ] && echo "HA validation: PASS" || echo "HA validation: FAIL"
-exit $FAIL
+if [ "$FAIL" -eq 0 ]; then echo "HA validation: PASS"; else echo "HA validation: FAIL"; fi
+exit $(( FAIL > 0 ? 1 : 0 ))
 ```
 
 ### Deploy Command Integration
@@ -767,7 +779,13 @@ exit $FAIL
 docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
 # Wait for all services healthy
 echo "Waiting for both regions..."
-until curl -sf http://localhost:8080/healthz && curl -sf http://localhost:8081/healthz; do sleep 2; done
+for _ in $(seq 1 60); do   # up to 2 minutes, then fail instead of waiting forever
+  curl -sf -o /dev/null http://localhost:8080/healthz && curl -sf -o /dev/null http://localhost:8081/healthz && break
+  sleep 2
+done
+if ! { curl -sf -o /dev/null http://localhost:8080/healthz && curl -sf -o /dev/null http://localhost:8081/healthz; }; then
+  echo "⛔ HA stack not healthy after 120s"; exit 1
+fi
 echo "HA stack ready"
 
 # /deploy --failover-test
@@ -786,3 +804,5 @@ echo "HA stack ready"
 6. **NEVER** use LocalStack-specific APIs in application code — only standard AWS SDK calls
 7. **ALWAYS** test with at least 2 regions locally to catch region-specific assumptions
 8. Init scripts MUST be idempotent — safe to run multiple times on container restart
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 YAML blocks parsed (duplicate keys fail), actionlint 1.7.12, docker compose config (Compose 5.1.0); 10 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 run in fixture scenarios on macOS bash 3.2.57.

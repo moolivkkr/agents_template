@@ -293,3 +293,5 @@ if err := attributevalue.UnmarshalListOfMaps(result.Items, &widgets); err != nil
 - DynamoDB Local for development — never hit production tables from dev
 - `ProjectionExpression` to limit returned attributes — reduces cost and latency
 - Item size limit: 400KB — design items to stay well under this (< 50KB recommended)
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

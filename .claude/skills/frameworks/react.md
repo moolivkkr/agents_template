@@ -71,19 +71,22 @@ const { register, handleSubmit, formState: { errors } } = useForm({
 ## Accessibility Enforcement (MANDATORY)
 
 ### Required ESLint Plugin
-Every React project MUST include `eslint-plugin-jsx-a11y` in its ESLint config:
+Every React project MUST include `eslint-plugin-jsx-a11y` in its ESLint config. ESLint 10 reads only
+the flat config (`eslint.config.js`; `.eslintrc*` files are ignored, so an a11y rule set there silently
+never runs): `import jsxA11y from "eslint-plugin-jsx-a11y"`, then
+`export default [jsxA11y.flatConfigs.recommended, { rules: { …the rules below… } }]`.
+`eslint-plugin-jsx-a11y` 6.10.2 (the latest) still declares a peer range ending at ESLint 9, so npm
+refuses it next to ESLint 10 unless you add an npm `overrides` entry (or `--legacy-peer-deps`); the
+plugin itself runs under ESLint 10 (checked 2026-09-30 with ESLint 10.11.0).
 
 ```json
 {
-  "extends": ["plugin:jsx-a11y/recommended"],
-  "rules": {
-    "jsx-a11y/anchor-is-valid": "error",
-    "jsx-a11y/click-events-have-key-events": "error",
-    "jsx-a11y/no-static-element-interactions": "error",
-    "jsx-a11y/img-redundant-alt": "error",
-    "jsx-a11y/label-has-associated-control": "error",
-    "jsx-a11y/heading-has-content": "error"
-  }
+  "jsx-a11y/anchor-is-valid": "error",
+  "jsx-a11y/click-events-have-key-events": "error",
+  "jsx-a11y/no-static-element-interactions": "error",
+  "jsx-a11y/img-redundant-alt": "error",
+  "jsx-a11y/label-has-associated-control": "error",
+  "jsx-a11y/heading-has-content": "error"
 }
 ```
 
@@ -104,3 +107,5 @@ Every React project MUST include `eslint-plugin-jsx-a11y` in its ESLint config:
 - `useContext` for global UI state only (theme, locale); React Query for server state
 - Code split routes with `React.lazy + Suspense`
 - Never fetch data in `useEffect` — use React Query
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed + ESLint 10.11.0 with eslint-plugin-jsx-a11y 6.10.2 (loads the rules, reports a violation).

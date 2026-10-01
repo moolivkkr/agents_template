@@ -50,9 +50,13 @@ If specs contain TC-* IDs (pattern `TC-[A-Z0-9]+-\d+`):
 
 ```bash
 # Deterministic TC inventory — names of tests that ran and passed, not grep (board review TEST-02):
+# The weakening check needs the commit the phase started from. tc-inventory skips it on an empty
+# --diff-base, and a HEAD~20 guess is not the phase, so no base_sha = BLOCKED.
+BASE="$(cat "agent_state/phases/${PHASE:?}/base_sha" 2>/dev/null)"
+[ -n "$BASE" ] || { echo "⛔ BLOCKED: no agent_state/phases/${PHASE}/base_sha (written at Wave 0c)"; exit 1; }
 python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" \
   --results "agent_state/phases/${PHASE}/reports/test_results.json" \
-  --diff-base "$(cat agent_state/phases/${PHASE}/base_sha 2>/dev/null || git rev-parse HEAD~20)" \
+  --diff-base "$BASE" \
   --out "agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"
 # exit 1 = a HIGH/MEDIUM ID is missing/failing, an ID is defined by two phases, a range annotation,
 # or unacknowledged test weakening — each listed in the JSON. The gate reads this file.
@@ -65,3 +69,5 @@ Missing HIGH/MEDIUM TC-* IDs = blocker.
 MEDIUM/LOW behavior gaps = logged as known gaps.
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 run in fixture scenarios on macOS bash 3.2.57 (1 also on Linux bash 5.2.37 with GNU tools).

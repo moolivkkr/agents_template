@@ -67,9 +67,9 @@ block on them (mirrors the counting used in `/accept` and `gate-verification.md`
 
 ```bash
 GATE_BLOCKED=false
-REPORTS_DIR="agent_state/phases/${PHASE}/reports"
+REPORTS_DIR="agent_state/phases/${PHASE:?}/reports"
 
-# 1. Test tiers — parse totals; block on FAILED>0 or total==0.
+# 1. Test tiers — parse totals; block on FAILED>0, total==0, or no total at all.
 python3 - "$REPORTS_DIR" << 'PY' || GATE_BLOCKED=true
 import re, sys, os, glob
 d = sys.argv[1]
@@ -86,27 +86,46 @@ for fn, name in tiers.items():
     total = max(totals) if totals else None
     if failed > 0:
         print(f"⛔ {name}: {failed} FAILED test(s) — gate blocked"); bad = True
-    if total == 0:
+    if total is None:
+        print(f"⛔ {name}: no 'total: N' in the report — nothing shows that tests ran"); bad = True
+    elif total == 0:
         print(f"⛔ {name}: total=0 — tier was skipped"); bad = True
 if not bad:
     print("✓ All test tiers: 0 failed, non-zero totals")
 sys.exit(1 if bad else 0)
 PY
 
-# 2. TC-* coverage — HIGH+MEDIUM must be 100% (from specs_vs_tests.md / test_case_inventory).
-COV=$(ls agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.md agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md 2>/dev/null | head -1)
-if [ -n "$COV" ] && grep -qiP 'coverage' "$COV"; then
-  if grep -qiP '(HIGH|MEDIUM)[^\n]*(UNCOVERED|MISSING|0%|not covered)' "$COV"; then
-    echo "⛔ GATE BLOCKED: HIGH/MEDIUM TC-* IDs are uncovered ($COV)"; GATE_BLOCKED=true
+# 2. TC-* coverage — HIGH+MEDIUM must be 100%. Read the tc-inventory sidecar Step 3d wrote (verdict
+#    PASS = every HIGH/MEDIUM ID has a test that ran and passed), not prose. No sidecar blocks too,
+#    unless the specs define no TC-* IDs at all (the table's "skip if no TC-* IDs in specs").
+#    (This used grep -P, which macOS grep rejects: the check silently never ran there.)
+TC_JSON="agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"
+if [ -f "$TC_JSON" ]; then
+  if ! jq -e '.verdict == "PASS"' "$TC_JSON" >/dev/null 2>&1; then
+    echo "⛔ GATE BLOCKED: TC-* inventory verdict is $(jq -r '.verdict // "missing"' "$TC_JSON" 2>/dev/null || echo unreadable) ($TC_JSON)"
+    GATE_BLOCKED=true
   fi
+elif grep -rqE 'TC-[A-Z0-9]+-[0-9]+' "docs/design/phases/${PHASE}/specs" 2>/dev/null; then
+  echo "⛔ GATE BLOCKED: the specs define TC-* IDs but $TC_JSON is missing (run Step 3d)"; GATE_BLOCKED=true
 fi
 
-# 3. Review dimensions — block on any BLOCKING / HIGH / CRITICAL that isn't marked resolved.
+# 3. Review dimensions — every report must exist. Its count line "BLOCKING:N WARNING:N INFO:N" (what
+#    each Wave 4 reviewer ends with) decides, as in verify-gate.sh; without one, the same prose rule:
+#    BLOCKING lines that aren't "none" summaries or "non-blocking", minus lines marked resolved.
 for R in code_review_I code_review_II security_review; do
   F="$REPORTS_DIR/${R}.md"
-  [ -f "$F" ] || continue
-  if grep -qiP '\b(BLOCKING|CRITICAL)\b' "$F" && ! grep -qiP '(BLOCKING|CRITICAL)[^\n]*(resolved|fixed|✓)' "$F"; then
-    echo "⛔ GATE BLOCKED: ${R} has unresolved BLOCKING/CRITICAL findings"; GATE_BLOCKED=true
+  if [ ! -s "$F" ]; then
+    echo "⛔ GATE BLOCKED: ${R}.md is missing or empty"; GATE_BLOCKED=true; continue
+  fi
+  NB=$(grep -Eo 'BLOCKING:[[:space:]]*[0-9]+[[:space:]]+WARNING:' "$F" | tail -1 | grep -Eo '[0-9]+' || true)
+  if [ -z "$NB" ]; then
+    NB=$(awk '{ l = tolower($(0)); if (l !~ /blocking/) next
+                if (l ~ /no[ \t]+blocking|blocking[ \t]*[:=]?[ \t]*0([^0-9]|$)|0[ \t]+blocking|non[- ]?blocking|\|[ \t]*0[ \t]*\|[ \t]*$/) next
+                if (l ~ /resolved/) { r++; next }; f++ }
+              END { u = f - r; print (u > 0 ? u : 0) }' "$F")
+  fi
+  if [ "$NB" -gt 0 ]; then
+    echo "⛔ GATE BLOCKED: ${R} has ${NB} unresolved BLOCKING finding(s)"; GATE_BLOCKED=true
   fi
 done
 
@@ -142,12 +161,12 @@ Carry-forward enforcement:
 If any gate item fails:
 1. Write `gate.failed` with structured failure data (enables next-phase detection of "ran but failed" vs "never ran"):
    ```bash
-   cat > agent_state/phases/${PHASE}/gate.failed <<EOF
+   cat > "agent_state/phases/${PHASE}/gate.failed" <<EOF
    {
      "phase": ${PHASE},
      "failed_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
      "blockers": [
-       // list of failing gate items with details
+       {"gate_item": "<failing gate item, e.g. unit_tests>", "details": "<what failed, with file:line>"}
      ],
      "attempt": ${ATTEMPT:-1}
    }
@@ -261,35 +280,36 @@ When the NEXT phase starts (Phase N+1 Step 0):
 All manifest writes MUST use atomic write protocol to prevent corrupt JSON from crashing downstream phases:
 
 1. Write to `agent_state/phases/${PHASE}/manifest.json.tmp`
-2. Validate: `cat manifest.json.tmp | python3 -c "import json,sys; json.load(sys.stdin)" && echo "valid" || echo "CORRUPT"`
+2. Validate the `.tmp`: JSON syntax, then the required fields (Schema Validation below)
 3. If valid: `mv manifest.json.tmp manifest.json`
 4. If invalid: STOP — do not proceed. Log error and retry write.
 
 ```bash
-# Atomic manifest write
-python3 -c "import json,sys; json.load(sys.stdin)" < agent_state/phases/${PHASE}/manifest.json.tmp && \
-  mv agent_state/phases/${PHASE}/manifest.json.tmp agent_state/phases/${PHASE}/manifest.json || \
-  { echo "⛔ CORRUPT manifest — aborting"; exit 1; }
+# Atomic manifest write: both checks run on the .tmp BEFORE the mv (a schema check after the mv
+# would read a .tmp that no longer exists); a failure leaves manifest.json untouched
+M="agent_state/phases/${PHASE:?}/manifest.json"
+python3 - "$M.tmp" <<'PY' && mv "$M.tmp" "$M" || { echo "⛔ CORRUPT or incomplete manifest — aborting"; exit 1; }
+import json, os, sys
+manifest = json.load(open(sys.argv[1]))
+schema = 'agent_state/manifest_schema.json'   # its "required" list wins when the project has it
+required = json.load(open(schema))['required'] if os.path.exists(schema) else [
+    'phase', 'goal', 'started_at', 'completed_at', 'attempt', 'brd_requirements_met',
+    'test_results', 'artifacts', 'known_issues', 'carried_forward']
+missing = [f for f in required if f not in manifest]
+if missing:
+    print(f'⛔ MANIFEST MISSING FIELDS: {missing}')
+    sys.exit(1)
+print('✅ Manifest JSON + required fields valid')
+PY
 ```
 
 This protocol also applies to any agent-level manifest writes in `agent_state/phases/${PHASE}/<agent>/manifest.json` — always write to `.tmp`, validate, then `mv`.
 
 ### Schema Validation
 
-After JSON syntax validation, also validate against the manifest schema (`agent_state/manifest_schema.json`):
-
-```bash
-python3 -c "
-import json, sys
-manifest = json.load(sys.stdin)
-required = ['phase', 'goal', 'started_at', 'brd_requirements_met', 'test_results', 'artifacts', 'known_issues', 'carried_forward']
-missing = [f for f in required if f not in manifest]
-if missing:
-    print(f'⛔ MANIFEST MISSING FIELDS: {missing}')
-    sys.exit(1)
-print('✅ Manifest schema valid')
-" < agent_state/phases/${PHASE}/manifest.json.tmp
-```
+The atomic write above checks the `.tmp` against the manifest schema's `required` list
+(`agent_state/manifest_schema.json`: `phase`, `goal`, `started_at`, `completed_at`, `attempt`,
+`brd_requirements_met`, `test_results`, `artifacts`, `known_issues`, `carried_forward`) before the `mv`.
 
 ### Phase Completion Tagging
 
@@ -304,8 +324,8 @@ git tag "phase-${PHASE}-complete" -m "Phase ${PHASE} gate passed: $(date)"
 ### Write gate files
 
 ```bash
-mkdir -p agent_state/phases/${PHASE}
-touch agent_state/phases/${PHASE}/gate.passed
+mkdir -p "agent_state/phases/${PHASE:?}"
+touch "agent_state/phases/${PHASE}/gate.passed"
 ```
 
 Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next phase:
@@ -314,7 +334,9 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
 {
   "phase": N,
   "goal": "<from PHASE_PLAN.md>",
+  "started_at": "<ISO 8601 timestamp>",
   "completed_at": "<ISO 8601 timestamp>",
+  "attempt": 1,
   "brd_requirements_met": ["FR-001", "FR-002", "NFR-PERF-01"],
   "acceptance_tests": {
     "use_cases_total": 5,
@@ -345,7 +367,7 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
       "report": "agent_state/phases/N/reports/integration_tests.md"
     },
     "e2e": {
-      "status": "passed | not_run",
+      "status": "passed",
       "total": 3,
       "passed": 3,
       "failed": 0,
@@ -386,3 +408,5 @@ Write `agent_state/phases/${PHASE}/manifest.json` — the handshake for the next
 ```
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 6 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 4 run in fixture scenarios on macOS bash 3.2.57 (1 also on Linux bash 5.2.37 with GNU tools); 2 JSON blocks parsed + agent_state/manifest_schema.json, verify-gate.sh's gate.forced jq checks.

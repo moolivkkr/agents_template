@@ -17,8 +17,8 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /out/app ./cmd/app
 
-# Stage 2: Runtime (minimal, no shell)
-FROM gcr.io/distroless/static-debian12
+# Stage 2: Runtime (minimal, no shell). An explicit tag (pin its digest in CI), never an implicit :latest
+FROM gcr.io/distroless/static-debian12:nonroot
 ARG GIT_SHA=unknown
 ENV GIT_SHA=${GIT_SHA}
 COPY --from=builder /out/app /app
@@ -123,3 +123,5 @@ Order: dependency manifest → install (lockfile only, lifecycle scripts off) �
 - Health checks target `/healthz` + `/readyz` (the runtime contract) — never `/health`
 - Named volumes for persistent data (not bind mounts)
 - `depends_on` with `condition: service_healthy` (or `service_completed_successfully` for the migrate one-shot) — don't race on startup
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 Dockerfile blocks: hadolint 2.15.1 and docker build (+ docker run of 1); 1 YAML block parsed (duplicate keys fail), docker compose config (Compose 5.1.0).

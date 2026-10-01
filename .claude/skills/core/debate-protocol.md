@@ -195,3 +195,5 @@ At the human checkpoint, present:
 | Skip weakness acknowledgment | Honest weaknesses build trust in the verdict |
 | Arbitrate without reading all arguments | Arbitrator must reference specific debater points |
 | Override without logging | Every user override documented with rationale |
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed.

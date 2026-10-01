@@ -173,17 +173,16 @@ Add to project dependencies:
 - **Linting:** `eslint-plugin-jsx-a11y` (React) or equivalent
 
 ### ESLint A11y Rules (MUST be enabled)
+The `rules` of a flat-config entry after `jsxA11y.flatConfigs.recommended` in `eslint.config.js` (ESLint
+10 ignores `.eslintrc*` files, so rules placed there never run):
 ```json
 {
-  "extends": ["plugin:jsx-a11y/recommended"],
-  "rules": {
-    "jsx-a11y/alt-text": "error",
-    "jsx-a11y/anchor-is-valid": "error",
-    "jsx-a11y/click-events-have-key-events": "error",
-    "jsx-a11y/no-static-element-interactions": "error",
-    "jsx-a11y/label-has-associated-control": "error",
-    "jsx-a11y/heading-has-content": "error"
-  }
+  "jsx-a11y/alt-text": "error",
+  "jsx-a11y/anchor-is-valid": "error",
+  "jsx-a11y/click-events-have-key-events": "error",
+  "jsx-a11y/no-static-element-interactions": "error",
+  "jsx-a11y/label-has-associated-control": "error",
+  "jsx-a11y/heading-has-content": "error"
 }
 ```
 
@@ -192,3 +191,5 @@ Run axe-core scans in CI pipeline:
 - Component-level: runs with unit tests (Tier 1)
 - Page-level: runs with E2E tests (Tier 3)
 - ESLint: runs as pre-commit hook
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed + ESLint 10.11.0 with eslint-plugin-jsx-a11y 6.10.2 (loads the rules, reports a violation).

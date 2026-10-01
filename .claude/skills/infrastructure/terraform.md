@@ -32,19 +32,20 @@ State holds real resource IDs and secrets — never commit it, always lock it.
 ```hcl
 # backend.tf
 terraform {
-  required_version = ">= 1.6"
+  required_version = ">= 1.11" # S3-native locking: Terraform 1.11+ / OpenTofu 1.10+
   backend "s3" {
-    bucket         = "acme-tfstate"
-    key            = "prod/terraform.tfstate"
-    region         = "us-east-1"
-    dynamodb_table = "tf-locks"   # prevents concurrent apply corruption
-    encrypt        = true
+    bucket       = "acme-tfstate"
+    key          = "prod/terraform.tfstate"
+    region       = "us-east-1"
+    use_lockfile = true # lock object next to the state: prevents concurrent apply corruption
+    encrypt      = true
   }
 }
 ```
 
 - One state file per environment (separate `key`) — blast radius is contained
-- Locking (DynamoDB / GCS / native) is mandatory for any shared/CI state
+- Locking is mandatory for any shared/CI state: `use_lockfile` on S3 (`dynamodb_table` is deprecated),
+  built in on GCS / azurerm
 - Add `.terraform/`, `*.tfstate*`, `*.tfvars` (if they hold secrets) to `.gitignore`
 
 ## Modules
@@ -83,3 +84,5 @@ terraform apply tf.plan              # apply the exact reviewed plan
 - Never `terraform destroy` in prod without an explicit, reviewed plan
 - Idempotency is the contract: a second `apply` with no code change must show "no changes"
 - Keep provider and Terraform versions pinned so CI and local produce identical plans
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 HCL blocks: OpenTofu 1.12.6 fmt -check, init -backend=false + validate; 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

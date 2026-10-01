@@ -999,3 +999,5 @@ func TestStripeWebhookVerification(t *testing.T) {
 - For streaming responses (SSE/OpenAI), mock the chunked response format
 - Clean up mock servers in test teardown — prevent port leaks
 - Mock the authentication endpoint (JWKS) alongside the service endpoints
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 5 JSON blocks parsed.

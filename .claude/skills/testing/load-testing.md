@@ -317,27 +317,28 @@ class WidgetSimulation extends Simulation {
 ## Drill (Rust — Lightweight)
 
 ```yaml
-# benchmark.yml
+# benchmark.yml — drill interpolates {{ VAR }} from the environment (base, url, headers):
+#   APP_BASE_URL=http://app-qa.localhost:18080 AUTH_TOKEN="$(…mint a test-user token…)" drill --benchmark benchmark.yml --stats
 ---
 concurrency: 50
-base: "http://localhost:8080"
+base: "{{ APP_BASE_URL }}"
 iterations: 1000
 rampup: 10
 
 plan:
   - name: List widgets
     request:
-      url: /api/v1/widgets?page_size=20
+      url: /api/v1/widgets?limit=20        # cursor pagination: limit (+ cursor), never page/offset
       method: GET
       headers:
-        Authorization: "Bearer test-token"
+        Authorization: "Bearer {{ AUTH_TOKEN }}"   # from the environment, never committed
 
   - name: Create widget
     request:
       url: /api/v1/widgets
       method: POST
       headers:
-        Authorization: "Bearer test-token"
+        Authorization: "Bearer {{ AUTH_TOKEN }}"   # from the environment, never committed
         Content-Type: "application/json"
       body: '{"name":"drill-test","description":"bench"}'
 ```
@@ -362,21 +363,25 @@ load-test:
           --keyserver hkp://keyserver.ubuntu.com:80 --recv-keys C5AD17C747E3415A3642D57D77C6C491D6AC1D68
         echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.io/deb stable main" \
           | sudo tee /etc/apt/sources.list.d/k6.list
-        sudo apt-get update && sudo apt-get install k6
+        sudo apt-get update && sudo apt-get install -y k6
 
     - name: Run load test
+      env:                       # secrets reach the script as env vars, not pasted into its text
+        APP_BASE_URL: ${{ secrets.STAGING_URL }}       # the name the k6 script reads (__ENV.APP_BASE_URL)
+        AUTH_TOKEN: ${{ secrets.STAGING_AUTH_TOKEN }}
       run: |
         k6 run \
-          --env BASE_URL=${{ secrets.STAGING_URL }} \
-          --env AUTH_TOKEN=${{ secrets.STAGING_AUTH_TOKEN }} \
-          --summary-export=summary.json \
-          tests/load/api-load-test.js
+          --env APP_BASE_URL="$APP_BASE_URL" \
+          --env AUTH_TOKEN="$AUTH_TOKEN" \
+          --env K6_SUMMARY=summary.json \
+          tests/load/api-load-test.js       # its handleSummary() writes summary.json, as in the NFR-PERF
+                                            # script above (not --summary-export)
 
     - name: Check thresholds
       if: failure()
       run: |
         echo "Load test failed — p95 latency or error rate exceeded thresholds"
-        cat summary.json | jq '.metrics'
+        if [ -f summary.json ]; then jq '.metrics' summary.json; fi
         exit 1
 ```
 
@@ -428,3 +433,5 @@ Duration: Hold steady state for at least 5 minutes before measuring
 - k6 for CI/CD integration (scriptable, threshold-based exit codes)
 - Locust for exploratory testing (web UI, Python flexibility)
 - Gatling for Java/Scala shops (JVM-native, rich HTML reports)
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 YAML blocks parsed (duplicate keys fail), actionlint 1.7.12, drill benchmark structure.

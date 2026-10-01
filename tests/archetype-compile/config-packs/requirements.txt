@@ -1,0 +1,9 @@
+# Pinned for tests/archetype-compile/config-packs (run.sh installs these into .venv with uv).
+# pglast 7.x embeds libpg_query 17 = the PostgreSQL 17 grammar (pglast 8.x is PostgreSQL 18).
+pglast==7.18
+psycopg[binary]==3.2.10
+PyMySQL==1.1.2
+PyYAML==6.0.3
+jsonschema==4.25.1
+openapi-spec-validator==0.7.2
+cryptography==50.0.2   # PyMySQL needs it for MySQL 8.4 caching_sha2_password

@@ -43,10 +43,38 @@ paths:
             default: 20
       responses:
         "200":
+          description: A page of users   # required on every response object
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ListUsersResponse"
+components:
+  schemas:
+    ListUsersResponse:   # the response envelope (api/response-envelope.md)
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+        meta:
+          type: object
+          required: [request_id, pagination]
+          properties:
+            request_id: { type: string }
+            pagination:
+              type: object
+              required: [next_cursor, has_more, limit]
+              properties:
+                next_cursor: { type: [string, "null"] }   # null when has_more is false
+                has_more: { type: boolean }
+                limit: { type: integer }
+    User:
+      type: object
+      required: [id, email]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
 ```
 
 ```typescript
@@ -589,3 +617,5 @@ code maps to. See `backend/archetypes/error-handling-go.md` for the canonical er
 - Idempotency keys on all POST endpoints — safe retries are mandatory
 - Version in URL path — breaking changes require a new major version
 - Include `request_id` in every response for debugging correlation
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail), openapi-spec-validator (OpenAPI 3.1); 1 JSON block parsed + response-envelope rules.

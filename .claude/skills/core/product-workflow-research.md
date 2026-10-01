@@ -84,7 +84,7 @@ screen:
     - name: "Pattern Name"
       type: text | dropdown | checkbox | radio | number | regex | date | multiselect
       required: true | false
-      default: "value" | null
+      default: value | null   # alternatives, as above: the value, or null
       options: ["opt1", "opt2"]  # for dropdown/radio/multiselect
       validation: "description of validation rule"
       description: "what this field does"
@@ -308,3 +308,5 @@ Before producing final output, verify:
 9. **API coverage:** Every capability has API coverage level (FULL/PARTIAL/GAP/EXTRA) documented
 10. **API gaps highlighted:** Console-only operations prominently flagged — these are the most valuable findings
 11. **Integration map:** All external system touchpoints documented with direction and protocol
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 YAML blocks parsed (duplicate keys fail).

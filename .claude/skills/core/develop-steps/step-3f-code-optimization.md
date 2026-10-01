@@ -18,8 +18,12 @@ Dead code and redundant patterns accumulate across phases. Each agent generates 
 Optimization ONLY touches files that were created or modified in THIS phase. Never modify code from previous phases — it has already passed its own gate.
 
 ```bash
-# Scope = only files changed since last phase gate
-SCOPE_FILES=$(git diff --name-only agent_state/phases/$((PHASE-1))/gate.passed..HEAD 2>/dev/null || git diff --name-only HEAD~50..HEAD)
+# Scope = only files changed in this phase: since its base_sha (or /optimize --since). A gate.passed
+# path is not a revision, and a HEAD~50 guess is not this phase: no base, no optimization.
+BASE="${OPTIMIZE_BASE:-$(cat "agent_state/phases/${PHASE:?}/base_sha" 2>/dev/null)}"
+[ -n "$BASE" ] || { echo "⛔ BLOCKED: no base commit (agent_state/phases/${PHASE}/base_sha) — pass /optimize --since"; exit 1; }
+SCOPE_FILES=$(git diff --name-only "$BASE"..HEAD) || { echo "⛔ BLOCKED: git diff $BASE..HEAD failed"; exit 1; }
+echo "$SCOPE_FILES"
 ```
 
 ### Pre-optimization snapshot
@@ -62,3 +66,5 @@ Both agents follow the same safety protocol:
 - `agent_state/phases/${PHASE}/reports/ui_code_optimization.md` — UI optimization report (if frontend)
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 run in fixture scenarios on macOS bash 3.2.57 (1 also on Linux bash 5.2.37 with GNU tools).

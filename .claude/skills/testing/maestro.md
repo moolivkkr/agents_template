@@ -12,14 +12,15 @@ Expo. Strategy: `mobile-testing-strategy.md`.
 ## Install and run
 
 ```bash
-curl -fsSL "https://get.maestro.mobile.dev" | bash      # installs to ~/.maestro/bin
+curl -fsSL "https://get.maestro.mobile.dev" -o maestro-install.sh && bash maestro-install.sh   # installs to ~/.maestro/bin
+# (not `curl … | bash`: a failed download hands bash an empty script, which "succeeds")
 maestro --version
 maestro test .maestro/                                  # all flows in the folder
 maestro test .maestro/login.yaml                        # one flow
 maestro test --device <udid-or-emulator-id> .maestro/   # pick a target when several are booted
 # Backend = APP_BASE_URL (the Wave 3.5 deploy). Android: host → 10.0.2.2, same port, original host in a Host header
 maestro test -e API_URL="$API_URL_ANDROID" -e API_HOST="$API_HOST" .maestro/
-maestro test --format junit --output agent_state/phases/$PHASE/junit/mobile-ios-latest.xml .maestro/   # machine-readable results
+maestro test --format junit --output "agent_state/phases/$PHASE/junit/mobile-ios-latest.xml" .maestro/   # machine-readable results
 maestro test --include-tags smoke .maestro/             # tag-filtered subset
 ```
 
@@ -126,3 +127,5 @@ minification bugs and shows LogBox overlays that block taps.
 - Selecting by text (`tapOn: "Sign in"`): breaks on copy changes and locales. Use `id:`.
 - One mega-flow covering five workflows: one failure hides the other four. One workflow per file.
 - Testing only on iOS because the Mac is handy: every workflow runs on both platforms.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 3 YAML blocks parsed (duplicate keys fail), Maestro flow structure (documented commands).

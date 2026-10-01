@@ -239,3 +239,5 @@ class WidgetRepositoryTest {
 - `@RestControllerAdvice` for all error mapping, writing the envelope from `api/response-envelope.md` (`backend/archetypes/error-handling-java.md`) — no try-catch in controllers, no `ProblemDetail`.
 - `@Transactional` on service methods, never on controllers or repositories.
 - Test slices (`@WebMvcTest`, `@DataJpaTest`) over full `@SpringBootTest` when possible.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail); 1 JSON block parsed + response-envelope rules.

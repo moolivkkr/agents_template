@@ -809,6 +809,19 @@ CREATE TABLE inventory (
     quantity  INTEGER NOT NULL CHECK (quantity >= 0),
     PRIMARY KEY (tenant_id, sku)
 );
+
+-- Tenant isolation in the database too (infrastructure/saas-tenancy-models.md): the app sets
+-- app.current_tenant_id with set_config(..., true) inside each transaction.
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON orders
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
+ALTER TABLE inventory ENABLE ROW LEVEL SECURITY;
+ALTER TABLE inventory FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON inventory
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
 ```
 
 ---
@@ -1199,3 +1212,5 @@ async fn main() -> anyhow::Result<()> {
 - Prefer `&str` over `String` in function params when not taking ownership
 - Use `tracing` crate for structured logging (not `log` + `env_logger`)
 - Pin dependency versions in `Cargo.lock` (commit it for binaries, not for libraries)
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 SQL block parsed with libpg_query 17.7 and executed on PostgreSQL 17.11.

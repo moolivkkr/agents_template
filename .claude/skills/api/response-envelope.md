@@ -172,3 +172,5 @@ These are the contract tests, owned by `integration_test_agent`, with shapes fro
   body contains no stack trace or SQL (assert the absence of `"stack"`, `"SELECT "`, file paths).
 - **UI and mobile mocks** (MSW handlers, fixtures) are built from these types, so a mock that violates
   the envelope fails to type-check.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 JSON blocks parsed + response-envelope rules.

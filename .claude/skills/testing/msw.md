@@ -206,3 +206,5 @@ http.get("/healthz", () => {
 - Use `onUnhandledFrame: "error"` (MSW 2: `onUnhandledRequest`) in tests to catch missing handlers early
 - Use `onUnhandledFrame: "bypass"` (MSW 2: `onUnhandledRequest`) in the browser to let non-mocked requests through
 - MSW intercepts at the network level — works with any HTTP client (fetch, axios, ky)
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

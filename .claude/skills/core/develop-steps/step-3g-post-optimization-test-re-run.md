@@ -22,7 +22,8 @@ Re-run 3g.3: E2E tests            → must still pass (if they ran in 3c)
 
 If ANY test fails after optimization:
 
-1. **Identify which optimization caused the failure** — check git log since `phase-${PHASE}-pre-optimize` tag
+1. **Identify which optimization caused the failure** — check `git log "${PRE_SHA}..HEAD"` (PRE_SHA is
+   recorded before Step 3f starts; no tags)
 2. **Diagnose and fix first** (don't blindly revert):
    - Read test failure output → identify root cause (missing import, broken caller, type mismatch)
    - Apply targeted fix → commit as `fix: resolve <issue> after <optimization>`
@@ -30,10 +31,11 @@ If ANY test fails after optimization:
 3. **If fix doesn't work** — try broader fix (check all callers of changed code, fix all affected)
 4. **If still failing after 2 fix attempts** — revert the specific optimization commit + fix attempts:
    ```bash
-   git revert <commit-hash> --no-edit
+   git revert --no-edit "<commit-hash>"   # <commit-hash>: the optimization commit from step 1
    ```
 5. **Max 3 revert cycles** — if tests still fail after 3 optimization reverts:
-   - Reset to pre-optimization state: `git reset --hard phase-${PHASE}-pre-optimize`
+   - Return to the pre-optimization state by reverting, never resetting (a reset discards everyone's
+     uncommitted work): `git revert --no-edit "${PRE_SHA}..HEAD"`
    - Log in report: "⚠ All optimizations reverted — optimization introduced non-recoverable regression"
    - Pipeline continues (optimization failure is NOT a pipeline blocker, but IS logged in gate)
 6. **Update the optimization report** with fixed and reverted items
@@ -59,3 +61,5 @@ The Phase Gate (Step 6) checks the post-optimization test status:
 - Tests still failing → **BLOCKER** (should not happen if revert protocol followed)
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

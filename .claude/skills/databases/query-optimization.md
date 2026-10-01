@@ -196,7 +196,8 @@ CREATE INDEX idx_users_created_at ON users(created_at);
 
 -- Composite: WHERE user_id = $1 AND status = $2 ORDER BY created_at
 -- Leftmost prefix rule: index is used for (user_id), (user_id, status),
--- (user_id, status, created_at) — but NOT for (status) alone
+-- (user_id, status, created_at) — but NOT for (status) alone (PostgreSQL 18's skip scan can use it
+-- when user_id has few distinct values; through 17 that query is a Seq Scan)
 CREATE INDEX idx_orders_user_status_created
     ON orders(user_id, status, created_at DESC);
 ```
@@ -240,7 +241,8 @@ SELECT * FROM orders WHERE status = 'pending' ORDER BY created_at DESC;
 CREATE INDEX idx_orders_user_covering ON orders(user_id)
     INCLUDE (status, total, created_at);
 
--- This query can be satisfied entirely from the index:
+-- This query can be satisfied entirely from the index — an Index Only Scan, once (auto)VACUUM has
+-- marked the table's pages all-visible; rows on pages changed since then still visit the heap:
 SELECT status, total, created_at FROM orders WHERE user_id = $1;
 ```
 
@@ -253,12 +255,15 @@ SELECT status, total, created_at FROM orders WHERE user_id = $1;
 - Use `pg_stat_user_indexes` to find unused indexes (remove them)
 
 ```sql
--- Find unused indexes
-SELECT schemaname, tablename, indexname, idx_scan
-FROM pg_stat_user_indexes
-WHERE idx_scan = 0
-  AND indexname NOT LIKE '%_pkey'
-ORDER BY pg_relation_size(indexrelid) DESC;
+-- Find unused indexes (since the last stats reset). Unique and primary-key indexes enforce
+-- constraints even when no query scans them, so they are never candidates.
+SELECT s.schemaname, s.relname AS table_name, s.indexrelname AS index_name, s.idx_scan,
+       pg_size_pretty(pg_relation_size(s.indexrelid)) AS index_size
+FROM pg_stat_user_indexes s
+JOIN pg_index i ON i.indexrelid = s.indexrelid
+WHERE s.idx_scan = 0
+  AND NOT i.indisunique
+ORDER BY pg_relation_size(s.indexrelid) DESC;
 ```
 
 ## Connection Pooling
@@ -499,14 +504,16 @@ func (r *EventRepo) BulkInsert(ctx context.Context, events []Event) error {
 INSERT INTO tags (name, category)
 SELECT unnest($1::text[]), unnest($2::text[]);
 
--- Batch update
+-- Batch update: ids are uuids (the ::text[] form fails with "operator does not exist: uuid = text"),
+-- and the tenant predicate keeps a list of ids from touching another tenant's rows
 UPDATE users
 SET status = data.new_status
 FROM (
-    SELECT unnest($1::text[]) AS id,
+    SELECT unnest($1::uuid[]) AS id,
            unnest($2::text[]) AS new_status
 ) data
-WHERE users.id = data.id;
+WHERE users.id = data.id
+  AND users.tenant_id = $3;
 ```
 
 ```go
@@ -558,7 +565,9 @@ func (r *EventRepo) BulkInsertBatched(ctx context.Context, events []Event) error
 ### pg_stat_statements — Slow Query Tracking
 
 ```sql
--- Enable the extension (once per database)
+-- The server must preload the module (shared_preload_libraries = 'pg_stat_statements', then a
+-- restart); without it the view errors "pg_stat_statements must be loaded via shared_preload_libraries".
+-- Then enable the extension (once per database):
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
 
 -- Top 10 slowest queries by total time
@@ -590,7 +599,7 @@ LIMIT 20;
 ```sql
 -- Table cache hit ratio — should be > 99%
 SELECT
-    schemaname, tablename,
+    schemaname, relname AS table_name,
     heap_blks_hit * 100.0 / NULLIF(heap_blks_hit + heap_blks_read, 0) AS cache_hit_ratio
 FROM pg_statio_user_tables
 WHERE heap_blks_hit + heap_blks_read > 0
@@ -599,7 +608,7 @@ LIMIT 10;
 
 -- Index cache hit ratio
 SELECT
-    schemaname, tablename, indexrelname,
+    schemaname, relname AS table_name, indexrelname AS index_name,
     idx_blks_hit * 100.0 / NULLIF(idx_blks_hit + idx_blks_read, 0) AS cache_hit_ratio
 FROM pg_statio_user_indexes
 WHERE idx_blks_hit + idx_blks_read > 0
@@ -662,3 +671,5 @@ func (r *UserRepo) FindByID(ctx context.Context, id string) (*User, error) {
 - List columns explicitly — never `SELECT *` in production code
 - Use `COPY` for bulk inserts, `unnest()` for batch operations
 - Monitor slow queries with pg_stat_statements, alert on p95 > 100ms
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 12 SQL blocks parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 8 claims in the text proven on PostgreSQL 17.11.

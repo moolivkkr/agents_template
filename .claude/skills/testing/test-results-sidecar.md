@@ -17,8 +17,8 @@ Run the suite with a JUnit XML reporter, then convert. **Write the JUnit XML und
 the source tree make it "dirty", and the gate then rejects your evidence.
 
 ```bash
-python3 .claude/hooks/junit-to-sidecar.py --tier unit --command "<the command you ran>" --exit-code $RC \
-  --out agent_state/phases/$PHASE/reports/unit_results.json  path/to/junit*.xml
+python3 .claude/hooks/junit-to-sidecar.py --tier unit --command "<the command you ran>" --exit-code "$RC" \
+  --out "agent_state/phases/$PHASE/reports/unit_results.json"  path/to/junit*.xml
 ```
 
 | Stack | JUnit reporter |
@@ -51,7 +51,7 @@ Both still carry `code_sha` and per-case verdicts.
   "dirty": false,
   "env": "local|dev|qa", "base_url": "http://app-qa.localhost:18080",
   "command": "gotestsum --junitfile unit.xml -- -count=1 ./...", "exit_code": 0,
-  "cases": [ {"name": "TC-API-001 creates an order", "verdict": "PASS|FAIL|SKIPPED|BLOCKED|UNTESTED",
+  "cases": [ {"name": "TC-API-001 creates an order", "verdict": "PASS|FAIL|SKIPPED|FLAKY|BLOCKED|UNTESTED",
               "ids": ["TC-API-001"], "priority": "HIGH|MEDIUM|LOW"} ],
   "quarantined": [ {"name": "…", "issue": "#123", "expires": "2026-10-15"} ],
   "ts": "2026-09-30T12:00:00Z"
@@ -91,3 +91,5 @@ the suite you report.** Evidence from uncommitted code can't be bound to anythin
   passes, the gate blocks again.
 - Never raise retries, sleep longer, or loosen assertions to get a green run. The test-diff check
   (`tc-inventory.py --diff-base`) flags new skips and removed assertions.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 JSON block parsed + sdlc.test-results/v1 as junit-to-sidecar.py writes and verify-gate.sh reads it.

@@ -72,7 +72,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: <commands.build>
       - name: Build Docker image
-        run: docker build --build-arg GIT_SHA=${GITHUB_SHA::12} -t myapp:${GITHUB_SHA::12} .
+        run: docker build --build-arg GIT_SHA="${GITHUB_SHA::12}" -t "myapp:${GITHUB_SHA::12}" .
 ```
 Replace each `<commands.X>` with the table's row verbatim when generating the workflow.
 
@@ -104,6 +104,7 @@ env:
 ```yaml
 deploy-prod:
   needs: deploy-staging
+  runs-on: ubuntu-latest      # every job needs one
   environment: production     # requires manual approval if configured
   steps:
     - run: ./deploy.sh prod
@@ -118,3 +119,5 @@ deploy-prod:
 - **No silent retries:** no retry actions, `continue-on-error: true` or `|| true` around test and build steps. Playwright runs with `retries: 0`, or with `failOnFlakyTests: true` if the table sets retries; Go tests with `-count=1`. A test that passes only on retry is a failure
 - `concurrency` to cancel in-progress runs on new push
 - Upload test results (JUnit, coverage) with `if: always()` + `actions/upload-artifact`
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 YAML blocks parsed (duplicate keys fail), actionlint 1.7.12.

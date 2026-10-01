@@ -65,3 +65,5 @@ python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out 
 The orchestrator runs this in Wave 0c. The output feeds `verify-gate.sh` check (e): `typecheck`
 (falling back to `build`), `lint` and `test` (= `test:unit`) run at the gate, and a non-zero exit
 BLOCKs. The full `commands` and `versions` maps are there for every other reader.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

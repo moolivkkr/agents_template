@@ -30,12 +30,13 @@ For each requirement in the spec:
 
 **How to verify:**
 ```bash
-# Extract all requirement IDs from spec
-grep -E "^(FR|NFR|OBJ)-[0-9]+" docs/BRD.md | sort > /tmp/spec_reqs.txt
+# Extract all requirement IDs from spec — the IDs only (they also sit in tables, not just at line
+# start), so the search below looks for "FR-012", not for the whole requirement line
+grep -oE "(FR|NFR|OBJ)(-[A-Z]+)?-[0-9]+" docs/BRD.md | sort -u > /tmp/spec_reqs.txt
 
-# Search codebase for each requirement reference
+# Search codebase for each requirement reference (-w: FR-1 must not match FR-10)
 while read -r req; do
-  count=$(grep -r "$req" src/ --include="*.go" --include="*.ts" -l | wc -l)
+  count=$(grep -rlw "$req" src/ --include="*.go" --include="*.ts" | wc -l)
   if [ "$count" -eq 0 ]; then
     echo "MISSING: $req has no implementation reference"
   fi
@@ -56,14 +57,16 @@ For each endpoint in the API spec:
 
 **How to verify:**
 ```bash
-# List all routes defined in OpenAPI spec
-grep -E "^\s+/(api|v[0-9])" openapi.yaml | sort > /tmp/spec_routes.txt
+# Paths the OpenAPI spec defines (the keys under paths:), one per line
+grep -E "^[[:space:]]+/(api|v[0-9])" openapi.yaml | sed -E 's/^[[:space:]]+//; s/:[[:space:]]*$//' | sort -u > /tmp/spec_routes.txt
 
-# List all routes registered in code
-grep -rE "(GET|POST|PUT|PATCH|DELETE)\s+\"/" src/ --include="*.go" | sort > /tmp/code_routes.txt
+# Paths registered in code (route string literals; ":id" params rewritten to OpenAPI's "{id}")
+grep -rhoE "\"/(api|v[0-9])[^\"]*\"" src/ --include="*.go" | tr -d '"' \
+  | sed -E 's/:([A-Za-z_][A-Za-z0-9_]*)/{\1}/g' | sort -u > /tmp/code_routes.txt
 
-# Compare
-diff /tmp/spec_routes.txt /tmp/code_routes.txt
+# Compare the same shape on both sides: column 1 = in the spec only (not implemented),
+# column 2 = in code only (undocumented)
+comm -3 /tmp/spec_routes.txt /tmp/code_routes.txt
 ```
 
 ### 3. Data Model Completeness
@@ -515,3 +518,5 @@ outside the agent that wrote the code.
 - Produce evidence (test output, curl responses, screenshots) for each claim
 - If any check fails, fix it before reporting completion
 - Anti-rationalization: if you catch yourself saying "it's probably fine," verify
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 run in fixture scenarios on macOS bash 3.2.57 (2 also on Linux bash 5.2.37 with GNU tools).

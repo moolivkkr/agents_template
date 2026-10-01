@@ -50,13 +50,16 @@ CREATE INDEX idx_orders_tenant_status ON orders(tenant_id, status)
 ```sql
 -- RLS policy as a safety net (PostgreSQL example)
 CREATE POLICY tenant_isolation ON orders
-    USING (tenant_id = current_setting('app.current_tenant')::uuid);
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
 
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;  -- otherwise the table's owner bypasses the policy
 ```
 - Application-level filtering is the PRIMARY mechanism
 - RLS is the SECONDARY safety net — catches bugs in application code
-- Set tenant context at connection/session level before any queries
+- Set the tenant context per transaction, on the connection that runs the queries:
+  `SELECT set_config('app.current_tenant_id', $1, true)`. A session-level `SET` stays on the pooled
+  connection and applies to the next request that borrows it
 - RLS policies MUST exist on every tenant-scoped table
 
 ### Logging
@@ -463,3 +466,5 @@ updated_by:  UUID (user who last modified, from auth context)
 - Use UUIDv7 for primary keys (time-sortable, index-friendly)
 - Never expose auto-increment IDs externally (information leakage)
 - External-facing IDs may use prefixed format: `usr_abc123`, `ord_xyz789`
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 SQL block parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 1 JSON block parsed + response-envelope rules; 1 claim in the text proven on PostgreSQL 17.11.
