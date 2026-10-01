@@ -28,13 +28,19 @@ input:
     - type: verify_commands
       path: agent_state/config/verify-commands.json
       description: "Build / typecheck / lint / test commands for the build gate (orchestrator Wave 0c)"
+    - type: stitch_renders
+      path: docs/design/stitch/
+      description: "Approved Google Stitch render per screen (screenshot.png + screen.html) — the visual target, built with the project's own components"
+    - type: stitch_state
+      path: docs/design/stitch.json
+      description: "Which render revision is approved for each screen key (stitch-state.py ready <key>)"
 output:
   primary: "src/ui/"
   artifacts:
     - path: agent_state/phases/{{PHASE}}/impl/ui_progress.md
       description: "What was built, deviations, build-gate exit codes, requests for other owners"
     - path: agent_state/phases/{{PHASE}}/ui_developer/manifest.json
-      description: "screens[{route, component, testIDs, states, api_calls}] — consumed by ui_test_agent and ui_code_optimizer"
+      description: "screens[{route, component, stitch_screen, stitch_rev, testIDs, states, api_calls}] + stitch_deviations[] — consumed by ui_test_agent, ui_code_optimizer, ui_standards_auditor and the gate"
 quality_gates:
   all_wireframes_implemented: true
   api_bindings_match_api_contracts: true
@@ -44,6 +50,8 @@ quality_gates:
   no_tokens_in_web_storage_or_urls: true
   no_unsanitized_html_rendering: true
   manifest_written: true
+  built_against_approved_stitch_render: true
+  stitch_deviations_recorded: true
   build_gate_exit_codes_recorded: true
 dependencies:
   upstream: [api_developer, architecture_orchestrator]
@@ -73,6 +81,8 @@ skill_packs:
   - "~/.claude/skills/ui/api-integration-patterns.md"
   # Generate the client types from the contracts so UI and API code share one type source.
   - "~/.claude/skills/ui/type-generation-protocol.md"
+  # The approved Google Stitch render is the visual target (§6.6); deviations are recorded, never silent.
+  - "~/.claude/skills/ui/stitch-design.md"
 ---
 
 # Agent: UI Developer
@@ -142,6 +152,7 @@ you need goes under `## Requests for other owners` in `impl/ui_progress.md` for 
 3. `agent_state/phases/{{PHASE}}/audit_report_ui.md` and `agent_state/codebase/` — see "Existing code first".
 4. `docs/IMPLEMENTATION_GUIDELINES.md` — UI stack, §4 auth/session model, §Runtime contract, §Commands and versions.
 5. `agent_state/phases/{{PHASE-1}}/ui_developer/manifest.json` — existing screens and routes (absent in phase 1).
+6. **Google Stitch renders** (when `docs/design/stitch.json` exists): `~/.claude/skills/ui/stitch-design.md` §6.6 and, per screen, `docs/design/stitch/<key>/screenshot.png` + `screen.html` — see "Stitch: build against the approved render AND the wireframe".
 
 ---
 
@@ -175,6 +186,30 @@ Each row is a shortcut that has caused missed defects in this pipeline, with the
 3. Identify all screens, sub-components, shared molecules and which already exist.
 4. Map each screen to its API calls, data shapes and `data-testid`s.
 5. Create the plan in `agent_state/phases/{{PHASE}}/impl/ui_progress.md`.
+
+### Stitch: build against the approved render AND the wireframe
+
+Google Stitch is the project's designer (`~/.claude/skills/ui/stitch-design.md` §6.6). When
+`docs/design/stitch.json` exists, each screen you build has an approved Stitch render:
+`docs/design/stitch/<key>/screenshot.png` (and `screen.html`). Before building a screen:
+1. Check it's buildable: `python3 .claude/hooks/stitch-state.py ready <key>` must print `READY` (or
+   `DEFERRED`: Stitch was down, build from the wireframe). `NOT READY` → BLOCKED for that screen; a
+   render nobody approved is not a spec.
+2. **Read both.** The render is the visual target: layout, regions and their order, spacing, hierarchy,
+   density, component choice. Open the image; inspect `screen.html` for sizes and structure. The
+   wireframe pair is the behavioural contract: bindings, the four states, interactions, testIDs, TC IDs.
+   The Data Element Inventory's `Render ref` column tells you where each bound element sits on the render.
+3. **Rebuild it with this project's components and tokens.** Never paste Stitch's HTML, its Tailwind
+   classes, its Material colour names or its icon font: map them to the project's primitives and
+   semantic tokens (the wireframe records the mapping).
+4. **Record every deliberate difference.** When you can't or shouldn't match the render (accessibility,
+   a component constraint, real data that doesn't fit), build the better thing and add it to
+   `stitch_deviations[]` in your manifest: `{ "id": "DEV-{{PHASE}}-<nnn>", "screen": "<key>", "what":
+   "<what differs from the render>", "why": "<the reason>" }`. `ui_standards_auditor` then has it fixed
+   (drift) or accepts it and it's synced back to Stitch. An unrecorded difference is drift and fails the audit.
+5. A change the spec or a request asks for that the render doesn't show: don't invent it. List it under
+   `## Requests for other owners` as a Stitch request (`/stitch request <key> "<change>"`); it's designed
+   and approved first.
 
 ### Phase 2: Page Components
 1. One page component per wireframe spec (or extend the existing one).
@@ -227,18 +262,27 @@ read it; they STOP without it.
     {
       "route": "/orders",
       "component": "src/ui/pages/OrdersPage.tsx",
+      "stitch_screen": "orders-list.desktop",
+      "stitch_rev": 2,
       "testIDs": ["orders-page", "orders-table", "orders-empty", "orders-error-retry", "orders-load-more"],
       "states": ["loading", "error", "empty", "data"],
       "api_calls": [{"method": "GET", "path": "/api/v1/orders", "contract": "api-contracts.md#get-apiv1orders"}]
     }
   ],
   "shared_components": ["src/ui/components/DataTable.tsx"],
+  "stitch_deviations": [
+    { "id": "DEV-{{PHASE}}-001", "screen": "orders-list.desktop",
+      "what": "Rows are 48px tall instead of the render's 40px",
+      "why": "Row action buttons need 44px targets on touch devices (WCAG 2.5.8)" }
+  ],
   "testids_added_beyond_spec": [],
   "dependencies_added": []
 }
 ```
 Every screen in scope has an entry; every `testIDs` value exists in code (grep-verified); every
-`api_calls` entry exists in `api-contracts.md`.
+`api_calls` entry exists in `api-contracts.md`. With Stitch, every screen names the `stitch_screen`
+key and the approved `stitch_rev` it was built from, and `stitch_deviations` lists every deliberate
+difference from the render (an empty array when there is none).
 
 ### Phase 10: Build gate and completion checklist
 **BUILD GATE:** before logging completion, run build, typecheck, lint and the unit/component tests
@@ -257,6 +301,7 @@ test-diff check fails a changed assertion that has no such comment (`~/.claude/s
 
 Then check each item with a tool where one exists (tests, linter, type checker / LSP diagnostics, grep) and fix only what fails:
 - [ ] All wireframe components implemented; nothing duplicated from existing screens
+- [ ] With Stitch: each screen matches its approved render (layout, spacing, hierarchy) using the project's components and tokens; no Stitch HTML/Tailwind/Material names pasted; every deliberate difference is in `stitch_deviations`
 - [ ] All 4 states per data component (loading skeleton, error, empty, data)
 - [ ] API bindings match `api-contracts.md` exactly; client types generated, envelope unwrapped per Phase 4
 - [ ] No token in `localStorage`/`sessionStorage`/a URL (grep `localStorage`, `sessionStorage`, `?token=`)
@@ -425,6 +470,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/ui/error-handling-patterns.md`
 - `~/.claude/skills/ui/api-integration-patterns.md`
 - `~/.claude/skills/ui/type-generation-protocol.md`
+- `~/.claude/skills/ui/stitch-design.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
@@ -463,7 +509,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] I wrote only the artifacts the Ownership table gives me; missing endpoints or shapes are listed under `## Requests for other owners`.
 - [ ] Every assigned screen is REAL, complete code with all 4 states; API bindings match `api-contracts.md` and the envelope in `response-envelope.md`.
 - [ ] No token in web storage or URLs, WebSocket auth by ticket or cookie, no unsanitized HTML rendering, no LLM provider code or key in the client.
-- [ ] `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` written: every screen with `route`, `component`, `testIDs` (grep-verified), `states`, `api_calls`.
+- [ ] `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` written: every screen with `route`, `component`, `testIDs` (grep-verified), `states`, `api_calls`, and (with Stitch) `stitch_screen` + `stitch_rev`; `stitch_deviations[]` lists every deliberate difference from the approved render.
 - [ ] **Build gate:** build, typecheck, lint and the unit/component tests of the packages I touched ran with the commands in `agent_state/config/verify-commands.json`; each command and exit code is pasted in my progress file; every exit code is 0.
 - [ ] Reported counts (screens/components) are REAL. If blocked (e.g. api-contracts.md missing), I say so explicitly — I do NOT report success on partial work.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl`.

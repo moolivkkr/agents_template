@@ -21,6 +21,12 @@ input:
     - type: prev_ui_specs
       path: docs/design/phases/{{PHASE-1}}/specs/
       description: Previous phase screens — maintain navigation continuity
+    - type: stitch_renders
+      path: docs/design/stitch/
+      description: "Approved Google Stitch renders (screenshot.png + screen.html per screen key) — the visual source each wireframe is normalized from"
+    - type: stitch_state
+      path: docs/design/stitch.json
+      description: "Which revision of each screen is approved, by whom, and its render hash"
 output:
   primary: docs/design/phases/{{PHASE}}/specs/
   artifacts:
@@ -61,7 +67,34 @@ Produces wireframe specification files for UI screens scoped to the current phas
 7. **This project's UI stack packs** — the `ui/*` and `frameworks/*` entries in `agent_state/agent_registry.json` → `active_skill_packs` (for example `ui/shadcn.md` and `ui/tailwind.md` when the stack uses them). Load only those; a component library the project doesn't use is noise.
 8. **The project design system, only if the project names one** — `agent_registry.json` → `tech_profile.frontend.design_system` (a pack the guidelines or `docs/DECISIONS.md` named). When set, map every widget in the wireframe to a REAL component of that library by name, and specify surfaces, text and status colours with its semantic tokens — never invent component names or colours. This makes the wireframe directly implementable and passes design-review dimension 11. When it is null, `professional-ui-standards.md` is the authority. Never load another product's design system because its file sits in `~/.claude/skills/ui/`.
 
+9. **Google Stitch (the default designer)** — `~/.claude/skills/ui/stitch-design.md` §6.5, `docs/design/stitch.json`, and for each screen its approved render `docs/design/stitch/<key>/screenshot.png` + `screen.html` and payload `agent_state/stitch/<key>/rev-<n>.json`.
+
 **STOP CONDITION:** If `data-contracts.md` does not exist, do NOT proceed. Report: `⛔ Blocked: data-contracts.md missing — run /plan Step 2b first.`
+
+## Normalizing from an approved Stitch render (the default)
+
+When the screen has a Stitch screen in `docs/design/stitch.json`, the wireframe pair is **normalized
+from its approved render**, not designed from scratch (`~/.claude/skills/ui/stitch-design.md` §6.5):
+- **Only an approved latest revision.** If the screen's `approved_rev` isn't its latest `history` rev,
+  or the stored render's sha256 doesn't match, STOP for that screen and report it (`BLOCKED: <key> rev
+  <n> not approved`). Never normalize a pending render.
+- **The render decides layout; the contracts decide data.** Take regions, order, spacing, hierarchy,
+  density and component choice from the render. Replace Stitch's colours and fonts with the project's
+  semantic tokens (record the `namedColors` → token mapping) and its Material/Tailwind markup with the
+  project's components. Bindings, the four states, interactions, accessibility, testIDs and TC IDs come
+  from `data-contracts.md` and the test-case matrices. A field Stitch invented that the contract
+  lacks is removed and listed under `## Render vs contract` in the `.wireframe.md` (for the approver).
+- **Header line** in the `.wireframe.md`: `Stitch render: docs/design/stitch/<key>/screenshot.png (rev <n>, approved by <owner|design_quality_reviewer>, sha256 <first 12>)`.
+- **Data Element Inventory ties to the render:** add a `Render ref` column naming where the element
+  appears on the render (region › label, e.g. "Orders table › 4th column 'Total'"), so the developer and
+  `ui_standards_auditor` can find it on the image. A bound element the render doesn't show is marked
+  `not in render — added from contract` (and goes to the approver as a Stitch edit if it matters
+  visually).
+- You never call Stitch. A visual problem you find in the render (contrast, missing label, cramped
+  touch target) goes in your final message as an edit prompt for the parent's approval loop.
+
+Without a Stitch screen (`--source=wireframe`, or deferred because Stitch was unavailable), design
+the pair from the archetype as below and note `Stitch: none (<reason>)` in the header.
 
 ## Wireframe File Format
 
@@ -207,10 +240,10 @@ Enumerate ALL UI test cases for this screen using the per-element, per-page, per
 Every element that shows API data gets a row: table columns, card and detail fields, badges, KPI tiles,
 chart series, prefilled form inputs, option lists, headings built from data. Its binding comes from the
 API Bindings section, and its display rule is yours to state exactly — the tests assert it literally.
-| Element | Binding (field → contract_ref) | Display rule (format) | Empty / null shows | Edge behaviour | TC IDs |
-|---------|-------------------------------|-----------------------|--------------------|----------------|--------|
-| Orders table › Total | `data[].total_cents` → `Order.total_cents` | currency of `data[].currency`, 2 decimals for USD, grouping | `—` | negative shows `-$1.00`; largest allowed fits the column | TC-DATA-NNN (value), TC-DATA-NNN (empty), TC-DATA-NNN (edge) |
-| Orders table › Status | `data[].status` → `Order.status` | badge: pending → "Pending" (neutral), paid → "Paid" (success), … every enum value | — (required) | an unknown value → "Unknown" neutral badge | TC-DATA-NNN … |
+| Element | Binding (field → contract_ref) | Render ref (Stitch) | Display rule (format) | Empty / null shows | Edge behaviour | TC IDs |
+|---------|-------------------------------|---------------------|-----------------------|--------------------|----------------|--------|
+| Orders table › Total | `data[].total_cents` → `Order.total_cents` | table › 4th column "Total", right-aligned | currency of `data[].currency`, 2 decimals for USD, grouping | `—` | negative shows `-$1.00`; largest allowed fits the column | TC-DATA-NNN (value), TC-DATA-NNN (empty), TC-DATA-NNN (edge) |
+| Orders table › Status | `data[].status` → `Order.status` | table › 3rd column "Status" badge | badge: pending → "Pending" (neutral), paid → "Paid" (success), … every enum value | — (required) | an unknown value → "Unknown" neutral badge | TC-DATA-NNN … |
 
 Each row yields TC-DATA rows from the per-element matrix (value, empty/null when the contract allows it,
 and the edge values for its type). An element without a row here is an element nobody will test —
@@ -339,6 +372,7 @@ Keep it short; the detail belongs in the artifact.
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Primary output written under the EXACT path `docs/design/phases/{{PHASE}}/specs/` — for every in-scope screen BOTH a self-contained `.wireframe.html` (inline CSS, no build step) AND a `.wireframe.md` spec.
 - [ ] Every API binding maps to a REAL field path in `data-contracts.md` with the correct response type (list→ARRAY endpoint, detail/form→OBJECT endpoint) — no "TBD" bindings, no invented field names.
+- [ ] Every screen with a Stitch screen was normalized from its APPROVED latest render (header names path, rev, approver, sha), and its Data Element Inventory has a `Render ref` per bound element; invented render fields are listed under `## Render vs contract`, not bound.
 - [ ] All 4 states (loading/empty/error/populated), both breakpoints (375px + 1280px), and the error-boundary spec are present for every data-fetching screen.
 - [ ] A UI Test Case Inventory with real sequential TC-* IDs (page/form/component) is enumerated — no `NNN` placeholders left.
 - [ ] If `data-contracts.md` is missing I STOPPED and reported the block (`⛔ Blocked: data-contracts.md missing`) rather than emitting wireframes with guessed bindings that read as complete.

@@ -273,6 +273,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/requirements/persona-definition.md`
 - `~/.claude/skills/requirements/conflict-detection.md`
 - `~/.claude/skills/requirements/business-objectives.md`
+- `~/.claude/skills/ui/stitch-design.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->

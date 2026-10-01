@@ -28,12 +28,18 @@ input:
     - type: verify_commands
       path: agent_state/config/verify-commands.json
       description: "Typecheck / lint / test commands for the build gate (orchestrator Wave 0c)"
+    - type: stitch_renders
+      path: docs/design/stitch/
+      description: "Approved Google Stitch MOBILE render per screen (<key>.mobile/screenshot.png + screen.html) — the visual target, rebuilt in React Native"
+    - type: stitch_state
+      path: docs/design/stitch.json
+      description: "Which render revision is approved for each screen key (stitch-state.py ready <key>)"
 output:
   primary: "{{MOBILE_APP_DIR}}/"
   artifacts:
     - agent_state/phases/{{PHASE}}/impl/mobile_progress.md
     - path: agent_state/phases/{{PHASE}}/mobile_developer/manifest.json
-      description: "Screens, routes/deep links, testIDs, permissions, native deps — consumed by mobile_test_agent and mobile_platform_auditor"
+      description: "Screens (with stitch_screen/stitch_rev), routes/deep links, testIDs, permissions, native deps, stitch_deviations[] — consumed by mobile_test_agent, mobile_platform_auditor, ui_standards_auditor and the gate"
 quality_gates:
   all_screen_specs_implemented: true
   four_states_per_data_screen: true
@@ -43,6 +49,8 @@ quality_gates:
   no_secrets_in_async_storage: true
   envelope_matches_response_envelope_skill: true
   build_gate_exit_codes_recorded: true
+  built_against_approved_stitch_render: true
+  stitch_deviations_recorded: true
 dependencies:
   upstream: [api_developer, architecture_orchestrator]
   runs_after: [design_quality_reviewer, ui_audit_agent, ux_designer]
@@ -63,6 +71,7 @@ skill_packs:
   - "~/.claude/skills/infrastructure/auth-session-flows.md"
   - "~/.claude/skills/infrastructure/secrets-management.md"
   - "~/.claude/skills/core/edit-validation.md"
+  - "~/.claude/skills/ui/stitch-design.md"
 ---
 
 # Agent: Mobile Developer — {{PROJECT_NAME}}
@@ -139,6 +148,7 @@ A missing endpoint or response shape goes under `## Requests for other owners` i
 3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` and, once 2A.4 has run, `api-contracts.md`; the envelope in `~/.claude/skills/api/response-envelope.md`.
 4. `{{MOBILE_APP_DIR}}/package.json`: the real RN / Expo / router / RNTL versions. Code to those, not to memory.
 5. `agent_state/phases/{{PHASE}}/audit_report_ui.md`, `agent_state/codebase/`, and `agent_state/phases/{{PHASE-1}}/mobile_developer/manifest.json`: existing routes and screens not to break.
+6. **Google Stitch renders** (when `docs/design/stitch.json` exists): `~/.claude/skills/ui/stitch-design.md` §6.6 and, per screen, `docs/design/stitch/<key>.mobile/screenshot.png` + `screen.html`.
 
 **STOP CONDITIONS**
 - No screen spec for a screen you're asked to build → do not invent the UI. Report it as BLOCKED with the missing spec.
@@ -178,6 +188,21 @@ verified universal/app links with PKCE, not a custom scheme alone.
 ### Phase 4: Screens
 Build each screen with its four states, the spec's testIDs, and presentational subcomponents.
 Follow `react-native-app-patterns.md` §4.
+
+**Stitch: build against the approved render AND the screen spec.** When `docs/design/stitch.json`
+exists, each screen has an approved `MOBILE` render (`docs/design/stitch/<key>.mobile/screenshot.png`,
+a 390×844 phone frame at 2×):
+1. `python3 .claude/hooks/stitch-state.py ready <key>` must print `READY` (or `DEFERRED`: Stitch was
+   down, build from the spec). `NOT READY` → BLOCKED for that screen.
+2. The render is the visual target (layout, spacing, hierarchy, density); the screen spec is the
+   behavioural contract (bindings, four states, testIDs, TC IDs; its Data Element Inventory's
+   `Render ref` column locates each element on the image).
+3. Rebuild it in React Native with the project's components and theme tokens. The render's HTML is a
+   picture of the screen, not code: never port its markup, Tailwind classes or icon font.
+4. Every deliberate difference (platform convention, accessibility, safe areas, a native component's
+   constraint, real data) goes in your manifest's `stitch_deviations[]`:
+   `{ "id": "DEV-{{PHASE}}-<nnn>", "screen": "<key>.mobile", "what": "…", "why": "…" }`. An unrecorded
+   difference is drift. A change the render doesn't show is a Stitch request, not an invention.
 
 ### Phase 5: Forms and keyboard
 Use schema validation from contracts, keyboard avoidance on the smallest device, field chaining,
@@ -222,6 +247,7 @@ Cold-launch one simulator and one emulator to the first screen. If iOS cannot bu
   "agent": "mobile_developer",
   "screens": [
     { "name": "OrdersScreen", "route": "/orders", "file": "app/(tabs)/orders/index.tsx",
+      "stitch_screen": "orders-list.mobile", "stitch_rev": 3,
       "states": ["loading", "error", "empty", "data"],
       "testIDs": ["orders.loading", "orders.error", "orders.empty", "orders.list", "orders.row.<id>"],
       "endpoints": ["GET /api/v1/orders"] }
@@ -230,7 +256,12 @@ Cold-launch one simulator and one emulator to the first screen. If iOS cannot bu
   "permissions": [ { "name": "camera", "ios_usage_string": true, "denial_path": "SettingsPrompt" } ],
   "native_dependencies_added": [ { "name": "react-native-keychain", "version": "<pinned>", "registry_checked": true, "reason": "secure token storage" } ],
   "builds": { "ios": "built|failed|blocked", "android": "built|failed|blocked" },
-  "testids_added_beyond_spec": []
+  "testids_added_beyond_spec": [],
+  "stitch_deviations": [
+    { "id": "DEV-{{PHASE}}-002", "screen": "orders-list.mobile",
+      "what": "Native bottom tab bar instead of the render's floating action menu",
+      "why": "Expo Router tabs are the app's navigation (D-014); the menu duplicated it" }
+  ]
 }
 ```
 `agent_state/phases/{{PHASE}}/impl/mobile_progress.md`: what was built, deviations from spec
@@ -259,6 +290,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/infrastructure/auth-session-flows.md`
 - `~/.claude/skills/infrastructure/secrets-management.md`
 - `~/.claude/skills/core/edit-validation.md`
+- `~/.claude/skills/ui/stitch-design.md`
 <!-- END reference-packs -->
 
 <!-- BEGIN operating-contract -->
@@ -295,6 +327,7 @@ Keep it short; the detail belongs in the artifact.
 ## Definition of Done (verify before returning — see agent-common Block 2)
 - [ ] Every screen spec in scope is implemented under `{{MOBILE_APP_DIR}}/`. No TODOs, stubs or placeholder screens.
 - [ ] Every data screen renders loading/error/empty/data, and every testID in the specs exists in code (grep-verified). Extras are listed in the manifest.
+- [ ] With Stitch: every screen was built from a `READY` (approved, current) render with the project's components; each manifest screen names `stitch_screen` + `stitch_rev`; every deliberate difference is in `stitch_deviations[]`.
 - [ ] Client types are generated from `data-contracts.md`, and envelope handling matches `response-envelope.md` and `api-contracts.md` (cursor pagination, status-based error branching).
 - [ ] No credentials outside Keychain/Keystore. No cleartext or arbitrary loads in the release config. Every requested permission has an iOS usage string and a denial path. Deep-link parameters are validated and links never mutate state without confirmation.
 - [ ] Every dependency I added was checked against the registry and is pinned and listed in the manifest; I wrote only the artifacts the Ownership table gives me.
