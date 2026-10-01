@@ -45,7 +45,9 @@ fi
 
 # Roles, memberships, database, schema public, default privileges, and objects created before the
 # migrator existed. NOTICE lines name every change; the last line of stdout is the number of changes.
-sql_changes="$(psql_su -tA <<'SQL'
+# (The SQL comes from a function rather than a heredoc inside $(...), which bash 3.2 can't parse.)
+converge_sql() {
+  cat <<'SQL'
 \getenv migrator DB_MIGRATOR_USER
 \getenv app DB_APP_USER
 SELECT set_config('db_roles.migrator', :'migrator', false) AS _m, set_config('db_roles.app', :'app', false) AS _a \gset
@@ -197,8 +199,8 @@ END
 $do$;
 SELECT current_setting('db_roles.changes');
 SQL
-)"
-sql_changes="$(printf '%s\n' "$sql_changes" | tail -1)"
+}
+sql_changes="$(converge_sql | psql_su -tA | tail -1)"
 
 # Passwords. Over TCP to a non-loopback address a login proves the current one; the init server's
 # socket (and loopback) are trusted by pg_hba, so there the password is always (re)set.
