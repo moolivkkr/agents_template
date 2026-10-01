@@ -14,6 +14,8 @@ tags:
 
 # Python patterns and conventions for building reliable, maintainable applications.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): every block type-checked and imported; the FastAPI blocks run as one app through TestClient, the SQLAlchemy tenant filter on SQLite, the async/perf helpers against a local HTTP server, the ML pipeline on CPU, the Django blocks on SQLite with a real JWT; the repository, pooling, Alembic env, transaction, fixture and asyncpg blocks against PostgreSQL 16 (`run.sh --live`). FastAPI 0.142.2, Pydantic 2.13.5, SQLAlchemy 2.1.1, asyncpg 0.31.0, Alembic 1.20.0, structlog 26.1.0, httpx 0.28.1, pytest 9.1.1, pytest-asyncio 1.4.0, factory_boy 3.3.3, testcontainers 4.15.0, numpy 2.5.3, torch 2.14.1, Django 6.1.1, DRF 3.18.1, djangorestframework-simplejwt 5.5.1, django-model-utils 5.0.0.
+
 ## Project Structure
 ```
 src/
@@ -80,9 +82,10 @@ def test_email_validation(input: str, expected: bool) -> None:
 ```python
 import structlog
 log = structlog.get_logger()
-log.info("user_created", user_id=user.id, email=user.email)
+log.info("user_created", user_id=user.id, tenant_id=user.tenant_id)  # ids, never the email (PII)
 ```
 - Structured logging always — never f-strings in log calls
+- Never log PII (emails, names) or secrets — log ids and let the reader look them up
 - Bind request context (request_id, user_id) at middleware level
 
 ## Type Safety
@@ -90,6 +93,9 @@ log.info("user_created", user_id=user.id, email=user.email)
 ```python
 from typing import NotRequired, TypedDict, Protocol, Literal, TypeVar, overload, Generic
 # pydantic/FastAPI need typing_extensions.TypedDict on Python < 3.12
+
+# TypeVar for generic types and functions — defined before anything uses it
+T = TypeVar("T")
 
 # TypedDict for dictionaries with known shapes (API responses, configs)
 class UserResponse(TypedDict):
@@ -131,9 +137,7 @@ Status = Literal["active", "inactive", "suspended"]
 def update_status(user_id: str, status: Status) -> None:
     ...  # type checker rejects update_status("x", "invalid")
 
-# TypeVar for generic functions
-T = TypeVar("T")
-
+# Generic function over T
 def first_or_none(items: list[T]) -> T | None:
     return items[0] if items else None
 
@@ -160,16 +164,21 @@ def fetch(id: str, *, required: bool = False) -> User | None:
 ## Performance
 
 ```python
-import functools
 import asyncio
-from multiprocessing import Pool
+import functools
+import tomllib
 from dataclasses import dataclass
+from multiprocessing import Pool
+from pathlib import Path
+
+import httpx
 
 # Generator expressions for large data — avoid materializing full list
 def process_large_file(path: Path) -> int:
     # Generator: O(1) memory regardless of file size
-    return sum(1 for line in open(path) if "ERROR" in line)
-    # NOT: len([line for line in open(path) if "ERROR" in line])  # O(n) memory
+    with open(path) as f:
+        return sum(1 for line in f if "ERROR" in line)
+    # NOT: len([line for line in f if "ERROR" in line])  # O(n) memory
 
 # __slots__ for classes with many instances — 40-50% memory savings
 @dataclass(slots=True)
@@ -190,15 +199,17 @@ def fibonacci(n: int) -> int:
 
 # For methods, use functools.cached_property
 class Config:
+    def __init__(self, raw_content: str) -> None:
+        self._raw_content = raw_content
+
     @functools.cached_property
     def parsed(self) -> dict:
-        return toml.loads(self._raw_content)
+        return tomllib.loads(self._raw_content)  # stdlib TOML parser (3.11+)
 
-# asyncio for I/O-bound concurrency
-async def fetch_all(urls: list[str]) -> list[Response]:
-    async with aiohttp.ClientSession() as session:
-        tasks = [session.get(url) for url in urls]
-        return await asyncio.gather(*tasks)
+# asyncio for I/O-bound concurrency — one client (one connection pool) for all requests
+async def fetch_all(urls: list[str]) -> list[httpx.Response]:
+    async with httpx.AsyncClient() as client:
+        return await asyncio.gather(*(client.get(url) for url in urls))
 
 # multiprocessing for CPU-bound work
 def process_images(paths: list[Path]) -> list[Result]:
@@ -216,9 +227,14 @@ def process_images(paths: list[Path]) -> list[Result]:
 ## ML-Specific Patterns
 
 ```python
+import json
+from collections.abc import Generator
+from contextlib import contextmanager
+from itertools import batched
+from pathlib import Path
+
 import numpy as np
 import torch
-from contextlib import contextmanager
 
 # NumPy vectorization — 100x faster than Python loops
 def normalize(data: np.ndarray) -> np.ndarray:
@@ -242,15 +258,17 @@ def predict_batch(
 
 # GPU memory management — explicit cleanup with context managers
 @contextmanager
-def gpu_scope(device: str = "cuda:0"):
-    """Context manager for GPU operations with cleanup."""
+def gpu_scope(device: str = "cuda:0") -> Generator[None, None, None]:
+    """Context manager for GPU operations with cleanup; a no-op where there is no CUDA device."""
+    if not torch.cuda.is_available():
+        yield
+        return
+    torch.cuda.set_device(device)
     try:
-        torch.cuda.set_device(device)
         yield
     finally:
+        torch.cuda.synchronize()  # let queued kernels finish before their memory is released
         torch.cuda.empty_cache()
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
 
 # Usage:
 with gpu_scope():
@@ -258,9 +276,10 @@ with gpu_scope():
 
 # Data pipeline with generator chains — process streaming data in constant memory
 def load_data(path: Path):
-    """Generator: yields one record at a time."""
-    for line in open(path):
-        yield json.loads(line)
+    """Generator: yields one record at a time (the file closes when the generator finishes)."""
+    with open(path) as f:
+        for line in f:
+            yield json.loads(line)
 
 def filter_valid(records):
     """Generator: filters without materializing."""
@@ -277,7 +296,7 @@ def transform(records):
         }
 
 # Chain generators — entire pipeline runs in O(1) memory
-pipeline = transform(filter_valid(load_data("data.jsonl")))
+pipeline = transform(filter_valid(load_data(Path("data.jsonl"))))
 for batch in batched(pipeline, 1000):
     process(batch)
 
@@ -367,27 +386,36 @@ async def list_orders(
     }
 ```
 
-### SQLAlchemy Scoped Session Per Tenant
+### SQLAlchemy Tenant Filter on Every Query
 ```python
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
 from contextvars import ContextVar
+from uuid import UUID
 
-current_tenant: ContextVar[UUID] = ContextVar("current_tenant")
+from sqlalchemy import event
+from sqlalchemy.orm import Mapped, ORMExecuteState, Session, mapped_column, with_loader_criteria
 
-class TenantAwareSession:
-    """Automatically applies tenant filter to all queries."""
+current_tenant: ContextVar[UUID] = ContextVar("current_tenant")  # set by TenantMiddleware below
 
-    def __init__(self, session: AsyncSession) -> None:
-        self._session = session
+class TenantScoped:
+    """Mixin for every tenant-owned model (declares the column the filter uses)."""
+    tenant_id: Mapped[UUID] = mapped_column(index=True)
 
-    async def execute(self, stmt, *args, **kwargs):
-        tenant_id = current_tenant.get()
-        # Inject tenant filter for all SELECT/UPDATE/DELETE
-        if hasattr(stmt, "whereclause"):
-            stmt = stmt.where(model.tenant_id == tenant_id)
-        return await self._session.execute(stmt, *args, **kwargs)
+@event.listens_for(Session, "do_orm_execute")
+def _filter_by_tenant(state: ORMExecuteState) -> None:
+    """Adds WHERE tenant_id = <current tenant> to every ORM SELECT, UPDATE and DELETE on a TenantScoped
+    model, in every Session (an AsyncSession runs on one)."""
+    if (state.is_select or state.is_update or state.is_delete) and not (
+        state.is_column_load or state.is_relationship_load
+    ):
+        tenant_id = current_tenant.get()  # LookupError when no tenant is set: fails closed, never unfiltered
+        state.statement = state.statement.options(
+            with_loader_criteria(TenantScoped, lambda cls: cls.tenant_id == tenant_id, include_aliases=True)
+        )
 ```
+- SQLAlchemy's own global-filter hook (`do_orm_execute` + `with_loader_criteria`): a wrapper around
+  `session.execute()` can't know which model a statement targets, and code that holds the session directly
+  bypasses it
+- Defense in depth: PostgreSQL row-level security on the same column (`backend/archetypes/migration-pattern-python.md`)
 
 ### Tenant Middleware
 ```python
@@ -422,6 +450,8 @@ class TenantMiddleware(BaseHTTPMiddleware):
 
 ### Exception Hierarchy
 ```python
+from typing import TypedDict
+
 class FieldError(TypedDict):
     field: str
     code: str      # stable lower_snake: required, invalid_format, too_long, …
@@ -491,18 +521,22 @@ FastAPI's defaults are not the envelope: `HTTPException` and unknown routes answ
 validation answers 422 with pydantic's error list. Replace all of them — every error body goes through
 `error_response()`.
 ```python
-from fastapi import FastAPI
+from collections.abc import Mapping
+
+import structlog
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+log = structlog.get_logger()
 app = FastAPI()
 
 def get_request_id(request: Request) -> str:
     # Set by the request-id middleware (added last = outermost), which also sets the X-Request-Id header
     return getattr(request.state, "request_id", "")
 
-def error_response(request: Request, exc: AppError, headers: dict[str, str] | None = None) -> JSONResponse:
+def error_response(request: Request, exc: AppError, headers: Mapping[str, str] | None = None) -> JSONResponse:
     """The only function that writes an error body."""
     error: dict = {"code": exc.code, "message": exc.message}
     if exc.details:
@@ -510,6 +544,7 @@ def error_response(request: Request, exc: AppError, headers: dict[str, str] | No
     error["request_id"] = get_request_id(request)
     error["retryable"] = exc.retryable
     headers = dict(headers or {})
+    headers["X-Request-Id"] = error["request_id"]  # set here too: a 500 from the catch-all bypasses middleware
     if exc.retry_after:
         headers.setdefault("Retry-After", str(exc.retry_after))
     if exc.status_code == 401:
@@ -578,11 +613,21 @@ async def unhandled_error_handler(request: Request, exc: Exception) -> JSONRespo
 
 ### Async SQLAlchemy Repository
 ```python
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update, func
+from datetime import datetime
 from uuid import UUID
 
-class BaseRepository[T]:
+from sqlalchemy import func, select, tuple_, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Mapped
+
+class TenantModel:
+    """The columns BaseRepository relies on (a declarative mixin for tenant-owned models)."""
+    id: Mapped[UUID]
+    tenant_id: Mapped[UUID]
+    created_at: Mapped[datetime]
+    deleted_at: Mapped[datetime | None]
+
+class BaseRepository[T: TenantModel]:
     """Generic async repository with tenant isolation and soft delete."""
 
     def __init__(self, session: AsyncSession, model: type[T]) -> None:
@@ -604,14 +649,17 @@ class BaseRepository[T]:
     async def find_paginated(
         self, tenant_id: UUID, *, cursor: str | None = None, limit: int = 20,
     ) -> tuple[list[T], str | None]:
+        # Keyset on (created_at, id): unique and stable, so no row repeats or goes missing between pages
+        # even when timestamps tie. The cursor is opaque (base64 of both values; crud-repository-python.md).
         stmt = (
             select(self._model)
             .where(self._model.tenant_id == tenant_id, self._model.deleted_at.is_(None))
-            .order_by(self._model.created_at.desc())
+            .order_by(self._model.created_at.desc(), self._model.id.desc())
             .limit(limit + 1)
         )
         if cursor:
-            stmt = stmt.where(self._model.created_at < decode_cursor(cursor))
+            created_at, last_id = decode_cursor(cursor)
+            stmt = stmt.where(tuple_(self._model.created_at, self._model.id) < (created_at, last_id))
 
         result = await self._session.execute(stmt)
         rows = list(result.scalars().all())
@@ -619,7 +667,7 @@ class BaseRepository[T]:
         has_more = len(rows) > limit
         if has_more:
             rows = rows[:limit]
-        next_cursor = encode_cursor(rows[-1].created_at) if has_more else None
+        next_cursor = encode_cursor(rows[-1].created_at, rows[-1].id) if has_more else None
         return rows, next_cursor
 
     async def save(self, entity: T) -> T:
@@ -642,15 +690,24 @@ class BaseRepository[T]:
 ### Alembic Migration Patterns
 ```python
 # alembic/env.py — configure for async
+import asyncio
+
 from alembic import context
+from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
+
+def do_run_migrations(connection: Connection) -> None:
+    context.configure(connection=connection, target_metadata=Base.metadata)
+    with context.begin_transaction():
+        context.run_migrations()
 
 def run_migrations_online() -> None:
     connectable = create_async_engine(settings.DATABASE_URL)
 
-    async def do_migrations():
+    async def do_migrations() -> None:
         async with connectable.connect() as connection:
             await connection.run_sync(do_run_migrations)
+        await connectable.dispose()
 
     asyncio.run(do_migrations())
 
@@ -664,7 +721,7 @@ def run_migrations_online() -> None:
 from sqlalchemy.ext.asyncio import create_async_engine
 
 engine = create_async_engine(
-    "postgresql+asyncpg://user:pass@host/db",
+    settings.DATABASE_URL,  # from the environment — never credentials in code
     pool_size=20,           # base connections
     max_overflow=10,        # extra connections under load
     pool_timeout=30,        # wait time for connection from pool
@@ -679,6 +736,9 @@ engine = create_async_engine(
 
 ### FastAPI Dependency Injection
 ```python
+from collections.abc import AsyncGenerator
+from uuid import UUID
+
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -692,7 +752,9 @@ async def get_db_session() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 def get_user_repository(
-    session: AsyncSession = Depends(get_db_session),
+    # scope="function": the commit after `yield` runs before the response is sent, so a failed commit is
+    # a 500, not a 201 for data that was never saved (the default scope runs it after the response)
+    session: AsyncSession = Depends(get_db_session, scope="function"),
 ) -> UserRepository:
     return UserRepository(session)
 
@@ -739,9 +801,13 @@ class OrderService:
 
 ### pytest Fixtures
 ```python
+from collections.abc import AsyncGenerator
+from uuid import UUID, uuid4
+
 import pytest
-from testcontainers.postgres import PostgresContainer
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from testcontainers.community.postgres import PostgresContainer  # testcontainers.postgres is deprecated
 
 @pytest.fixture(scope="session")
 def postgres():
@@ -749,14 +815,15 @@ def postgres():
     with PostgresContainer("postgres:16-alpine") as pg:
         yield pg
 
-@pytest.fixture
+@pytest_asyncio.fixture  # an async fixture (plain @pytest.fixture works only in asyncio_mode = "auto")
 async def db_session(postgres) -> AsyncGenerator[AsyncSession, None]:
-    engine = create_async_engine(postgres.get_connection_url())
+    engine = create_async_engine(postgres.get_connection_url(driver="asyncpg"))  # default URL is psycopg2
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with AsyncSession(engine) as session:
         yield session
         await session.rollback()  # reset state between tests
+    await engine.dispose()
 
 @pytest.fixture
 def user_factory(db_session: AsyncSession):
@@ -778,10 +845,15 @@ def user_factory(db_session: AsyncSession):
 ```python
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
+from sqlalchemy.orm import scoped_session, sessionmaker
+
+# factory_boy writes through a (sync) Session; conftest binds it: Session.configure(bind=engine)
+Session = scoped_session(sessionmaker())
 
 class UserFactory(SQLAlchemyModelFactory):
     class Meta:
         model = User
+        sqlalchemy_session = Session
         sqlalchemy_session_persistence = "flush"
 
     id = factory.LazyFunction(uuid4)
@@ -795,6 +867,9 @@ user = UserFactory(email="specific@example.com")  # override only what matters
 
 ### Async Test Patterns
 ```python
+import asyncio
+from unittest.mock import AsyncMock
+
 import pytest
 
 @pytest.mark.asyncio
@@ -846,8 +921,10 @@ def mock_mailer() -> AsyncMock:
 
 ### Async Context Managers
 ```python
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator
+
+import asyncpg
 
 @asynccontextmanager
 async def managed_connection(pool: asyncpg.Pool) -> AsyncGenerator[asyncpg.Connection, None]:
@@ -857,13 +934,16 @@ async def managed_connection(pool: asyncpg.Pool) -> AsyncGenerator[asyncpg.Conne
     finally:
         await pool.release(conn)
 
-# Usage
-async with managed_connection(pool) as conn:
-    await conn.execute("SELECT 1")
+# Usage (inside a coroutine)
+async def ping(pool: asyncpg.Pool) -> None:
+    async with managed_connection(pool) as conn:
+        await conn.execute("SELECT 1")
 ```
 
 ### Task Groups (Python 3.11+)
 ```python
+import asyncio
+
 async def fetch_user_data(user_id: str) -> UserProfile:
     """Fetch multiple resources concurrently with structured concurrency."""
     async with asyncio.TaskGroup() as tg:
@@ -881,40 +961,46 @@ async def fetch_user_data(user_id: str) -> UserProfile:
 
 ### Semaphores for Concurrency Limits
 ```python
-async def fetch_many(urls: list[str], max_concurrent: int = 10) -> list[Response]:
+import asyncio
+
+import httpx
+
+async def fetch_many(urls: list[str], max_concurrent: int = 10) -> list[httpx.Response]:
     """Limit concurrent HTTP requests to avoid overwhelming upstream."""
     semaphore = asyncio.Semaphore(max_concurrent)
 
-    async def _fetch(url: str) -> Response:
-        async with semaphore:
-            async with aiohttp.ClientSession() as session:
-                return await session.get(url)
+    async with httpx.AsyncClient() as client:  # one client: one connection pool for every request
+        async def _fetch(url: str) -> httpx.Response:
+            async with semaphore:
+                return await client.get(url)
 
-    return await asyncio.gather(*[_fetch(url) for url in urls])
+        return await asyncio.gather(*[_fetch(url) for url in urls])
 ```
 
 ### Graceful Shutdown
 ```python
-import signal
+from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
-async def graceful_shutdown(app: FastAPI) -> None:
-    """Handle SIGTERM/SIGINT for zero-downtime deployments."""
-    loop = asyncio.get_event_loop()
-    stop_event = asyncio.Event()
+from fastapi import FastAPI
 
-    def _signal_handler():
-        log.info("shutdown_signal_received")
-        stop_event.set()
-
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, _signal_handler)
-
-    await stop_event.wait()
-    # Drain in-flight requests, close DB pools, flush metrics
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    """Zero-downtime deploys. The server (uvicorn) owns SIGTERM/SIGINT: on the signal it stops accepting
+    connections and lets in-flight requests finish (--timeout-graceful-shutdown), then runs the code after
+    `yield`. Installing your own signal handlers would replace uvicorn's and it would never shut down."""
+    app.state.db_pool = await create_db_pool()
+    app.state.redis = create_redis()
+    yield
+    log.info("shutdown_started")
     await app.state.db_pool.close()
-    await app.state.redis.close()
+    await app.state.redis.aclose()  # redis-py 5+: aclose(); close() is deprecated
     log.info("shutdown_complete")
+
+app = FastAPI(lifespan=lifespan)
 ```
+- A plain asyncio worker (no server) installs the handlers itself: `loop.add_signal_handler` with
+  `asyncio.get_running_loop()` (`backend/archetypes/worker-pattern-python.md`)
 
 ---
 
@@ -923,6 +1009,7 @@ async def graceful_shutdown(app: FastAPI) -> None:
 ### Multi-Tenant Model Managers
 ```python
 from django.db import models
+from model_utils import FieldTracker
 
 class TenantManager(models.Manager):
     """Automatically filters by tenant — prevents accidental cross-tenant reads."""
@@ -939,11 +1026,14 @@ class TenantManager(models.Manager):
 class Order(models.Model):
     tenant_id = models.UUIDField(db_index=True)
     status = models.CharField(max_length=20)
+    total = models.IntegerField(default=0)  # money in minor units (cents)
+    created_at = models.DateTimeField(auto_now_add=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     version = models.IntegerField(default=1)
 
     objects = TenantManager()          # default: tenant-filtered
     all_objects = models.Manager()     # admin: unfiltered (use sparingly)
+    tracker = FieldTracker()           # django-model-utils: the changed fields, for the audit signal
 
     class Meta:
         indexes = [

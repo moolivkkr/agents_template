@@ -573,3 +573,105 @@ UNITS.append(Unit(
     live="run",
     pytest_args=["-o", "asyncio_mode=auto", "tests/db"],
 ))
+
+# ── languages/python.md: the general blocks (errors, pytest, logging, typing, performance, async, shutdown) ──
+PYB = "from harness_stubs.py_basics import "
+UNITS.append(Unit(
+    name="pack-python-basics",
+    own=[PY],
+    files={
+        "harness_stubs/py_basics.py": [stub("py_basics.py")],
+        "docs_fragments/domain_errors.py": [
+            T(PYB + "DBConnectionError, RepositoryError, db  # harness: the app's names"),
+            B(PY, 0, "# Define domain errors", wrap="async def get_user(user_id: str) -> object:"),
+        ],
+        "tests/test_email.py": [
+            T("import pytest\n\n" + PYB + "validate_email  # harness: the function under test"),
+            B(PY, 1, '@pytest.mark.parametrize("input,expected", ['),
+        ],
+        "docs_fragments/logging_example.py": [T(PYB + "user  # harness: the user just created"), B(PY, 2, "import structlog")],
+        "docs_fragments/types.py": [
+            T(PYB + "User, UserNotFoundError, db  # harness: the app's names"),
+            B(PY, 3, "from typing import NotRequired, TypedDict, Protocol, Literal, TypeVar, overload, Generic"),
+        ],
+        "docs_fragments/perf.py": [T(PYB + "Result, resize_image  # harness: the app's names"), B(PY, 4, "import asyncio")],
+        "docs_fragments/task_groups.py": [
+            T(PYB + "UserProfile, fetch_orders, fetch_preferences, fetch_profile  # harness: the app's names"),
+            B(PY, 21, "import asyncio"),
+        ],
+        "docs_fragments/semaphores.py": [B(PY, 22, "import asyncio")],
+        "docs_fragments/shutdown.py": [
+            T(PYB + "create_db_pool, create_redis, log  # harness: the app's resources"),
+            B(PY, 23, "from collections.abc import AsyncGenerator"),
+        ],
+    },
+    smoke=smoke("smoke_python_basics.py"),
+    pytest="run",
+))
+
+# ── languages/python.md "ML-Specific Patterns": numpy + torch on CPU; the usage lines run at import ──
+_JSONL = "\n".join(
+    '{"id": %d, "status": "%s"}' % (i, "active" if i % 2 == 0 else "inactive") for i in range(3000))
+UNITS.append(Unit(
+    name="pack-python-ml",
+    own=[PY],
+    files={
+        "harness_stubs/ml_app.py": [stub("ml_app.py")],
+        "data.jsonl": [T(_JSONL)],  # the file the doc's pipeline reads
+        "ml/pipeline.py": [
+            T("from harness_stubs.ml_app import data, extract_features, model, process  # harness: app names"),
+            B(PY, 5, "import json"),
+        ],
+    },
+    smoke=smoke("smoke_python_ml.py"),
+))
+
+# ── languages/python.md, the FastAPI blocks as one app: types, error hierarchy, handlers, tenant dependency,
+# SQLAlchemy tenant filter, tenant middleware, DI (TestClient), plus the filter on SQLite ─────────────
+PYF = "from harness_stubs.py_fastapi import "
+UNITS.append(Unit(
+    name="pack-python-fastapi",
+    own=[PY],
+    files={
+        "harness_stubs/py_basics.py": [stub("py_basics.py")],
+        "harness_stubs/py_fastapi.py": [stub("py_fastapi.py")],
+        "harness_stubs/py_fastapi_main.py": [stub("py_fastapi_main.py")],
+        "app/types.py": [
+            T("from harness_stubs.py_basics import User, UserNotFoundError, db  # harness: the app's names"),
+            B(PY, 3, "from typing import NotRequired, TypedDict, Protocol, Literal, TypeVar, overload, Generic"),
+        ],
+        "app/errors.py": [B(PY, 9, "from typing import TypedDict")],
+        "app/handlers.py": [
+            T("from app.errors import (  # harness: the hierarchy above, in its own module\n"
+              "    AppError, FieldError, ForbiddenError, InternalError, MalformedRequestError, NotFoundError,\n"
+              "    RateLimitError, UnauthenticatedError, ValidationError,\n)"),
+            B(PY, 10, "from collections.abc import Mapping"),
+        ],
+        "app/tenancy.py": [
+            T("from app.errors import ForbiddenError\nfrom app.handlers import get_request_id\n"
+              "from app.types import PaginatedResponse\n"
+              + PYF + "OrderResponse, OrderService, get_order_service, get_verified_claims\n"
+              + PYF + "orders_router as router"),
+            B(PY, 6, "from fastapi import Depends, Header, Query, Request"),
+        ],
+        "app/db_tenant.py": [B(PY, 7, "from contextvars import ContextVar")],
+        "app/tenant_middleware.py": [
+            T("from fastapi import Request\n\nfrom app.db_tenant import current_tenant\n"
+              "from app.errors import ForbiddenError, UnauthenticatedError\nfrom app.handlers import error_response\n"
+              "from app.tenancy import TokenClaims, resolve_tenant"),
+            B(PY, 8, "from starlette.middleware.base import BaseHTTPMiddleware"),
+        ],
+        "app/users.py": [
+            T("from app.handlers import get_request_id\nfrom app.tenancy import get_current_tenant\n"
+              "from app.types import ApiResponse\n"
+              + PYF + "(\n    CacheService, CreateUserRequest, EventPublisher, UserRepository, UserResponse, UserService,\n"
+              "    async_session_factory, get_cache, get_event_publisher,\n)\n"
+              + PYF + "users_router as router"),
+            B(PY, 14, "from collections.abc import AsyncGenerator"),
+        ],
+        "tests/test_python_fastapi.py": [stub("test_python_fastapi.py")],
+    },
+    imports=["app.types", "app.errors", "app.handlers", "app.tenancy", "app.db_tenant", "app.tenant_middleware",
+             "app.users"],
+    pytest="run",
+))
