@@ -62,7 +62,7 @@ fi
 ```bash
 INVENTORY=agent_state/siem_pipeline/stage_0/consolidated_inventory.json
 if [ -f "$INVENTORY" ]; then
-  echo "Stage 0 inventory: OK ($(python3 -c 'import json; d=json.load(open("'$INVENTORY'")); print(len(d)) 2>/dev/null || echo "?") rules)"
+  echo "Stage 0 inventory: OK ($(python3 -c 'import json, sys; print(len(json.load(open(sys.argv[1]))))' "$INVENTORY" 2>/dev/null || echo "?") rules)"
 else
   echo "WARNING: Stage 0 inventory missing. Board will use rules-as-authored without gap context."
   echo "Run: /startup:rules-plugin --plugin siem --stage 0  (to populate)"

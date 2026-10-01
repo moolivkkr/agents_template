@@ -279,7 +279,7 @@ spec:
 
 When a tenant upgrades from pooled to dedicated:
 
-```
+```text
 Step 1: Provision dedicated database
   CREATE DATABASE app_${tenant_slug};
   Run all migrations against new database
@@ -315,7 +315,7 @@ Step 5: Cleanup (after 24-hour validation period)
 ## Tenant Lifecycle
 
 ### Provisioning
-```
+```text
 CREATE TENANT:
   1. Generate tenant UUID
   2. Insert tenant record (status: active, db_mode: shared)
@@ -327,7 +327,7 @@ CREATE TENANT:
 ```
 
 ### Deprovisioning
-```
+```text
 DEPROVISION TENANT:
   1. Set status → deprovisioning (block new operations)
   2. Data export window (30 days)
@@ -345,7 +345,7 @@ DEPROVISION TENANT:
 ## Tenant ID Extraction Priority
 
 Standard extraction order for multi-method authentication:
-```
+```text
 Priority 1: JWT Bearer token (Authorization header)
   → Extract tenant_id from JWT claims
 
@@ -365,7 +365,7 @@ Priority 4: X-Tenant-ID header (DEV MODE ONLY)
 ## Per-Tenant Encryption
 
 ### Key Hierarchy
-```
+```text
 KEK (Key Encryption Key)
 ├─ Storage: Vault Transit or AWS KMS
 ├─ Path: transit/keys/tenant-${tenant_id}-kek

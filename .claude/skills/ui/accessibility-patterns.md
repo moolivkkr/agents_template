@@ -116,7 +116,7 @@ tags:
 
 ## Color & Contrast
 
-```
+```text
 Minimum contrast ratios (WCAG AA):
 - Normal text (<18px): 4.5:1
 - Large text (≥18px bold or ≥24px): 3:1

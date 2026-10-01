@@ -122,7 +122,7 @@ existing screens after a theme change, call `apply_design_system` with `projectI
 
 Build the prompt from the contract, not from memory, so the render matches what will be built:
 
-```
+```text
 <Screen name> — <archetype> for <persona> (<FR-ids>).
 Platform: <web desktop 1280px | iOS/Android phone app (React Native)>.
 Purpose: <one-sentence user story>.
@@ -146,7 +146,7 @@ Leave `modelId` unset unless DECISIONS.md picks one. The enum currently lists
 - After 10 polls with nothing, finish that screen on the pure-agent path and log it.
 
 **Verified response shape** (`generate_screen_from_text` and `edit_screens`):
-```
+```text
 outputComponents[0].design.screens[0] = {
   id, name: "projects/<p>/screens/<id>", title, deviceType, width, height,   // width/height are 2× (780×1768 for a 390pt phone)
   prompt,                      // Stitch's EXPANDED prompt; store it, it shows what Stitch assumed

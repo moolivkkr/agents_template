@@ -4,7 +4,7 @@
 
 Run reconciliation agents **sequentially** — `spec_test_reconciler` depends on `spec_impl_reconciler` output to distinguish "untested" from "unimplemented".
 
-```
+```text
 Step 3d (first):
   └─ spec_impl_reconciler  → specs ↔ implementation (4-level verification)
        ↓ writes: agent_state/reconciliation/phase-N/specs_vs_impl.md

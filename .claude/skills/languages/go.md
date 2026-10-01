@@ -20,7 +20,7 @@ Idiomatic Go for production services. Prioritize clarity, explicit error handlin
 
 ## Project Structure
 
-```
+```text
 cmd/
   server/       # main.go — wire dependencies, start server
   worker/       # main.go — wire dependencies, start worker

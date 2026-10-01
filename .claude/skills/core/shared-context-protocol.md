@@ -112,7 +112,7 @@ When `/remember` (or any agent) writes a new fact, it matches on the **`(subject
 key** — NOT on semantic similarity. 2026 research (MemStrata) shows embeddings cannot tell a
 contradiction from a duplicate (AUROC ≈ 0.59, near chance), so we never use similarity for this.
 
-```
+```text
 On write of new fact N with (subject=S, relation=R):
   find prior active fact P where P.subject == S AND P.relation == R
   if found:
@@ -145,7 +145,7 @@ Every agent definition (`core/`, `templates/`, `generated/`) lists this as the F
 Every command that spawns an agent prepends this canonical line to the prompt string. Paste it
 verbatim:
 
-```
+```text
 GROUND TRUTH: First read docs/PROJECT_FACTS.md — it lists retired/renamed components, hard
 constraints, and environment facts, and it OVERRIDES any conflicting assumption in this prompt
 or your training. If this task touches anything marked RETIRED/superseded there, stop and flag

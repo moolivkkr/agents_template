@@ -23,7 +23,7 @@ tags:
 Every SaaS backend enforces tenant isolation at every layer. No exceptions.
 
 ### Parameter Ordering
-```
+```text
 function DoSomething(context, tenant_id, ...other_params) -> result, error
 ```
 - `context` (or request/ctx) is ALWAYS the first parameter
@@ -31,7 +31,7 @@ function DoSomething(context, tenant_id, ...other_params) -> result, error
 - This convention is non-negotiable across all languages
 
 ### Database Queries
-```
+```sql
 -- EVERY query MUST filter by tenant_id
 SELECT * FROM orders WHERE tenant_id = ? AND id = ?
 
@@ -63,7 +63,7 @@ ALTER TABLE orders FORCE ROW LEVEL SECURITY;  -- otherwise the table's owner byp
 - RLS policies MUST exist on every tenant-scoped table
 
 ### Logging
-```
+```text
 -- EVERY log line MUST include tenant_id
 log.info("order_created", tenant_id=tid, order_id=oid, amount=amt)
 
@@ -72,7 +72,7 @@ log.info("order_created", tenant_id=tid, order_id=oid, amount=amt)
 ```
 
 ### Metrics
-```
+```text
 -- EVERY metric MUST label with tenant_id
 metrics.increment("orders.created", tags={tenant_id: tid})
 
@@ -81,7 +81,7 @@ metrics.histogram("request.latency", value, tags={tenant_tier: "enterprise"})
 ```
 
 ### Tenant Context Flow
-```
+```text
 Request → Auth Middleware → Extract tenant_id from JWT/API key
        → Store in request context
        → Pass explicitly to service layer
@@ -96,7 +96,7 @@ Request → Auth Middleware → Extract tenant_id from JWT/API key
 The service layer contains business logic. It depends on abstractions (interfaces/protocols), never on concrete implementations.
 
 ### Constructor Pattern
-```
+```text
 ServiceConstructor(
     repository:     RepositoryInterface,
     cache:          CacheInterface,
@@ -109,7 +109,7 @@ ServiceConstructor(
 - Dependencies are injected, making the service testable in isolation
 
 ### Method Signature
-```
+```text
 service.DoOperation(ctx, tenant_id, request) -> response, error
 ```
 - `ctx` as first param (carries timeout, cancellation, trace context)
@@ -119,7 +119,7 @@ service.DoOperation(ctx, tenant_id, request) -> response, error
 
 ### Audit Trail
 Every mutation MUST log an audit entry:
-```
+```text
 audit_log(
     who:       user_id (from context),
     what:      "order.created",
@@ -135,7 +135,7 @@ audit_log(
 - Include both before/after state for updates
 
 ### Cache-Aside Pattern
-```
+```text
 function GetEntity(ctx, tenant_id, id):
     // 1. Check cache
     cached = cache.get(key(tenant_id, id))
@@ -154,7 +154,7 @@ function GetEntity(ctx, tenant_id, id):
 ```
 
 ### Cache Invalidation
-```
+```text
 function UpdateEntity(ctx, tenant_id, id, updates):
     entity = repository.update(ctx, tenant_id, id, updates)
 
@@ -178,7 +178,7 @@ function UpdateEntity(ctx, tenant_id, id, updates):
 The repository layer handles data persistence. It translates between domain entities and database rows.
 
 ### Parameterized Queries Only
-```
+```text
 -- ALWAYS: parameterized
 query("SELECT * FROM users WHERE tenant_id = $1 AND email = $2", tenant_id, email)
 
@@ -190,7 +190,7 @@ query("SELECT * FROM users WHERE email = '" + email + "'")  // SQL injection
 - ORM queries must also be audited for injection safety
 
 ### Soft Delete
-```
+```sql
 -- Mark as deleted, never physically remove
 UPDATE orders SET deleted_at = NOW() WHERE tenant_id = $1 AND id = $2
 
@@ -204,7 +204,7 @@ SELECT * FROM orders WHERE tenant_id = $1 AND deleted_at IS NULL
 - Provide explicit `include_deleted` parameter for admin/audit queries
 
 ### Optimistic Locking
-```
+```sql
 -- Include version in update WHERE clause
 UPDATE orders
 SET status = $1, version = version + 1, updated_at = NOW()
@@ -217,7 +217,7 @@ WHERE tenant_id = $2 AND id = $3 AND version = $4
 - Zero affected rows means a concurrent modification — return ConflictError
 
 ### Cursor-Based Pagination
-```
+```text
 -- Cursor-based (scalable, consistent with concurrent writes)
 SELECT * FROM orders
 WHERE tenant_id = $1 AND created_at < $2
@@ -237,7 +237,7 @@ response = { data: rows[:limit],
 - The cursor is opaque to the client (encode timestamp + ID); `next_cursor` is null when `has_more` is false
 
 ### Error Mapping
-```
+```text
 Database Error              → Domain Error
 ────────────────────────────────────────────
 unique_violation            → ConflictError
@@ -258,7 +258,7 @@ timeout                     → InternalError (retry)
 The handler layer (controller/endpoint) is the HTTP boundary. It is THIN — no business logic.
 
 ### Request Lifecycle
-```
+```text
 1. PARSE     — Extract data from HTTP request (body, path params, query params, headers)
 2. VALIDATE  — Validate parsed data against schema (return 400 if invalid)
 3. EXECUTE   — Call service layer method (pass ctx, tenant_id, validated request)
@@ -266,7 +266,7 @@ The handler layer (controller/endpoint) is the HTTP boundary. It is THIN — no 
 ```
 
 ### Tenant Extraction
-```
+```text
 function handler(request):
     tenant_id = extract_tenant_from_context(request.context)
     // tenant_id was set by auth middleware after JWT validation
@@ -274,7 +274,7 @@ function handler(request):
 ```
 
 ### Trace Span
-```
+```text
 function handler(request):
     span = tracer.start_span("handler.create_order")
     defer span.end()
@@ -317,7 +317,7 @@ function handler(request):
 ```
 
 ### Error Mapping
-```
+```text
 Domain Error       → HTTP Status → Error Code
 ────────────────────────────────────────────────
 MalformedRequest   → 400         → MALFORMED_REQUEST
@@ -353,7 +353,7 @@ Every backend defines exactly these 9 domain error types (plus 400 MALFORMED_REQ
 | Internal      | Unexpected server error                  | 500  | No (client) |
 
 ### Error Wrapping
-```
+```text
 // At each boundary, wrap with context
 Repository: "find user abc123: connection refused"
 Service:    "get user profile: find user abc123: connection refused"
@@ -377,7 +377,7 @@ Handler:    logs full chain, returns generic message to client
 ## Testing Contract
 
 ### Test Pyramid
-```
+```text
                     /  E2E  \           — Few, slow, expensive
                    / Integration \      — Some, medium speed
                   /   Unit Tests   \    — Many, fast, cheap
@@ -396,7 +396,7 @@ Handler:    logs full chain, returns generic message to client
 - Skip in CI fast lane with a flag (`-short`, `@Tag("integration")`, `@pytest.mark.integration`)
 
 ### Table-Driven / Parameterized Tests
-```
+```text
 // Default test style — enumerate inputs and expected outputs
 test_cases = [
     { name: "valid email",     input: "a@b.com",  expected: true  },
@@ -409,7 +409,7 @@ for each case in test_cases:
 ```
 
 ### Factory Functions
-```
+```text
 // Create test entities with sensible defaults, override what matters
 function build_user(overrides = {}):
     return User(
@@ -425,7 +425,7 @@ user = build_user({ email: "duplicate@example.com" })
 ```
 
 ### Assert Behavior, Not Implementation
-```
+```text
 // GOOD: assert the outcome
 result = service.create_order(ctx, tenant_id, request)
 assert result.status == "confirmed"
@@ -445,7 +445,7 @@ assert cache.set.was_called_once()
 
 ### Entity Base Fields
 Every entity MUST include:
-```
+```text
 id:          UUID (primary key, generated server-side)
 tenant_id:   UUID (foreign key to tenants table)
 created_at:  TIMESTAMP WITH TIME ZONE (set on insert, never modified)
@@ -467,4 +467,4 @@ updated_by:  UUID (user who last modified, from auth context)
 - Never expose auto-increment IDs externally (information leakage)
 - External-facing IDs may use prefixed format: `usr_abc123`, `ord_xyz789`
 
-> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 SQL block parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 1 JSON block parsed + response-envelope rules; 1 claim in the text proven on PostgreSQL 17.11.
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 SQL blocks: 3 parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 1 executed on MySQL 8.4.11; 1 JSON block parsed + response-envelope rules; 1 claim in the text proven on PostgreSQL 17.11.

@@ -27,7 +27,11 @@ are extracted from the markdown at run time (blocks.py), so an edit to a sample 
      hcl         init -backend=false + validate
      ngql        executed on NebulaGraph 3.8 (metad + storaged + graphd sharing one network namespace)
    Blocks whose only meaningful check is live are reported "live-only" in the default run.
-3. Every finding is printed as .claude/skills/<file>.md:<line>: <check>: <message>.
+3. .claude/commands and .claude/agents: every ```bash block gets bash -n + shellcheck -S error (with
+   <placeholders> and {{fields}} turned into words) and the portability lint (grep -P, BSD-first stat),
+   which the inventory also runs over every skill bash block and .claude/hooks/*.sh. units.SNIPPETS runs
+   the lines those fixes changed, macOS always and Linux with --live. No skill fence may lack a language tag.
+4. Every finding is printed as .claude/<path>.md:<line>: <check>: <message>.
 
 Usage: run.sh [--live] [--only SUBSTR ...] [--family F ...] [--keep] [--inventory-only] [--list]
 Exit 0 = everything passed; 1 = a check failed; 2 = a required tool is missing.
@@ -54,6 +58,17 @@ import blocks as B  # noqa: E402
 import units as U  # noqa: E402
 
 FAMILIES = ("sql", "sh", "yaml", "json", "dockerfile", "hcl", "ngql")
+CLAUDE = Path(os.environ.get("CONFIG_PACKS_CLAUDE_DIR") or REPO / ".claude")
+EXTRA_SH_TREES = ("commands", "agents")   # their ```bash blocks: one uniform check, skips listed in units.CMD_SKIPS
+# Fail-open bug classes found on 2026-09-30, linted in every bash block and every .claude/hooks/*.sh
+PORTABILITY = [
+    (re.compile(r"\bgrep\s+(-[A-Za-z]*P[A-Za-z]*|--perl-regexp)\b"),
+     "grep -P: BSD/macOS grep rejects it (exit 2), so the pipeline yields nothing; use -E or sed -n -E"),
+    (re.compile(r"stat\s+-f\s+%m[^|\n]*\|\|\s*stat\s+-c"),
+     "BSD-first stat: on Linux `stat -f %m` prints file-system info to stdout before the GNU fallback runs"),
+]
+PLACEHOLDER = re.compile(r"(?<![<\w])<(?![<(])[A-Za-z{][^<>\n]*>")   # <the command you ran>, not <<EOF or <(cmd)
+MUSTACHE = re.compile(r"\{\{[A-Za-z_][A-Za-z0-9_.]*\}\}")
 DOCKER = shutil.which("docker") or "/Applications/Docker.app/Contents/Resources/bin/docker"
 
 
@@ -141,9 +156,9 @@ class Ctx:
         return apply_subst(b.text, U.BLOCKS[key].get("subst"))
 
     def linux_container(self):
-        """bash 5 + GNU coreutils/grep/sed/awk(mawk): the postgres:17 image (Debian), idle."""
+        """bash 5 + GNU coreutils/grep/sed, mawk and python3: the official python:3.12-slim image (Debian), idle."""
         if self.linux is None:
-            self.start("cfgpk-linux", "--entrypoint", "sleep", "postgres:17", "7200")
+            self.start("cfgpk-linux", "--entrypoint", "sleep", "python:3.12-slim", "7200")
             self.linux = "cfgpk-linux"
         return self.linux
 
@@ -186,6 +201,59 @@ def check_sh(b, spec, ctx, out):
             errs += run_exec(b, text, sc, ctx, linux=True)
             out["steps"].append(f"exec[{sc['name']}] Linux")
     return errs
+
+
+def check_sh_tree(b, ctx, out):
+    """commands/ and agents/ bash blocks: they hold <placeholders> and {{template}} fields for the agent to fill,
+    so those become plain words first; then bash -n (macOS bash 3.2) and shellcheck at error severity."""
+    text = MUSTACHE.sub("${HARNESS_TEMPLATE_FIELD}", PLACEHOLDER.sub("HARNESS_PLACEHOLDER", b.text))
+    f = ctx.path(b, ".sh")
+    f.write_text(text)
+    errs = []
+    for bash, ver in ctx.bashes:
+        r = run([bash, "-n", str(f)])
+        for line in r.stderr.splitlines():
+            m = re.search(r"line (\d+): (.*)", line)
+            errs.append((b.md_line(int(m.group(1))) if m else b.first_line, f"bash {ver} -n: {m.group(2) if m else line}"))
+    r = run(["shellcheck", "-s", "bash", "-S", "error", "-f", "json1", str(f)])
+    try:
+        comments = json.loads(r.stdout or "{}").get("comments", [])
+    except json.JSONDecodeError:
+        comments = [{"line": 1, "code": "?", "level": "error", "message": (r.stdout + r.stderr).strip()}]
+    for c in comments:
+        errs.append((b.md_line(c["line"]), f"shellcheck SC{c['code']} ({c['level']}): {c['message']}"))
+    errs += [(b.first_line, m) for m in portability(b.text)]
+    out["steps"] += ["bash -n (placeholders as words)", "shellcheck -S error", "portability lint"]
+    return errs
+
+
+def run_snippets(ctx):
+    """The exact lines the 2026-09-30 portability fixes changed (grep -P, BSD-first stat), cut out of the
+    command/agent/hook files and run in fixture dirs: macOS bash 3.2 always, Linux bash 5 with --live."""
+    results = []
+    for sn in U.SNIPPETS:
+        src = CLAUDE / sn["file"]
+        lines = src.read_text(encoding="utf-8").split("\n")
+        idx = [i for i, ln in enumerate(lines) if sn["contains"] in ln]
+        if len(idx) != 1:
+            results.append((sn, src, 1, [f"snippet {sn['name']!r}: {len(idx)} lines contain {sn['contains']!r} (moved/changed?)"], []))
+            continue
+        i = idx[0]
+        j = i
+        if sn.get("until"):
+            while j < len(lines) and not re.search(sn["until"], lines[j]):
+                j += 1
+        while lines[j].rstrip().endswith("\\"):
+            j += 1
+        text = "\n".join(ln.strip() if sn.get("dedent", True) else ln for ln in lines[i:j + 1]) + "\n"
+        fake = B.Block(sn["file"], "sh", "bash", 0, i + 1, 0, "", text.rstrip("\n").split("\n"), prefix=".claude/")
+        errs, where = [], ["macOS"]
+        errs += [m for _, m in run_exec(fake, text, sn, ctx, linux=False)]
+        if ctx.live and sn.get("linux", True):
+            errs += [m for _, m in run_exec(fake, text, sn, ctx, linux=True)]
+            where.append("Linux")
+        results.append((sn, src, i + 1, errs, where))
+    return results
 
 
 def run_exec(b, text, sc, ctx, linux):
@@ -419,7 +487,10 @@ def run_claims(ctx, families):
                 label = f"postgres {ctx.pg_version}"
                 try:
                     import pglast
-                    for st in pglast.split(cl.get("setup", "SELECT 1")):   # one by one: VACUUM can't run in a block
+                    setup = cl.get("setup", "SELECT 1")
+                    if cl.get("block_sql"):
+                        setup = setup.replace("{BLOCK}", ctx.block_text(cl["block_sql"]))
+                    for st in pglast.split(setup):   # one by one: VACUUM can't run in a block
                         conn.execute(st.encode())
                     out = "\n".join(str(r[0]) for r in conn.execute(cl["query"].encode()).fetchall())
                 except psycopg.Error as e:
@@ -644,6 +715,14 @@ def check_yaml(b, spec, ctx, out):
         except Exception as e:
             errs.append((b.first_line, f"OpenAPI 3.1: {str(e).splitlines()[0]}"))
         out["steps"].append("openapi-spec-validator (3.1)")
+    if spec.get("spring"):
+        meta = U.spring_metadata(ctx)
+        if meta is None:
+            out["deferred"].append(f"Spring Boot {U.SPRING_BOOT} property check (configuration metadata jars not in ~/.m2)")
+        else:
+            for k, (ln, why) in U.spring_unknown_keys(docs, meta, text).items():
+                errs.append((b.md_line(ln), f"Spring Boot {U.SPRING_BOOT}: unknown property {k}{why}"))
+            out["steps"].append(f"every key a Spring Boot {U.SPRING_BOOT} property ({len(meta)} in its configuration metadata)")
     if spec.get("golangci"):
         d = docs[0] if docs else {}
         if str(d.get("version")) != "2":
@@ -745,10 +824,37 @@ def maestro_check(b, docs, spec):
 
 
 # ── JSON ─────────────────────────────────────────────────────────────────────────────────────────────
+def strip_jsonc(text):
+    """Blank out // comments outside strings, keeping every line and column (so errors map back)."""
+    out, in_str, esc, i = [], False, False, 0
+    while i < len(text):
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+            out.append(c)
+        elif text.startswith("//", i):
+            j = text.find("\n", i)
+            j = len(text) if j < 0 else j
+            out.append(" " * (j - i))
+            i = j
+            continue
+        else:
+            out.append(c)
+        i += 1
+    return "".join(out)
+
+
 def json_values(text, b, prefix):
-    """All JSON values in text (one or several), with // full-line comments removed."""
-    lines = text.split("\n")
-    clean = "\n".join("" if re.match(r"\s*//", ln) else ln for ln in lines)
+    """All JSON values in text (one or several), with // comments blanked (JSONC)."""
+    clean = strip_jsonc(text)
     dec = json.JSONDecoder()
     vals, i = [], 0
     while True:
@@ -984,8 +1090,36 @@ CHECKERS = {"sh": check_sh, "sql": check_sql, "yaml": check_yaml, "json": check_
 
 
 # ─────────────────────────────────────────────────────────────── inventory ──
-def inventory(all_b):
+def portability(text):
+    """Bug-class matches in shell text, with comments stripped (a comment may name the bad form)."""
+    code = "\n".join(re.sub(r"(^|\s)#.*$", "", ln) for ln in text.split("\n"))
+    return [msg for rx, msg in PORTABILITY if rx.search(code)]
+
+
+def hook_scripts():
+    return sorted((CLAUDE / "hooks").glob("*.sh"))
+
+
+def inventory(all_b, extra_b=()):
     problems = []
+    for path, line in B.untagged_fences(str(SKILLS)):
+        problems.append(f".claude/skills/{path}:{line}: code fence without a language tag (use the real one, or text)")
+    for b in list(all_b) + list(extra_b):
+        if b.lang == "sh":
+            for msg in portability(b.text):
+                problems.append(f"{b.display}:{b.first_line}: [{b.key}] {msg}")
+    for h in hook_scripts():
+        for msg in portability(h.read_text(encoding="utf-8")):
+            problems.append(f".claude/hooks/{h.name}: {msg}")
+    extra_keys = {b.key: b for b in extra_b}
+    for k, sk in U.CMD_SKIPS.items():
+        b = extra_keys.get(k)
+        if b is None:
+            problems.append(f"units.CMD_SKIPS has {k}, which no longer exists")
+        elif sk.get("anchor") != b.anchor:
+            problems.append(f"{b.display}:{b.first_line}: {k} drifted: first line is now {b.anchor!r}, units.CMD_SKIPS pins {sk.get('anchor')!r}")
+        elif not str(sk.get("skip", "")).strip():
+            problems.append(f"{b.display}:{b.first_line}: {k} is skipped without a reason")
     counts = {}
     for b in all_b:
         counts.setdefault(b.path, {}).setdefault(b.lang, 0)
@@ -1005,7 +1139,7 @@ def inventory(all_b):
     for b in all_b:
         keys.add(b.key)
         spec = U.BLOCKS.get(b.key)
-        loc = f".claude/skills/{b.path}:{b.first_line}"
+        loc = f"{b.display}:{b.first_line}"
         if spec is None:
             problems.append(f"{loc}: {b.key} ({b.info}) is neither checked nor skipped — add it to units.BLOCKS")
             continue
@@ -1059,11 +1193,12 @@ def main():
     args = ap.parse_args()
 
     all_b = B.all_blocks(str(SKILLS))
-    problems = inventory(all_b)
+    extra_b = [b for t in EXTRA_SH_TREES for b in B.tree_blocks(str(CLAUDE), t)]
+    problems = inventory(all_b, extra_b)
     if args.list:
         for b in all_b:
             spec = U.BLOCKS.get(b.key, {})
-            print(f"{b.key}\t.claude/skills/{b.path}:{b.first_line}\t{spec.get('check') or ('skip: ' + spec['skip'] if 'skip' in spec else '?')}")
+            print(f"{b.key}\t{b.display}:{b.first_line}\t{spec.get('check') or ('skip: ' + spec['skip'] if 'skip' in spec else '?')}")
     if problems:
         print("INVENTORY FAILED:")
         for p in problems:
@@ -1072,12 +1207,14 @@ def main():
     by_fam = {}
     for b in all_b:
         by_fam[b.lang] = by_fam.get(b.lang, 0) + 1
-    print("inventory OK: " + ", ".join(f"{k} {v}" for k, v in sorted(by_fam.items())) + f" ({len(all_b)} blocks in {len(U.EXPECTED)} files)")
+    print("inventory OK: " + ", ".join(f"{k} {v}" for k, v in sorted(by_fam.items())) + f" ({len(all_b)} blocks in {len(U.EXPECTED)} files)"
+          f"; commands+agents: {len(extra_b)} bash blocks ({len(U.CMD_SKIPS)} skipped with a reason); no untagged fences;"
+          f" portability lint clean (+ {len(hook_scripts())} hook scripts)")
     if args.inventory_only or args.list:
         return 0
 
     fams = args.family or list(FAMILIES)
-    sel = [b for b in all_b if b.lang in fams and (not args.only or any(o in b.key for o in args.only))]
+    sel = [b for b in all_b + extra_b if b.lang in fams and (not args.only or any(o in b.key for o in args.only))]
     require_tools(args, {b.lang for b in sel})
     tmp = Path(tempfile.mkdtemp(prefix="config-packs-"))
     ctx = Ctx(args, tmp)
@@ -1086,9 +1223,9 @@ def main():
     failed, stats, report = 0, {}, []
     try:
         for b in sel:
-            spec = U.BLOCKS[b.key]
+            spec = U.BLOCKS.get(b.key) or U.CMD_SKIPS.get(b.key) or {"tree": True}
             st = stats.setdefault(b.lang, {"checked": 0, "skipped": 0, "executed": 0, "live-only": 0, "failed": 0})
-            loc = f".claude/skills/{b.path}:{b.first_line}"
+            loc = f"{b.display}:{b.first_line}"
             if "skip" in spec:
                 st["skipped"] += 1
                 print(f"SKIP {loc} {b.key}: {spec['skip']}")
@@ -1096,7 +1233,7 @@ def main():
                 continue
             out = {"steps": [], "deferred": []}
             try:
-                errs = CHECKERS[b.lang](b, spec, ctx, out)
+                errs = check_sh_tree(b, ctx, out) if spec.get("tree") else CHECKERS[b.lang](b, spec, ctx, out)
             except Finding as f:
                 errs = [(b.first_line, str(f))]
             except subprocess.TimeoutExpired as e:
@@ -1105,7 +1242,7 @@ def main():
                 failed += 1
                 st["failed"] += 1
                 for ln, msg in errs:
-                    print(f"FAIL .claude/skills/{b.path}:{ln}: [{b.key}] {msg}")
+                    print(f"FAIL {b.display}:{ln}: [{b.key}] {msg}")
                 continue
             if out["steps"]:
                 st["checked"] += 1
@@ -1117,6 +1254,20 @@ def main():
             print(f"PASS {loc} {b.key}: {'; '.join(out['steps']) or '-'}{tail}")
             report.append({"key": b.key, "path": b.path, "lang": b.lang, "line": b.first_line,
                            "steps": out["steps"], "deferred": out["deferred"]})
+        if "sh" in fams and not args.only:
+            for sn, src, ln, errs, where in run_snippets(ctx):
+                st = stats.setdefault("snippets", {"checked": 0, "skipped": 0, "executed": 0, "live-only": 0, "failed": 0})
+                rel = src.relative_to(CLAUDE)
+                report.append({"snippet": sn["name"], "path": str(rel), "ok": not errs, "where": where})
+                if errs:
+                    failed += 1
+                    st["failed"] += 1
+                    for m in errs:
+                        print(f"FAIL .claude/{rel}:{ln}: [snippet {sn['name']}] {m}")
+                else:
+                    st["checked"] += 1
+                    st["executed"] += 1
+                    print(f"PASS snippet .claude/{rel}:{ln} {sn['name']} ({' + '.join(where)})")
         if ("sql" in fams or "ngql" in fams) and not args.only:
             for cl, path, errs, summary in run_claims(ctx, fams):
                 report.append({"claim": cl["name"], "path": path, "ok": not errs, "engine": summary.split(":")[0]})
@@ -1144,7 +1295,7 @@ def main():
         else:
             shutil.rmtree(tmp, ignore_errors=True)
     print("\nsummary (per family: checked / skipped / executed / live-only / failed):")
-    for fam in FAMILIES + ("claims",):
+    for fam in FAMILIES + ("claims", "snippets"):
         if fam in stats:
             s = stats[fam]
             print(f"  {fam:10} {s['checked']:3} checked  {s['skipped']:3} skipped  {s['executed']:3} executed  {s['live-only']:3} live-only  {s['failed']:3} failed")

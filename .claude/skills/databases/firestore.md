@@ -1,7 +1,7 @@
 # Firestore patterns for document-oriented cloud-native data storage.
 
 ## Document Model
-```
+```text
 // Collection / Document / Subcollection hierarchy
 tenants/
   {tenantId}/
@@ -54,7 +54,7 @@ interface Widget {
 ```
 
 ## Security Rules
-```
+```firestore-rules
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
@@ -238,7 +238,7 @@ firebase.firestore().disableNetwork(); // force offline (for testing)
 - `snapshot.metadata.fromCache` indicates whether data came from cache or server
 
 ## Indexing
-```
+```json
 // firestore.indexes.json — required for composite queries
 {
   "indexes": [
@@ -305,4 +305,4 @@ firebase emulators:start --import=./test-data --export-on-exit=./test-data
 - Emulator for all local development and testing — never use production in dev
 - Max 1 write per second per document — shard counters for high-write fields
 
-> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed + the firestore.indexes.json structure; 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

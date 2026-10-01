@@ -67,7 +67,7 @@ TIMESTAMP=$(date +%Y%m%d%H%M%S)
 if [ -n "$PHASE_ARG" ]; then
   PHASES=($PHASE_ARG)
 else
-  PHASES=$(ls -d agent_state/phases/*/ 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n)
+  PHASES=$(ls -d agent_state/phases/*/ 2>/dev/null | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p' | sort -n)
 fi
 
 # Sessions directory (if exists)
@@ -296,7 +296,7 @@ if [ -d "$SESSION_BASE" ]; then
     THREAD_NAME=$(basename "$thread_dir")
     LATEST="${thread_dir}LATEST.md"
     if [ -f "$LATEST" ]; then
-      LATEST_MTIME=$(stat -f %m "$LATEST" 2>/dev/null || stat -c %Y "$LATEST")
+      LATEST_MTIME=$(stat -c %Y "$LATEST" 2>/dev/null || stat -f %m "$LATEST")
       DAYS_OLD=$(( (NOW - LATEST_MTIME) / 86400 ))
       if [ "$DAYS_OLD" -gt 30 ]; then
         echo "WARNING: Session thread '${THREAD_NAME}' is ${DAYS_OLD} days old — likely abandoned"
@@ -325,7 +325,7 @@ fi
 ```bash
 CODEBASE_DIR="agent_state/codebase"
 if [ -d "$CODEBASE_DIR" ] && [ -f "$CODEBASE_DIR/.last-mapped" ]; then
-  MAP_MTIME=$(stat -f %m "$CODEBASE_DIR/.last-mapped" 2>/dev/null || stat -c %Y "$CODEBASE_DIR/.last-mapped")
+  MAP_MTIME=$(stat -c %Y "$CODEBASE_DIR/.last-mapped" 2>/dev/null || stat -f %m "$CODEBASE_DIR/.last-mapped")
   NOW=$(date +%s)
   DAYS_OLD=$(( (NOW - MAP_MTIME) / 86400 ))
 
@@ -367,7 +367,7 @@ if [ -d "agent_state/debates" ]; then
     [[ "$debate" == *-verdict.json ]] && continue
     [[ "$debate" == *unresolved.json ]] && continue
     VERDICT="${debate%-*}-verdict.json"
-    DEBATE_MTIME=$(stat -f %m "$debate" 2>/dev/null || stat -c %Y "$debate")
+    DEBATE_MTIME=$(stat -c %Y "$debate" 2>/dev/null || stat -f %m "$debate")
     DAYS_OLD=$(( ($(date +%s) - DEBATE_MTIME) / 86400 ))
     if [ ! -f "$VERDICT" ] && [ "$DAYS_OLD" -gt 14 ]; then
       echo "WARNING: Unresolved debate '$(basename $debate)' is ${DAYS_OLD} days old — resolve or archive"

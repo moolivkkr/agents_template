@@ -39,7 +39,7 @@ CMD ["serve"]
   a numeric `USER`, and `ARG GIT_SHA` → `ENV GIT_SHA`.
 
 ## .dockerignore
-```
+```gitignore
 .git
 .env*
 secrets.env

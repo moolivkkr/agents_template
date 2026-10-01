@@ -96,7 +96,7 @@ fi
 # Strategy 3: If still nothing, check for gate.failed files
 if [ -z "$PHASE" ]; then
   LATEST_FAILED=$(ls -t agent_state/phases/*/gate.failed* 2>/dev/null | head -1)
-  PHASE=$(echo "$LATEST_FAILED" | grep -oP 'phases/\K\d+')
+  PHASE=$(echo "$LATEST_FAILED" | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p')
 fi
 ```
 

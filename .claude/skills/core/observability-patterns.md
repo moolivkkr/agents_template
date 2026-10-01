@@ -642,7 +642,7 @@ async function callDownstream(ctx: RequestContext, url: string, body: unknown): 
 ```
 
 **Flow:**
-```
+```text
 Client → API Gateway (generates req_abc123)
   → Service A (logs with req_abc123, creates trace span)
     → Service B (receives req_abc123 via header, logs with same ID)

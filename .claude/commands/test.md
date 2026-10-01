@@ -263,7 +263,7 @@ jq -r --arg p "${PHASE}" '"TC-* Inventory — Phase \($p) (\(.mode) mode): \(.pa
        "  missing:        \(.missing | join(", "))",
        "  failing:        \(.failing | join(", "))",
        "  skipped-only:   \(.skipped_only | join(", "))",
-       "  comment-only:   \(.comment_only | join(", "))   (IDs in comments don't count — put them in test names)",
+       "  comment-only:   \(.comment_only | join(", "))   (IDs in comments do not count — put them in test names)",
        "  duplicate IDs:  \(.duplicate_ids | keys | join(", "))",
        "  weakening:      \(.weakening_unacknowledged | map("\(.file) \(.kind)") | join("; "))"' "$OUT"
 jq -r '.cases | group_by(.name | capture("TC-(?<c>[A-Z0-9]+)-").c) | .[] |

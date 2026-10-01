@@ -30,7 +30,7 @@
 ## Weak vs Sharp Personas
 
 ### Weak (avoid)
-```
+```text
 Persona: User
 Goal: Use the system
 Needs: Everything works
@@ -38,7 +38,7 @@ Needs: Everything works
 **Problem:** Describes everyone, guides nothing. Cannot answer "would this persona use this feature?"
 
 ### Sharp (use)
-```
+```text
 Persona: Sarah — Operations Manager (5-person startup)
 Primary Goal: Onboard new hires in < 30 minutes without IT help
 Key Constraint: Non-technical, manages 3-8 hires/month, no dedicated HR
@@ -78,7 +78,7 @@ Example:
 
 Same feature, different UX needs = separate requirements:
 
-```
+```text
 FR-015: View team members (Admin Sarah)
   → Full list with edit/remove actions, role management, audit trail
 

@@ -17,7 +17,7 @@ tags:
 > Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16; the Gradle blocks built with Gradle 9.8.0 (`tests/archetype-compile/java/run.sh`). The tenant filter, the repository queries (keyset, `Limit`, projections, specifications) and the Redis cache serializer were also run, on PostgreSQL 16.
 
 ## Project Structure
-```
+```text
 src/main/java/com/company/app/
   domain/          # entities, value objects, domain services
   application/     # use cases, application services
@@ -131,6 +131,7 @@ spring:
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:local}
 
+---
 # application-local.yml — dev overrides
 spring:
   datasource:
@@ -138,6 +139,7 @@ spring:
   jpa:
     show-sql: true
 
+---
 # application-prod.yml — production
 spring:
   datasource:
@@ -1064,7 +1066,7 @@ public class StreamController {
 ## Build and Tooling
 
 ### Gradle vs Maven
-```
+```text
 Gradle:
   + Faster builds (incremental, build cache, daemon)
   + Kotlin DSL with IDE auto-completion
@@ -1155,4 +1157,4 @@ dependencies {
 - Domain layer: unchecked `RuntimeException` subclasses
 - Never swallow exceptions — log + rethrow or convert
 
-> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail).
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 YAML blocks parsed (duplicate keys fail), every key a Spring Boot 4.1.1 property (its configuration metadata).

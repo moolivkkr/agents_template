@@ -16,7 +16,9 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SKILLS = HERE.parents[2] / ".claude" / "skills"
+CLAUDE = HERE.parents[2] / ".claude"
+TREES = ("skills", "commands", "agents", "hooks")   # copied for each mutation (not .claude/worktrees)
+FENCE = "`" * 3
 
 # (name, file, old text, new text, harness args, text the failing run must print)
 MUTATIONS = [
@@ -31,7 +33,7 @@ done
 PHASE="${ARG_PHASE:-$((LAST_PASSED + 1))}"''',
      '''LAST_PASSED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\\K\\d+' | sort -n | tail -1)
 PHASE=${ARG_PHASE:-$(( ${LAST_PASSED:-0} + 1 ))}''',
-     ["--only", "step-0-orient.md#sh1"], "next phase after the highest gate.passed"),
+     ["--only", "step-0-orient.md#sh1"], "grep -P: BSD/macOS grep rejects it"),   # the inventory lint stops it first
     ("stale data contract only warns again (fail-open)",
      "core/develop-steps/step-0-orient.md",
      '''      || { echo "⛔ BLOCKED: data-contracts.md is stale or unreadable — re-run /plan --phase=${PHASE} or update it"; exit 1; }''',
@@ -94,6 +96,19 @@ ORDER BY created_at DESC LIMIT $2 OFFSET $3""",
     ("a new, unconfigured block",
      "databases/sqlite.md", "## Rules\n", "```sql\nSELECT 1;\n```\n\n## Rules\n",
      ["--inventory-only"], "units.EXPECTED says 3"),
+    ("the old pause.md phase detection (grep -oP)",
+     "commands/pause.md", "| sed -n -E 's|.*phases/([0-9]+)/.*|\\1|p' | sort -n | tail -1)", "| grep -oP 'phases/\\K\\d+' | sort -n | tail -1)",
+     ["--inventory-only"], "grep -P: BSD/macOS grep rejects it"),
+    ("the old autonomous-continue.sh mtime (BSD-first stat)",
+     "hooks/autonomous-continue.sh", 'mtime() { stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null || echo 0; }',
+     'mtime() { stat -f %m "$1" 2>/dev/null || stat -c %Y "$1" 2>/dev/null || echo 0; }',
+     ["--inventory-only"], "BSD-first stat"),
+    ("the old test.md jq program (an apostrophe ends the single-quoted string)",
+     "commands/test.md", "(IDs in comments do not count", "(IDs in comments don't count",
+     ["--only", "commands/test.md"], "bash 3.2"),
+    ("an untagged fence in a skill pack",
+     "databases/redis.md", FENCE + "text\napp:entity:id", FENCE + "\napp:entity:id",
+     ["--inventory-only"], "code fence without a language tag"),
     ("a block whose first line changed",
      "databases/mysql.md", "CREATE TABLE users (\n", "CREATE TABLE IF NOT EXISTS users (\n",
      ["--inventory-only"], "drifted"),
@@ -107,17 +122,19 @@ def main():
     try:
         # the unmodified docs pass the same selections first (else a "caught" mutation proves nothing)
         clean = base / "clean"
-        shutil.copytree(SKILLS, clean)
+        for t in TREES:
+            shutil.copytree(CLAUDE / t, clean / t)
         for name, _, _, _, args, _ in MUTATIONS:
             r = subprocess.run([py, str(HERE / "harness.py"), *args], capture_output=True, text=True,
-                               env=dict(os.environ, CONFIG_PACKS_SKILLS_DIR=str(clean)))
+                               env=dict(os.environ, CONFIG_PACKS_SKILLS_DIR=str(clean / "skills"), CONFIG_PACKS_CLAUDE_DIR=str(clean)))
             if r.returncode:
                 failures += 1
                 print(f"✗ baseline fails before mutating ({' '.join(args)}):\n{(r.stdout + r.stderr)[-800:]}")
         for i, (name, rel, old, new, args, expect) in enumerate(MUTATIONS, 1):
             d = base / f"m{i}"
-            shutil.copytree(SKILLS, d)
-            p = d / rel
+            for t in TREES:
+                shutil.copytree(CLAUDE / t, d / t)
+            p = d / (rel if rel.split("/")[0] in TREES[1:] else "skills/" + rel)
             text = p.read_text(encoding="utf-8")
             if text.count(old) != 1:
                 failures += 1
@@ -125,7 +142,7 @@ def main():
                 continue
             p.write_text(text.replace(old, new), encoding="utf-8")
             r = subprocess.run([py, str(HERE / "harness.py"), *args], capture_output=True, text=True,
-                               env=dict(os.environ, CONFIG_PACKS_SKILLS_DIR=str(d)))
+                               env=dict(os.environ, CONFIG_PACKS_SKILLS_DIR=str(d / "skills"), CONFIG_PACKS_CLAUDE_DIR=str(d)))
             out = r.stdout + r.stderr
             if r.returncode == 0 or expect not in out:
                 failures += 1

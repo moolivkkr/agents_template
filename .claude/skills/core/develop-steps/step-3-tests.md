@@ -125,7 +125,7 @@ If no E2E test files exist for this phase:
 5. Playwright config must exist — create if missing (chromium, baseURL, webServer)
 
 **Step 3c.2 — Run E2E Tests (Feedback Loop):**
-```
+```text
 Cycle 1: Run all E2E tests
   → All pass? → proceed to Step 3c.3
   → Failures? → diagnose root cause (test bug vs implementation bug)

@@ -45,7 +45,7 @@ real bug fix), so a score movement means something.
 
 Suite lives under `agent_state/eval/suite/<task-id>/`:
 
-```
+```text
 agent_state/eval/suite/
   T-001-crud-endpoint/
     task.md              # the mini requirement/spec fed to the framework
@@ -102,7 +102,7 @@ Layer 1 — every check resolves to a file:line / command-output, never a self-r
 }
 ```
 
-```
+```text
 outcome_score = Σ (rubric_item_passed ? weight : 0)      # ∈ [0,1]
 ```
 
@@ -134,7 +134,7 @@ Scoring (two components, ADK-style):
 - **in_order match** — longest common subsequence of actual vs expected `must:true` steps.
 - **precision/recall** — required steps that ran (recall) and extra/forbidden steps (precision).
 
-```
+```text
 trajectory_score = 0.6 * (matched_required / total_required)      # recall of required steps
                  + 0.4 * (in_order_required / total_required)      # correct ordering
                  − forbidden_hits * 0.25                           # each forbidden step penalized
@@ -167,7 +167,7 @@ the agents is visible as a trade-off, not a free win.
 
 ## BEFORE / AFTER protocol (the whole point)
 
-```
+```text
 1. BASELINE   — run the FULL suite on the current framework, snapshot results.
                 → agent_state/eval/baselines/<date>-<git-sha>.json
 2. CHANGE     — make ONE framework change (edit a prompt / skill / wave).
@@ -209,7 +209,7 @@ you were tuning for, you will ship a net regression. Defenses, mandatory:
 
 ### Verdict thresholds
 
-```
+```text
 IMPROVED  : suite outcome_mean Δ ≥ +0.05  AND regression_rate == 0
             (mean rose meaningfully AND nothing individually regressed)
 REGRESSED : suite outcome_mean Δ ≤ −0.05  OR  regression_rate ≥ 0.20

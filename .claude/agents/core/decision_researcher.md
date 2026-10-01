@@ -132,7 +132,7 @@ The recommendation must:
 
 Write to `agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md`:
 
-```markdown
+````markdown
 # Research: <Question Title>
 
 > Researched by decision_researcher on <date>
@@ -218,7 +218,7 @@ Write to `agent_state/phases/{{PHASE}}/research/{{QUESTION_SLUG}}.md`:
   "risks": ["<top risk if this option is chosen>"]
 }
 ```
-```
+````
 
 ---
 

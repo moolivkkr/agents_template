@@ -348,7 +348,7 @@ Document every configurable field for this capability:
 
 Map every dependency this capability has on other capabilities or configuration objects:
 
-```markdown
+````markdown
 ## Prerequisites: ${CAPABILITY_NAME}
 
 ### Must Exist Before Configuration
@@ -368,7 +368,7 @@ graph TD
     A --> C[${THIS_CAPABILITY}]
     B --> C
 ```
-```
+````
 
 ### 4d — Decision Points and Branching Paths
 

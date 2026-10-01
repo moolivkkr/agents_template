@@ -3,7 +3,7 @@
 > Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess), then `next build` (Next.js 16.3.8, Turbopack) of an App Router app holding all three blocks (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## App Router Directory Structure
-```
+```text
 app/
   (auth)/
     login/page.tsx

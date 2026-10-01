@@ -108,7 +108,6 @@ ML/AI Stack:
     Used for security: YES [semantic search over alerts/logs] | NO
     Relevance: [document if ELSER assists in threat hunting or log correlation]
 ```
-```
 
 ### Hard gate
 

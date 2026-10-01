@@ -99,7 +99,7 @@ after login.
 
 ## Review grep (what `security_reviewer` searches the diff for)
 
-```
+```text
 dangerouslySetInnerHTML|v-html|\[innerHTML\]|\{@html|innerHTML\s*=|outerHTML|insertAdjacentHTML|document\.write|bypassSecurityTrust|eval\(|new Function|javascript:|postMessage\(|addEventListener\(["']message
 ```
 

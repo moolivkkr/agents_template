@@ -148,6 +148,10 @@ write("agent_state/phases/2/test-changes.json", json.dumps([{"file": "web/orders
 run(TCI, "--phase", "2", "--root", W, "--diff-base", BASE, "--out", f"{W}/agent_state/inv4.json")
 check("TW03", 4, len(json.load(open(f"{W}/agent_state/inv4.json"))["weakening_unacknowledged"]),
       "a test-changes.json entry does not acknowledge an in-file change — the why/when comment must be in the test")
+for cid, empty in (("TW04", ""), ("TW05", "  ")):   # "$(cat base_sha)" when the file is missing
+    rc, out = run(TCI, "--phase", "2", "--root", W, "--diff-base", empty, "--out", f"{W}/agent_state/inv_{cid}.json")
+    check(cid, (2, False, True), (rc, os.path.exists(f"{W}/agent_state/inv_{cid}.json"), "--diff-base is empty" in out),
+          f"an empty --diff-base ({empty!r}) fails loudly (exit 2, no inventory) instead of skipping the weakening check")
 
 # ─── TEST-CHANGE comments: why and when, next to every change to a pre-existing test ─────────────
 E = tempfile.mkdtemp(prefix="evidence-tchange.")

@@ -81,7 +81,7 @@ for PHASE_DIR in agent_state/phases/*/; do
 
   # Check 4: gate.passed is not stale (warn if > 30 days old)
   if [ -f "$GATE" ]; then
-    GATE_AGE=$(( ($(date +%s) - $(stat -f %m "$GATE" 2>/dev/null || stat -c %Y "$GATE" 2>/dev/null)) / 86400 ))
+    GATE_AGE=$(( ($(date +%s) - $(stat -c %Y "$GATE" 2>/dev/null || stat -f %m "$GATE" 2>/dev/null)) / 86400 ))
     [ "$GATE_AGE" -gt 30 ] && echo "⚠ Phase $PHASE_NUM: gate is ${GATE_AGE} days old — consider re-running /develop"
   fi
 
@@ -613,7 +613,7 @@ test -f agent_state/accept/traceability_matrix.md || echo "BLOCKED: traceability
 test -f agent_state/accept/unresolved_gaps.md || echo "BLOCKED: unresolved gaps report missing"
 
 # Report must contain a scored verdict
-if ! grep -qP '(COMPLETE|NEAR COMPLETE|INCOMPLETE|FAILING)' agent_state/accept/pipeline_completeness_report.md 2>/dev/null; then
+if ! grep -qE '(COMPLETE|NEAR COMPLETE|INCOMPLETE|FAILING)' agent_state/accept/pipeline_completeness_report.md 2>/dev/null; then
   echo "BLOCKED: completeness report has no verdict"
 fi
 ```
@@ -699,7 +699,7 @@ auto-generate release notes from project artifacts:
 1. **Read all phase manifests** — extract `brd_requirements_met` per phase
    ```bash
    for MANIFEST in agent_state/phases/*/manifest.json; do
-     # Extract brd_requirements_met array
+     jq -r '.brd_requirements_met[]?' "$MANIFEST"   # Extract brd_requirements_met array
    done
    ```
 

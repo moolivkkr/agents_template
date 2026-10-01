@@ -113,7 +113,7 @@ Appended once per Wave 5 cycle. This is the stall sensor.
 
 Evaluate after **every** Wave 5 cycle, before spawning the next fix agent:
 
-```
+```text
 if done:
     → exit Wave 5, proceed to Wave 6 gate.
 

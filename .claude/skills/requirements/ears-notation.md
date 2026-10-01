@@ -22,7 +22,7 @@ Related skills: [acceptance-criteria.md](acceptance-criteria.md), [requirement-c
 
 ### Concrete Examples
 
-```
+```text
 # Ubiquitous
 FR-012: THE SYSTEM SHALL store passwords hashed with bcrypt (cost ≥ 12).
 
@@ -53,7 +53,7 @@ Note how FR-007 (event) and FR-007b (unwanted) share a root ID — split a compo
 > **Precondition = the trigger** (the WHEN / WHILE / IF / WHERE part; empty for Ubiquitous → precondition is the default/steady state).
 > **Assertion = the SHALL** (the observable behavior after the precondition holds).
 
-```
+```text
 WHEN <trigger>  THE SYSTEM SHALL <response>
      └── precondition ──┘         └── assertion ──┘
               ▼                          ▼
@@ -62,7 +62,7 @@ WHEN <trigger>  THE SYSTEM SHALL <response>
 
 Worked example:
 
-```
+```text
 FR-007: WHEN an Admin submits the invite form with a valid email
         THE SYSTEM SHALL create a pending member and send an invite email within 5s.
 
@@ -89,7 +89,7 @@ For each existing requirement:
 
 ### Before / After
 
-```
+```text
 BEFORE (prose):
 FR-042: The system should handle invalid uploads gracefully and support large files.
 

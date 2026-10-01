@@ -2,7 +2,7 @@
 
 ## NFR Anatomy (All Parts Required)
 
-```
+```text
 ID:          NFR-PERF-001
 Category:    Performance
 Requirement: API response time under load
@@ -16,7 +16,7 @@ Priority:    MUST (RFC 2119)
 ## NFR Categories with Templates
 
 ### Performance
-```
+```text
 NFR-PERF-NNN: [Endpoint/Operation] response time
   Target: p95 < [X]ms, p99 < [Y]ms
   Applies to: [list endpoints or "all read endpoints"]
@@ -25,7 +25,7 @@ NFR-PERF-NNN: [Endpoint/Operation] response time
 ```
 
 ### Availability
-```
+```text
 NFR-AVAIL-NNN: System uptime
   Target: [99.9%] monthly uptime
   Measurement: [health check endpoint, monitoring tool]
@@ -34,7 +34,7 @@ NFR-AVAIL-NNN: System uptime
 ```
 
 ### Security
-```
+```text
 NFR-SEC-NNN: [Security control]
   Requirement: [specific control — not "system is secure"]
   Applies to: [which data, endpoints, user types]
@@ -43,7 +43,7 @@ NFR-SEC-NNN: [Security control]
 ```
 
 ### Scalability
-```
+```text
 NFR-SCALE-NNN: [Growth dimension]
   Current: [N users, N records, N requests/day]
   Target: [10x current within 12 months]
@@ -52,7 +52,7 @@ NFR-SCALE-NNN: [Growth dimension]
 ```
 
 ### Data
-```
+```text
 NFR-DATA-NNN: [Data requirement]
   Retention: [how long data is kept]
   Deletion: [GDPR right-to-delete, soft delete + hard purge after N days]
@@ -75,7 +75,7 @@ Every NFR must answer: **"Applies to WHAT, specifically?"**
 
 When NFRs conflict, use this priority order (unless project overrides):
 
-```
+```text
 1. Security / Compliance  (legal requirements, cannot compromise)
 2. Data Integrity         (no data loss, no corruption)
 3. Availability           (system must be reachable)

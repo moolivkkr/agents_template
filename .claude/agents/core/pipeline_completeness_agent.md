@@ -172,7 +172,7 @@ Trace EVERY requirement forward through the full chain. This is the core of the 
 
 ```bash
 # Extract all requirement IDs from BRD
-grep -oP '(FR|NFR|OBJ)-\d+' docs/BRD.md | sort -u > /tmp/brd_ids.txt
+grep -oE '(FR|NFR|OBJ)-[0-9]+' docs/BRD.md | sort -u > /tmp/brd_ids.txt
 echo "Total BRD requirements: $(wc -l < /tmp/brd_ids.txt)"
 ```
 
@@ -217,7 +217,7 @@ Read ALL `specs_vs_impl.md` reports across phases. Extract items flagged as `UNS
 
 ```bash
 for RECON in agent_state/reconciliation/phase-*/specs_vs_impl.md; do
-  PHASE=$(echo "$RECON" | grep -oP 'phase-\K\d+')
+  PHASE=$(echo "$RECON" | sed -n -E 's|.*phase-([0-9]+).*|\1|p')
   echo "--- Phase $PHASE: Unspecced Implementations ---"
   grep -A2 'UNSPECCED\|Unspecced' "$RECON" 2>/dev/null || echo "None"
 done
@@ -290,7 +290,7 @@ For each phase's `specs_vs_tests.md`:
 ```bash
 for GATE in agent_state/phases/*/gate.passed; do
   if grep -q "FORCED" "$GATE" 2>/dev/null; then
-    PHASE=$(echo "$GATE" | grep -oP 'phases/\K\d+')
+    PHASE=$(echo "$GATE" | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p')
     echo "Phase $PHASE: FORCED gate — checking if blockers were resolved..."
     # Read the gate file for overridden blockers
     # Check if they appear as resolved in later phase manifests
@@ -380,7 +380,7 @@ Some FR-* requirements are too large for a single phase and get split. Identify 
 ```bash
 # Find FR-* IDs that appear in multiple phase plans
 for ID in $(cat /tmp/brd_ids.txt); do
-  PHASES=$(grep -rl "$ID" docs/design/phases/*/PHASE_PLAN.md 2>/dev/null | grep -oP 'phases/\K\d+' | sort -u)
+  PHASES=$(grep -rl "$ID" docs/design/phases/*/PHASE_PLAN.md 2>/dev/null | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p' | sort -u)
   PHASE_COUNT=$(echo "$PHASES" | wc -w | tr -d ' ')
   if [ "$PHASE_COUNT" -gt 1 ]; then
     echo "SPLIT: $ID across phases: $PHASES"

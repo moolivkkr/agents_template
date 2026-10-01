@@ -70,7 +70,7 @@ TIMESTAMP_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 ```bash
 # Find the latest passed gate
-LAST_PASSED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n | tail -1)
+LAST_PASSED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p' | sort -n | tail -1)
 
 # Check for in-progress phase (has execution.jsonl but no gate.passed)
 for dir in agent_state/phases/*/; do

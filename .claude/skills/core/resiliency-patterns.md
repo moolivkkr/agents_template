@@ -660,7 +660,7 @@ const importBulkhead = new Bulkhead('imports', 3);     // max 3 concurrent impor
 Every process that connects shares one server-side limit. Write the budget down (in the
 `database_agent` design) and keep it true as replicas scale:
 
-```
+```text
   Σ (max replicas × pools per process × max conns per pool)   for api, workers, cron
 + migrate/seed jobs that can run at the same time as the app
 + admin / monitoring headroom

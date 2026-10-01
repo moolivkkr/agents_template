@@ -514,7 +514,7 @@ jobs:
 
 ### Architecture
 
-```
+```text
 ┌─── Region: us-east-1 (primary) ──────────┐  ┌─── Region: us-west-2 (secondary) ────────┐
 │  frontend-east:3000                       │  │  frontend-west:3001                       │
 │  backend-east:8080   ←── /healthz ──┐     │  │  backend-west:8081   ←── /healthz ──┐     │

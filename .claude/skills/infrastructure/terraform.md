@@ -13,7 +13,7 @@ tags:
 # Terraform patterns for reproducible infrastructure-as-code.
 
 ## Layout
-```
+```text
 infra/
   modules/                 # reusable, versioned building blocks
     network/  { main.tf variables.tf outputs.tf }

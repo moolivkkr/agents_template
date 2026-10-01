@@ -1,7 +1,7 @@
 # DynamoDB patterns for serverless, high-scale key-value and document storage.
 
 ## Table Design
-```
+```text
 Table: Widgets
   Partition Key (PK): TENANT#<tenant_id>
   Sort Key (SK):      WIDGET#<widget_id>
@@ -22,7 +22,7 @@ Table: Widgets
 - Design tables around access patterns, not entity relationships
 
 ## Single-Table Design
-```
+```text
 PK                      | SK                          | Type    | Data
 TENANT#abc              | METADATA                    | Tenant  | {name, plan, ...}
 TENANT#abc              | WIDGET#w1                   | Widget  | {name, status, ...}
@@ -167,7 +167,7 @@ async function listWidgets(tenantId: string, cursor?: string, pageSize = 20) {
 - Request `Limit + 1` to detect `hasMore` without extra query
 
 ## Cost Optimization
-```
+```text
 On-Demand Mode:
   - Pay per request — no capacity planning
   - Best for: unpredictable traffic, new workloads, dev/staging

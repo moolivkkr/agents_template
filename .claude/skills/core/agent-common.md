@@ -55,7 +55,7 @@ Keep it short; the detail belongs in the artifact.
 Every agent's `## Required Reading` section MUST begin with these two items, in this order, before
 any project/spec file:
 
-```
+```text
 0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read FIRST, before any other file.** Retired/renamed
    components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this
    prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP
@@ -77,7 +77,7 @@ Every agent MUST end its work with an explicit self-check. A silent no-op or a s
 single largest failure mode (a report file exists, so the gate passes, but the work never happened).
 Copy this block, specialized to the agent's output:
 
-```
+```text
 ## Definition of Done (verify before returning — do not report success until all pass)
 - [ ] Output written to the EXACT path in my frontmatter `output.primary` (not a nearby path).
 - [ ] Output is real content, not a stub/placeholder/"TODO" — it would satisfy a skeptical reviewer.
@@ -108,7 +108,7 @@ verifier points at the actual error (CRITIC, ICLR 2024).
 **Prohibited:** "review your own work and improve it," "reflect, self-critique, then revise,"
 reflection-only polish passes. **Allowed** — a fix loop ONLY when triggered by:
 
-```
+```text
 [ ] A failing test (unit / integration / E2E) with a concrete assertion
 [ ] A compiler / type-checker / build error (file:line)
 [ ] A linter / static-analysis / security-scanner finding (rule + location)
@@ -131,7 +131,7 @@ actually receives data. Without this, `memory_search` returns nothing forever.
 Append to `agent_state/phases/${PHASE}/lessons.md` (aggregated to the root index at gate — see
 `memory-as-tools.md` / `structured-lessons.md`):
 
-```
+```text
 ### L-${PHASE}-<seq>
 - **Category:** testing|implementation|security|performance|infrastructure|agent_performance|planning|ux
 - **Tags:** <comma-separated: language, domain, pattern>

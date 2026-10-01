@@ -52,7 +52,7 @@ Then the page shows empty state: Users icon + "No team members yet" + "Invite yo
 
 For EACH FR-*, verify these are covered:
 
-```
+```text
 □ Happy path defined (exact user steps + expected result)
 □ Auth required? If yes: unauthenticated → redirect to login
 □ Permission required? If yes: unauthorized → "You don't have permission"
@@ -67,7 +67,7 @@ For EACH FR-*, verify these are covered:
 ## Criteria by Feature Type
 
 ### List/Table Features
-```
+```text
 □ Empty list behavior (no items exist)
 □ Filtered empty (items exist but none match filter)
 □ Pagination: first page, last page, beyond-last page
@@ -78,7 +78,7 @@ For EACH FR-*, verify these are covered:
 ```
 
 ### Form Features
-```
+```text
 □ Each field validation rule (type, min, max, pattern)
 □ Required vs optional fields
 □ Submit with all valid → success toast + redirect/reset
@@ -90,7 +90,7 @@ For EACH FR-*, verify these are covered:
 ```
 
 ### CRUD Operations
-```
+```text
 □ Create: success creates resource + shows in list
 □ Read: single resource load + not-found handling
 □ Update: optimistic update + rollback on failure

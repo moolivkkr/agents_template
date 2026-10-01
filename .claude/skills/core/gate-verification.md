@@ -74,7 +74,7 @@ Default weighted rubric (tune per project in `sdlc-config.json`):
 | Acceptance use cases passed | 0.15 | acceptance_report.md |
 | No suppression/stub/TODO introduced | 0.05 | code_quality_verifier |
 
-```
+```text
 gate_score = Σ (dimension_score × weight)
 PASS if gate_score ≥ 0.90 AND no dimension with weight ≥ 0.15 scored 0
        AND no hard failure (below)
@@ -105,7 +105,7 @@ run the verification on a **different model** than the one that produced the wor
 verifying its own output shares its blind spots. Work is produced on Opus 5.5, so launch the verifier
 with `model: fable` (see `model-routing.md`), in a fresh context that did not produce the work. The verifier is prompted to **refute**:
 
-```
+```text
 "Try to prove this claim is FALSE. Find one counterexample, one uncovered path, or one file:line
 that contradicts it. Default to REFUTED if you cannot positively confirm."
 ```

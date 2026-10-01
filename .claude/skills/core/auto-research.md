@@ -21,7 +21,7 @@ Any agent running in `--auto` mode that encounters a question it would normally 
 ### Level 1: CHECK DOCUMENTS (confidence: HIGH)
 Search `requirements/`, `docs/BRD.md`, `docs/IMPLEMENTATION_GUIDELINES.md` for explicit statements.
 
-```
+```text
 Question: "What auth method should we use?"
 Search: grep -i "auth\|jwt\|session\|oauth" requirements/*.md docs/*.md
 Found: requirements/tech-spec.md:14 — "Use JWT for stateless authentication"
@@ -31,7 +31,7 @@ Found: requirements/tech-spec.md:14 — "Use JWT for stateless authentication"
 ### Level 2: INFER FROM CONTEXT (confidence: MEDIUM-HIGH)
 Derive from related requirements, tech stack, or constraints already documented.
 
-```
+```text
 Question: "What pagination page size?"
 Context: BRD says "mobile-first", NFR-PERF says "< 200ms response"
 Inference: Mobile screens show ~10-20 items. 20 is standard for API pagination.
@@ -41,7 +41,7 @@ Inference: Mobile screens show ~10-20 items. 20 is standard for API pagination.
 ### Level 3: WEB RESEARCH (confidence: MEDIUM)
 Search the web for best practices given the project's specific tech stack and domain.
 
-```
+```text
 Question: "What email provider for transactional emails?"
 Search: "best transactional email provider 2026 [project tech stack]"
 Findings: Resend (modern, developer-friendly), SendGrid (established), AWS SES (cheapest)
@@ -52,7 +52,7 @@ Context: IMPL_GUIDELINES shows TypeScript + Next.js → Resend has best DX for t
 ### Level 4: SENSIBLE DEFAULT (confidence: LOW-MEDIUM)
 Apply industry standard defaults when research yields no clear winner.
 
-```
+```text
 Question: "What rate limit for auth endpoints?"
 No project-specific guidance found.
 Industry standard: 5 attempts per minute per IP for login, 3 for password reset
@@ -62,7 +62,7 @@ Industry standard: 5 attempts per minute per IP for login, 3 for password reset
 ### Level 5: DOCUMENT AS OPEN (confidence: LOW)
 Truly cannot determine — use best guess, flag prominently for human review.
 
-```
+```text
 Question: "Should deleted users' data be anonymized or purged?"
 No requirements mention data retention policy. Legal implications.
 → Answer: Soft-delete with 30-day retention, then anonymize (LOW confidence)

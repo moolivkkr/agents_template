@@ -3,7 +3,7 @@
 > Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Quarkus 3.40.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`). The exception mappers were also run in a Quarkus app (`@QuarkusTest`): application errors, crashes, unknown routes, wrong methods and unreadable bodies all come back in the error envelope with their own status.
 
 ## Project Structure
-```
+```text
 src/main/java/com/example/app/
 ├── App.java                          # No main class needed — Quarkus manages lifecycle
 ├── config/

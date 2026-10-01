@@ -16,7 +16,7 @@ Language-agnostic testing strategy covering structure, naming, isolation, and co
 
 ## Test Pyramid
 
-```
+```text
         /\
        /e2e\        — Few, slow, expensive. Test critical user journeys only.
       /------\
@@ -55,7 +55,7 @@ def test_apply_discount_reduces_order_total():
 
 Format: `test_<what>_<condition>_<expected_outcome>`
 
-```
+```text
 test_create_user_with_duplicate_email_returns_conflict
 test_calculate_tax_for_zero_amount_returns_zero
 test_authenticate_with_expired_token_raises_unauthorized

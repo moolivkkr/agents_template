@@ -32,7 +32,7 @@ Credentials (the app should never see the user's password). Modern default is **
 for everyone**, secret added only for confidential clients.
 
 ### Authorization Code + PKCE (the canonical flow)
-```
+```text
 1. Client generates:  code_verifier (random 43-128 chars)
                        code_challenge = BASE64URL(SHA256(code_verifier))
 2. Redirect to /authorize?response_type=code&client_id=...&redirect_uri=...
@@ -76,14 +76,14 @@ call APIs; use the `id_token` to establish identity. Don't send the `id_token` t
   bounded. Never expose the refresh token to JavaScript.
 - **Session cookie:** `HttpOnly; Secure; SameSite`, scoped `Path`/`Domain`, plus a CSRF token (double-submit
   or synchronizer) for state-changing requests.
-```
+```text
 Set-Cookie: refresh_token=<opaque-or-jwt>; HttpOnly; Secure; SameSite=Strict; Path=/auth; Max-Age=1209600
 Set-Cookie: session=<opaque-id>; HttpOnly; Secure; SameSite=Lax; Path=/
 ```
 
 ## Refresh-token rotation (mandatory for long-lived sessions)
 Every refresh **issues a new refresh token and invalidates the old one** (rotation). Detect replay:
-```
+```text
 On /token (grant_type=refresh_token):
   1. Look up token in store. If not found OR already-used → REVOKE the entire token family
      (someone is replaying a stolen token) and force re-auth.

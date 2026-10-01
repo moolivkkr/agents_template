@@ -138,7 +138,7 @@ the zero-rows case; the bug was caught late in review each time.
 
 **During `/consolidate`:** the dedup sweep collapses the three `L-*` entries onto one pattern:
 
-```
+```text
 P-014 · Category: testing · Tags: e2e, ui, empty-state
 Pattern: List/collection views repeatedly shipped without an empty-state assertion.
 Evidence: Phase 2, Phase 4, Phase 5 — each caught the same gap in review.

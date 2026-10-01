@@ -61,7 +61,7 @@ Write to: `agent_state/debates/<step>-<topic>.json`
 
 Each researcher agent gathers evidence FOR their assigned option:
 
-```
+```text
 Researcher A (assigned Option A):
   1. Search requirements/ and docs/ for supporting evidence
   2. Search web for best practices, case studies, benchmarks
@@ -81,7 +81,7 @@ All researchers run in parallel — one per option.
 
 Each debater reads ALL researchers' outputs, then argues FOR their assigned position:
 
-```
+```text
 Debater A (advocates Option A, has read all research):
 
 ## Argument for: [Option A]
@@ -117,7 +117,7 @@ Debater A (advocates Option A, has read all research):
 
 The arbitrator reads ALL debate arguments and produces the final verdict:
 
-```
+```text
 ## Decision: [Topic]
 
 ### Verdict: Option [X] — [Name]
@@ -159,7 +159,7 @@ Confidence: [HIGH | MEDIUM | LOW]
 ## Integration with Pipeline
 
 ### How agents escalate
-```
+```text
 1. Agent detects uncertainty
 2. Agent writes debate_request JSON to agent_state/debates/
 3. debate_moderator picks it up

@@ -22,7 +22,7 @@ Production-grade mock patterns for common SaaS integrations in tests. Each servi
 
 ## General Principles
 
-```
+```text
 1. Mock at the HTTP boundary — not at the SDK level
    (ensures your SDK configuration is also tested)
 
@@ -530,7 +530,7 @@ func newSendGridServer(t *testing.T) *httptest.Server {
 
 ### Mock Response Shapes
 
-```
+```text
 // PUT /{bucket}/{key} (upload)
 // Returns 200 with ETag header
 

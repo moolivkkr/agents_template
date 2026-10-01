@@ -5,6 +5,9 @@
 # The blocks are extracted from the markdown at run time; units.py says how each one is checked (or
 # why it is skipped). The run fails on any finding (printed as .claude/skills/<file>.md:<line>), on a
 # block nobody checks or skips with a reason, and on a block count or first line that changed.
+# Also: every ```bash block in .claude/commands and .claude/agents (bash -n + shellcheck -S error +
+# the portability lint), no untagged fence in .claude/skills, no grep -P / BSD-first stat in any bash
+# block or .claude/hooks/*.sh, and the lines those fixes changed run on macOS bash 3.2 (+ Linux, --live).
 #
 # Usage:
 #   bash tests/archetype-compile/config-packs/run.sh                  # default: local tools, no network

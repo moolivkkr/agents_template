@@ -4,7 +4,7 @@
 
 Every functional requirement MUST include all 5 parts:
 
-```
+```text
 TRIGGER:  What initiates this behavior (user action, system event, time-based)
 ACTOR:    Who performs or experiences it (specific persona, not "the user")
 ACTION:   What exactly happens (concrete verb, not vague)
@@ -17,7 +17,7 @@ ERROR:    What happens when it fails (specific error conditions + handling)
 **Weak:** "Users can search for items"
 
 **Strong:**
-```
+```text
 FR-012: Item Search
 TRIGGER: User types in search input and presses Enter or waits 300ms (debounce)
 ACTOR:   Authenticated End User
@@ -64,7 +64,7 @@ Examples:
 
 If a requirement takes > 5 sentences to describe, it's too large. Split it:
 
-```
+```text
 FR-012: Item Search (base)        → search by name, return paginated results
 FR-012a: Item Search (filters)    → filter by category, date range, status
 FR-012b: Item Search (sort)       → sort by relevance, date, name

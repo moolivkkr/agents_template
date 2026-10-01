@@ -36,7 +36,7 @@ CONTRACT_FILE="docs/design/phases/${PHASE}/specs/api-contracts.md"
 - After fix: re-validate → then proceed to Build-step B3
 
 **If validation passes:**
-```
+```text
 ✅ API Contract Validation — PASS
    Endpoints documented: N/N
    Shape checks: all unambiguous

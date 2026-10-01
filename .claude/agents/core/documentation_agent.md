@@ -57,7 +57,7 @@ Keeps project documentation accurate and up to date. Generates API documentation
 ### README.md (project root)
 
 Structure:
-```markdown
+````markdown
 # <PROJECT_NAME>
 
 <1-2 sentence description from BRD §Executive Summary>
@@ -108,7 +108,7 @@ See [docs/developer-guide.md](docs/developer-guide.md) for setup, testing, and c
 | DATABASE_URL | Yes | — | PostgreSQL connection string |
 | REDIS_URL | No | localhost:6379 | Redis connection string |
 | ... | ... | ... | ... |
-```
+````
 
 ### Quality gate for README
 - [ ] Project description matches BRD §Executive Summary
@@ -126,7 +126,7 @@ One file per resource group (e.g., `docs/api/auth.md`, `docs/api/users.md`, `doc
 
 For each endpoint, document:
 
-```markdown
+````markdown
 ## <METHOD> <PATH>
 
 <Brief description>
@@ -174,7 +174,7 @@ For each endpoint, document:
 | 401 | UNAUTHORIZED | Missing or invalid token |
 | 404 | NOT_FOUND | Resource doesn't exist or not owned |
 | 422 | VALIDATION_ERROR | Field validation failed |
-```
+````
 
 ### Quality gate for API docs
 - [ ] Every endpoint from manifest's `api_routes[]` is documented
@@ -190,7 +190,7 @@ For each endpoint, document:
 ### `docs/developer-guide.md`
 
 Structure:
-```markdown
+````markdown
 # Developer Guide
 
 ## Prerequisites
@@ -274,7 +274,7 @@ Structure:
 | DB connection refused | Docker not running | `docker compose up -d` |
 | Port already in use | Previous instance running | `docker compose down` then retry |
 | Migration failed | Schema conflict | Check `migrations/` for conflicts |
-```
+````
 
 ### Quality gate for developer guide
 - [ ] All setup steps are copy-pasteable commands

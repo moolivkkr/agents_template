@@ -529,7 +529,7 @@ fn gql_error(err: AppError) -> async_graphql::Error {
 
 The N+1 problem occurs when a field resolver makes one database query per parent object.
 
-```
+```text
 // WITHOUT DataLoader:
 Query widgets(first: 10) → 1 query for 10 widgets
   Widget.createdBy → 10 individual user queries (N+1!)
@@ -541,7 +541,7 @@ Query widgets(first: 10) → 1 query for 10 widgets
 
 ### DataLoader Contract
 
-```
+```text
 DataLoader batch function:
     Input:  [key1, key2, key3, ...]
     Output: [value1, value2, value3, ...]  (same order, same length)
@@ -587,7 +587,7 @@ export function createLoaders(db: Database) {
 
 ## Authentication and Authorization
 
-```
+```text
 Authentication: Validate JWT on every request, extract user/tenant.
 Authorization: Check permissions in resolvers or directives.
 
@@ -624,7 +624,7 @@ type Mutation {
 
 ## Error Handling
 
-```
+```text
 GraphQL has two error categories:
 
 1. System Errors (in "errors" array):
@@ -691,7 +691,7 @@ enum EventType {
 }
 ```
 
-```
+```text
 // Server publishes events when mutations occur:
 mutation_resolver.createWidget():
     widget = service.create(...)
@@ -709,7 +709,7 @@ subscription_resolver.widgetChanged(filter):
 
 ### Query Complexity Limiting
 
-```
+```text
 // Assign complexity cost to fields:
 type Widget {
     id: ID!                           # cost: 0 (scalar)
@@ -733,7 +733,7 @@ query {
 
 ### Depth Limiting
 
-```
+```text
 // Reject queries deeper than N levels (default: 10):
 max_depth = 10
 
@@ -752,7 +752,7 @@ query {
 
 ### Persisted Queries
 
-```
+```text
 // Client sends a hash instead of the full query string:
 POST /graphql
 {
@@ -778,7 +778,7 @@ Implementation:
 
 ## Testing
 
-```
+```text
 // Schema validation: ensure schema is valid and has no breaking changes
 test("schema is valid"):
     assert schema.validate() passes

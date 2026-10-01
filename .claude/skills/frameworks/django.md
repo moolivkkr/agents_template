@@ -1,7 +1,7 @@
 # Django patterns for production-ready Python web applications.
 
 ## Project Layout
-```
+```text
 myproject/
   settings/
     base.py        # shared settings

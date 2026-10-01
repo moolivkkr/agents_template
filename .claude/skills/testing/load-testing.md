@@ -405,7 +405,7 @@ export const options = {
 - `delayAbortEval` gives the system time to warm up before evaluating
 
 ## Defining Scenarios (Virtual Users)
-```
+```text
 Scenario: E-commerce checkout flow
   70% — Browse products (GET /products, GET /products/:id)
   20% — Add to cart (POST /cart/items)

@@ -20,7 +20,7 @@ Before marking **any** implementation task as done, verify every item. No except
 
 ### 1. Requirement Coverage
 
-```
+```text
 For each requirement in the spec:
   [ ] Corresponding code exists
   [ ] Code implements the full requirement, not a subset
@@ -45,7 +45,7 @@ done < /tmp/spec_reqs.txt
 
 ### 2. API Completeness
 
-```
+```text
 For each endpoint in the API spec:
   [ ] Route is registered in the router
   [ ] Handler function exists and has real logic
@@ -71,7 +71,7 @@ comm -3 /tmp/spec_routes.txt /tmp/code_routes.txt
 
 ### 3. Data Model Completeness
 
-```
+```text
 For each model/entity in the spec:
   [ ] Database migration exists with all fields
   [ ] Go/TS struct has all fields with correct types
@@ -121,7 +121,7 @@ func TestUserModelMatchesMigration(t *testing.T) {
 
 ### 4. Error Handling Completeness
 
-```
+```text
 For each error case documented in the spec:
   [ ] Error is caught/handled in code
   [ ] Correct HTTP status code is returned
@@ -132,7 +132,7 @@ For each error case documented in the spec:
 
 ### 5. UI Completeness
 
-```
+```text
 For each component in the wireframe:
   [ ] Component file exists
   [ ] Component renders all specified elements
@@ -146,7 +146,7 @@ For each component in the wireframe:
 
 ### 6. Code Hygiene
 
-```
+```text
 [ ] No TODO/FIXME/HACK comments left behind
 [ ] No placeholder/mock data in production code paths
 [ ] All imports are used — no dead imports
@@ -182,7 +182,7 @@ Each level builds on the previous. All four must pass.
 
 > "Do all the files, functions, and endpoints exist?"
 
-```
+```text
 Check:
   - Every file mentioned in the design doc exists on disk
   - Every function/method in the spec has a corresponding implementation
@@ -218,7 +218,7 @@ check_file_exists "migrations/001_create_users.sql"
 
 > "Do implementations have real logic, not stubs?"
 
-```
+```text
 Check:
   - Functions contain more than `return nil` or `// TODO`
   - Database queries actually query the database (not return empty results)
@@ -259,7 +259,7 @@ func (s *OrderService) CalculateTotal(items []LineItem) (float64, error) {
 
 > "Are components connected? Can data flow end-to-end?"
 
-```
+```text
 Check:
   - HTTP handler calls service, service calls repository, repository calls DB
   - Dependencies are injected — not nil, not mocked in production
@@ -314,7 +314,7 @@ func TestServerWiring(t *testing.T) {
 
 > "Does actual data move correctly through the system?"
 
-```
+```text
 Check:
   - POST creates a record that GET can retrieve
   - Mutations are persisted to the database (not just in memory)
@@ -381,7 +381,7 @@ The most dangerous verification failures are the ones you talk yourself out of c
 
 ### Don't Accept "It Works" Without Evidence
 
-```
+```text
 BAD:  "The endpoint works" (never tested it)
 GOOD: "GET /api/v1/users returns 200 with correct JSON shape — here's the curl output"
 
@@ -394,7 +394,7 @@ GOOD: "Tested all 5 error paths: not found, validation, conflict, auth, server e
 
 ### Don't Skip Edge Cases
 
-```
+```text
 Always test:
   - Empty collections (no data yet)
   - Single item collections
@@ -407,7 +407,7 @@ Always test:
 
 ### Don't Assume Tests Cover What They Claim
 
-```
+```text
 Read the test body, not just the test name:
 
 BAD test:
@@ -437,7 +437,7 @@ GOOD test:
 
 ### Don't Rationalize Gaps
 
-```
+```text
 Common rationalizations (all wrong):
   - "We'll add tests later" → Tests exist to verify correctness NOW
   - "That edge case won't happen" → It will, in production, at 3am
@@ -494,7 +494,7 @@ grounded in an external verifier that points at the actual error (CRITIC, ICLR 2
 
 **A fix→re-check loop is allowed ONLY when triggered by one of these external signals:**
 
-```
+```text
 [ ] A failing test (unit / integration / E2E) — the assertion names the expected vs actual
 [ ] A compiler / type-checker / build error — with file:line
 [ ] A linter / static-analysis / security-scanner finding — with rule + location
