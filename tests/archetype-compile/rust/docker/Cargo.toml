@@ -1,0 +1,29 @@
+# HARNESS-ONLY minimal service the Rust Dockerfile archetypes build (docker-check.py). Not a doc sample:
+# docker-check.py appends dockerfile-rust.md's [profile.release] block to this file, and adds the doc's
+# rust-toolchain.toml, .dockerignore and the migration-pattern-rust.md migrations to the build context.
+[package]
+name = "yourapp"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.94"
+publish = false
+
+# its own workspace: this directory sits under the harness's workspace root
+[workspace]
+
+[[bin]]
+name = "yourapp" # dockerfile-rust.md builds --bin yourapp
+path = "src/main.rs"
+
+[[bin]]
+name = "order-service" # performance-rust.md's Dockerfile builds --bin order-service
+path = "src/bin/order-service.rs"
+
+[dependencies]
+axum = "0.8.9"
+serde_json = "1.0.151"
+# tls-rustls (ring): C code, so the musl variants need their musl C toolchain like a real service does
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "macros", "migrate", "chrono", "uuid"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+uuid = { version = "1.26.1", features = ["serde"] }

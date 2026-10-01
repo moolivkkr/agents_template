@@ -6,6 +6,8 @@
 #   bash tests/archetype-compile/rust/run.sh --only widget-app -v
 #   bash tests/archetype-compile/rust/run.sh --update-lock     # after changing a version in Cargo.toml
 #   bash tests/archetype-compile/rust/prepare-sqlx.sh          # after changing a sqlx::query! or the schema
+#   bash tests/archetype-compile/rust/run-tests.sh             # the full run + cargo test (throwaway Postgres; Docker)
+#   bash tests/archetype-compile/rust/docker-check.sh          # build + run the Rust Dockerfiles (Docker)
 #
 # Needs a Rust toolchain (brew install rustup && rustup-init -y --no-modify-path). The first run
 # downloads and builds ~500 crates into ./target (gitignored); later runs take seconds per unit.

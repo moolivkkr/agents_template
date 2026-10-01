@@ -395,12 +395,16 @@ public class WidgetDataFetcher {
 ### Rust (async-graphql)
 
 ```rust
+use std::sync::Arc;
+
+use async_graphql::{dataloader::DataLoader, Context, ErrorExtensions, Object, Result, ID};
+
 #[Object]
 impl QueryRoot {
     async fn widget(&self, ctx: &Context<'_>, id: ID) -> Result<Option<Widget>> {
-        let tenant_id = ctx.data::<AuthContext>()?.tenant_id;
+        let tenant_id = ctx.data::<AuthContext>()?.tenant_id; // from the verified token, per request
         let svc = ctx.data::<Arc<WidgetService>>()?;
-        Ok(svc.get(tenant_id, &id).await?)
+        svc.get(tenant_id, &id).await.map_err(gql_error)
     }
 
     async fn widgets(
@@ -410,10 +414,17 @@ impl QueryRoot {
         after: Option<String>,
         filter: Option<WidgetFilter>,
     ) -> Result<WidgetConnection> {
+        // outside 1..=100 is an error, never clamped: a client asking for 500 and getting 100 can't tell
+        if !(1..=100).contains(&first) {
+            return Err(async_graphql::Error::new("first must be between 1 and 100.")
+                .extend_with(|_, e| {
+                    e.set("code", "VALIDATION_FAILED");
+                    e.set("field", "first");
+                }));
+        }
         let tenant_id = ctx.data::<AuthContext>()?.tenant_id;
         let svc = ctx.data::<Arc<WidgetService>>()?;
-        let first = first.min(100);
-        Ok(svc.list(tenant_id, first, after, filter).await?)
+        svc.list(tenant_id, first, after, filter).await.map_err(gql_error)
     }
 }
 
@@ -421,8 +432,22 @@ impl QueryRoot {
 impl Widget {
     async fn created_by(&self, ctx: &Context<'_>) -> Result<User> {
         let loader = ctx.data::<DataLoader<UserLoader>>()?;
-        loader.load_one(self.created_by_id).await?.ok_or("user not found".into())
+        loader
+            .load_one(self.created_by_id)
+            .await
+            .map_err(|e| gql_error(AppError::internal(e)))?
+            .ok_or_else(|| "user not found".into())
     }
+}
+
+/// AppError (backend/archetypes/error-handling-rust.md) → GraphQL error: the stable code in
+/// extensions.code and the user-safe message. Never `?` it straight into async_graphql::Error —
+/// that sends its Display text, which is log text (SQL, upstream detail).
+fn gql_error(err: AppError) -> async_graphql::Error {
+    if err.status_code().is_server_error() {
+        tracing::error!(error = %err, "resolver failed"); // the cause goes to the log only
+    }
+    async_graphql::Error::new(err.user_message()).extend_with(|_, e| e.set("code", err.error_code()))
 }
 ```
 

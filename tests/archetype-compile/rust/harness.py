@@ -2,21 +2,28 @@
 # ruff: noqa: E501
 # flake8: noqa
 """Compile-check every ```rust block in .claude/skills/backend/archetypes/*.md, plus the skill packs in
-units.EXTRA_FILES (languages/rust.md, frameworks/axum.md) (run via run.sh).
+units.EXTRA_FILES (languages/rust.md, the axum/actix-web/graphql framework packs, testing/rust-test.md
+and the Rust blocks of the shared testing packs) (run via run.sh; run-tests.sh also runs the tests).
 
 What it does, in order, and each step fails the run on its own:
   1. Extracts the ```rust and ```toml blocks from the archetypes at run time (so an edited sample is
-     re-verified) and checks each file's block counts against units.py. A count that moved fails.
+     re-verified) and checks each file's block counts against units.py. A count that moved fails, and
+     so does any other .claude/skills/**/*.md with a ```rust block that isn't in units.EXTRA_FILES.
   2. Coverage: every Rust block (and every segment of a split block) is compiled by some unit or is
      listed in units.SKIP with a reason. Anything else fails.
   3. Lint: a ``` fence inside a /// or //! doc comment must be ```text or ```ignore. A plain or
      ```rust fence there becomes a doctest that `cargo test` compiles, and a fragment never compiles.
+     Also: axum `:param` routes; Dockerfile Rust builders = the pinned toolchain; the Dockerfile
+     variants docker-check.py builds (units.DOCKERFILES) still compose and set a numeric USER.
   4. Assembles each unit as a crate of a cargo workspace (units.py says which blocks go in which
      module, plus the glue and harness-only stubs), writes it under target/work, and runs
      `cargo check --all-targets` per unit (tests and benches included) with a shared target dir.
      sqlx macros run offline against the committed .sqlx/ metadata (see prepare-sqlx.sh).
      Errors are mapped back to the archetype file:line they came from.
-  5. Checks every ```toml Cargo manifest in the Rust archetypes: each dependency must be a crate this
+  5. --run-tests: `cargo test` of each unit with tests (units.Unit.tests) — the samples' own tests plus
+     harness smoke tests — when what they need is there (--database-url for #[sqlx::test] / TestApp,
+     a Docker daemon for testcontainers); otherwise the unit prints NOT RUN.
+  6. Checks every ```toml Cargo manifest in the Rust archetypes: each dependency must be a crate this
      harness compiled against, at a version the doc's requirement accepts, with features that exist;
      [profile.*] / [[bench]] blocks must be accepted by cargo without "unused manifest key".
 
@@ -80,6 +87,24 @@ def blocks_of(path):
 
 
 SKILLS = os.path.join(REPO, ".claude", "skills")
+RUST_FENCE = re.compile(r"^\s*`{3,}\s*rust\b", re.I)
+
+
+def unlisted_rust_packs():
+    """Every .claude/skills/**/*.md with a ```rust block is an archetype or in units.EXTRA_FILES."""
+    if os.environ.get("ARCHETYPE_DIR"):
+        return []  # a copied archetype dir (harness self-test): the skill tree isn't the one checked
+    out = []
+    for base, _dirs, files in os.walk(SKILLS):
+        for fn in files:
+            path = os.path.join(base, fn)
+            rel = os.path.relpath(path, SKILLS)
+            if not fn.endswith(".md") or os.path.dirname(path) == ARCH or rel in cfg.EXTRA_FILES:
+                continue
+            # a plain line scan: other packs' fences are not this harness's to parse (some nest them)
+            if any(RUST_FENCE.match(line) for line in open(path, encoding="utf-8")):
+                out.append(f".claude/skills/{rel} has ```rust blocks the harness doesn't check: add it to units.EXTRA_FILES")
+    return out
 
 
 def load_blocks():
@@ -91,7 +116,7 @@ def load_blocks():
     for stem, path in paths:
         counters = {}
         for lang, start, lines in blocks_of(path):
-            if lang in ("rust", "toml", "protobuf", "sql", "dockerfile"):
+            if lang in ("rust", "toml", "protobuf", "sql", "dockerfile", "dockerignore"):
                 counters[lang] = counters.get(lang, 0) + 1
                 found.setdefault((stem, lang), []).append(Block(stem, lang, counters[lang], start, lines))
     return found
@@ -239,10 +264,10 @@ def unit_manifest(unit, deps):
     return "\n".join(lines) + "\n"
 
 
-def migrations_from_doc(blocks):
-    """The ```sql migration files of migration-pattern-rust.md, keyed by their `-- migrations/…` header."""
+def migrations_from_doc(blocks, doc="migration-pattern-rust"):
+    """The ```sql migration files of a doc, keyed by their `-- migrations/…` header."""
     out = {}
-    for b in blocks.get(("migration-pattern-rust", "sql"), []):
+    for b in blocks.get((doc, "sql"), []):
         head = next((l.strip() for l in b.lines if l.strip()), "")
         m = re.match(r"--\s*migrations/(\S+\.sql)$", head)
         if m:
@@ -281,7 +306,6 @@ def assemble(ctx, only):
             if d not in wanted:
                 shutil.rmtree(os.path.join(units_dir, d))
     srcmap = {}
-    migrations = migrations_from_doc(ctx.blocks)
     protos = protos_from_doc(ctx.blocks)
     for unit in cfg.UNITS:
         udir = os.path.join(units_dir, unit.name)
@@ -297,7 +321,7 @@ def assemble(ctx, only):
             srcmap[os.path.realpath(os.path.join(udir, rel))] = [o for _, o in lines]
             keep.add(rel)
         if unit.migrations:
-            for name, sql in migrations.items():
+            for name, sql in migrations_from_doc(ctx.blocks, cfg.SCHEMAS[unit.schema]["migrations"]).items():
                 write_if_changed(os.path.join(udir, "migrations", name), sql)
                 keep.add(os.path.join("migrations", name))
         if unit.protos:
@@ -342,6 +366,33 @@ def registry_packages(lock_path):
         return set()
     lock = tomllib.load(open(lock_path, "rb"))
     return {(p["name"], p["version"]) for p in lock.get("package", []) if "registry" in p.get("source", "")}
+
+
+def unit_database_url(base_url, unit):
+    """The unit's schema lives in its own database (archetype_<schema>) on the prepare server."""
+    return base_url.rsplit("/", 1)[0] + f"/archetype_{unit.schema}"
+
+
+def docker_available():
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=30).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+def run_unit_tests(unit, database_url):
+    """cargo test for one unit. Returns (ok, summary, output). DB units get DATABASE_URL = the server's
+    maintenance database: #[sqlx::test] and the TestApp helpers create their own databases on it."""
+    env = cargo_env()
+    if database_url:
+        env["DATABASE_URL"] = database_url
+    proc = subprocess.run(["cargo", "test", "-p", unit.package, "--all-features", "--no-fail-fast"] + unit.test_args,
+                          cwd=WORK, env=env, capture_output=True, text=True)
+    out = proc.stdout + proc.stderr
+    passed = sum(int(n) for n in re.findall(r"test result: \w+\. (\d+) passed", out))
+    failed = sum(int(n) for n in re.findall(r"(\d+) failed;", out))
+    ignored = sum(int(n) for n in re.findall(r"(\d+) ignored;", out))
+    return proc.returncode == 0 and failed == 0, f"{passed} passed, {failed} failed, {ignored} ignored", out
 
 
 def check_unit(unit, srcmap, env, verbose):
@@ -502,6 +553,40 @@ def check_dockerfile_toolchain(blocks):
     return failures, seen
 
 
+def block_text(blocks, doc, lang, idx):
+    lst = blocks.get((doc, lang), [])
+    if not 1 <= idx <= len(lst):
+        raise ValueError(f"{doc}.md has {len(lst)} ```{lang} block(s); units.py wants #{idx}")
+    return "\n".join(lst[idx - 1].lines).strip("\n") + "\n"
+
+
+def docker_variants(blocks):
+    """{name: Dockerfile text} for units.DOCKERFILES (docker-check.py builds them), and the problems
+    found composing them — checked on every run, so a doc edit that breaks a variant fails cheaply."""
+    out, problems = {}, []
+    try:
+        frag_doc, frag_idx = cfg.DOCKER_FRAGMENT
+        frag = block_text(blocks, frag_doc, "dockerfile", frag_idx).split("\n")
+        fragment = "\n".join(frag[next(i for i, l in enumerate(frag) if l.startswith("RUN ")):]).strip("\n")
+    except (ValueError, StopIteration) as e:
+        return out, [f"units.DOCKER_FRAGMENT: {e or 'no RUN line'}"]
+    for name, (doc, idx, subs) in cfg.DOCKERFILES.items():
+        try:
+            text = block_text(blocks, doc, "dockerfile", idx)
+        except ValueError as e:
+            problems.append(f"units.DOCKERFILES[{name!r}]: {e}")
+            continue
+        for old, new, count in subs or []:
+            n = text.count(old)
+            if n != count:
+                problems.append(f"units.DOCKERFILES[{name!r}]: {old!r} matched {n} time(s) in {doc}.md dockerfile #{idx}, expected {count}")
+            text = text.replace(old, new.replace("@FRAGMENT@", fragment))
+        if not re.search(r"^USER\s+\d+(:\d+)?\s*$", text, re.M):
+            problems.append(f"{doc}.md dockerfile #{idx} ({name}): no numeric USER line (non-root, Kubernetes runAsNonRoot)")
+        out[name] = text
+    return out, problems
+
+
 def check_manifests(blocks, env):
     failures, notes = [], []
     resolved = resolved_packages(env)
@@ -554,7 +639,13 @@ def main():
     ap.add_argument("--update-lock", action="store_true", help="resolve without --locked and copy Cargo.lock back")
     ap.add_argument("--prepare-sqlx", metavar="DATABASE_URL", help="regenerate .sqlx/ against this database")
     ap.add_argument("--coverage-only", action="store_true", help="steps 1-3 only (no cargo)")
-    ap.add_argument("--print-schema", action="store_true", help="print the SQL prepare-sqlx.sh applies, and exit")
+    ap.add_argument("--print-schema", nargs="?", const="default", metavar="SCHEMA",
+                    help="print the SQL prepare-sqlx.sh applies for a schema (units.SCHEMAS), and exit")
+    ap.add_argument("--list-schemas", action="store_true", help="print the schema names, and exit")
+    ap.add_argument("--run-tests", action="store_true",
+                    help="after compiling, run `cargo test` for the units that have tests (units.Unit.tests)")
+    ap.add_argument("--database-url", metavar="URL",
+                    help="with --run-tests: a Postgres server for the DB-backed tests (else they are not run)")
     ap.add_argument("--only", nargs="*", help="check only these units")
     ap.add_argument("-v", "--verbose", action="store_true", help="print full rustc diagnostics and warnings")
     args = ap.parse_args()
@@ -562,18 +653,25 @@ def main():
     blocks = load_blocks()
     problems = []
 
+    if args.list_schemas:
+        print("\n".join(cfg.SCHEMAS))
+        return 0
     if args.print_schema:
-        migrations = migrations_from_doc(blocks)
+        schema = cfg.SCHEMAS[args.print_schema]
+        migrations = migrations_from_doc(blocks, schema["migrations"])
+        if not migrations:
+            raise SystemExit(f"schema {args.print_schema}: {schema['migrations']}.md has no `-- migrations/…` sql blocks")
         for name in sorted(migrations):
-            if name.endswith(".down.sql") or name in cfg.SCHEMA_EXCLUDE:
+            if name.endswith(".down.sql") or name in schema.get("exclude", {}):
                 continue
-            print(f"-- ===== migration-pattern-rust.md: {name}\n{migrations[name]}")
-        for name, why in sorted(cfg.SCHEMA_EXCLUDE.items()):
+            print(f"-- ===== {schema['migrations']}.md: {name}\n{migrations[name]}")
+        for name, why in sorted(schema.get("exclude", {}).items()):
             if name not in migrations:
-                raise SystemExit(f"units.SCHEMA_EXCLUDE names {name}, which migration-pattern-rust.md no longer has")
+                raise SystemExit(f"schema {args.print_schema} excludes {name}, which {schema['migrations']}.md no longer has")
             print(f"-- excluded {name}: {why}")
-        print("-- ===== harness-only tables (no archetype defines them)\n"
-              + open(os.path.join(HERE, "stubs", "harness_schema.sql"), encoding="utf-8").read())
+        if schema.get("extra"):
+            print("-- ===== harness-only tables (no archetype defines them)\n"
+                  + open(os.path.join(HERE, "stubs", schema["extra"]), encoding="utf-8").read())
         return 0
 
     # 1. counts
@@ -585,6 +683,7 @@ def main():
     for (file, lang), lst in blocks.items():
         if lang == "rust" and file not in cfg.EXPECTED:
             problems.append(f"{file}.md has {len(lst)} rust block(s) and no entry in units.EXPECTED")
+    problems += unlisted_rust_packs()
     ntoml = {}
     for (file, idx) in cfg.TOML:
         ntoml[file] = max(ntoml.get(file, 0), idx)
@@ -635,6 +734,7 @@ def main():
     problems += lint_colon_routes(blocks)
     docker_problems, n_builders = check_dockerfile_toolchain(blocks)
     problems += docker_problems
+    problems += docker_variants(blocks)[1]
 
     total_rust = sum(len(l) for (f, lang), l in blocks.items() if lang == "rust")
     skipped = sorted(cfg.SKIP.items())
@@ -679,6 +779,8 @@ def main():
     results = []
     selected = [u for u in cfg.UNITS if not args.only or u.name in args.only]
     for unit in selected:
+        if args.prepare_sqlx:  # each schema is its own database on the prepare server
+            env["DATABASE_URL"] = unit_database_url(args.prepare_sqlx, unit)
         ok, errors, warnings, proc = check_unit(unit, srcmap, env, args.verbose)
         results.append((unit, ok))
         tag = "PASS" if ok else "FAIL"
@@ -700,9 +802,34 @@ def main():
               + ", ".join(f"{n} {v}" for n, v in sorted(drift)[:12]))
         results.append((None, False))
 
-    # 5. manifests
+    # 5. run the tests (--run-tests) of the units that compiled: each when what it needs is there
+    test_fail, test_missing = 0, 0
+    if args.run_tests:
+        print("\ntests (cargo test):")
+        have_docker = docker_available()
+        compiled = {u.name for u, ok in results if u is not None and ok}
+        for unit in selected:
+            if unit.tests is None:
+                continue
+            missing = [need for need, have in (("--database-url", "db" not in unit.tests or args.database_url),
+                                               ("a Docker daemon", "docker" not in unit.tests or have_docker)) if not have]
+            if unit.name not in compiled or missing:
+                test_missing += 1
+                why = "did not compile" if unit.name not in compiled else "needs " + " and ".join(missing)
+                print(f"NOT RUN {unit.name:23} {why}")
+                continue
+            ok, summary, out = run_unit_tests(unit, args.database_url if "db" in unit.tests else None)
+            test_fail += not ok
+            print(f"{'PASS' if ok else 'FAIL'} {unit.name:26} {summary}")
+            if not ok or args.verbose:
+                shown = r"^test .* \.\.\. |FAILED|panicked at|^error" if args.verbose else r"FAILED|panicked at|^error"
+                for line in out.splitlines():
+                    if re.search(shown, line):
+                        print("    " + line[:300])
+
+    # 6. manifests
     if args.only:
-        return 0 if all(ok for _, ok in results) and structure_ok else 1
+        return 0 if all(ok for _, ok in results) and structure_ok and not test_fail else 1
     man_fail, man_notes = check_manifests(blocks, cargo_env())
     if man_fail:
         print("FAIL toml manifests\n  " + "\n  ".join(man_fail))
@@ -719,7 +846,9 @@ def main():
         print(f"  skip {key[0]}.md rust #{key[1]}{seg}: {why}")
     if args.prepare_sqlx:
         print(f"\n.sqlx/ now has {len(os.listdir(SQLX_DIR))} query file(s)")
-    return 0 if nfail == 0 and not man_fail else 1
+    if args.run_tests and test_missing:
+        print(f"\n{test_missing} unit(s)' tests NOT RUN (see above): the run is not a full test pass")
+    return 0 if nfail == 0 and not man_fail and not test_fail else 1
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ tags:
 
 # Performance Archetype (Rust)
 
-> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0 (query! macros against a harness-only orders schema — no archetype defines one), deadpool-redis 0.23.1, reqwest 0.13.5, criterion 0.8.2. Compiled, not run.
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, sqlx 0.9.0 (query! macros against a harness-only orders schema — no archetype defines one), deadpool-redis 0.23.1, reqwest 0.13.5, criterion 0.8.2. Compiled, not run — except the cargo-chef Dockerfile, built and run 2026-09-30 (tests/archetype-compile/rust/docker-check.sh): non-root numeric user, `/healthz` answers.
 
 > **CANONICAL REFERENCE**: This file is the single source of truth for Rust backend performance patterns. All other Rust skill packs that mention pooling, caching, async tuning, or profiling should defer to this file.
 
@@ -1068,8 +1068,11 @@ sccache --show-stats
 # a non-root user and GIT_SHA: dockerfile-rust.md)
 ARG RUST_VERSION=1.98.1
 FROM rust:${RUST_VERSION}-bookworm AS chef
-RUN cargo install cargo-chef
+RUN cargo install cargo-chef --locked
 WORKDIR /app
+# the toolchain file's channel and components once, not again in every cargo step
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install
 
 FROM chef AS planner
 COPY . .
@@ -1086,8 +1089,10 @@ RUN cargo build --release --bin order-service
 
 # Stage 4: Runtime — minimal image
 FROM debian:bookworm-slim AS runtime
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=builder /app/target/release/order-service /usr/local/bin/
+# never root: a NUMERIC user (Kubernetes runAsNonRoot can't verify a name), no trailing comment
+USER 1001:1001
 ENTRYPOINT ["/usr/local/bin/order-service"]
 ```
 

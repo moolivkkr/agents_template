@@ -14,7 +14,7 @@ tags:
 
 # Rust patterns and conventions for safe, performant applications.
 
-> Rust blocks 1 and 3–7 (errors, envelope, axum handlers/routes, extractor) compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0; smoke-tested: the routes build, an out-of-range `limit` is a 400, the tenant comes from verified claims. The other blocks are not checked yet.
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, sqlx 0.9.0 (query! macros checked against this file's own migration on Postgres 17), actix-web 4.15.0, mockall 0.15.0, testcontainers-modules 0.15.0. Run (run-tests.sh): the unit and mockall tests and the testcontainers test (a real postgres:17-alpine) pass; harness tests on top show an out-of-range `limit` is a 400, the tenant comes from the verified token, the keyset cursor neither skips nor repeats rows, short stock rolls the whole order back, and a stale version is a 409.
 
 ## Project Structure
 ```
@@ -115,16 +115,17 @@ pub enum DomainError {
 ### anyhow for Application/Binary Code
 ```rust
 use anyhow::{Context, Result};
+use sqlx::PgPool;
 
-fn run() -> Result<()> {
+async fn run() -> Result<()> {
     let config = load_config()
         .context("failed to load config")?;
 
-    let db = connect_db(&config.database_url)
+    let pool = PgPool::connect(&config.database_url)
         .await
         .context("failed to connect to database")?;
 
-    Ok(())
+    serve(config, pool).await.context("server stopped with an error")
 }
 
 // Use .context() to add human-readable info at each call site
@@ -317,7 +318,7 @@ async fn list_orders(
 }
 
 // Router setup
-fn order_routes() -> Router<AppState> {
+pub fn order_routes() -> Router<AppState> {
     Router::new()
         .route("/orders", post(create_order).get(list_orders))
         // axum 0.8: `{id}` (a `:id` segment panics when the router is built)
@@ -331,6 +332,7 @@ use axum::{extract::FromRequestParts, http::request::Parts};
 use serde::Deserialize;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug)] // Clone: tenant_middleware also stores it in the request extensions
 pub struct TenantId(pub Uuid);
 
 /// Claims of a JWT the auth middleware has already verified (signature, expiry, audience) and
@@ -384,16 +386,17 @@ pub struct PaginationParams {
 
 ### Actix-web Patterns
 ```rust
-use actix_web::{web, HttpResponse, middleware};
+use actix_web::{middleware, web, HttpResponse};
+use uuid::Uuid;
 
-// DomainError implements actix's ResponseError with the same envelope mapping (frameworks/actix-web.md)
-// Handler with Path and JSON extractors
+// The same handler under actix-web. AppError (actix's ResponseError → the same envelope), AuthUser and
+// AuthMiddleware (verifies the bearer token; the tenant comes from it) are in frameworks/actix-web.md.
 async fn get_order(
     path: web::Path<Uuid>,
-    tenant: TenantId,
+    user: AuthUser,
     service: web::Data<OrderService>,
-) -> Result<HttpResponse, DomainError> {
-    let order = service.find_by_id(tenant.0, *path).await?;
+) -> Result<HttpResponse, AppError> {
+    let order = service.get_order(user.tenant_id, path.into_inner()).await?;
     Ok(HttpResponse::Ok().json(ApiResponse::success(OrderResponse::from(order))))
 }
 
@@ -402,7 +405,7 @@ fn configure_app(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/v1")
             .wrap(middleware::Logger::default())
-            .wrap(TenantMiddleware)
+            .wrap(AuthMiddleware)
             .service(
                 web::scope("/orders")
                     .route("", web::post().to(create_order))
@@ -415,8 +418,12 @@ fn configure_app(cfg: &mut web::ServiceConfig) {
 
 ### Tower Middleware (Axum)
 ```rust
-use tower_http::{trace::TraceLayer, cors::CorsLayer, timeout::TimeoutLayer};
 use std::time::Duration;
+
+use axum::{error_handling::HandleErrorLayer, middleware, response::Response, BoxError, Router};
+use tower::ServiceBuilder;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tracing::Instrument;
 
 fn app(state: AppState) -> Router {
     Router::new()
@@ -428,13 +435,22 @@ fn app(state: AppState) -> Router {
                 // (success meta and error body) carries the id it echoes as X-Request-Id — frameworks/axum.md
                 .layer(middleware::from_fn(request_id_middleware))
                 .layer(TraceLayer::new_for_http())
-                .layer(TimeoutLayer::new(Duration::from_secs(30)))
+                // a request over 30s becomes the 503 UNAVAILABLE envelope (tower-http's TimeoutLayer
+                // would answer an empty-bodied 408 instead)
+                .layer(HandleErrorLayer::new(timeout_error))
+                .timeout(Duration::from_secs(30))
                 .layer(CorsLayer::permissive()) // tighten for production
                 // verifies the JWT and inserts Claims — must come before tenant_middleware
                 .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
                 .layer(middleware::from_fn(tenant_middleware))
         )
         .with_state(state)
+}
+
+async fn timeout_error(err: BoxError) -> DomainError {
+    // retryable: true lets a client retry; it still retries only idempotent requests (or ones that
+    // carry an Idempotency-Key), since the timed-out write may have happened
+    DomainError::Unavailable { service: "request handling", cause: anyhow::anyhow!("{err}") }
 }
 
 // Custom middleware function — the tenant comes from the verified Claims, never from a header alone
@@ -474,8 +490,57 @@ async fn create_order(
 }
 ```
 
+### Domain Types the Queries Map Into
+```rust
+// src/domain/mod.rs — entities (see Project Structure)
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+/// The Postgres enum `order_status` (migration below). `query_as!` needs the type hint
+/// `status as "status: OrderStatus"` to read it and `status as OrderStatus` to bind it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[sqlx(type_name = "order_status", rename_all = "lowercase")]
+#[serde(rename_all = "lowercase")]
+pub enum OrderStatus {
+    Pending,
+    Confirmed,
+    Shipped,
+    Cancelled,
+}
+
+#[derive(Debug, Clone)]
+pub struct Order {
+    pub id: Uuid,
+    pub tenant_id: Uuid,
+    pub status: OrderStatus,
+    pub total_cents: i64, // money in integer minor units — never f32/f64
+    pub created_at: DateTime<Utc>,
+    pub version: i32, // optimistic lock
+}
+
+impl Order {
+    pub fn new(id: Uuid, tenant_id: Uuid) -> Self {
+        Self { id, tenant_id, status: OrderStatus::Pending, total_cents: 0, created_at: Utc::now(), version: 1 }
+    }
+
+    /// Pending → Confirmed; confirming anything else is a 409 CONFLICT.
+    pub fn confirm(self) -> Result<Self, DomainError> {
+        match self.status {
+            OrderStatus::Pending => Ok(Self { status: OrderStatus::Confirmed, ..self }),
+            _ => Err(DomainError::Conflict("Only a pending order can be confirmed.".into())),
+        }
+    }
+}
+```
+
 ### SQLx Queries with Tenant Filtering
 ```rust
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use chrono::{DateTime, Utc};
+use sqlx::PgPool;
+use uuid::Uuid;
+
 // EVERY query includes tenant_id — no exceptions
 pub async fn find_by_id(
     pool: &PgPool,
@@ -485,7 +550,7 @@ pub async fn find_by_id(
     let order = sqlx::query_as!(
         Order,
         r#"
-        SELECT id, tenant_id, status as "status: OrderStatus", total, created_at, version
+        SELECT id, tenant_id, status as "status: OrderStatus", total_cents, created_at, version
         FROM orders
         WHERE tenant_id = $1 AND id = $2 AND deleted_at IS NULL
         "#,
@@ -498,32 +563,33 @@ pub async fn find_by_id(
     Ok(order)
 }
 
-// Cursor-based pagination with tenant isolation
+// Cursor (keyset) pagination with tenant isolation. The cursor is the last row's (created_at, id):
+// rows that share a created_at are neither skipped nor repeated. Index: (tenant_id, created_at DESC, id DESC).
 pub async fn list_paginated(
     pool: &PgPool,
     tenant_id: Uuid,
-    cursor: Option<chrono::DateTime<Utc>>,
-    limit: i64,
+    cursor: Option<&str>, // meta.pagination.next_cursor of the previous page, opaque to clients
+    limit: i64,           // already checked to be in 1..=100 by the handler
 ) -> Result<(Vec<Order>, Option<String>), DomainError> {
-    let orders = match cursor {
-        Some(c) => sqlx::query_as!(
+    let mut orders = match cursor.map(decode_cursor).transpose()? {
+        Some((after_created_at, after_id)) => sqlx::query_as!(
             Order,
             r#"
-            SELECT id, tenant_id, status as "status: OrderStatus", total, created_at, version
+            SELECT id, tenant_id, status as "status: OrderStatus", total_cents, created_at, version
             FROM orders
-            WHERE tenant_id = $1 AND created_at < $2 AND deleted_at IS NULL
-            ORDER BY created_at DESC
-            LIMIT $3
+            WHERE tenant_id = $1 AND deleted_at IS NULL AND (created_at, id) < ($2, $3)
+            ORDER BY created_at DESC, id DESC
+            LIMIT $4
             "#,
-            tenant_id, c, limit + 1,
+            tenant_id, after_created_at, after_id, limit + 1,
         ).fetch_all(pool).await?,
         None => sqlx::query_as!(
             Order,
             r#"
-            SELECT id, tenant_id, status as "status: OrderStatus", total, created_at, version
+            SELECT id, tenant_id, status as "status: OrderStatus", total_cents, created_at, version
             FROM orders
             WHERE tenant_id = $1 AND deleted_at IS NULL
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             LIMIT $2
             "#,
             tenant_id, limit + 1,
@@ -531,14 +597,24 @@ pub async fn list_paginated(
     };
 
     let has_more = orders.len() as i64 > limit;
-    let orders: Vec<Order> = orders.into_iter().take(limit as usize).collect();
-    let next_cursor = if has_more {
-        orders.last().map(|o| encode_cursor(o.created_at))
-    } else {
-        None
-    };
+    orders.truncate(limit as usize);
+    let next_cursor = if has_more { orders.last().map(encode_cursor) } else { None };
 
     Ok((orders, next_cursor))
+}
+
+fn encode_cursor(last: &Order) -> String {
+    URL_SAFE_NO_PAD.encode(format!("{}|{}", last.created_at.to_rfc3339(), last.id))
+}
+
+/// A tampered or garbled cursor is a 400 VALIDATION_FAILED on `cursor` — not a 500, not page one.
+fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, Uuid), DomainError> {
+    let invalid = || DomainError::Validation(vec![FieldError::new("cursor", "invalid_format")]);
+    let bytes = URL_SAFE_NO_PAD.decode(cursor).map_err(|_| invalid())?;
+    let text = String::from_utf8(bytes).map_err(|_| invalid())?;
+    let (created_at, id) = text.split_once('|').ok_or_else(invalid)?;
+    let created_at = DateTime::parse_from_rfc3339(created_at).map_err(|_| invalid())?.with_timezone(&Utc);
+    Ok((created_at, Uuid::parse_str(id).map_err(|_| invalid())?))
 }
 ```
 
@@ -560,19 +636,22 @@ impl OrderRepository {
         Self { pool }
     }
 
+    pub async fn find_by_id(&self, tenant_id: Uuid, order_id: Uuid) -> Result<Option<Order>, DomainError> {
+        find_by_id(&self.pool, tenant_id, order_id).await // the tenant-filtered query above
+    }
+
     pub async fn save(&self, order: &Order) -> Result<Order, DomainError> {
         let saved = sqlx::query_as!(
             Order,
             r#"
-            INSERT INTO orders (id, tenant_id, status, total, created_by, version)
-            VALUES ($1, $2, $3, $4, $5, 1)
-            RETURNING id, tenant_id, status as "status: OrderStatus", total, created_at, version
+            INSERT INTO orders (id, tenant_id, status, total_cents, version)
+            VALUES ($1, $2, $3, $4, 1)
+            RETURNING id, tenant_id, status as "status: OrderStatus", total_cents, created_at, version
             "#,
             order.id,
             order.tenant_id,
             order.status as OrderStatus,
-            order.total,
-            order.created_by,
+            order.total_cents,
         )
         .fetch_one(&self.pool)
         .await?;
@@ -593,7 +672,7 @@ impl OrderRepository {
             UPDATE orders
             SET status = $1, version = version + 1, updated_at = NOW()
             WHERE tenant_id = $2 AND id = $3 AND version = $4 AND deleted_at IS NULL
-            RETURNING id, tenant_id, status as "status: OrderStatus", total, created_at, version
+            RETURNING id, tenant_id, status as "status: OrderStatus", total_cents, created_at, version
             "#,
             status as OrderStatus,
             tenant_id,
@@ -603,9 +682,14 @@ impl OrderRepository {
         .fetch_optional(&self.pool)
         .await?;
 
-        result.ok_or(DomainError::Conflict(
-            "order was modified by another request".into(),
-        ))
+        match result {
+            Some(order) => Ok(order),
+            // No row: the order is gone (or is another tenant's — the same 404) or its version moved on
+            None => match self.find_by_id(tenant_id, order_id).await? {
+                Some(_) => Err(DomainError::Conflict("This order was changed by someone else. Reload it and try again.".into())),
+                None => Err(DomainError::NotFound { resource: "Order", id: order_id }),
+            },
+        }
     }
 
     pub async fn soft_delete(&self, tenant_id: Uuid, order_id: Uuid) -> Result<(), DomainError> {
@@ -628,24 +712,29 @@ impl OrderRepository {
 
 ### Connection Pooling
 ```rust
-use sqlx::postgres::PgPoolOptions;
+use std::time::Duration;
 
-let pool = PgPoolOptions::new()
-    .max_connections(20)
-    .min_connections(5)
-    .acquire_timeout(Duration::from_secs(30))
-    .idle_timeout(Duration::from_secs(600))
-    .max_lifetime(Duration::from_secs(1800))
-    .after_connect(|conn, _meta| Box::pin(async move {
-        // Set session-level defaults (e.g., statement timeout)
-        sqlx::query("SET statement_timeout = '30s'")
-            .execute(conn)
-            .await?;
-        Ok(())
-    }))
-    .connect(&database_url)
-    .await
-    .context("failed to create connection pool")?;
+use anyhow::Context;
+use sqlx::postgres::{PgPool, PgPoolOptions};
+
+pub async fn connect_pool(database_url: &str) -> anyhow::Result<PgPool> {
+    PgPoolOptions::new()
+        .max_connections(20)
+        .min_connections(5)
+        .acquire_timeout(Duration::from_secs(30))
+        .idle_timeout(Duration::from_secs(600))
+        .max_lifetime(Duration::from_secs(1800))
+        .after_connect(|conn, _meta| Box::pin(async move {
+            // Set session-level defaults (e.g., statement timeout)
+            sqlx::query("SET statement_timeout = '30s'")
+                .execute(conn)
+                .await?;
+            Ok(())
+        }))
+        .connect(database_url)
+        .await
+        .context("failed to create connection pool")
+}
 ```
 
 ### Transaction Support
@@ -660,21 +749,27 @@ pub async fn create_order_with_inventory(
     // All operations in one transaction
     let order = sqlx::query_as!(
         Order,
-        r#"INSERT INTO orders (id, tenant_id, status, total) VALUES ($1, $2, 'pending', $3)
-           RETURNING id, tenant_id, status as "status: OrderStatus", total, created_at, version"#,
-        Uuid::new_v4(), tenant_id, request.total,
+        r#"INSERT INTO orders (id, tenant_id, status, total_cents) VALUES ($1, $2, 'pending', $3)
+           RETURNING id, tenant_id, status as "status: OrderStatus", total_cents, created_at, version"#,
+        Uuid::new_v4(), tenant_id, request.total_cents,
     )
     .fetch_one(&mut *tx)
     .await?;
 
     for item in &request.items {
-        sqlx::query!(
+        let reserved = sqlx::query!(
             "UPDATE inventory SET quantity = quantity - $1 WHERE tenant_id = $2 AND sku = $3 AND quantity >= $1",
             item.quantity, tenant_id, item.sku,
         )
         .execute(&mut *tx)
-        .await
-        .map_err(|_| DomainError::Conflict("insufficient inventory".into()))?;
+        .await? // a database error stays a database error (500/503) — never relabelled as a conflict
+        .rows_affected();
+
+        // The guarded UPDATE matches no row when stock is short (or the SKU is unknown): that is not
+        // an error from Postgres, so check it. Returning here drops `tx`, which rolls the order back.
+        if reserved == 0 {
+            return Err(DomainError::Conflict("Not enough stock for this order.".into()));
+        }
     }
 
     tx.commit().await?;
@@ -684,30 +779,36 @@ pub async fn create_order_with_inventory(
 
 ### Migration Patterns
 ```bash
-# Create migration
-sqlx migrate add create_orders_table
+sqlx migrate add create_orders   # writes migrations/<timestamp>_create_orders.sql
+sqlx migrate run                 # applies pending migrations to DATABASE_URL
+cargo sqlx prepare               # writes .sqlx/ query metadata so CI builds offline (SQLX_OFFLINE=true)
+```
 
-# Migration file: migrations/20240115_create_orders_table.sql
+```sql
+-- migrations/20240115000000_create_orders.sql
+CREATE TYPE order_status AS ENUM ('pending', 'confirmed', 'shipped', 'cancelled');
+
 CREATE TABLE orders (
-    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    tenant_id UUID NOT NULL REFERENCES tenants(id),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending',
-    total DECIMAL(12,2) NOT NULL,
-    version INTEGER NOT NULL DEFAULT 1,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    deleted_at TIMESTAMPTZ,
-    created_by UUID
+    id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id   UUID NOT NULL,               -- the verified token's tenant
+    status      order_status NOT NULL DEFAULT 'pending',
+    total_cents BIGINT NOT NULL CHECK (total_cents >= 0), -- money in integer minor units (api/response-envelope.md)
+    version     INTEGER NOT NULL DEFAULT 1,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    deleted_at  TIMESTAMPTZ
 );
 
-CREATE INDEX idx_orders_tenant_status ON orders(tenant_id, status) WHERE deleted_at IS NULL;
-CREATE INDEX idx_orders_tenant_created ON orders(tenant_id, created_at DESC) WHERE deleted_at IS NULL;
+CREATE INDEX idx_orders_tenant_status ON orders (tenant_id, status) WHERE deleted_at IS NULL;
+-- the keyset list: WHERE tenant_id = $1 AND (created_at, id) < ($2, $3) ORDER BY created_at DESC, id DESC
+CREATE INDEX idx_orders_tenant_created ON orders (tenant_id, created_at DESC, id DESC) WHERE deleted_at IS NULL;
 
-# Run migrations
-sqlx migrate run
-
-# Compile-time verification
-cargo sqlx prepare  # generates query metadata for offline builds
+CREATE TABLE inventory (
+    tenant_id UUID NOT NULL,
+    sku       TEXT NOT NULL,
+    quantity  INTEGER NOT NULL CHECK (quantity >= 0),
+    PRIMARY KEY (tenant_id, sku)
+);
 ```
 
 ---
@@ -735,11 +836,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_service_create_order() {
-        let mock_repo = MockOrderRepository::new();
+        let mut mock_repo = MockOrderRepository::new();
         mock_repo.expect_save()
             .returning(|order| Ok(order.clone()));
 
-        let service = OrderService::new(mock_repo);
+        let service = OrderService::new(Arc::new(mock_repo));
         let result = service.create_order(TENANT_ID, valid_request()).await;
 
         assert!(result.is_ok());
@@ -750,9 +851,14 @@ mod tests {
 
 ### mockall for Mocking Traits
 ```rust
+use async_trait::async_trait;
+#[cfg(test)]
 use mockall::automock;
 
-#[automock]
+// The service holds the repository as Arc<dyn OrderRepository>: a native `async fn` trait isn't
+// dyn-compatible, so #[async_trait] stays. #[automock] goes first, and only in test builds
+// (mockall is a dev-dependency).
+#[cfg_attr(test, automock)]
 #[async_trait]
 pub trait OrderRepository: Send + Sync {
     async fn find_by_id(&self, tenant_id: Uuid, id: Uuid) -> Result<Option<Order>, DomainError>;
@@ -760,18 +866,25 @@ pub trait OrderRepository: Send + Sync {
     async fn soft_delete(&self, tenant_id: Uuid, id: Uuid) -> Result<(), DomainError>;
 }
 
-#[tokio::test]
-async fn test_get_order_not_found() {
-    let mut mock_repo = MockOrderRepository::new();
-    mock_repo
-        .expect_find_by_id()
-        .with(eq(TENANT_ID), eq(ORDER_ID))
-        .returning(|_, _| Ok(None));
+#[cfg(test)]
+mod repository_mock_tests {
+    use super::*;
+    use mockall::predicate::eq;
+    use std::sync::Arc;
 
-    let service = OrderService::new(Arc::new(mock_repo));
-    let result = service.get_order(TENANT_ID, ORDER_ID).await;
+    #[tokio::test]
+    async fn test_get_order_not_found() {
+        let mut mock_repo = MockOrderRepository::new();
+        mock_repo
+            .expect_find_by_id()
+            .with(eq(TENANT_ID), eq(ORDER_ID))
+            .returning(|_, _| Ok(None));
 
-    assert!(matches!(result, Err(DomainError::NotFound { .. })));
+        let service = OrderService::new(Arc::new(mock_repo));
+        let result = service.get_order(TENANT_ID, ORDER_ID).await;
+
+        assert!(matches!(result, Err(DomainError::NotFound { .. })));
+    }
 }
 ```
 
@@ -781,15 +894,17 @@ async fn test_get_order_not_found() {
 #[cfg(test)]
 pub mod test_helpers {
     use super::*;
+    use uuid::uuid;
 
     pub const TENANT_ID: Uuid = uuid!("00000000-0000-0000-0000-000000000001");
+    pub const ORDER_ID: Uuid = uuid!("00000000-0000-0000-0000-0000000000a1");
 
     pub fn build_order(overrides: OrderOverrides) -> Order {
         Order {
             id: overrides.id.unwrap_or_else(Uuid::new_v4),
             tenant_id: overrides.tenant_id.unwrap_or(TENANT_ID),
             status: overrides.status.unwrap_or(OrderStatus::Pending),
-            total: overrides.total.unwrap_or(Decimal::new(10000, 2)),
+            total_cents: overrides.total_cents.unwrap_or(10_000), // $100.00
             version: overrides.version.unwrap_or(1),
             created_at: overrides.created_at.unwrap_or_else(Utc::now),
         }
@@ -800,9 +915,13 @@ pub mod test_helpers {
         pub id: Option<Uuid>,
         pub tenant_id: Option<Uuid>,
         pub status: Option<OrderStatus>,
-        pub total: Option<Decimal>,
+        pub total_cents: Option<i64>,
         pub version: Option<i32>,
         pub created_at: Option<DateTime<Utc>>,
+    }
+
+    pub fn valid_request() -> CreateOrderRequest {
+        CreateOrderRequest { total_cents: 10_000, items: vec![] }
     }
 
     // Usage:
@@ -812,38 +931,48 @@ pub mod test_helpers {
 
 ### Integration Tests with testcontainers
 ```rust
-// tests/integration/mod.rs
-use testcontainers::{clients::Cli, images::postgres::Postgres};
+// tests/integration/main.rs — integration tests link the crate as a library, so #[cfg(test)]
+// helpers in src/ (test_helpers above) aren't visible here
+// [dev-dependencies] testcontainers-modules = { version = "0.15", features = ["postgres"] }
+use sqlx::PgPool;
+use testcontainers_modules::{
+    postgres::Postgres,
+    testcontainers::{runners::AsyncRunner, ContainerAsync, ImageExt},
+};
+use uuid::Uuid;
+use yourapp::{domain::Order, repositories::OrderRepository};
 
 async fn setup_test_db() -> (PgPool, ContainerAsync<Postgres>) {
-    let docker = Cli::default();
-    let container = docker.run(Postgres::default()).await;
-    let port = container.get_host_port_ipv4(5432).await;
-    let url = format!("postgresql://postgres:postgres@localhost:{}/postgres", port);
+    // pin the server version production runs (the module's default tag is older)
+    let container = Postgres::default().with_tag("17-alpine").start().await.expect("start postgres (is Docker running?)");
+    let port = container.get_host_port_ipv4(5432).await.unwrap();
+    let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
 
     let pool = PgPool::connect(&url).await.unwrap();
     sqlx::migrate!("./migrations").run(&pool).await.unwrap();
 
-    (pool, container)
+    (pool, container) // the container is removed when this handle drops: keep it alive for the test
 }
 
 #[tokio::test]
 async fn test_order_repository_crud() {
     let (pool, _container) = setup_test_db().await;
     let repo = OrderRepository::new(pool.clone());
+    let tenant_id = Uuid::new_v4();
 
     // Create
-    let order = build_order(Default::default());
+    let order = Order::new(Uuid::new_v4(), tenant_id);
     let saved = repo.save(&order).await.unwrap();
-    assert_eq!(saved.tenant_id, TENANT_ID);
+    assert_eq!(saved.tenant_id, tenant_id);
 
-    // Read
-    let found = repo.find_by_id(TENANT_ID, saved.id).await.unwrap();
+    // Read — and another tenant can't (tenant_id is in every WHERE)
+    let found = repo.find_by_id(tenant_id, saved.id).await.unwrap();
     assert!(found.is_some());
+    assert!(repo.find_by_id(Uuid::new_v4(), saved.id).await.unwrap().is_none());
 
     // Soft delete
-    repo.soft_delete(TENANT_ID, saved.id).await.unwrap();
-    let found = repo.find_by_id(TENANT_ID, saved.id).await.unwrap();
+    repo.soft_delete(tenant_id, saved.id).await.unwrap();
+    let found = repo.find_by_id(tenant_id, saved.id).await.unwrap();
     assert!(found.is_none()); // filtered by deleted_at IS NULL
 }
 ```
@@ -855,11 +984,13 @@ async fn test_order_repository_crud() {
 ### Zero-Cost Abstractions
 ```rust
 // Iterators are zero-cost — compiled to the same code as manual loops
-let total: Decimal = orders
-    .iter()
-    .filter(|o| o.status == OrderStatus::Confirmed)
-    .map(|o| o.total)
-    .sum();
+fn confirmed_total_cents(orders: &[Order]) -> i64 {
+    orders
+        .iter()
+        .filter(|o| o.status == OrderStatus::Confirmed)
+        .map(|o| o.total_cents)
+        .sum()
+}
 
 // Generic functions are monomorphized — no runtime dispatch overhead
 fn process<T: Serialize>(item: &T) -> Result<Vec<u8>, serde_json::Error> {
@@ -877,8 +1008,12 @@ enum Notification {
 
 ### Arc, Mutex, and Channels
 ```rust
+use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{Mutex, RwLock, mpsc};
+
+use sqlx::PgPool;
+use tokio::sync::{mpsc, RwLock};
+use uuid::Uuid;
 
 // Shared state in Axum — Arc is the standard approach
 #[derive(Clone)]
@@ -892,34 +1027,42 @@ pub struct AppState {
 // Use Mutex for write-heavy data
 // Use channels (mpsc, broadcast) for message passing between tasks
 
-// mpsc channel for background job queue
-let (tx, mut rx) = mpsc::channel::<Job>(100);
+// mpsc channel for a background job queue — bounded, so a burst waits instead of growing memory
+pub fn start_job_worker() -> mpsc::Sender<Job> {
+    let (tx, mut rx) = mpsc::channel::<Job>(100);
 
-tokio::spawn(async move {
-    while let Some(job) = rx.recv().await {
-        process_job(job).await;
-    }
-});
+    tokio::spawn(async move {
+        while let Some(job) = rx.recv().await {
+            process_job(job).await;
+        }
+    });
+    tx
+}
 
-// Send jobs from handlers
-tx.send(Job::ProcessOrder(order_id)).await?;
+// Send jobs from handlers (waits while the queue is full; errors only once the worker has stopped)
+pub async fn enqueue_order(tx: &mpsc::Sender<Job>, order_id: Uuid) -> anyhow::Result<()> {
+    tx.send(Job::ProcessOrder(order_id)).await?;
+    Ok(())
+}
 ```
 
 ### Tokio Runtime Configuration
 ```rust
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Default: multi-threaded runtime with worker threads = CPU cores
-    // For most services, the default is correct
+// Default: #[tokio::main] = a multi-threaded runtime with one worker thread per CPU core.
+// For most services, the default is correct:
+//     #[tokio::main]
+//     async fn main() -> anyhow::Result<()> { run_server().await }
 
-    // Custom runtime for fine-tuning:
+// Custom runtime for fine-tuning: build it in a plain fn main. Never inside #[tokio::main] —
+// block_on there panics ("Cannot start a runtime from within a runtime").
+fn main() -> anyhow::Result<()> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)        // limit worker threads
         .max_blocking_threads(64) // for spawn_blocking calls
         .enable_all()
         .build()?;
 
-    runtime.block_on(async { run_server().await })
+    runtime.block_on(run_server())
 }
 
 // CPU-bound work: use spawn_blocking to avoid blocking the async runtime
@@ -938,8 +1081,11 @@ async fn hash_password(password: String) -> Result<String, DomainError> {
 
 ### tokio::select! for Racing Futures
 ```rust
-use tokio::time::timeout;
+use std::time::Duration;
 
+use tokio::net::TcpListener;
+
+// Idempotent reads only: the primary request may still complete after we give up on it
 async fn fetch_with_fallback(primary: &str, fallback: &str) -> Result<Response, DomainError> {
     tokio::select! {
         result = fetch(primary) => result,
@@ -951,12 +1097,17 @@ async fn fetch_with_fallback(primary: &str, fallback: &str) -> Result<Response, 
 }
 
 // Graceful shutdown with select
-async fn run_server(listener: TcpListener, shutdown: tokio::sync::watch::Receiver<()>) {
+pub async fn run_server(listener: TcpListener, mut shutdown: tokio::sync::watch::Receiver<()>) {
     loop {
         tokio::select! {
-            Ok((stream, _)) = listener.accept() => {
-                tokio::spawn(handle_connection(stream));
-            }
+            accepted = listener.accept() => match accepted {
+                Ok((stream, _peer)) => {
+                    tokio::spawn(handle_connection(stream));
+                }
+                // e.g. too many open files: log and keep accepting (an `Ok(..) = accept()` pattern would
+                // instead disable this branch and stop accepting until shutdown)
+                Err(e) => tracing::warn!(error = %e, "accept failed"),
+            },
             _ = shutdown.changed() => {
                 tracing::info!("shutdown signal received");
                 break;
@@ -968,74 +1119,65 @@ async fn run_server(listener: TcpListener, shutdown: tokio::sync::watch::Receive
 
 ### tokio::join! for Concurrent Execution
 ```rust
-async fn fetch_user_profile(tenant_id: Uuid, user_id: Uuid) -> Result<UserProfile, DomainError> {
-    // Run all three queries concurrently
-    let (user, orders, preferences) = tokio::try_join!(
-        user_repo.find_by_id(tenant_id, user_id),
-        order_repo.find_by_user(tenant_id, user_id),
-        pref_repo.find_by_user(tenant_id, user_id),
-    )?;
+impl ProfileService {
+    pub async fn fetch_user_profile(&self, tenant_id: Uuid, user_id: Uuid) -> Result<UserProfile, DomainError> {
+        // Run all three queries concurrently; the first error cancels the other two
+        let (user, orders, preferences) = tokio::try_join!(
+            self.user_repo.find_by_id(tenant_id, user_id),
+            self.order_repo.find_by_user(tenant_id, user_id),
+            self.pref_repo.find_by_user(tenant_id, user_id),
+        )?;
 
-    let user = user.ok_or(DomainError::NotFound { resource: "User", id: user_id })?;
+        let user = user.ok_or(DomainError::NotFound { resource: "User", id: user_id })?;
 
-    Ok(UserProfile { user, orders, preferences })
+        Ok(UserProfile { user, orders, preferences })
+    }
 }
 ```
 
 ### Streaming with futures::Stream
 ```rust
 use futures::stream::{self, StreamExt};
-use tokio::sync::Semaphore;
 
 async fn process_batch(
     items: Vec<Item>,
     max_concurrent: usize,
 ) -> Vec<Result<ProcessedItem, DomainError>> {
-    let semaphore = Arc::new(Semaphore::new(max_concurrent));
-
-    let results: Vec<_> = stream::iter(items)
-        .map(|item| {
-            let sem = semaphore.clone();
-            async move {
-                let _permit = sem.acquire().await.unwrap();
-                process_item(item).await
-            }
-        })
+    // buffer_unordered polls at most max_concurrent futures at once — that IS the limit, no
+    // Semaphore needed. (Share an Arc<Semaphore> only to cap concurrency ACROSS calls or tasks,
+    // e.g. all requests to one upstream.) Results arrive in completion order, not input order.
+    stream::iter(items)
+        .map(process_item)
         .buffer_unordered(max_concurrent)
         .collect()
-        .await;
-
-    results
+        .await
 }
 ```
 
 ### Graceful Shutdown
 ```rust
+// With axum, prefer axum::serve(..).with_graceful_shutdown(..) (frameworks/axum.md): it stops
+// accepting and waits for in-flight requests by itself. With a hand-rolled accept loop (run_server above):
+#[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let pool = connect_pool(&std::env::var("DATABASE_URL").context("DATABASE_URL is not set")?).await?;
+    let listener = TcpListener::bind("0.0.0.0:8080").await?;
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(());
+    let server = tokio::spawn(run_server(listener, shutdown_rx));
 
     // Listen for OS signals
-    let shutdown_signal = async {
-        let ctrl_c = tokio::signal::ctrl_c();
-        let mut sigterm = tokio::signal::unix::signal(
-            tokio::signal::unix::SignalKind::terminate()
-        ).unwrap();
-
-        tokio::select! {
-            _ = ctrl_c => tracing::info!("received SIGINT"),
-            _ = sigterm.recv() => tracing::info!("received SIGTERM"),
-        }
-    };
-
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
-        _ = run_server(listener, shutdown_rx) => {},
-        _ = shutdown_signal => {
-            tracing::info!("initiating graceful shutdown");
-            let _ = shutdown_tx.send(());
-            // Allow in-flight requests to complete (up to timeout)
-            tokio::time::sleep(Duration::from_secs(10)).await;
-        }
+        _ = tokio::signal::ctrl_c() => tracing::info!("received SIGINT"),
+        _ = sigterm.recv() => tracing::info!("received SIGTERM"),
     }
+
+    tracing::info!("initiating graceful shutdown");
+    let _ = shutdown_tx.send(()); // run_server stops accepting
+    server.await?;
+    // Accepted connections run in their own tasks: give them a grace period (shorter than the
+    // orchestrator's termination grace period), then exit anyway
+    tokio::time::sleep(Duration::from_secs(10)).await;
 
     // Cleanup: close DB pool, flush metrics
     pool.close().await;

@@ -13,7 +13,7 @@ tags:
 
 # Dockerfile Archetype (Rust)
 
-> Builder tags checked 2026-09-30: `rust:1.98.1-bookworm` and `alpine:3.24` exist (registry manifest lookup), and every builder equals the `rust-toolchain.toml` channel below — tests/archetype-compile/rust/run.sh fails if they drift apart. The images were not built.
+> Built and run 2026-09-30 (tests/archetype-compile/rust/docker-check.sh, Docker 29.2, linux/arm64): all three Dockerfiles below, and the debian one with the BuildKit cache-mount tip, built a small axum + sqlx (rustls, `query!`, embedded migrations) service with this file's toolchain file, .dockerignore and release profile; each image's USER is numeric, the process runs as that uid, `/healthz` answers 200, `GIT_SHA` reaches the app, and the HEALTHCHECK turns healthy where there is one. run.sh keeps every builder equal to the `rust-toolchain.toml` channel.
 
 Optimized multi-stage Docker build for Rust projects. Every generated project MUST follow this pattern.
 
@@ -105,6 +105,11 @@ FROM rust:${RUST_VERSION}-bookworm AS chef
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 
+# Install what rust-toolchain.toml pins (its channel and components) once, in a cached layer. Without
+# this, every later cargo step that sees the file downloads the components again (and fails offline).
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install
+
 # =============================================================================
 # Stage 2: Planner — Analyze dependencies and create a recipe
 # =============================================================================
@@ -193,16 +198,28 @@ ENTRYPOINT ["/app/yourapp"]
 ```dockerfile
 # =============================================================================
 # Variant: Static linking with musl for minimal Alpine runtime
-# Produces a ~5-15 MB image (vs ~80-150 MB with debian-slim)
+# Measured 2026-09-30 for a small axum + sqlx service: ~27 MB (vs ~160 MB on debian-slim), most of it
+# Alpine and the curl the HEALTHCHECK uses
 # =============================================================================
 
 # Stage 1: Chef (builder = toolchain file: RUST_VERSION equals rust-toolchain.toml's channel)
 ARG RUST_VERSION=1.98.1
 FROM rust:${RUST_VERSION}-bookworm AS chef
+# The musl target of the platform being built. BuildKit sets TARGETARCH (amd64, arm64), so
+# `docker buildx build --platform linux/amd64,linux/arm64` gives each image its own architecture; a
+# hard-coded x86_64 target doesn't even build on an arm64 builder (musl-gcc rejects -m64).
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+        amd64) echo x86_64-unknown-linux-musl ;; \
+        arm64) echo aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported TARGETARCH '$TARGETARCH' (build with BuildKit)" >&2; exit 1 ;; \
+    esac > /rust-target
 RUN cargo install cargo-chef --locked
-RUN rustup target add x86_64-unknown-linux-musl
-RUN apt-get update && apt-get install -y musl-tools
+RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+# rust-toolchain.toml's channel and components, once, in a cached layer (see the debian Dockerfile)
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install && rustup target add "$(cat /rust-target)"
 
 # Stage 2: Planner
 FROM chef AS planner
@@ -215,15 +232,16 @@ FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 
 # Build dependencies with musl target
-RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
+RUN cargo chef cook --release --target "$(cat /rust-target)" --recipe-path recipe.json
 
 COPY . .
 COPY .sqlx/ .sqlx/
 ENV SQLX_OFFLINE=true
 
-# Build with musl for fully static binary
-RUN cargo build --release --target x86_64-unknown-linux-musl --bin yourapp
-RUN strip target/x86_64-unknown-linux-musl/release/yourapp
+# Build with musl for fully static binary (copied out of the per-target directory)
+RUN cargo build --release --target "$(cat /rust-target)" --bin yourapp && \
+    cp "target/$(cat /rust-target)/release/yourapp" /app/yourapp-bin && \
+    strip /app/yourapp-bin
 
 # Stage 4: Minimal Alpine runtime (a static musl binary doesn't care which libc the image has)
 FROM alpine:3.24 AS runtime
@@ -239,7 +257,7 @@ RUN addgroup -g 1001 -S appuser && \
     adduser -u 1001 -S appuser -G appuser -s /bin/false
 
 WORKDIR /app
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/yourapp /app/yourapp
+COPY --from=builder /app/yourapp-bin /app/yourapp
 COPY --from=builder /app/migrations /app/migrations
 
 USER 1001:1001
@@ -256,31 +274,41 @@ ENTRYPOINT ["/app/yourapp"]
 ```dockerfile
 # =============================================================================
 # Variant: FROM scratch — no OS, no shell, no package manager
-# Produces ~5-10 MB images. No curl for health check.
+# Measured 2026-09-30 for a small axum + sqlx service: ~4 MB. No curl for health check.
 # Use only when you have external health check infrastructure.
 # =============================================================================
 
 # Builder = toolchain file: RUST_VERSION equals rust-toolchain.toml's channel
 ARG RUST_VERSION=1.98.1
 FROM rust:${RUST_VERSION}-bookworm AS builder
-RUN cargo install cargo-chef --locked
-RUN rustup target add x86_64-unknown-linux-musl
-RUN apt-get update && apt-get install -y musl-tools
+# the musl target of the platform being built (see the Alpine variant)
+ARG TARGETARCH
+RUN case "$TARGETARCH" in \
+        amd64) echo x86_64-unknown-linux-musl ;; \
+        arm64) echo aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported TARGETARCH '$TARGETARCH' (build with BuildKit)" >&2; exit 1 ;; \
+    esac > /rust-target
+RUN apt-get update && apt-get install -y --no-install-recommends musl-tools && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
+COPY rust-toolchain.toml ./
+RUN rustup toolchain install && rustup target add "$(cat /rust-target)"
 
 COPY Cargo.toml Cargo.lock ./
 COPY src/ src/
+# sqlx::migrate!("./migrations") embeds the migrations at compile time: the build needs them
+COPY migrations/ migrations/
 COPY .sqlx/ .sqlx/
 ENV SQLX_OFFLINE=true
 
-RUN cargo build --release --target x86_64-unknown-linux-musl --bin yourapp
-RUN strip target/x86_64-unknown-linux-musl/release/yourapp
+RUN cargo build --release --target "$(cat /rust-target)" --bin yourapp && \
+    cp "target/$(cat /rust-target)/release/yourapp" /app/yourapp-bin && \
+    strip /app/yourapp-bin
 
 FROM scratch
 ARG GIT_SHA=unknown
 ENV GIT_SHA=${GIT_SHA}
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
-COPY --from=builder /app/target/x86_64-unknown-linux-musl/release/yourapp /yourapp
+COPY --from=builder /app/yourapp-bin /yourapp
 
 # scratch has no user database, but a NUMERIC user needs none; without USER the process is root
 USER 65532:65532
