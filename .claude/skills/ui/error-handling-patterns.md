@@ -12,6 +12,8 @@ tags:
 
 # Error Handling Patterns — UI Reference
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, TanStack Query 5.104, react-hook-form 7.89 and sonner 2.0; `error.tsx` also in a `next build` (Next.js 16.3.8) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Error Type → UI Pattern Lookup Table
 
 | HTTP Status | Error Type | UI Pattern | User Message |
@@ -72,13 +74,13 @@ Create `error.tsx` at EVERY route segment that fetches data.
 ## TanStack Query Error Handling
 
 ```tsx
-// In query hooks — handle isError
+// In query hooks — handle isError (lists are cursor-paginated: useInfiniteQuery, api-integration-patterns.md)
 function UserList() {
-  const { data, isLoading, isError, error, refetch } = useQuery(userQueries.list());
+  const { data, isLoading, isError, error, refetch } = useInfiniteQuery(userQueries.list());
 
   if (isError) {
     return (
-      <div className="flex flex-col items-center gap-4 py-12">
+      <div role="alert" className="flex flex-col items-center gap-4 py-12">
         <AlertCircle className="size-8 text-destructive" />
         <p className="text-sm text-muted-foreground">
           {error instanceof Error ? error.message : "Failed to load users"}
@@ -89,7 +91,7 @@ function UserList() {
       </div>
     );
   }
-  // ... loading and data states
+  // ... loading and data states (rows: data?.pages.flatMap((p) => p.data))
 }
 ```
 
@@ -134,11 +136,13 @@ function mapServerErrors<T extends FieldValues>(form: UseFormReturn<T>, details:
   return mapped; // false → no field matched; show a toast instead
 }
 
-// Usage in form submit handler (the Idempotency-Key is created once per submit):
-const idempotencyKey = useMemo(() => crypto.randomUUID(), []);
+// Usage in form submit handler. One Idempotency-Key per user action: a retried submit (after a timeout or an
+// error) reuses it; a successful create replaces it, so the NEXT user created from this form gets a new key.
+const idempotencyKey = useRef(crypto.randomUUID());
 async function onSubmit(input: CreateUserRequest) {
   try {
-    await createUser.mutateAsync({ input, idempotencyKey });
+    await createUser.mutateAsync({ input, idempotencyKey: idempotencyKey.current });
+    idempotencyKey.current = crypto.randomUUID();
     toast.success("Created!");
     form.reset();
   } catch (error) {
@@ -153,22 +157,25 @@ async function onSubmit(input: CreateUserRequest) {
 ## Optimistic Update with Rollback
 
 ```tsx
+// Cached lists are infinite queries under ["users", "list", filters]: pages of { data: User[], meta }
+type UserPages = InfiniteData<ApiSuccess<User[]>>;
+
 const deleteUser = useMutation({
   mutationFn: (id: string) => api.users.delete(id),
   onMutate: async (id) => {
-    await queryClient.cancelQueries({ queryKey: ["users"] });
-    const previous = queryClient.getQueryData<User[]>(["users"]);
+    await queryClient.cancelQueries({ queryKey: ["users", "list"] });
+    const previous = queryClient.getQueriesData<UserPages>({ queryKey: ["users", "list"] });
 
-    // Optimistically remove
-    queryClient.setQueryData<User[]>(["users"], (old) =>
-      old?.filter((u) => u.id !== id)
+    // Optimistically remove it from every loaded page of every cached list
+    queryClient.setQueriesData<UserPages>({ queryKey: ["users", "list"] }, (old) =>
+      old && { ...old, pages: old.pages.map((p) => ({ ...p, data: p.data.filter((u) => u.id !== id) })) }
     );
 
     return { previous };
   },
   onError: (_err, _id, context) => {
     // Rollback on failure
-    queryClient.setQueryData(["users"], context?.previous);
+    context?.previous.forEach(([key, data]) => queryClient.setQueryData(key, data));
     toast.error("Failed to delete user");
   },
   onSuccess: () => toast.success("User deleted"),
@@ -202,7 +209,7 @@ toast.promise(saveData(payload), {
 // Destructive confirmation toast
 toast("Delete this item?", {
   action: { label: "Delete", onClick: () => deleteItem(id) },
-  cancel: { label: "Cancel" },
+  cancel: { label: "Cancel", onClick: () => {} },   // sonner 2 requires onClick on cancel too
 });
 ```
 

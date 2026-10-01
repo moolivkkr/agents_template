@@ -1,5 +1,7 @@
 # Playwright patterns for browser E2E testing.
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against @playwright/test 1.63.0 and @axe-core/playwright 4.13; the config, page object, setup file and specs ran (13 tests: setup + 6 specs x the config's 2 projects) on the system Chrome 154 against a local stub app; the locator and network excerpts type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Configuration
 
 Pipeline runs test the **deployed** build: Wave 3.5 deploys the committed code, and every browser tier
@@ -142,7 +144,7 @@ test.describe("Authentication", () => {
 await expect(page.getByText("Success")).toBeVisible()
 await expect(page.getByRole("button")).toBeEnabled()
 await expect(page.getByRole("textbox")).toHaveValue("alice@example.com")
-await expect(page.getByTestId("item-list")).toHaveCount(3)
+await expect(page.getByTestId("item-list").getByRole("listitem")).toHaveCount(3)   // count the rows, not the list
 
 // Page assertions
 await expect(page).toHaveURL(/.*dashboard/)
@@ -173,7 +175,7 @@ await page.route("**/api/v1/users", (route) =>
 await page.route("**/api/v1/users", (route) => route.abort("internetdisconnected"))
 
 // Wait for a specific API call
-const responsePromise = page.waitForResponse("**/api/users")
+const responsePromise = page.waitForResponse("**/api/v1/users")
 await page.getByRole("button", { name: "Load" }).click()
 const response = await responsePromise
 expect(response.status()).toBe(200)
@@ -213,7 +215,8 @@ test("TC-SEC-20105 SESSION-STORAGE: no token in web storage after sign-in", asyn
 })
 
 test("TC-SEC-20106 XSS-RENDER: a stored script payload renders as text", async ({ page }) => {
-  const payload = '<img src=x onerror="window.__xss=1">'
+  // run-unique: on a shared qa (or the config's second project) the same payload twice is a strict-mode failure
+  const payload = `<img src=x onerror="window.__xss=1"> ${crypto.randomUUID()}`
   await createNoteViaApi(persona("buyer"), payload)          // through the product API, as the persona
   await page.goto("/notes")
   await expect(page.getByText(payload)).toBeVisible()
@@ -238,7 +241,9 @@ setup("authenticate", async ({ page }) => {
   await page.context().storageState({ path: ".auth/user.json" })   // gitignore .auth/
 })
 
-// Use in config: { storageState: ".auth/user.json" }
+// Use in config (setup files aren't matched by the default testMatch):
+//   projects: [{ name: "setup", testMatch: /.*\.setup\.ts/ },
+//              { name: "chromium", use: { ...devices["Desktop Chrome"], storageState: ".auth/user.json" }, dependencies: ["setup"] }]
 ```
 
 ## Run Commands

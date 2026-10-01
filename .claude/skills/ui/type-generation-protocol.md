@@ -12,6 +12,8 @@ tags:
 
 # Type Generation Protocol — data-contracts.md → types/api.ts
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess), including that the generated envelope types equal `api/response-envelope.md`'s and that the compile-error sample fails with exactly TS2339; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Rule: All API response types MUST be auto-generated from data-contracts.md
 
 During `/plan` Step 2b, after `data-contracts.md` is written, the planning agent MUST generate a `types/api.ts` file that exports TypeScript types for every response interface defined in the data contracts.
@@ -107,19 +109,19 @@ After generation, verify:
 ## Usage Rules
 
 ### UI Components MUST import from types/api.ts
-```typescript
+```tsx
 // ✅ CORRECT — import from generated types
-import { UserResponse, ListUsersResponse } from "@/types/api";
+import type { UserResponse, ListUsersResponse } from "@/types/api";
 
 function UserList() {
-  const { data } = useQuery<ListUsersResponse>(...);
-  return data?.data.map((user: UserResponse) => <UserCard user={user} />);
+  const { data } = useQuery<ListUsersResponse>({ queryKey: ["users", "list"], queryFn: listUsers });
+  return data?.data.map((user: UserResponse) => <UserCard key={user.id} user={user} />);
 }
 
 // ❌ BANNED — never define response types inline
 function UserList() {
   interface User { id: string; name: string; } // INLINE TYPE — BLOCKED
-  const { data } = useQuery<{ data: User[] }>(...);
+  const { data } = useQuery<{ data: User[] }>({ queryKey: ["users", "list"], queryFn: listUsers });
 }
 ```
 

@@ -12,6 +12,8 @@ tags:
 
 # Form Validation Protocol — Zod Schema Generation
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against Zod 4.6 and react-hook-form 7.89; the user schema also in a `next build` (Next.js 16.3.8) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Rule: Zod schemas MUST derive from data-contracts.md
 
 When a form submits to an API endpoint, the Zod validation schema MUST match the request type in data-contracts.md.
@@ -35,10 +37,8 @@ import { z } from "zod";
 
 export const createUserSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(50, "Name must be at most 50 characters"),
-  email: z.string().email("Enter a valid email address"),
-  role: z.enum(["admin", "member", "viewer"], {
-    required_error: "Select a role",
-  }),
+  email: z.email("Enter a valid email address"),
+  role: z.enum(["admin", "member", "viewer"], { error: "Select a role" }), // Zod 4 removed required_error
 });
 
 export type CreateUserInput = z.infer<typeof createUserSchema>;
@@ -63,7 +63,7 @@ export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 ### Constraint Matching
 - Constraints (min, max, format, enum values) MUST match contract annotations
 - If contract says `min: 2, max: 50` for name, Zod schema says `.min(2).max(50)`
-- If contract says `valid email`, Zod schema says `.email()`
+- If contract says `valid email`, Zod schema says `z.email()` (Zod 4; `z.string().email()` is deprecated)
 - If contract says enum values, Zod schema uses `z.enum([...])` with the exact values
 
 ### File Organization
@@ -82,31 +82,29 @@ export type UpdateUserInput = z.infer<typeof updateUserSchema>;
 
 ## Server Error Mapping
 
-When the API returns 422 with field errors, map them to react-hook-form using this exact pattern:
+When the API returns **400 `VALIDATION_FAILED`** with field errors, map them to react-hook-form using this
+exact pattern:
 
 ```typescript
-// Error shape from data-contracts.md error envelope:
-// { error: { code: "VALIDATION_ERROR", details: { fields: Record<string, string> } } }
-// HTTP client unwraps to: error.code, error.details
+// The one error envelope (api/response-envelope.md):
+// { error: { code: "VALIDATION_FAILED", message, details: [{ field, code, message }], request_id, retryable } }
+// The HTTP client (api-integration-patterns.md) throws it as ApiError: error.code, error.details (FieldError[])
 
-import { UseFormReturn, FieldValues, Path } from "react-hook-form";
+import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
+import type { ApiError } from "@/lib/api-client";
 
-function mapServerErrors<T extends FieldValues>(
-  form: UseFormReturn<T>,
-  error: { code?: string; details?: { fields?: Record<string, string> } }
-) {
-  if (error.code === "VALIDATION_ERROR" && error.details?.fields) {
-    Object.entries(error.details.fields).forEach(([field, message]) => {
-      // Only set error if the field exists in the form
-      const formValues = form.getValues();
-      if (field in formValues) {
-        form.setError(field as Path<T>, {
-          type: "server",
-          message,
-        });
-      }
-    });
+export function mapServerErrors<T extends FieldValues>(form: UseFormReturn<T>, error: ApiError): boolean {
+  if (error.code !== "VALIDATION_FAILED") return false;
+  const formValues = form.getValues();
+  let mapped = false;
+  for (const d of error.details) {
+    // Only set an error on a field the form has: details[].field is the contract's (snake_case) name
+    if (d.field in formValues) {
+      form.setError(d.field as Path<T>, { type: "server", message: d.message });
+      mapped = true;
+    }
   }
+  return mapped; // false → nothing matched: show error.message instead
 }
 ```
 
@@ -114,16 +112,15 @@ function mapServerErrors<T extends FieldValues>(
 ```typescript
 async function onSubmit(data: CreateUserInput) {
   try {
-    await api.users.create(data);
+    // idempotencyKey: a useRef(crypto.randomUUID()), replaced after each success (api-integration-patterns.md)
+    await api.users.create({ input: data, idempotencyKey: idempotencyKey.current });
+    idempotencyKey.current = crypto.randomUUID();
     toast.success("User created");
     form.reset();
     onSuccess?.();
-  } catch (error: any) {
-    if (error.status === 422) {
-      mapServerErrors(form, error);
-    } else {
-      toast.error(error.message ?? "Failed to create user");
-    }
+  } catch (error) {
+    if (error instanceof ApiError && mapServerErrors(form, error)) return;
+    toast.error(error instanceof ApiError ? error.message : "Failed to create user");
   }
 }
 ```
@@ -136,8 +133,8 @@ async function onSubmit(data: CreateUserInput) {
 ```typescript
 z.string().min(1, "Required")           // required string
 z.string().min(2).max(100)               // length range
-z.string().email("Invalid email")        // email format
-z.string().url("Invalid URL")            // URL format
+z.email("Invalid email")                 // email format (Zod 4)
+z.url("Invalid URL")                     // URL format (Zod 4)
 z.string().regex(/^[A-Z]{2,3}$/, "Invalid code")  // pattern
 z.string().trim()                         // auto-trim whitespace
 ```
@@ -166,7 +163,7 @@ z.string().nullish()                      // omitted or null
 ### Conditional validation
 ```typescript
 const schema = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("email"), email: z.string().email() }),
+  z.object({ type: z.literal("email"), email: z.email() }),
   z.object({ type: z.literal("phone"), phone: z.string().min(10) }),
 ]);
 ```

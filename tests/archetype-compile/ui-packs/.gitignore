@@ -1,0 +1,6 @@
+node_modules/
+.units/
+__pycache__/
+# Playwright writes its default outputDir and HTML report next to the nearest package.json (web/)
+test-results/
+playwright-report/

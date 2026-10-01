@@ -12,6 +12,8 @@ tags:
 
 # Component Composition Patterns — shadcn/ui + React
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, class-variance-authority 0.7 and shadcn/ui component stubs on radix-ui 1.6; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Component Hierarchy (Atomic Design for shadcn)
 
 ```
@@ -98,14 +100,14 @@ export function Alert({ title, description, variant, className }: AlertProps) {
 }
 ```
 
-### Forward Refs (required for form inputs, tooltips)
+### Refs (required for form inputs, tooltips)
+React 19 passes `ref` to function components as a regular prop, so a wrapper forwards it with the rest of the
+props: no `forwardRef`, no `displayName`. Current shadcn/ui components are written this way and type their
+props as `React.ComponentProps<…>` (there is no exported `InputProps`).
 ```tsx
-const CustomInput = React.forwardRef<HTMLInputElement, InputProps>(
-  ({ className, ...props }, ref) => (
-    <Input className={cn("custom-styles", className)} ref={ref} {...props} />
-  )
-);
-CustomInput.displayName = "CustomInput";
+function CustomInput({ className, ...props }: React.ComponentProps<typeof Input>) {
+  return <Input className={cn("custom-styles", className)} {...props} />; // props includes ref
+}
 ```
 
 ## Compound Component Pattern
@@ -149,7 +151,7 @@ CustomInput.displayName = "CustomInput";
     <Table>
       <TableHeader>
         <TableRow>
-          <TableHead className="w-12"><Checkbox /></TableHead>
+          <TableHead className="w-12"><Checkbox aria-label="Select all users" /></TableHead>
           <TableHead>Name</TableHead>
           <TableHead>Email</TableHead>
           <TableHead>Role</TableHead>
@@ -159,10 +161,10 @@ CustomInput.displayName = "CustomInput";
       <TableBody>
         {users.map(user => (
           <TableRow key={user.id}>
-            <TableCell><Checkbox /></TableCell>
+            <TableCell><Checkbox aria-label={`Select ${user.name}`} /></TableCell>
             <TableCell className="font-medium">{user.name}</TableCell>
             <TableCell>{user.email}</TableCell>
-            <TableCell><StatusBadge status={user.role} /></TableCell>
+            <TableCell><Badge variant="secondary">{user.role}</Badge></TableCell>
             <TableCell className="text-right">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

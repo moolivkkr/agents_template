@@ -1,5 +1,7 @@
 # React Native App Patterns — implementing screens for iOS + Android
 
+> Code samples compile-checked: the OrdersScreen sample: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against react-native 0.87.1 and @shopify/flash-list 2.3.2, and rendered by the 3 RNTL 14.0.1 tests of `testing/react-native-testing-library.md` in Jest 29.7 (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 How `mobile_developer` builds a React Native app that the pipeline can test and review. Platform
 facts (versions, networking, permissions, build variants): `react-native.md`. Test contract (testIDs,
 device tiers): `../testing/mobile-testing-strategy.md`.
@@ -43,7 +45,9 @@ device tiers): `../testing/mobile-testing-strategy.md`.
   - builds base URLs from env config: iOS simulator `http://localhost:PORT`, Android emulator
     `http://10.0.2.2:PORT`, and real hosts in release;
   - adds the bearer token from secure storage;
-  - unwraps the `{ data, error, meta }` envelope exactly as `api-contracts.md` defines it;
+  - unwraps the one envelope (`../api/response-envelope.md`) exactly as `api-contracts.md` defines it:
+    `{ data, meta }` on success, `{ error: { code, message, details, request_id, retryable } }` on failure,
+    branching on the HTTP status (a success body has no `error` key);
   - maps 401 to a single refresh-or-logout path.
 - Server state lives in **TanStack Query** (`../frameworks/tanstack-query.md`). Refetch on app focus
   through `focusManager` + `AppState`, and pause queries when offline through `onlineManager` +

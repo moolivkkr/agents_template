@@ -12,6 +12,8 @@ tags:
 
 # Responsive Design Patterns — Mobile-First Reference
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3 and shadcn/ui component stubs on radix-ui 1.6; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Breakpoint Strategy (Mobile-First)
 
 Build for mobile FIRST. Add complexity at larger breakpoints.
@@ -109,7 +111,8 @@ function MainNav() {
   {users.map(user => (
     <Card key={user.id} className="p-4">
       <div className="flex items-center gap-3">
-        <Avatar><AvatarImage src={user.avatar} /><AvatarFallback>{user.initials}</AvatarFallback></Avatar>
+        {/* contract field names (snake_case); a URL from data goes through safeHref (secure-rendering.md) */}
+        <Avatar><AvatarImage src={safeHref(user.avatar_url)} alt="" /><AvatarFallback>{user.name.slice(0, 2).toUpperCase()}</AvatarFallback></Avatar>
         <div className="flex-1 min-w-0">
           <p className="font-medium truncate">{user.name}</p>
           <p className="text-sm text-muted-foreground truncate">{user.email}</p>
@@ -149,7 +152,7 @@ Minimum **44x44px** on mobile (WCAG 2.2 AAA, AA recommends 24px minimum).
 </Button>
 
 // Icon buttons — already 40px (h-10 w-10), add padding for touch
-<Button variant="ghost" size="icon" className="size-11">
+<Button variant="ghost" size="icon" className="size-11" aria-label="Delete item">
   <Trash className="size-4" />
 </Button>
 ```

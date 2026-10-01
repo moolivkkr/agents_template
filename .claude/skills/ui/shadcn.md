@@ -12,6 +12,8 @@ tags:
 
 # shadcn/ui patterns for composable, accessible React components.
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, radix-ui 1.6, lucide-react 1.49, sonner 2.0, react-hook-form 7.89 and Zod 4.6, with shadcn/ui component stubs (the CLI registry wasn't fetched); type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Install and Add Components
 ```bash
 # Initialize shadcn/ui in a project
@@ -25,7 +27,7 @@ npx shadcn@latest add input
 npx shadcn@latest add table
 npx shadcn@latest add select
 npx shadcn@latest add dropdown-menu
-npx shadcn@latest add toast
+npx shadcn@latest add sonner     # toasts: the CLI marks "toast" deprecated by "sonner" (shadcn 4.21)
 npx shadcn@latest add card
 npx shadcn@latest add tabs
 ```
@@ -42,7 +44,7 @@ import { Button } from "@/components/ui/button"
 <Button variant="ghost">Settings</Button>
 <Button variant="link">Learn more</Button>
 <Button size="sm">Small</Button>
-<Button size="icon"><TrashIcon className="h-4 w-4" /></Button>
+<Button size="icon" aria-label="Delete"><TrashIcon className="h-4 w-4" /></Button>
 <Button disabled>Saving...</Button>
 <Button asChild><Link href="/dashboard">Go</Link></Button>
 ```
@@ -82,10 +84,11 @@ import {
   Form, FormControl, FormField, FormItem,
   FormLabel, FormMessage,
 } from "@/components/ui/form"
+import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 
 const schema = z.object({
-  email: z.string().email("Invalid email"),
+  email: z.email("Invalid email"),
   name: z.string().min(2, "Name must be at least 2 characters"),
 })
 
@@ -110,6 +113,20 @@ export function CreateUserForm() {
               <FormLabel>Email</FormLabel>
               <FormControl>
                 <Input placeholder="alice@example.com" {...field} />
+              </FormControl>
+              <FormMessage />
+            </FormItem>
+          )}
+        />
+        {/* every field in the schema needs its FormField, or the form can never pass validation */}
+        <FormField
+          control={form.control}
+          name="name"
+          render={({ field }) => (
+            <FormItem>
+              <FormLabel>Name</FormLabel>
+              <FormControl>
+                <Input placeholder="Alice" {...field} />
               </FormControl>
               <FormMessage />
             </FormItem>
@@ -258,7 +275,8 @@ import { Badge } from "@/components/ui/badge"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 
 <Avatar>
-  <AvatarImage src={user.avatarUrl} alt={user.name} />
+  {/* wire field name from the contract (snake_case); a URL from data goes through safeHref (secure-rendering.md) */}
+  <AvatarImage src={safeHref(user.avatar_url)} alt={user.name} />
   <AvatarFallback>{user.name.slice(0, 2).toUpperCase()}</AvatarFallback>
 </Avatar>
 ```

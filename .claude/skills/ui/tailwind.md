@@ -12,6 +12,8 @@ tags:
 
 # Tailwind CSS utility patterns for layout, spacing, and responsive design.
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against tailwindcss 4.3.3's `Config` type, tailwind-merge 3.7, clsx 2.1 and next-themes 0.4.6; `cn()` also in a `next build`; the class-string list skipped (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Layout: Flexbox
 ```html
 <!-- Row with centered items and gap -->
@@ -154,6 +156,10 @@ export function cn(...inputs: ClassValue[]) {
 ```
 
 ## Tailwind Config Customization
+Tailwind CSS v4 (4.3 is current) is configured in CSS: `@import "tailwindcss";`, theme values in an
+`@theme { --color-brand-500: #3b82f6; }` block, and `@custom-variant dark (&:where(.dark, .dark *));` for the
+class strategy. A JavaScript config like the one below still works, but v4 only loads it through
+`@config "../tailwind.config.ts";` in that CSS file. New projects use `@theme`.
 ```typescript
 // tailwind.config.ts
 import type { Config } from "tailwindcss"
@@ -221,7 +227,7 @@ shadow-none → flat elements within cards
   "transition-shadow hover:shadow-md",
   // Responsive
   "md:h-20 md:px-6"
-)}>
+)} />
 ```
 
 ## Dark Mode (class strategy)
@@ -251,8 +257,8 @@ shadow-none → flat elements within cards
 Use `next-themes` for theme switching:
 ```tsx
 import { useTheme } from "next-themes"
-const { theme, setTheme } = useTheme()
-<Button variant="ghost" size="icon" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+const { resolvedTheme, setTheme } = useTheme()   // resolvedTheme: what "system" resolved to
+<Button variant="ghost" size="icon" aria-label="Toggle theme" onClick={() => setTheme(resolvedTheme === "dark" ? "light" : "dark")}>
   <Sun className="size-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
   <Moon className="absolute size-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />
 </Button>

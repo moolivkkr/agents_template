@@ -1,5 +1,7 @@
 # MSW (Mock Service Worker) patterns for API mocking in tests and development.
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against MSW 3.0.1; envelope helpers, handlers, server and setup ran with this pack's 3 tests in Vitest 5.0.3 + jsdom; `msw/browser` setup type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Install
 ```bash
 npm install msw --save-dev
@@ -11,6 +13,9 @@ npm install msw --save-dev
 > for the major in your lockfile; the examples below are MSW 3. `msw/native` was removed in 3.0.
 > **Svelte:** pin `msw@^2.15` while tests run under `svelteTesting()` — its `browser` resolve condition
 > stops `msw/node` 3.x from loading (see `frameworks/svelte.md`).
+> **React Native (Jest + `@react-native/jest-preset`):** pin `msw@^2.15` too. MSW 3 ships ESM only, and its
+> interceptors use `import.meta` and static class blocks, which the preset's CommonJS Babel transform can't
+> load; MSW 2 needs three Jest settings (`testing/react-native-testing-library.md` §Setup).
 
 ## Mocks are typed from the envelope — never hand-shaped
 
@@ -104,12 +109,16 @@ afterAll(() => server.close())
 ```typescript
 import { http, HttpResponse } from "msw"
 import { server } from "../mocks/server"
+import { apiError, page } from "../mocks/envelope"
+// The project's test render: wraps the UI in a fresh QueryClientProvider (retries off). A plain render() of a
+// screen that uses TanStack Query fails with "No QueryClient set" (ui/archetypes/component-test.md).
+import { renderWithProviders } from "../test/render"
 
 it("TC-UI-20102 shows the error state when the API fails", async () => {
   // Override just for this test — resets after each test via resetHandlers
   server.use(http.get("/api/v1/users", () => apiError(503, "UNAVAILABLE", "Try again shortly.")))
 
-  render(<UserList />)
+  renderWithProviders(<UserList />)
   expect(await screen.findByRole("alert")).toHaveTextContent(/try again/i)
   expect(screen.getByRole("button", { name: /retry/i })).toBeVisible()
 })
@@ -117,7 +126,7 @@ it("TC-UI-20102 shows the error state when the API fails", async () => {
 it("TC-UI-20103 shows the empty state for an empty list", async () => {
   server.use(http.get("/api/v1/users", () => page([])))   // data: [] — never null
 
-  render(<UserList />)
+  renderWithProviders(<UserList />)
   expect(await screen.findByText("No users found")).toBeInTheDocument()
 })
 ```
@@ -160,7 +169,7 @@ it("sends correct data on form submit", async () => {
     })
   )
 
-  render(<CreateUserForm />)
+  renderWithProviders(<CreateUserForm />)
   await userEvent.type(screen.getByLabelText("Name"), "Charlie")
   await userEvent.click(screen.getByRole("button", { name: "Create" }))
 
