@@ -68,6 +68,19 @@ before="$(grep -c '^### D-' "$D")"
 CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "x" --scope global --date 2026-10-01 >/dev/null 2>&1; rc=$?
 [ "$rc" = 3 ] && [ "$(grep -c '^### D-' "$D")" = "$before" ] && ok "decide without --decision/--rationale → exit 3, nothing written" || bad "incomplete decide wrote an entry (rc=$rc)"
 
+# Parallel decides (debates finishing together) must not lose or duplicate an entry (board review
+# 2026-09-30-debate, ARCH-03: without a lock, 20/20 trials lost one).
+before="$(grep -c '^### D-' "$D")"
+for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "parallel $i" --scope global --date 2026-10-01 --source debate \
+    --decision "d$i" --rationale "r$i" >/dev/null 2>&1 &
+done
+wait
+after="$(grep -c '^### D-' "$D")"; uniq_ids="$(grep -o '^### D-[0-9]*' "$D" | sort -u | wc -l | tr -d ' ')"
+[ "$after" = "$((before + 12))" ] && [ "$uniq_ids" = "$after" ] && [ "$(grep -c '^### D-[0-9]* — parallel' "$D")" = 12 ] \
+  && ok "12 parallel decides record 12 entries with 12 distinct ids" || bad "parallel decides lost or duplicated entries ($before → $after, $uniq_ids distinct)"
+ls "$W/docs"/.DECISIONS.*.tmp >/dev/null 2>&1 && bad "temp files left behind in docs/" || ok "no temp files left behind"
+
 echo "────────────────────────────────────────────"
 echo "remember.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -28,8 +28,10 @@
 #                             test/lint/typecheck and blocks on non-zero (real execution, not self-
 #                             report). Only on an explicit-phase gate; advisory-skip when unconfigured.
 #   (c)  no dangling failure — no "failed" status without a LATER "completed" for the same agent.
-#   (f)  no pending debate   — every blocking debate request for the phase has a valid verdict that
-#                             reached docs/DECISIONS.md, or is auto-resolved/withdrawn (debate-status.py).
+#   (f)  no pending debate   — every debate request for the phase has a valid, current verdict backed by a
+#                             real debate and linked from docs/DECISIONS.md, or is auto-resolved, withdrawn
+#                             or decided by a person (debate-status.py --check). Security debates count as
+#                             security findings when the gate is forced.
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
 #
@@ -354,10 +356,17 @@ check_report() {  # $1 agent, $2 report path from execution.jsonl
     REPORT_ISSUES=$((REPORT_ISSUES + 1))
     return
   fi
-  # Debate artifacts (research briefs, arguments, verdicts) aren't findings reports: words like
-  # "blocking I/O" in a brief would trip the prose heuristics below. Check (f) validates them.
-  case "$report" in
-    agent_state/debates/*) ok "debate artifact exists: $report (agent '$agent'; validated by check (f))"; return ;;
+  # A debate agent's artifact (research brief, argument, verdict) isn't a findings report: words like
+  # "blocking I/O" in a brief would trip the prose heuristics below, and check (f) validates the debate.
+  # Only the four debate agents get this, and only for a plain path inside agent_state/debates/: any
+  # other agent, or a path with "..", goes through the normal checks (board review 2026-09-30-debate,
+  # TEST-10: a FAIL sidecar logged as agent_state/debates/../… passed the gate).
+  case "$agent" in
+    debate_moderator|debate_researcher|debate_advocate|debate_arbitrator)
+      case "$report" in
+        *..*) ;;
+        agent_state/debates/*) ok "debate artifact exists: $report (agent '$agent'; the debate is checked by (f))"; return ;;
+      esac ;;
   esac
 
   # Test agents: only the machine-readable sidecar counts (board review 2026-09-30, TEST-01).
@@ -488,7 +497,8 @@ fi
 #     verdict (or be auto-resolved in agent_state/debates/unresolved.json, or withdrawn with a reason)
 #     before the phase gates, and a verdict must reach docs/DECISIONS.md. debate-status.py is the only
 #     reader of agent_state/debates/ (the gate used to glob a name the protocol never wrote — review
-#     2026-09-30, D1/D2). A pending debate is a finding: gate.forced can override it.
+#     2026-09-30, D1/D2). A pending debate is a finding: gate.forced can override it, but a security
+#     debate needs its own security_acknowledged entry.
 # ---------------------------------------------------------------------------
 echo "── (f) no pending debate ──"
 DEBATE_STATUS="${HOOK_DIR:-.claude/hooks}/debate-status.py"
@@ -501,9 +511,13 @@ else
   DEBATE_OUT="$(python3 "$DEBATE_STATUS" --root "$PWD" --phase "$PHASE" --check 2>&1)"; DEBATE_RC=$?
   printf '%s\n' "$DEBATE_OUT" | grep -v '^BLOCKING: ' | sed 's/^/    /'
   if [ "$DEBATE_RC" -eq 0 ]; then
-    ok "every blocking debate for phase $PHASE has a verdict (or is auto-resolved/withdrawn)"
+    ok "every debate for phase $PHASE is decided (verdict, default, withdrawal or a person's override)"
   else
     while IFS= read -r b; do [ -n "$b" ] && fail "${b#BLOCKING: }"; done < <(printf '%s\n' "$DEBATE_OUT" | grep '^BLOCKING: ')
+    # A security decision nobody made is a security finding: forcing the gate past it needs its own
+    # security_acknowledged entry, like any other security finding (board review TEST-13).
+    NSEC="$(printf '%s\n' "$DEBATE_OUT" | grep -c '^BLOCKING: security debate')"
+    SECURITY_FAILS=$((SECURITY_FAILS + NSEC))
     [ "$DEBATE_RC" -ne 2 ] && fail "debate-status.py failed (exit $DEBATE_RC)"
   fi
 fi

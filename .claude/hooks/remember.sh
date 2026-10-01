@@ -69,8 +69,13 @@ if [ "$ACTION" = "decide" ]; then
     if [ -z "$val" ]; then echo "remember decide: --$(printf '%s' "$k" | tr '[:upper:]' '[:lower:]') is required"; exit 3; fi
   done
   exec python3 - "$FILE" "$TITLE" "$DATE" "$D_SCOPE" "$D_DECISION" "$D_RATIONALE" "$SOURCE" "$CONFIDENCE" "${D_LINK:-—}" "${D_REVERSES:-}" <<'PY'
-import os, re, sys
+import fcntl, hashlib, os, re, sys, tempfile
 path, title, date, scope, decision, rationale, source, confidence, link, reverses = sys.argv[1:11]
+# Debates finishing together call this in parallel. Without a lock two callers read the same ledger,
+# both take the next D-NNN, and one entry is lost (board review 2026-09-30-debate, ARCH-03: lost in
+# 20/20 trials). The lock lives outside the repo, keyed by the ledger's absolute path.
+_lock = open(os.path.join(tempfile.gettempdir(), "remember-" + hashlib.sha1(os.path.abspath(path).encode()).hexdigest()[:16] + ".lock"), "w")
+fcntl.flock(_lock, fcntl.LOCK_EX)
 text = open(path).read() if os.path.exists(path) else "# DECISIONS\n\nSettled decisions with rationale (Tier 0.5). Written only by `.claude/hooks/remember.sh decide`.\n\n"
 live = re.sub(r"<!--.*?-->", "", text, flags=re.S)                       # ignore commented examples
 ids = [int(n) for n in re.findall(r"^### D-(\d+)", live, re.M)]
@@ -90,8 +95,9 @@ entry = (f"### {new} — {title}\n- status: active\n- scope: {scope}\n- date: {d
          f"- decision: > {decision}\n- rationale: > {rationale}\n")
 text = text.rstrip("\n") + "\n\n" + entry
 os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-tmp = path + ".tmp"
-open(tmp, "w").write(text)
+fd, tmp = tempfile.mkstemp(prefix=".DECISIONS.", suffix=".tmp", dir=os.path.dirname(path) or ".")
+with os.fdopen(fd, "w") as fh:
+    fh.write(text)
 os.replace(tmp, path)
 print(f"{new} recorded" + (f"; {reverses} → reversed" if reverses else ""))
 PY
