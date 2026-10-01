@@ -1,42 +1,60 @@
 # Actix-web framework patterns for Rust HTTP APIs.
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, actix-web 4.15.0, actix-cors 0.7.2, deadpool-postgres 0.14.2, r2d2_postgres 0.18.2, jsonwebtoken 11.1.0, with languages/rust.md's ApiResponse. Both tests run and pass (against stub widget handlers); harness tests on top: a missing, forged, expired, wrong-issuer or wrong-audience token is a 401 envelope with the echoed request id, a malformed id a 400 on `id`, a malformed body a 400 MALFORMED_REQUEST.
+
 ## App & HttpServer Setup
 ```rust
-use actix_web::{web, App, HttpServer, middleware};
+use actix_web::{middleware, web, App, HttpServer};
+use sqlx::PgPool;
+
+/// Shared by every worker; handlers take `web::Data<AppState>`.
+pub struct AppState {
+    pub db: PgPool,
+    pub jwt: JwtService, // verifies bearer tokens (Custom Auth Middleware below)
+    pub config: AppConfig,
+}
 
 #[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    let db_pool = PgPool::connect(&std::env::var("DATABASE_URL").unwrap())
-        .await
-        .expect("failed to connect to database");
+async fn main() -> anyhow::Result<()> {
+    // Required settings come from the environment; a missing one fails startup — no default secrets
+    let config = AppConfig::from_env()?;
+    let db_pool = PgPool::connect(&config.database_url).await?;
 
     let app_state = web::Data::new(AppState {
         db: db_pool,
-        jwt: JwtService::new(&config.jwt_secret),
+        jwt: JwtService::new(&config.jwt_secret, &config.jwt_issuer, &config.jwt_audience),
         config: config.clone(),
     });
 
     HttpServer::new(move || {
         App::new()
             .app_data(app_state.clone())
-            .wrap(middleware::Logger::default())
+            // extractor failures become the envelope (JSON Configuration below)
+            .app_data(json_config())
+            .app_data(query_config())
+            .app_data(path_config())
             .wrap(middleware::Compress::default())
+            .wrap(access_log()) // Middleware below
+            .wrap(cors())
+            .wrap(middleware::from_fn(request_id)) // added last = outermost (Error Handling below)
             .configure(api_config)
     })
     .bind(("0.0.0.0", 8080))?
     .workers(num_cpus::get())
     .run()
-    .await
+    .await?;
+    Ok(())
 }
 ```
 - `HttpServer::new` takes a factory closure — called once per worker thread
 - `App::new()` is the per-worker application builder
 - `.app_data()` shares state across handlers via `web::Data<T>` (internally `Arc<T>`)
 - `.configure(fn)` modularizes route registration
+- `.wrap()` order: the LAST call is the OUTERMOST layer
 
 ## Route Definition
 ```rust
-fn api_config(cfg: &mut web::ServiceConfig) {
+pub fn api_config(cfg: &mut web::ServiceConfig) {
     cfg.service(
         web::scope("/api/v1")
             .service(
@@ -50,7 +68,7 @@ fn api_config(cfg: &mut web::ServiceConfig) {
                     .route(web::put().to(update_widget))
                     .route(web::delete().to(delete_widget))
             )
-            .wrap(auth_middleware())
+            .wrap(AuthMiddleware) // every route in the scope needs a verified bearer token
     );
 }
 ```
@@ -61,7 +79,7 @@ fn api_config(cfg: &mut web::ServiceConfig) {
 
 ## Extractors
 ```rust
-use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::{web, HttpResponse};
 use serde::Deserialize;
 use uuid::Uuid;
 
@@ -74,7 +92,7 @@ async fn get_widget(path: web::Path<Uuid>) -> HttpResponse {
 // Query parameters: /widgets?limit=20&cursor=abc (cursor pagination only)
 #[derive(Deserialize)]
 struct ListParams {
-    limit: Option<i64>,     // clamp to 1..=100; echoed as meta.pagination.limit
+    limit: Option<i64>,     // default 20; outside 1..=100 is a 400 VALIDATION_FAILED on `limit` — never clamped
     cursor: Option<String>, // meta.pagination.next_cursor from the previous page
 }
 async fn list_widgets(query: web::Query<ListParams>) -> HttpResponse {
@@ -111,9 +129,13 @@ async fn update_widget(
 
 ## Custom Extractor (AuthUser)
 ```rust
-use actix_web::{dev::Payload, FromRequest, HttpRequest};
-use std::future::{Ready, ready};
+use std::future::{ready, Ready};
 
+use actix_web::{dev::Payload, FromRequest, HttpMessage, HttpRequest};
+use uuid::Uuid;
+
+/// Inserted by AuthMiddleware only after the bearer token verified; the tenant comes from the token.
+#[derive(Clone, Debug)]
 pub struct AuthUser {
     pub user_id: Uuid,
     pub tenant_id: Uuid,
@@ -125,15 +147,7 @@ impl FromRequest for AuthUser {
     type Future = Ready<Result<Self, Self::Error>>;
 
     fn from_request(req: &HttpRequest, _payload: &mut Payload) -> Self::Future {
-        let extensions = req.extensions();
-        match extensions.get::<AuthUser>() {
-            Some(user) => ready(Ok(AuthUser {
-                user_id: user.user_id,
-                tenant_id: user.tenant_id,
-                roles: user.roles.clone(),
-            })),
-            None => ready(Err(AppError::Unauthenticated)),
-        }
+        ready(req.extensions().get::<AuthUser>().cloned().ok_or(AppError::Unauthenticated))
     }
 }
 ```
@@ -142,42 +156,84 @@ impl FromRequest for AuthUser {
 
 ## Middleware
 ```rust
-use actix_web::middleware::Logger;
 use actix_cors::Cors;
+use actix_web::{
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    middleware::{Logger, Next},
+};
 
-// Built-in logger
-App::new()
-    .wrap(Logger::new("%a %r %s %b %Dms"))
+// Built-in logger: .wrap(access_log())
+pub fn access_log() -> Logger {
+    Logger::new("%a %r %s %b %Dms")
+}
 
-// CORS
-App::new()
-    .wrap(
-        Cors::default()
-            .allowed_origin("https://app.example.com")
-            .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
-            .allowed_headers(vec!["Authorization", "Content-Type"])
-            .max_age(3600)
-    )
+// CORS: an explicit allow-list — .wrap(cors())
+pub fn cors() -> Cors {
+    Cors::default()
+        .allowed_origin("https://app.example.com")
+        .allowed_methods(vec!["GET", "POST", "PUT", "DELETE"])
+        .allowed_headers(vec!["Authorization", "Content-Type"])
+        .max_age(3600)
+}
 
-// Custom middleware using wrap_fn
-App::new()
-    .wrap_fn(|req, srv| {
-        let start = std::time::Instant::now();
-        let fut = srv.call(req);
-        async move {
-            let res = fut.await?;
-            let elapsed = start.elapsed();
-            tracing::info!(latency_ms = elapsed.as_millis(), "request completed");
-            Ok(res)
-        }
-    })
+// Custom middleware as an async fn: .wrap(middleware::from_fn(timing))
+pub async fn timing(
+    req: ServiceRequest,
+    next: Next<impl MessageBody>,
+) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
+    let start = std::time::Instant::now();
+    let res = next.call(req).await?;
+    tracing::info!(latency_ms = start.elapsed().as_millis() as u64, status = res.status().as_u16(), "request completed");
+    Ok(res)
+}
 ```
 
 ## Custom Auth Middleware
 ```rust
-use actix_web::dev::{Service, ServiceRequest, ServiceResponse, Transform};
-use std::future::{Future, Ready, ready};
+use std::future::{ready, Future, Ready};
 use std::pin::Pin;
+
+use actix_web::body::EitherBody;
+use actix_web::dev::{forward_ready, Service, ServiceRequest, ServiceResponse, Transform};
+use actix_web::{web, HttpMessage};
+use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use serde::Deserialize;
+use uuid::Uuid;
+
+/// Verifies bearer tokens: HS256 signature, exp, iss and aud. Built once at startup from config.
+pub struct JwtService {
+    key: DecodingKey,
+    validation: Validation,
+}
+
+#[derive(Deserialize)]
+struct Claims {
+    sub: Uuid,
+    tenant_id: Uuid,
+    #[serde(default)]
+    roles: Vec<String>,
+}
+
+impl JwtService {
+    pub fn new(secret: &str, issuer: &str, audience: &str) -> Self {
+        let mut validation = Validation::new(Algorithm::HS256);
+        validation.set_issuer(&[issuer]);
+        validation.set_audience(&[audience]);
+        validation.set_required_spec_claims(&["exp", "iss", "aud", "sub"]);
+        validation.leeway = 30; // seconds of clock skew
+        Self { key: DecodingKey::from_secret(secret.as_bytes()), validation }
+    }
+
+    /// The tenant comes only from the verified token — never from a header or the body.
+    pub fn verify(&self, token: &str) -> Result<AuthUser, AppError> {
+        let data = decode::<Claims>(token, &self.key, &self.validation).map_err(|e| {
+            tracing::debug!(kind = ?e.kind(), "bearer token rejected"); // why: the log, never the client
+            AppError::Unauthenticated
+        })?;
+        Ok(AuthUser { user_id: data.claims.sub, tenant_id: data.claims.tenant_id, roles: data.claims.roles })
+    }
+}
 
 pub struct AuthMiddleware;
 
@@ -187,7 +243,7 @@ where
     S::Future: 'static,
     B: 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<EitherBody<B>>; // left: the handler's response, right: our 401
     type Error = actix_web::Error;
     type Transform = AuthMiddlewareService<S>;
     type InitError = ();
@@ -208,38 +264,48 @@ where
     S::Future: 'static,
     B: 'static,
 {
-    type Response = ServiceResponse<B>;
+    type Response = ServiceResponse<EitherBody<B>>;
     type Error = actix_web::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
 
-    fn poll_ready(&self, ctx: &mut core::task::Context<'_>) -> core::task::Poll<Result<(), Self::Error>> {
-        self.service.poll_ready(ctx)
-    }
+    forward_ready!(service);
 
     fn call(&self, req: ServiceRequest) -> Self::Future {
-        let token = req.headers()
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "));
-
-        // Validate token and insert AuthUser into extensions
-        // ...
-
-        let fut = self.service.call(req);
-        Box::pin(async move { fut.await })
+        let user = match (req.app_data::<web::Data<AppState>>(), bearer_token(&req)) {
+            (Some(state), Some(token)) => state.jwt.verify(token),
+            (None, _) => Err(AppError::Internal(anyhow::anyhow!("AppState was not registered with .app_data()"))),
+            (_, None) => Err(AppError::Unauthenticated),
+        };
+        match user {
+            Ok(user) => {
+                req.extensions_mut().insert(user); // what the AuthUser extractor reads
+                let fut = self.service.call(req);
+                Box::pin(async move { Ok(fut.await?.map_into_left_body()) })
+            }
+            // missing, malformed, expired, wrong issuer/audience: one 401 envelope, rendered here (inside
+            // the request-id scope) as a response rather than an Err; the handler never runs
+            Err(err) => Box::pin(ready(Ok(req.error_response(err).map_into_right_body()))),
+        }
     }
+}
+
+fn bearer_token(req: &ServiceRequest) -> Option<&str> {
+    req.headers().get("Authorization")?.to_str().ok()?.strip_prefix("Bearer ")
 }
 ```
 - Actix middleware uses the `Transform` + `Service` traits from Tower-like patterns
-- For simpler middleware, prefer `wrap_fn` or `from_fn` helpers
+- For simpler middleware, prefer `middleware::from_fn` (Middleware above)
 
 ## Error Handling (ResponseError trait)
 Every error body is the envelope in `api/response-envelope.md`:
 `{"error": {code, message, details?, request_id, retryable}}` — no `data`, no source-error text.
 ```rust
 use actix_web::{
-    dev::{Service, ServiceResponse},
+    body::MessageBody,
+    dev::{ServiceRequest, ServiceResponse},
+    error::InternalError,
     http::{header::{self, HeaderName, HeaderValue}, StatusCode},
+    middleware::Next,
     HttpResponse, ResponseError,
 };
 use serde::Serialize;
@@ -330,33 +396,46 @@ impl ResponseError for AppError {
     }
 }
 
-tokio::task_local! {
-    /// The current request's id; set by the request-id middleware and equal to the X-Request-Id header.
-    pub static REQUEST_ID: String;
-}
+// The task-local ApiResponse::success reads (languages/rust.md "Response Envelope"): ONE id for
+// success and error bodies. A second task_local! here would leave every success meta.request_id empty.
+use crate::response::REQUEST_ID;
 
-// Request-id middleware — register it LAST (outermost). Inner errors are rendered inside its scope,
-// so every envelope carries the same id the response echoes as X-Request-Id.
-App::new()
-    // ... other .wrap(...) calls first ...
-    .wrap_fn(|req, srv| {
-        let id = req.headers().get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let http_req = req.request().clone();
-        let fut = srv.call(req);
-        REQUEST_ID.scope(id.clone(), async move {
-            let mut res = match fut.await {
-                Ok(res) => res.map_into_boxed_body(),
-                Err(err) => ServiceResponse::from_err(err, http_req), // error_response() runs here, in scope
-            };
-            if let Ok(value) = HeaderValue::from_str(&id) {
-                res.headers_mut().insert(HeaderName::from_static("x-request-id"), value);
+// Request-id middleware — register it LAST (outermost): .wrap(middleware::from_fn(request_id)).
+// Inner errors are rendered inside its scope, so every envelope carries the id it echoes as X-Request-Id.
+pub async fn request_id(
+    req: ServiceRequest,
+    next: Next<impl MessageBody + 'static>,
+) -> Result<ServiceResponse<impl MessageBody>, actix_web::Error> {
+    let id = req.headers().get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        // a client-chosen id lands in logs and headers: short, plain characters only
+        .filter(|s| !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
+        .map(str::to_owned)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let header = HeaderValue::from_str(&id).ok();
+    // Don't clone req.request() to keep it for later: actix panics routing a request whose
+    // HttpRequest is shared ("Panics if this HttpRequest has been cloned").
+    REQUEST_ID.scope(id, async move {
+        match next.call(req).await {
+            Ok(mut res) => {
+                if let Some(value) = header {
+                    res.headers_mut().insert(HeaderName::from_static("x-request-id"), value);
+                }
+                Ok(res)
             }
-            Ok::<_, actix_web::Error>(res)
-        })
+            // An inner middleware's Err: render the envelope HERE, inside the scope, so it carries the
+            // id — the server would otherwise render it after the scope ended, with an empty request_id
+            Err(err) => {
+                let mut res = err.error_response();
+                if let Some(value) = header {
+                    res.headers_mut().insert(HeaderName::from_static("x-request-id"), value);
+                }
+                Err(InternalError::from_response(err, res).into())
+            }
+        }
     })
+    .await
+}
 ```
 - Implement `ResponseError` on your error type — Actix calls it automatically on `Err`
 - Handler return type: `Result<HttpResponse, AppError>` enables `?` operator
@@ -366,76 +445,88 @@ App::new()
 
 ## Connection Pooling
 ```rust
-use deadpool_postgres::{Config, Pool, Runtime};
-use tokio_postgres::NoTls;
+use std::time::Duration;
 
-// deadpool (async, preferred for Actix)
-fn create_pool(database_url: &str) -> Pool {
+use deadpool_postgres::{Config, Pool, PoolConfig, Runtime, Timeouts};
+
+// deadpool (async, preferred for Actix). NoTls only to a database on the same host or a private
+// sidecar; across a network use a TLS connector (e.g. tokio-postgres-rustls).
+fn create_pool(database_url: &str) -> anyhow::Result<Pool> {
     let mut cfg = Config::new();
     cfg.url = Some(database_url.to_string());
-    cfg.pool = Some(deadpool_postgres::PoolConfig {
+    cfg.pool = Some(PoolConfig {
         max_size: 50,
-        timeouts: deadpool_postgres::Timeouts {
+        timeouts: Timeouts {
             wait: Some(Duration::from_secs(5)),
             create: Some(Duration::from_secs(5)),
             recycle: Some(Duration::from_secs(30)),
         },
         ..Default::default()
     });
-    cfg.create_pool(Some(Runtime::Tokio1), NoTls).unwrap()
+    Ok(cfg.create_pool(Some(Runtime::Tokio1), tokio_postgres::NoTls)?)
 }
 
-// r2d2 (sync — use only with web::block for CPU-bound work)
-use r2d2_postgres::{postgres::NoTls, PostgresConnectionManager};
+// r2d2 (sync — every call that uses it goes inside web::block so it never blocks a worker thread)
+use r2d2_postgres::{postgres, PostgresConnectionManager};
 
-fn create_sync_pool(database_url: &str) -> r2d2::Pool<PostgresConnectionManager<NoTls>> {
-    let manager = PostgresConnectionManager::new(database_url.parse().unwrap(), NoTls);
-    r2d2::Pool::builder()
+fn create_sync_pool(database_url: &str) -> anyhow::Result<r2d2::Pool<PostgresConnectionManager<postgres::NoTls>>> {
+    let manager = PostgresConnectionManager::new(database_url.parse()?, postgres::NoTls);
+    Ok(r2d2::Pool::builder()
         .max_size(20)
         .min_idle(Some(5))
-        .build(manager)
-        .unwrap()
+        .build(manager)?)
 }
 ```
 - Prefer `deadpool` or `sqlx` for async connection pooling with Actix
 - Use `r2d2` only when wrapping sync libraries with `web::block()`
 - Always set `max_size` explicitly — never use unlimited connections
+- Pool construction fails startup with an error (`?`), never a panic in a request path
 
 ## Testing with actix-rt
 ```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use actix_web::{test, App, web};
+    use actix_web::{http::StatusCode, middleware, test, web, App};
 
     #[actix_rt::test]
     async fn test_get_widget() {
+        // your test helpers: a test database, a seeded row, and a token signed with the test key
+        // (testing/rust-test.md) — never a fixed string the server accepts as a token
         let state = web::Data::new(test_app_state().await);
+        let widget = seed_widget(&state).await;
+        let token = test_token(&state, widget.tenant_id);
         let app = test::init_service(
             App::new()
                 .app_data(state.clone())
+                .app_data(path_config())
+                .wrap(middleware::from_fn(request_id))
                 .configure(api_config)
         ).await;
 
         let req = test::TestRequest::get()
-            .uri("/api/v1/widgets/some-uuid")
-            .insert_header(("Authorization", "Bearer test-token"))
+            .uri(&format!("/api/v1/widgets/{}", widget.id)) // a real id: "some-uuid" is a 400
+            .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
 
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::OK);
+        let request_id = resp.headers().get("x-request-id").unwrap().to_str().unwrap().to_owned();
 
         let body: serde_json::Value = test::read_body_json(resp).await;
-        assert!(body["data"]["id"].is_string());
-        assert!(body["meta"]["request_id"].is_string()); // envelope: data + meta.request_id
+        assert_eq!(body["data"]["id"], widget.id.to_string());
+        assert_eq!(body["meta"]["request_id"], request_id.as_str()); // envelope: data + meta.request_id = X-Request-Id
     }
 
     #[actix_rt::test]
     async fn test_create_widget() {
         let state = web::Data::new(test_app_state().await);
+        let token = test_token(&state, uuid::Uuid::new_v4());
         let app = test::init_service(
             App::new()
                 .app_data(state.clone())
+                .app_data(json_config())
+                .wrap(middleware::from_fn(request_id))
                 .configure(api_config)
         ).await;
 
@@ -447,7 +538,7 @@ mod tests {
         let req = test::TestRequest::post()
             .uri("/api/v1/widgets")
             .set_json(&input)
-            .insert_header(("Authorization", "Bearer test-token"))
+            .insert_header(("Authorization", format!("Bearer {token}")))
             .to_request();
 
         let resp = test::call_service(&app, req).await;
@@ -463,30 +554,35 @@ mod tests {
 
 ## JSON Configuration
 ```rust
-// Customize extractor failures globally: each becomes an AppError, so the body is the envelope.
+use actix_web::web;
+
+// Extractor failures become an AppError, so the body is the envelope: .app_data(json_config()) etc.
 // serde's text goes to a debug log — never into the message.
-App::new()
-    .app_data(
-        web::JsonConfig::default()
-            .limit(1_048_576) // 1MB body limit
-            .error_handler(|err, _req| {
-                // bad syntax, wrong shape, wrong content type, too large → 400 MALFORMED_REQUEST
-                tracing::debug!(error = %err, "json body rejected");
-                AppError::MalformedRequest.into()
-            })
-    )
-    .app_data(
-        web::QueryConfig::default().error_handler(|err, _req| {
-            tracing::debug!(error = %err, "query rejected");
+pub fn json_config() -> web::JsonConfig {
+    web::JsonConfig::default()
+        .limit(1_048_576) // 1MB body limit
+        .error_handler(|err, _req| {
+            // bad syntax, wrong shape, wrong content type, too large → 400 MALFORMED_REQUEST
+            tracing::debug!(error = %err, "json body rejected");
             AppError::MalformedRequest.into()
         })
-    )
-    .app_data(
-        web::PathConfig::default().error_handler(|err, _req| {
-            tracing::debug!(error = %err, "path rejected");
-            AppError::NotFound("Resource").into() // /widgets/not-a-uuid can't name an existing resource
-        })
-    )
+}
+
+pub fn query_config() -> web::QueryConfig {
+    web::QueryConfig::default().error_handler(|err, _req| {
+        tracing::debug!(error = %err, "query rejected");
+        AppError::MalformedRequest.into()
+    })
+}
+
+pub fn path_config() -> web::PathConfig {
+    web::PathConfig::default().error_handler(|err, _req| {
+        tracing::debug!(error = %err, "path rejected");
+        // /widgets/not-a-uuid: the client sent a malformed id → 400 VALIDATION_FAILED on `id`
+        // (as in frameworks/axum.md and error-handling-rust.md), not a 404
+        AppError::Validation(vec![FieldError { field: "id".into(), code: "invalid_format", message: "Must be a valid ID." }]).into()
+    })
+}
 ```
 
 ## Rules
@@ -495,7 +591,7 @@ App::new()
 - Implement `ResponseError` on your error type for automatic HTTP error mapping — it writes the envelope
   (`api/response-envelope.md`), and extractor failures map to `AppError` via the `*Config` error handlers
 - Use `deadpool` or `sqlx` for async connection pooling — `r2d2` is sync only
-- `web::block()` for CPU-bound work — offloads to thread pool, prevents blocking the event loop
+- `web::block()` for blocking calls (sync drivers, CPU-heavy work) — runs them on the blocking thread pool, so the workers keep serving
 - Custom extractors via `FromRequest` — never parse auth headers manually in every handler
 - Use `actix_cors` crate for CORS — never implement CORS manually
 - `JsonConfig` must set body size limit — never accept unbounded request bodies

@@ -1,5 +1,11 @@
 # Rust testing patterns for backend services.
 
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, mockall 0.15.0, proptest 1.11.0, sqlx 0.9.0, inside the Rust CRUD archetypes' widget app. Every test here ran (the database ones on Postgres 17) and passes.
+
+The examples test the widget service of the Rust CRUD archetypes (`backend/archetypes/crud-*-rust.md`):
+`crate::models::Widget`, `crate::services::widget::WidgetService`, the `#[automock]` traits in
+`crate::traits`, and `yourapp::startup::build_app`.
+
 ## Unit Test Module Pattern
 ```rust
 #[cfg(test)]
@@ -27,6 +33,7 @@ mod tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_fixtures::{tenant_id, user_id};
 
     #[tokio::test]
     async fn test_create_widget() {
@@ -57,22 +64,17 @@ mod tests {
 - Default is `flavor = "current_thread"` — use `#[tokio::test(flavor = "multi_thread")]` only when testing concurrent behavior
 
 ## Mocking with mockall
+The service's dependencies are traits with `#[automock]` on them, in `src/traits/`
+(`backend/archetypes/crud-service-test-rust.md`). Mock those — never a hand-copied subset of the trait,
+which drifts from the real one.
 ```rust
-use mockall::automock;
-
-#[automock]
-#[async_trait]
-pub trait WidgetRepository: Send + Sync {
-    async fn create(&self, widget: &Widget) -> Result<(), AppError>;
-    async fn get_by_id(&self, tenant_id: Uuid, id: Uuid) -> Result<Widget, AppError>;
-    async fn update(&self, widget: &Widget) -> Result<(), AppError>;
-    async fn soft_delete(&self, tenant_id: Uuid, id: Uuid) -> Result<(), AppError>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockall::predicate::*;
+    use std::sync::Arc;
+
+    use crate::test_fixtures::{tenant_id, user_id};
+    use crate::traits::{audit::MockAuditWriter, cache::MockCache, repository::MockWidgetRepository};
 
     #[tokio::test]
     async fn test_service_calls_repo_create() {
@@ -83,8 +85,9 @@ mod tests {
             .times(1)
             .returning(|_| Ok(()));
 
-        let mock_cache = MockCache::new();  // no cache expectations — not called on create
-        let mock_audit = MockAuditWriter::new();
+        let mock_cache = MockCache::new(); // no expectations: create must not touch the cache
+        let mut mock_audit = MockAuditWriter::new();
+        mock_audit.expect_write().times(1).returning(|_| Ok(())); // create writes one audit entry
 
         let service = WidgetService::new(
             Arc::new(mock_repo),
@@ -98,29 +101,29 @@ mod tests {
     }
 }
 ```
-- Add `#[automock]` above the trait definition — mockall generates `MockWidgetRepository`
+- `#[automock]` above the trait definition makes mockall generate `MockWidgetRepository`
 - Use `expect_*()` to set expectations, `returning()` to provide return values
 - Use `withf()` for predicate-based argument matching
-- Mock objects panic on unexpected calls — this is intentional (catches incorrect usage)
+- Mock objects panic on unexpected calls — this is intentional (catches incorrect usage), so every call
+  the code under test makes needs an expectation
 
 ## Database Tests with sqlx
 ```rust
-// In Cargo.toml: sqlx = { features = ["runtime-tokio", "postgres", "migrate"] }
+// In Cargo.toml: sqlx = { features = ["runtime-tokio", "postgres", "migrate", "macros"] }
 
 #[cfg(test)]
 mod tests {
     use sqlx::PgPool;
 
-    // sqlx::test provides a fresh database per test via transactions that roll back.
+    use super::*;
+    use crate::test_fixtures::test_widget;
+
+    // #[sqlx::test] creates a fresh database for each test, runs the migrations in it, and drops it
+    // after the test passes.
     #[sqlx::test(migrations = "./migrations")]
     async fn test_create_widget(pool: PgPool) {
         let repo = PgWidgetRepository::new(pool);
-        let widget = Widget {
-            id: Uuid::new_v4(),
-            tenant_id: Uuid::new_v4(),
-            name: "DB Test".into(),
-            ..Default::default()
-        };
+        let widget = Widget { name: "DB Test".into(), ..test_widget() };
 
         let result = repo.create(&widget).await;
         assert!(result.is_ok());
@@ -143,35 +146,40 @@ mod tests {
     }
 }
 ```
-- Set `DATABASE_URL` in `.env` or env var — sqlx connects to a real Postgres instance
-- `#[sqlx::test]` wraps each test in a transaction that rolls back — tests are isolated
+- `DATABASE_URL` (env var or `.env`) points at a Postgres server the test user can create databases on
+- `#[sqlx::test]` gives every test its own database — tests are isolated and can run in parallel
 - `migrations = "./migrations"` runs migrations before each test
 - Requires a running Postgres — use docker-compose or testcontainers
 
 ## Test Fixtures with std::sync::OnceLock
 ```rust
+// src/test_fixtures.rs — in lib.rs: #[cfg(test)] mod test_fixtures;
 use std::sync::OnceLock;
+
+use chrono::Utc;
 use uuid::Uuid;
+
+use crate::models::{Widget, WidgetStatus};
 
 static TEST_TENANT: OnceLock<Uuid> = OnceLock::new();
 static TEST_USER: OnceLock<Uuid> = OnceLock::new();
 
-fn tenant_id() -> Uuid {
+pub(crate) fn tenant_id() -> Uuid {
     *TEST_TENANT.get_or_init(|| Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap())
 }
 
-fn user_id() -> Uuid {
+pub(crate) fn user_id() -> Uuid {
     *TEST_USER.get_or_init(|| Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap())
 }
 
-fn test_widget() -> Widget {
+pub(crate) fn test_widget() -> Widget {
     let now = Utc::now();
     Widget {
         id: Uuid::new_v4(),
         tenant_id: tenant_id(),
         name: "Test Widget".into(),
         description: Some("fixture".into()),
-        status: "active".into(),
+        status: WidgetStatus::Active,
         created_at: now,
         updated_at: now,
         deleted_at: None,
@@ -183,29 +191,41 @@ fn test_widget() -> Widget {
 ```
 - Use `OnceLock` (stable since Rust 1.80) for lazily-initialized test constants
 - Avoid `lazy_static` — `OnceLock` is in std and does the same thing
+- Integration tests in `tests/` can't see `#[cfg(test)]` items of the crate: they get their own helpers
+  (Test Helper below)
 
 ## Property-Based Testing with proptest
 ```rust
-use proptest::prelude::*;
+// next to encode_cursor / decode_cursor / sanitize_column in the repository module
+#[cfg(test)]
+mod proptests {
+    use super::*;
+    use crate::test_fixtures::test_widget;
+    use proptest::prelude::*;
 
-proptest! {
-    #[test]
-    fn test_cursor_roundtrip(
-        ts in any::<i64>().prop_map(|secs| DateTime::from_timestamp(secs.abs() % 4_000_000_000, 0).unwrap()),
-        id in any::<[u8; 16]>().prop_map(Uuid::from_bytes),
-    ) {
-        let encoded = encode_cursor(ts, id);
-        let (decoded_ts, decoded_id) = decode_cursor(&encoded).unwrap();
-        prop_assert_eq!(ts, decoded_ts);
-        prop_assert_eq!(id, decoded_id);
-    }
+    proptest! {
+        #[test]
+        fn test_cursor_roundtrip(
+            secs in 0i64..4_000_000_000,
+            id in any::<[u8; 16]>().prop_map(Uuid::from_bytes),
+        ) {
+            let created_at = DateTime::from_timestamp(secs, 0).unwrap();
+            let widget = Widget { id, created_at, ..test_widget() };
 
-    #[test]
-    fn test_sanitize_column_never_returns_injection(input in ".*") {
-        let result = sanitize_column(&input);
-        // Result must be one of the allow-listed columns
-        prop_assert!(["created_at", "updated_at", "name", "status", "priority", "category"]
-            .contains(&result));
+            let encoded = encode_cursor("created_at", &widget);
+            let decoded = decode_cursor(&encoded, "created_at").unwrap();
+            prop_assert_eq!(decoded.id, id);
+            prop_assert!(matches!(decoded.key, CursorKey::Ts(ts) if ts == created_at));
+            // a cursor issued for one sort order is rejected for another
+            prop_assert!(decode_cursor(&encoded, "name").is_err());
+        }
+
+        #[test]
+        fn test_sanitize_column_never_returns_injection(input in ".*") {
+            let result = sanitize_column(&input);
+            // Result must be one of the allow-listed columns
+            prop_assert!(["created_at", "updated_at", "name"].contains(&result));
+        }
     }
 }
 ```
@@ -216,28 +236,28 @@ proptest! {
 ## Integration Tests (tests/ directory)
 ```rust
 // tests/api_integration.rs — runs as a separate binary
-use axum::body::Body;
-use axum::http::{Request, StatusCode};
-use tower::ServiceExt;
+use axum::http::StatusCode;
+use serde_json::json;
+use sqlx::PgPool;
 
 mod common;
 use common::TestApp;
 
-#[tokio::test]
-async fn test_full_crud_lifecycle() {
-    let app = TestApp::spawn().await;
+#[sqlx::test(migrations = "./migrations")]
+async fn test_full_crud_lifecycle(pool: PgPool) {
+    let app = TestApp::spawn(pool).await;
 
     // Create
     let resp = app.post("/api/v1/widgets", json!({ "name": "Integration" })).await;
     assert_eq!(resp.status(), StatusCode::CREATED);
-    let created: serde_json::Value = app.json(resp).await;
+    let created = app.json(resp).await;
     let id = created["data"]["id"].as_str().unwrap();
 
     // Read
     let resp = app.get(&format!("/api/v1/widgets/{id}")).await;
     assert_eq!(resp.status(), StatusCode::OK);
 
-    // Update
+    // Update (optimistic lock: send the version you read)
     let resp = app.put(
         &format!("/api/v1/widgets/{id}"),
         json!({ "name": "Updated", "version": 1 }),
@@ -260,44 +280,73 @@ async fn test_full_crud_lifecycle() {
 
 ## Test Helper (tests/common/mod.rs)
 ```rust
+use axum::{body::Body, http::Request, response::Response, Router};
+use jsonwebtoken::{encode, EncodingKey, Header};
+use sqlx::PgPool;
+use tower::ServiceExt; // oneshot
+use uuid::Uuid;
+use yourapp::{auth::claims::JwtClaims, config::AppConfig, startup::build_app};
+
 pub struct TestApp {
     app: Router,
     token: String,
 }
 
 impl TestApp {
-    pub async fn spawn() -> Self {
-        let pool = test_pool().await;
-        let state = Arc::new(AppState::test(pool));
-        let app = build_router(state);
-        let token = generate_test_jwt(tenant_id(), user_id());
+    /// `pool` is the fresh, migrated database #[sqlx::test] hands the test.
+    pub async fn spawn(pool: PgPool) -> Self {
+        // test-only key; a real deployment loads the secret from its environment
+        let config = AppConfig::test_defaults();
+        let token = test_jwt(&config.jwt_secret, Uuid::new_v4(), Uuid::new_v4());
+        let app = build_app(config, pool).await;
         Self { app, token }
     }
 
-    pub async fn get(&self, path: &str) -> axum::response::Response {
-        let req = Request::builder()
-            .uri(path)
-            .header("authorization", format!("Bearer {}", self.token))
-            .body(Body::empty())
-            .unwrap();
-        self.app.clone().oneshot(req).await.unwrap()
+    pub async fn get(&self, path: &str) -> Response {
+        self.send("GET", path, Body::empty()).await
     }
 
-    pub async fn post(&self, path: &str, body: serde_json::Value) -> axum::response::Response {
-        let req = Request::builder()
-            .method("POST")
-            .uri(path)
-            .header("authorization", format!("Bearer {}", self.token))
-            .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&body).unwrap()))
-            .unwrap();
-        self.app.clone().oneshot(req).await.unwrap()
+    pub async fn post(&self, path: &str, body: serde_json::Value) -> Response {
+        self.send("POST", path, Body::from(serde_json::to_vec(&body).unwrap())).await
     }
 
-    pub async fn json(&self, resp: axum::response::Response) -> serde_json::Value {
+    pub async fn put(&self, path: &str, body: serde_json::Value) -> Response {
+        self.send("PUT", path, Body::from(serde_json::to_vec(&body).unwrap())).await
+    }
+
+    pub async fn delete(&self, path: &str) -> Response {
+        self.send("DELETE", path, Body::empty()).await
+    }
+
+    pub async fn json(&self, resp: Response) -> serde_json::Value {
         let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&body).unwrap()
     }
+
+    async fn send(&self, method: &str, path: &str, body: Body) -> Response {
+        let req = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("authorization", format!("Bearer {}", self.token))
+            .header("content-type", "application/json")
+            .body(body)
+            .unwrap();
+        self.app.clone().oneshot(req).await.unwrap()
+    }
+}
+
+/// A token signed with the test key, for one tenant — the server verifies it like any other.
+fn test_jwt(secret: &str, tenant_id: Uuid, user_id: Uuid) -> String {
+    let now = chrono::Utc::now();
+    let claims = JwtClaims {
+        sub: user_id,
+        tenant_id,
+        roles: vec!["admin".into()],
+        iat: now.timestamp() as usize,
+        exp: (now + chrono::Duration::hours(1)).timestamp() as usize,
+        jti: None,
+    };
+    encode(&Header::default(), &claims, &EncodingKey::from_secret(secret.as_bytes())).unwrap()
 }
 ```
 - `tower::ServiceExt::oneshot` — no TCP server needed, fast and deterministic

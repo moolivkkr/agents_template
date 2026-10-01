@@ -1,12 +1,12 @@
 # Axum framework patterns for Rust HTTP APIs.
 
-> The Error Handling block and its bad-path test compile-checked 2026-09-30 and the test passes (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9. The other blocks are not checked yet.
+> Rust samples compile-checked 2026-09-30 (tests/archetype-compile/rust/run.sh): rustc 1.98.1, axum 0.8.9, tower-http 0.7.1, deadpool-redis 0.23.1, with languages/rust.md's ApiResponse. Both tests run and pass (the router test against stub widget handlers); harness tests on top: 401 envelopes on the nested routes, a forged token is a 401, an unknown route is a 404 envelope.
 
 ## Router Setup
 ```rust
 use axum::{
     Router,
-    routing::{get, post, put, delete},
+    routing::{get, post},
     middleware,
 };
 use std::sync::Arc;
@@ -17,7 +17,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .nest("/api/v1", api_routes(state.clone()))
         .fallback(|| async { AppError::NotFound("Resource") }) // unknown route → envelope, not an empty 404
         .layer(TraceLayer::new_for_http())
-        .layer(middleware::from_fn(recovery_middleware))
+        .layer(middleware::from_fn(recovery_middleware)) // panic → 500 envelope (error-handling-rust.md)
         .layer(middleware::from_fn(request_id_middleware)) // added last = outermost (see Error Handling)
         .with_state(state)
 }
@@ -41,7 +41,9 @@ fn widget_routes() -> Router<Arc<AppState>> {
 
 ## Extractors
 ```rust
-use axum::extract::{Path, Query, Json, State, Extension};
+use std::sync::Arc;
+
+use axum::{extract::{Json, Path, Query, State}, response::IntoResponse};
 use uuid::Uuid;
 
 // Path parameters: /widgets/{id}
@@ -70,9 +72,11 @@ async fn update(
 
 ## Middleware (Tower Layers)
 ```rust
-use axum::{extract::Request, middleware::Next, response::Response};
+use std::sync::Arc;
 
-async fn auth_middleware(
+use axum::{extract::{Request, State}, middleware::Next, response::Response};
+
+pub async fn auth_middleware(
     State(state): State<Arc<AppState>>,
     mut req: Request,
     next: Next,
@@ -83,8 +87,11 @@ async fn auth_middleware(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(AppError::Unauthenticated)?;
 
-    let claims = state.jwt.verify(token)
-        .map_err(|_| AppError::Unauthenticated)?; // why it failed goes to a debug log, not the client
+    // signature, exp, iss and aud checked; the tenant is read from these claims, never from a header
+    let claims = state.jwt.verify(token).map_err(|e| {
+        tracing::debug!(error = %e, "token rejected"); // why it failed: the log, never the client
+        AppError::Unauthenticated
+    })?;
 
     req.extensions_mut().insert(claims);
     Ok(next.run(req).await)
@@ -179,16 +186,17 @@ impl IntoResponse for AppError {
     }
 }
 
-tokio::task_local! {
-    /// The current request's id; set by request_id_middleware and equal to the X-Request-Id header.
-    pub static REQUEST_ID: String;
-}
+// The task-local ApiResponse::success reads (languages/rust.md "Response Envelope"): ONE id for
+// success and error bodies. A second task_local! here would leave every success meta.request_id empty.
+use crate::response::REQUEST_ID;
 
-// Outermost layer: take or generate the id, run the whole request inside the scope (so handler,
-// extractor and middleware errors all see it), and echo it on the response.
+// Outermost layer: keep a well-formed incoming id or mint one, run the whole request inside the scope
+// (so handler, extractor and middleware errors all see it), and echo it on the response.
 pub async fn request_id_middleware(req: Request, next: Next) -> Response {
     let id = req.headers().get("x-request-id")
         .and_then(|v| v.to_str().ok())
+        // a client-chosen id lands in logs and headers: short, plain characters only
+        .filter(|s| !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'))
         .map(str::to_owned)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let mut res = REQUEST_ID.scope(id.clone(), next.run(req)).await;
@@ -246,6 +254,10 @@ impl From<PathRejection> for AppError {
 
 ## State Management
 ```rust
+use std::sync::Arc;
+
+use axum::Router;
+
 pub struct AppState {
     pub db: sqlx::PgPool,
     pub redis: deadpool_redis::Pool,
@@ -253,27 +265,37 @@ pub struct AppState {
     pub config: AppConfig,
 }
 
-// In main.rs:
-let state = Arc::new(AppState {
-    db: sqlx::PgPool::connect(&config.database_url).await?,
-    redis: deadpool_redis::Config::from_url(&config.redis_url).create_pool(None)?,
-    jwt: JwtService::new(&config.jwt_secret),
-    config,
-});
-let app = build_router(state);
+// Called from main.rs: every dependency is built once, at startup, from the loaded config
+pub async fn build_app(config: AppConfig) -> anyhow::Result<Router> {
+    let state = Arc::new(AppState {
+        db: sqlx::PgPool::connect(&config.database_url).await?,
+        // Runtime::Tokio1: the pool's wait/create/recycle timeouts need a runtime (None disables them)
+        redis: deadpool_redis::Config::from_url(&config.redis_url)
+            .create_pool(Some(deadpool_redis::Runtime::Tokio1))?,
+        jwt: JwtService::new(&config.jwt_secret),
+        config,
+    });
+    Ok(build_router(state))
+}
 ```
 - `Arc<AppState>` is the standard pattern — thread-safe shared ownership
 - All dependencies live in `AppState` — no globals, fully testable
 
 ## Graceful Shutdown
 ```rust
+use axum::Router;
 use tokio::signal;
 
-let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
-tracing::info!("listening on {}", listener.local_addr()?);
-axum::serve(listener, app)
-    .with_graceful_shutdown(shutdown_signal())
-    .await?;
+// main.rs: serve(build_app(config).await?).await
+pub async fn serve(app: Router) -> anyhow::Result<()> {
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await?;
+    tracing::info!("listening on {}", listener.local_addr()?);
+    // on the signal: stop accepting, let in-flight requests finish, then return
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
+    Ok(())
+}
 
 async fn shutdown_signal() {
     let ctrl_c = signal::ctrl_c();
@@ -294,22 +316,27 @@ use tower::ServiceExt; // for `oneshot`
 
 #[tokio::test]
 async fn test_get_widget() {
+    // your test helpers: a test database, a seeded row, and a token signed with the test key
+    // (testing/rust-test.md) — never a fixed string the server accepts as a token
     let state = Arc::new(test_app_state().await);
+    let widget = seed_widget(&state).await;
+    let token = test_token(&state, widget.tenant_id);
     let app = build_router(state);
 
     let req = Request::builder()
-        .uri("/api/v1/widgets/some-uuid")
-        .header("authorization", "Bearer test-token")
+        .uri(format!("/api/v1/widgets/{}", widget.id)) // a real id: "some-uuid" is a 400
+        .header("authorization", format!("Bearer {token}"))
         .body(Body::empty())
         .unwrap();
 
     let resp = app.oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+    let request_id = resp.headers()["x-request-id"].to_str().unwrap().to_owned();
 
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(json["data"]["id"].is_string());
-    assert!(json["meta"]["request_id"].is_string()); // envelope: data + meta.request_id
+    assert_eq!(json["data"]["id"], widget.id.to_string());
+    assert_eq!(json["meta"]["request_id"], request_id.as_str()); // envelope: data + meta.request_id = X-Request-Id
 }
 ```
 A bad path parameter is a 400 envelope, not axum's plain-text rejection (same module as the error

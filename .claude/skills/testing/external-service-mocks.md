@@ -277,7 +277,7 @@ class StripeIntegrationTest {
 
 ```rust
 use wiremock::{MockServer, Mock, ResponseTemplate};
-use wiremock::matchers::{method, path};
+use wiremock::matchers::{body_string_contains, header, method, path};
 
 #[tokio::test]
 async fn test_create_payment_intent() {
@@ -285,6 +285,8 @@ async fn test_create_payment_intent() {
 
     Mock::given(method("POST"))
         .and(path("/v1/payment_intents"))
+        .and(header("authorization", "Bearer sk_test_fake"))
+        .and(body_string_contains("amount=2000"))
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "id": "pi_test_123",
             "object": "payment_intent",
@@ -293,6 +295,7 @@ async fn test_create_payment_intent() {
             "status": "requires_payment_method",
             "client_secret": "pi_test_secret_123"
         })))
+        .expect(1) // verified when mock_server drops: exactly one matching request
         .mount(&mock_server)
         .await;
 

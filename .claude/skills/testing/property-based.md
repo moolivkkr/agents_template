@@ -249,29 +249,33 @@ proptest! {
         let mut cursor = None;
         loop {
             let page = paginate(&items, cursor.as_deref(), page_size);
+            prop_assert!(page.items.len() <= page_size);
             collected.extend(page.items);
             if !page.has_more {
                 break;
             }
             cursor = Some(page.cursor.unwrap());
         }
-        prop_assert_eq!(collected.len(), total);
+        // every item exactly once, in order: a count alone misses one skipped + one repeated
+        let want: Vec<_> = items.iter().map(|w| w.id).collect();
+        let got: Vec<_> = collected.iter().map(|w| w.id).collect();
+        prop_assert_eq!(got, want);
     }
 }
 ```
 
 ### quickcheck (simpler API)
 ```rust
-use quickcheck::{quickcheck, Arbitrary, Gen};
+use quickcheck::{quickcheck, TestResult};
 
 quickcheck! {
-    fn encode_decode_roundtrip(name: String) -> bool {
+    fn encode_decode_roundtrip(name: String) -> TestResult {
         if name.is_empty() || name.len() > 255 {
-            return true; // skip invalid inputs
+            return TestResult::discard(); // not a valid name: don't count it as a passing case
         }
         let encoded = encode(&name);
         let decoded = decode(&encoded);
-        decoded == name
+        TestResult::from_bool(decoded == name)
     }
 }
 ```

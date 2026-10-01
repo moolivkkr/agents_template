@@ -38,7 +38,7 @@ class S:
 
 class Unit:
     def __init__(self, name, what, files, *, lib=True, lib_name=None, bins=(), benches=(), migrations=False,
-                 protos=False, build_rs=False, features=None):
+                 protos=False, build_rs=False, features=None, schema="default", tests=None, test_args=()):
         self.name, self.what, self.files = name, what, files
         self.package = "archetype-" + name
         # lib=False: a binary-only crate (src/main.rs is the crate root, as in the doc's layout)
@@ -46,6 +46,12 @@ class Unit:
         self.bins, self.benches = list(bins), list(benches)
         self.migrations, self.protos, self.build_rs = migrations, protos, build_rs
         self.features = dict(features or {})  # checked with --all-features, so cfg(feature) code compiles too
+        # SCHEMAS key: the database its sqlx macros are checked against, and the migrations/ it gets
+        self.schema = schema
+        # run.sh --run-tests: None = the unit is compile-checked only; otherwise what its tests need
+        # besides cargo: () nothing, "db" a Postgres server (--database-url), "docker" a Docker daemon
+        self.tests = None if tests is None else tuple(tests)
+        self.test_args = list(test_args)  # extra `cargo test` target selection, e.g. ["--lib"]
 
 
 def blocks(file, *idx, **kw):
@@ -53,13 +59,23 @@ def blocks(file, *idx, **kw):
 
 
 # Skill packs outside backend/archetypes whose Rust blocks are pinned here too (key: path under
-# .claude/skills without .md). Their untouched blocks are listed in SKIP with the reason.
-EXTRA_FILES = ["languages/rust.md", "frameworks/axum.md"]
+# .claude/skills without .md). harness.py fails when any other .claude/skills/**/*.md has a ```rust
+# block, so a new one can't go unchecked. Shared (multi-language) packs: only their Rust blocks are
+# compiled; their other blocks belong to the other languages' harnesses.
+EXTRA_FILES = [
+    "languages/rust.md", "frameworks/axum.md", "frameworks/actix-web.md", "frameworks/graphql.md",
+    "testing/rust-test.md", "testing/external-service-mocks.md", "testing/property-based.md",
+]
 
 # ─── expected block counts: a mismatch fails the run until this file is updated ──────────────────
 EXPECTED = {
-    "languages/rust": 25,
+    "languages/rust": 26,
     "frameworks/axum": 8,
+    "frameworks/actix-web": 10,
+    "frameworks/graphql": 1,
+    "testing/rust-test": 8,
+    "testing/external-service-mocks": 1,
+    "testing/property-based": 2,
     "auth-middleware-rust": 9,
     "crud-handler-rust": 8,
     "crud-handler-test-rust": 10,
@@ -100,19 +116,22 @@ TOML = {
 # imports widget.proto and timestamp.proto itself (fixed upstream, 2026-09-30); the protos compile as written.
 PROTO_PATCHES = []
 
-# Schema for the sqlx::query! metadata (prepare-sqlx.sh): the ```sql migrations of
-# migration-pattern-rust.md in filename order (.up.sql only), minus these, plus stubs/harness_schema.sql.
-# Migrations left out of that schema, with the reason. Empty: the doc's full set applies to a clean
-# Postgres 17 (round 2, 2026-09-30), so the macros are checked against exactly what a project migrates to.
-SCHEMA_EXCLUDE = {}
-
-# Blocks (or segments) that are deliberately not compiled, with the reason.
-_NOT_YET = ("not compile-checked yet: round 2 (2026-09-30) checked only the blocks it changed in this pack "
-            "and the ones those depend on")
-SKIP = {
-    **{("languages/rust", i): _NOT_YET for i in [2] + list(range(8, 26))},
-    **{("frameworks/axum", i): _NOT_YET for i in (1, 2, 3, 5, 6, 7)},
+# Databases the sqlx::query! metadata is generated against (prepare-sqlx.sh creates one per key,
+# archetype_<key>): the ```sql `-- migrations/…` blocks of `migrations` (a doc key) in filename order
+# (.up.sql / plain .sql only), minus `exclude` {file: reason}, plus stubs/<extra>. A unit with
+# migrations=True also gets that doc's migrations/ directory (sqlx::migrate!, #[sqlx::test]).
+#   default: migration-pattern-rust.md's full set (applies to a clean Postgres 17 since round 2,
+#            2026-09-30, so the CRUD macros are checked against exactly what a project migrates to),
+#            plus the harness-only orders tables the observability/performance excerpts query.
+#   lang:    languages/rust.md's own orders/inventory migration (its repository samples).
+SCHEMAS = {
+    "default": {"migrations": "migration-pattern-rust", "extra": "harness_schema.sql", "exclude": {}},
+    "lang": {"migrations": "languages/rust", "extra": None, "exclude": {}},
 }
+
+# Blocks (or segments) that are deliberately not compiled, with the reason. Empty: every Rust block of
+# every pack is compiled (round 3, 2026-09-30).
+SKIP = {}
 
 EH = "error-handling-rust"
 AUTH = "auth-middleware-rust"
@@ -130,6 +149,12 @@ OBS = "observability-rust"
 PERF = "performance-rust"
 LANG = "languages/rust"
 AXUM = "frameworks/axum"
+ACTIX = "frameworks/actix-web"
+RT = "testing/rust-test"
+GQL = "frameworks/graphql"
+MOCKS = "testing/external-service-mocks"
+PROP = "testing/property-based"
+ACTIX_MAIN = r"^#\[actix_web::main\]"
 
 # The service file shows domain types, traits and WidgetService in one place; in the composed app
 # those live in crate::domain / crate::traits (the layout crud-service-test-rust.md states).
@@ -185,15 +210,10 @@ def repo_impl_blocks():
             B(REPO, 9), T("}"), B(REPO, 8), B(REPO, 10), B(REPO, 11), B(REPO, 12)]
 
 
-UNITS = [
-    Unit("error-handling", "error-handling-rust.md: AppError, envelope IntoResponse, request id, extractors, recovery, tests", {
-        "src/lib.rs": [T("pub mod error;")],
-        "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7, 8, 9),
-    }),
-
-    Unit("widget-app", "auth-middleware + crud-handler + crud-service + crud-repository + migration db.rs composed "
-                       "as one crate `yourapp`, with the service unit tests, handler and repository integration tests", {
-        "src/lib.rs": [T("""
+# widget-app: the CRUD archetypes composed as one crate `yourapp` (the layout crud-service-test-rust.md
+# states). testing/rust-test.md's unit reuses it with its own tests added.
+WIDGET_APP_FILES = {
+    "src/lib.rs": [T("""
 pub mod auth;
 pub mod config;
 pub mod db;
@@ -209,44 +229,89 @@ pub mod services;
 pub mod startup;
 pub mod traits;
 """)],
-        "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7),
-        "src/config.rs": [S("app_config.rs")],
-        "src/harness.rs": [S("app_harness.rs")],
-        "src/auth/mod.rs": [T("pub mod api_key;\npub mod claims;\npub mod middleware;\npub mod require_role;")],
-        "src/auth/claims.rs": [B(AUTH, 1)],
-        "src/auth/middleware.rs": [B(AUTH, 2), B(AUTH, 9)],
-        "src/auth/require_role.rs": [B(AUTH, 4)],
-        "src/auth/api_key.rs": [B(AUTH, 5)],
-        "src/extractors/mod.rs": [T("pub mod auth_user;")],
-        "src/extractors/auth_user.rs": [B(AUTH, 3)],
-        "src/middleware/mod.rs": [T("pub mod cors;\npub mod rate_limit;")],
-        "src/middleware/rate_limit.rs": [B(AUTH, 6)],
-        "src/middleware/cors.rs": [B(AUTH, 7)],
-        "src/startup.rs": [
-            T("use crate::harness::{health_check, readiness_check}; // app-specific probes (no archetype defines them)"),
-            B(AUTH, 8, subs=[("WidgetService::new(/* ... */)", "crate::harness::widget_service(pool.clone())", 1)]),
-        ],
-        "src/handlers/mod.rs": [T("pub mod admin;\npub mod widget;")],
-        "src/handlers/admin.rs": [S("admin_routes.rs")],
-        "src/handlers/widget.rs": blocks(HANDLER, 1, 2, 3, 4, 5, 6, 7, 8),
-        "src/domain.rs": [B(SVC, 1)],
-        "src/models.rs": [B(REPO, 13)],
-        "src/traits/mod.rs": [T("pub mod audit;\npub mod cache;\npub mod repository;")],
-        "src/traits/repository.rs": [B(STEST, 1, split=r"^// src/traits/", seg=1)],
-        "src/traits/cache.rs": [B(STEST, 1, split=r"^// src/traits/", seg=2)],
-        "src/traits/audit.rs": [B(STEST, 1, split=r"^// src/traits/", seg=3)],
-        "src/services/mod.rs": [T("pub mod widget;")],
-        "src/services/widget.rs": [SERVICE_MODULE_GLUE] + blocks(SVC, 3, 4, 5, 6, 7, 8, 9, 10, 11)
-                                  + blocks(STEST, 2, 3, 4, 5, 6, 7, 8, 9),
-        "src/repositories/mod.rs": [T("pub mod widget;")],
-        "src/repositories/widget.rs": [REPO_MODULE_GLUE] + repo_impl_blocks(),
-        "src/db.rs": blocks(MIG, 1, 2),
-        "tests/api/main.rs": [T("mod helpers;\nmod widget_test;")],
-        "tests/api/helpers.rs": blocks(HTEST, 1, 2, 3),
-        "tests/api/widget_test.rs": blocks(HTEST, 4, 5, 6, 7, 8, 9, 10),
-        "tests/repository/main.rs": [B(RTEST, 1)],
-        "tests/repository/widget_repo_test.rs": blocks(RTEST, 2, 3, 4, 5, 6, 7, 8, 9, 10),
-    }, lib_name="yourapp", migrations=True),
+    "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7),
+    "src/config.rs": [S("app_config.rs")],
+    "src/harness.rs": [S("app_harness.rs")],
+    "src/auth/mod.rs": [T("pub mod api_key;\npub mod claims;\npub mod middleware;\npub mod require_role;")],
+    "src/auth/claims.rs": [B(AUTH, 1)],
+    "src/auth/middleware.rs": [B(AUTH, 2), B(AUTH, 9)],
+    "src/auth/require_role.rs": [B(AUTH, 4)],
+    "src/auth/api_key.rs": [B(AUTH, 5)],
+    "src/extractors/mod.rs": [T("pub mod auth_user;")],
+    "src/extractors/auth_user.rs": [B(AUTH, 3)],
+    "src/middleware/mod.rs": [T("pub mod cors;\npub mod rate_limit;")],
+    "src/middleware/rate_limit.rs": [B(AUTH, 6)],
+    "src/middleware/cors.rs": [B(AUTH, 7)],
+    "src/startup.rs": [
+        T("use crate::harness::{health_check, readiness_check}; // app-specific probes (no archetype defines them)"),
+        B(AUTH, 8, subs=[("WidgetService::new(/* ... */)", "crate::harness::widget_service(pool.clone())", 1)]),
+    ],
+    "src/handlers/mod.rs": [T("pub mod admin;\npub mod widget;")],
+    "src/handlers/admin.rs": [S("admin_routes.rs")],
+    "src/handlers/widget.rs": blocks(HANDLER, 1, 2, 3, 4, 5, 6, 7, 8),
+    "src/domain.rs": [B(SVC, 1)],
+    "src/models.rs": [B(REPO, 13)],
+    "src/traits/mod.rs": [T("pub mod audit;\npub mod cache;\npub mod repository;")],
+    "src/traits/repository.rs": [B(STEST, 1, split=r"^// src/traits/", seg=1)],
+    "src/traits/cache.rs": [B(STEST, 1, split=r"^// src/traits/", seg=2)],
+    "src/traits/audit.rs": [B(STEST, 1, split=r"^// src/traits/", seg=3)],
+    "src/services/mod.rs": [T("pub mod widget;")],
+    "src/services/widget.rs": [SERVICE_MODULE_GLUE] + blocks(SVC, 3, 4, 5, 6, 7, 8, 9, 10, 11)
+                              + blocks(STEST, 2, 3, 4, 5, 6, 7, 8, 9),
+    "src/repositories/mod.rs": [T("pub mod widget;")],
+    "src/repositories/widget.rs": [REPO_MODULE_GLUE] + repo_impl_blocks(),
+    "src/db.rs": blocks(MIG, 1, 2),
+    "tests/api/main.rs": [T("mod helpers;\nmod widget_test;")],
+    "tests/api/helpers.rs": blocks(HTEST, 1, 2, 3),
+    "tests/api/widget_test.rs": blocks(HTEST, 4, 5, 6, 7, 8, 9, 10),
+    "tests/repository/main.rs": [B(RTEST, 1)],
+    "tests/repository/widget_repo_test.rs": blocks(RTEST, 2, 3, 4, 5, 6, 7, 8, 9, 10),
+}
+
+
+UNITS = [
+    Unit("error-handling", "error-handling-rust.md: AppError, envelope IntoResponse, request id, extractors, recovery, tests", {
+        "src/lib.rs": [T("pub mod error;")],
+        "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7, 8, 9),
+    }, tests=()),
+
+    Unit("widget-app", "auth-middleware + crud-handler + crud-service + crud-repository + migration db.rs composed "
+                       "as one crate `yourapp`, with the service unit tests, handler and repository integration tests",
+         WIDGET_APP_FILES, lib_name="yourapp", migrations=True, tests=("db",)),
+
+    Unit("rust-test", "testing/rust-test.md's tests inside the widget app (crate `yourapp`, minus the archetypes' own "
+                      "tests/): unit, tokio, mockall, #[sqlx::test], fixtures, proptest, oneshot integration + TestApp", {
+        **{k: v for k, v in WIDGET_APP_FILES.items() if not k.startswith("tests/")},
+        "src/lib.rs": WIDGET_APP_FILES["src/lib.rs"] + [T("#[cfg(test)]\nmod test_fixtures;")],
+        "src/test_fixtures.rs": [B(RT, 5)],
+        # the unit-test module and the proptests sit next to sanitize_column / the cursor codec
+        "src/repositories/widget.rs": WIDGET_APP_FILES["src/repositories/widget.rs"] + [B(RT, 1), B(RT, 6)],
+        "src/repositories/mod.rs": [T("pub mod widget;\n#[cfg(test)]\nmod db_tests;")],
+        "src/repositories/db_tests.rs": [T("""
+use crate::error::AppError;
+use crate::models::Widget;
+use crate::repositories::widget::PgWidgetRepository;
+use crate::traits::repository::WidgetRepository;
+"""), B(RT, 4)],
+        "src/services/mod.rs": [T("pub mod widget;\n#[cfg(test)]\nmod mock_examples;\n#[cfg(test)]\nmod tokio_examples;")],
+        "src/services/tokio_examples.rs": [T("""
+use std::sync::Arc;
+
+use uuid::Uuid;
+
+use crate::error::AppError;
+use crate::handlers::widget::CreateWidgetInput;
+use crate::services::widget::WidgetService;
+use crate::traits::{audit::MockAuditWriter, cache::MockCache, repository::MockWidgetRepository};
+"""), S("rust_test_setup.rs"), B(RT, 2)],
+        "src/services/mock_examples.rs": [T("""
+use crate::handlers::widget::CreateWidgetInput;
+use crate::models::Widget;
+use crate::services::widget::WidgetService;
+"""), B(RT, 3)],
+        "tests/api_integration.rs": [B(RT, 7)],
+        "tests/common/mod.rs": [B(RT, 8)],
+    }, lib_name="yourapp", migrations=True, tests=("db",)),
 
     Unit("crud-repository", "crud-repository-rust.md as its own module (trait next to the impl), with error.rs, Widget, ListFilters", {
         "src/lib.rs": [T("pub mod domain;\npub mod error;\npub mod models;\npub mod repositories;")],
@@ -268,7 +333,7 @@ pub mod traits;
         "src/ws/types.rs": [B(WS, 1)],
         "src/ws/manager.rs": [B(WS, 2)],
         "src/ws/handler.rs": [B(WS, 3), B(WS, 5)],
-    }, lib=False),
+    }, lib=False, tests=()),
 
     Unit("worker", "worker-pattern-rust.md: job types, traits, Worker, main.rs, EmailSendHandler, health (binary crate)", {
         "src/main.rs": [
@@ -469,27 +534,231 @@ use archetype_observability::telemetry::{init_telemetry, shutdown_telemetry};
        # the doc's DHAT manifest: dhat-heap = ["dep:dhat"]; dhat is always a dependency here
        features={"dhat-heap": []}),
 
-    Unit("lang-rust", "languages/rust.md: DomainError + sqlx mapping, ApiResponse, IntoResponse, axum handlers/routes, "
-                      "TenantId extractor (+ harness smoke tests: routes build, limit bounds, extractor)", {
-        "src/lib.rs": [T("pub mod app; // harness stubs: the order service the snippets call\n"
-                         "pub mod error;\npub mod extractors;\npub mod handlers;\npub mod response;")],
+    Unit("lang-rust", "languages/rust.md as crate `yourapp` (its Project Structure): errors, envelope, axum handlers, "
+                      "extractor, tower stack, domain types, tenant-filtered keyset queries, repository, pool, "
+                      "transaction, mocks, fixtures, async patterns, two binaries, the testcontainers test "
+                      "(+ harness smoke and DB tests)", {
+        "src/lib.rs": [T("""
+pub mod anyhow_run;
+pub mod app; // harness stubs: names the snippets call but the doc never defines
+pub mod axum_error; // frameworks/axum.md "Error Handling": request_id_middleware, which "Tower Middleware" layers
+pub mod domain;
+pub mod error;
+pub mod extractors;
+pub mod handlers;
+pub mod join;
+pub mod middleware;
+pub mod perf;
+pub mod pool;
+pub mod repositories;
+pub mod response;
+pub mod select;
+pub mod services;
+pub mod state;
+pub mod streams;
+pub mod tenancy;
+""")],
         "src/app.rs": [S("lang_app.rs")],
         # the pack shows several files' worth in one page: error types, the envelope, the extractor, handlers
         "src/error.rs": [T("use crate::response::current_request_id;"), B(LANG, 1), B(LANG, 3), B(LANG, 5)],
         "src/response.rs": [B(LANG, 4)],
+        "src/axum_error.rs": [B(AXUM, 4)],
         "src/extractors.rs": [T("use crate::error::DomainError;"), B(LANG, 7)],
         "src/handlers.rs": [T("""
 use crate::app::*;
+use crate::domain::{CreateOrderRequest, OrderResponse};
 use crate::error::{DomainError, FieldError};
 use crate::extractors::{PaginationParams, TenantId};
 use crate::response::ApiResponse;
 """), B(LANG, 6), S("lang_smoke.rs")],
-    }),
+        "src/anyhow_run.rs": [T("use crate::app::{load_config, serve};"), B(LANG, 2)],
+        "src/middleware.rs": [T("""
+use crate::app::{auth_middleware, user_routes, AppState};
+use crate::axum_error::request_id_middleware;
+use crate::error::DomainError;
+use crate::extractors::{Claims, TenantId};
+use crate::handlers::order_routes;
+"""), B(LANG, 9), S("lang_mw_smoke.rs")],
+        "src/tenancy.rs": [T("""
+use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+
+use crate::app::AppState;
+use crate::domain::{CreateOrderRequest, OrderResponse};
+use crate::error::DomainError;
+use crate::extractors::TenantId;
+use crate::response::ApiResponse;
+"""), B(LANG, 10)],
+        # src/domain/mod.rs: the entities block, the DTOs it leaves out, and the #[cfg(test)] fixtures
+        "src/domain/mod.rs": [T("use crate::error::DomainError;"), B(LANG, 11), S("lang_domain.rs"), B(LANG, 18)],
+        "src/repositories/mod.rs": [T("use crate::domain::{CreateOrderRequest, Order, OrderStatus};\n"
+                                      "use crate::error::{DomainError, FieldError};"),
+                                    B(LANG, 12), B(LANG, 13), B(LANG, 15)],
+        "src/pool.rs": [B(LANG, 14)],
+        "src/services/mod.rs": [T("""
+use std::sync::Arc;
+
+use uuid::Uuid;
+
+use crate::domain::{CreateOrderRequest, Order};
+use crate::error::DomainError;
+#[cfg(test)]
+use crate::domain::test_helpers::{valid_request, ORDER_ID, TENANT_ID};
+#[cfg(test)]
+use crate::domain::OrderStatus;
+
+mod order_tests;
+"""), B(LANG, 17), S("lang_service.rs")],
+        "src/services/order_tests.rs": [T("#[allow(unused_imports)]\nuse super::*;"), B(LANG, 16)],
+        "src/perf.rs": [T("""
+use serde::Serialize;
+
+use crate::app::{EmailNotification, PushNotification, SmsNotification};
+use crate::domain::{Order, OrderStatus};
+"""), B(LANG, 20)],
+        "src/state.rs": [T("use crate::app::{process_job, CachedValue, Job};\nuse crate::services::OrderService;"), B(LANG, 21)],
+        "src/select.rs": [T("use crate::app::{fetch, handle_connection, Response};\nuse crate::error::DomainError;"), B(LANG, 23)],
+        "src/join.rs": [T("use uuid::Uuid;\n\nuse crate::app::{ProfileService, UserProfile};\nuse crate::error::DomainError;"), B(LANG, 24)],
+        "src/streams.rs": [T("use crate::app::{process_item, Item, ProcessedItem};\nuse crate::error::DomainError;"), B(LANG, 25)],
+        "src/bin/tuned_runtime.rs": [T("use yourapp::app::run_server;\nuse yourapp::error::DomainError;"), B(LANG, 22)],
+        "src/bin/graceful_shutdown.rs": [T("""
+use std::time::Duration;
+
+use anyhow::Context;
+use tokio::net::TcpListener;
+use yourapp::pool::connect_pool;
+use yourapp::select::run_server;
+"""), B(LANG, 26)],
+        "tests/integration/main.rs": [B(LANG, 19)],
+        "tests/harness_db.rs": [S("lang_db_tests.rs")],
+    }, lib_name="yourapp", bins=["tuned_runtime", "graceful_shutdown"], migrations=True, schema="lang",
+       tests=("db", "docker")),
 
     Unit("axum-pack", "frameworks/axum.md: AppError envelope, request id, rejection-mapping extractors, and its bad-path test", {
-        "src/lib.rs": [T("pub mod error;")],
+        "src/lib.rs": [T("""
+pub mod app; // harness stubs: config, JWT service, the widget handlers, test helpers
+pub mod auth;
+pub mod error;
+pub mod extractor_examples;
+pub mod response;
+pub mod router;
+pub mod serve;
+pub mod state;
+""")],
+        "src/app.rs": [S("axum_app.rs")],
+        # ApiResponse and the REQUEST_ID task-local its success envelope reads (languages/rust.md)
+        "src/response.rs": [B(LANG, 4)],
         "src/error.rs": [B(AXUM, 4), B(AXUM, 8)],
-    }),
+        "src/router.rs": [T("""
+use crate::app::{create_widget, delete_widget, get_widget, list_widgets, recovery_middleware, update_widget, user_routes};
+use crate::auth::auth_middleware;
+use crate::error::{request_id_middleware, AppError};
+use crate::state::AppState;
+"""), B(AXUM, 1)],
+        # signatures only: the `{ .. }` bodies are the doc's placeholders
+        "src/extractor_examples.rs": [T("use axum::http::StatusCode;\n\nuse crate::app::{CreateInput, ListParams, UpdateInput};\n"
+                                        "use crate::state::AppState;"),
+                                      B(AXUM, 2, subs=[("{ .. }", "{ StatusCode::NOT_IMPLEMENTED }", 5)])],
+        "src/auth.rs": [T("use crate::error::AppError;\nuse crate::state::AppState;"), B(AXUM, 3)],
+        "src/state.rs": [T("use crate::app::{AppConfig, JwtService};\nuse crate::router::build_router;"), B(AXUM, 5)],
+        "src/serve.rs": [B(AXUM, 6)],
+        "tests/router_test.rs": [T("""
+use std::sync::Arc;
+
+use archetype_axum_pack::app::{seed_widget, test_app_state, test_token};
+use archetype_axum_pack::router::build_router;
+"""), B(AXUM, 7)],
+        "tests/harness_smoke.rs": [S("axum_smoke.rs")],
+    }, tests=()),
+
+    Unit("actix", "frameworks/actix-web.md (+ languages/rust.md's actix handler): server setup, routes, extractors, "
+                  "AuthUser, middleware fns, token-verifying auth middleware, ResponseError envelope + request id, "
+                  "pools, extractor configs, its tests (+ harness smoke tests)", {
+        "src/lib.rs": [T("""
+pub mod app; // harness stubs: config loader, widget handlers, order service, test helpers
+pub mod auth;
+pub mod config;
+pub mod error;
+pub mod extractor_examples;
+pub mod lang_orders;
+pub mod middleware;
+pub mod pools;
+pub mod response;
+pub mod routes;
+pub mod state;
+""")],
+        "src/app.rs": [S("actix_app.rs")],
+        # ApiResponse and the REQUEST_ID task-local its success envelope reads (languages/rust.md)
+        "src/response.rs": [B(LANG, 4)],
+        # "App & HttpServer Setup" shows the state type and main.rs together: the struct is the library's
+        "src/state.rs": [T("use crate::app::AppConfig;\nuse crate::auth::middleware::JwtService;"),
+                         B(ACTIX, 1, split=ACTIX_MAIN, seg=0)],
+        "src/bin/server.rs": [T("""
+use actix_web::{middleware, web, App, HttpServer};
+use archetype_actix::app::AppConfig;
+use archetype_actix::auth::middleware::JwtService;
+use archetype_actix::config::{json_config, path_config, query_config};
+use archetype_actix::error::request_id;
+use archetype_actix::middleware::{access_log, cors};
+use archetype_actix::routes::api_config;
+use archetype_actix::state::AppState;
+use sqlx::PgPool;
+"""), B(ACTIX, 1, split=ACTIX_MAIN, seg=1)],
+        "src/routes.rs": [T("""
+use actix_web::web;
+
+use crate::app::{create_widget, delete_widget, get_widget, list_widgets, update_widget};
+use crate::auth::middleware::AuthMiddleware;
+#[cfg(test)]
+use crate::app::{seed_widget, test_app_state, test_token};
+#[cfg(test)]
+use crate::config::{json_config, path_config};
+#[cfg(test)]
+use crate::error::request_id;
+"""), B(ACTIX, 2), B(ACTIX, 9)],
+        # signatures only: `// ...` is the doc's placeholder for each body
+        "src/extractor_examples.rs": [T("use crate::app::{CreateInput, UpdateInput};\nuse crate::state::AppState;"),
+                                      B(ACTIX, 3, subs=[("    // ...", "    todo!() // ...", 5)])],
+        "src/auth/mod.rs": [T("pub mod extractor;\npub mod middleware;")],
+        "src/auth/extractor.rs": [T("use crate::error::AppError;"), B(ACTIX, 4)],
+        "src/auth/middleware.rs": [T("use crate::auth::extractor::AuthUser;\nuse crate::error::AppError;\nuse crate::state::AppState;"),
+                                   B(ACTIX, 6)],
+        "src/middleware.rs": [B(ACTIX, 5)],
+        "src/error.rs": [B(ACTIX, 7)],
+        "src/pools.rs": [B(ACTIX, 8)],
+        "src/config.rs": [T("use crate::error::{AppError, FieldError};"), B(ACTIX, 10)],
+        "src/lang_orders.rs": [T("""
+use crate::app::{create_order, list_orders, OrderResponse, OrderService};
+use crate::auth::{extractor::AuthUser, middleware::AuthMiddleware};
+use crate::error::AppError;
+use crate::response::ApiResponse;
+"""), B(LANG, 8)],
+        "tests/harness_smoke.rs": [S("actix_smoke.rs")],
+    }, bins=["server"], tests=()),
+
+    Unit("graphql", "frameworks/graphql.md (Rust block): async-graphql resolvers with the archetypes' AppError "
+                    "(+ harness smoke tests: `first` bounds, errors reach clients as code + safe message)", {
+        "src/lib.rs": [T("pub mod app; // harness stubs: schema types, loader, service\npub mod error;\npub mod resolvers;")],
+        "src/app.rs": [S("graphql_app.rs")],
+        "src/error.rs": blocks(EH, 1, 2, 3, 4, 5, 6, 7),
+        "src/resolvers.rs": [T("use crate::app::{AuthContext, QueryRoot, User, UserLoader, Widget, WidgetConnection, "
+                               "WidgetFilter, WidgetService};\nuse crate::error::AppError;"),
+                             B(GQL, 1), S("graphql_smoke.rs")],
+    }, tests=()),
+
+    Unit("external-service-mocks", "testing/external-service-mocks.md (Rust block): the wiremock test against a "
+                                   "minimal real reqwest StripeClient", {
+        "src/lib.rs": [T("pub mod stripe; // harness stub: the client under test\n#[cfg(test)]\nmod wiremock_test;")],
+        "src/stripe.rs": [S("stripe_client.rs")],
+        "src/wiremock_test.rs": [T("use crate::stripe::StripeClient;"), B(MOCKS, 1)],
+    }, tests=()),
+
+    Unit("property-based", "testing/property-based.md (Rust blocks): proptest and quickcheck properties", {
+        "src/lib.rs": [T("pub mod app; // harness stubs: the code the properties are about\n"
+                         "#[cfg(test)]\nmod proptests;\n#[cfg(test)]\nmod quickchecks;")],
+        "src/app.rs": [S("property_app.rs")],
+        "src/proptests.rs": [T("use crate::app::{paginate, Widget};"), B(PROP, 1)],
+        "src/quickchecks.rs": [T("use crate::app::{decode, encode};"), B(PROP, 2)],
+    }, tests=()),
 
     Unit("crud-service", "crud-service-rust.md as one module (domain types + traits + WidgetService), with error.rs, Widget and the handler DTOs", {
         "src/lib.rs": [T("pub mod dto;\npub mod error;\npub mod harness;\npub mod models;\npub mod service;")],

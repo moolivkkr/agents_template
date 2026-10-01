@@ -6,7 +6,8 @@ mod harness_smoke {
     use std::sync::Arc;
 
     fn state() -> AppState {
-        AppState { order_service: Arc::new(OrderService) }
+        let repo = Arc::new(crate::services::EmptyOrderRepository);
+        AppState { order_service: Arc::new(crate::services::OrderService::new(repo)) }
     }
 
     #[test]

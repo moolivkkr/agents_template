@@ -5,7 +5,9 @@
 # added or removed sample fails here until the harness is updated), no doc-comment ``` fence would
 # become a doctest `cargo test` compiles, no axum route has a `:param` segment (a startup panic since
 # axum 0.8), and every Rust Dockerfile builder / rust-toolchain.toml equals the harness's pinned
-# toolchain. Also covers languages/rust.md and frameworks/axum.md. Needs only python3 (no Rust, no network).
+# toolchain. Also covers languages/rust.md, the axum / actix-web / graphql framework packs, testing/rust-test.md
+# and the Rust blocks of the shared testing packs — and fails if any other .claude/skills file gains a
+# ```rust block the harness does not list. Needs only python3 (no Rust, no network).
 #
 # The full check — cargo check of every unit, sqlx macros against .sqlx/, Cargo manifests — is
 #   bash tests/archetype-compile/rust/run.sh
