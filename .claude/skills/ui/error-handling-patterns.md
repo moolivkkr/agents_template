@@ -118,7 +118,7 @@ const createUser = useMutation({
 ```tsx
 // API returns 400:
 // { "error": { "code": "VALIDATION_FAILED", "message": "Some fields are invalid.",
-//              "details": [ { "field": "email", "code": "already_taken", "message": "That email is already registered." } ],
+//              "details": [ { "field": "email", "code": "already_exists", "message": "That email is already registered." } ],
 //              "request_id": "b7e1c2…", "retryable": false } }
 
 import type { FieldValues, Path, UseFormReturn } from "react-hook-form";

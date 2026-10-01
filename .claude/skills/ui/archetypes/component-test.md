@@ -387,7 +387,7 @@ describe('WidgetForm', () => {
                         error: {
                             code: 'VALIDATION_FAILED',
                             message: 'Some fields are invalid.',
-                            details: [{ field: 'name', code: 'already_taken', message: 'Name already exists' }],
+                            details: [{ field: 'name', code: 'already_exists', message: 'Name already exists' }],
                             request_id: 'test',
                             retryable: false,
                         },
