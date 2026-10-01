@@ -794,7 +794,8 @@ class OrderService:
         self._repo = repo
 
     async def create_order(self, tenant_id: UUID, request: CreateOrderRequest) -> Order:
-        """Transaction spans the entire service method."""
+        """Transaction spans the entire service method. The order is read after the commit, so the
+        session needs expire_on_commit=False (an AsyncSession can't lazy-load expired attributes)."""
         async with self._session.begin():
             order = Order(tenant_id=tenant_id, **request.model_dump())
             order = await self._repo.save(order)
@@ -829,7 +830,8 @@ async def db_session(postgres) -> AsyncGenerator[AsyncSession, None]:
     engine = create_async_engine(postgres.get_connection_url(driver="asyncpg"))  # default URL is psycopg2
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-    async with AsyncSession(engine) as session:
+    # expire_on_commit=False: an AsyncSession can't lazy-load, so objects must stay readable after a commit
+    async with AsyncSession(engine, expire_on_commit=False) as session:
         yield session
         await session.rollback()  # reset state between tests
     await engine.dispose()
@@ -852,6 +854,8 @@ def user_factory(db_session: AsyncSession):
 
 ### factory_boy for Test Data
 ```python
+from uuid import UUID, uuid4
+
 import factory
 from factory.alchemy import SQLAlchemyModelFactory
 from sqlalchemy.orm import scoped_session, sessionmaker
@@ -870,8 +874,10 @@ class UserFactory(SQLAlchemyModelFactory):
     email = factory.Sequence(lambda n: f"user-{n}@example.com")
     name = factory.Faker("name")
 
-# Usage
-user = UserFactory(email="specific@example.com")  # override only what matters
+# Usage (in a test: building one writes it through the session)
+def test_specific_email() -> None:
+    user = UserFactory(email="specific@example.com")  # override only what matters
+    assert user.email == "specific@example.com"
 ```
 
 ### Async Test Patterns
@@ -936,7 +942,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 
 @asynccontextmanager
-async def managed_connection(pool: asyncpg.Pool) -> AsyncGenerator[asyncpg.Connection, None]:
+async def managed_connection(pool: asyncpg.Pool) -> AsyncGenerator[asyncpg.pool.PoolConnectionProxy, None]:
     conn = await pool.acquire()
     try:
         yield conn

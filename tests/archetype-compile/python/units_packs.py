@@ -676,3 +676,159 @@ UNITS.append(Unit(
              "app.users"],
     pytest="run",
 ))
+
+# ── languages/python.md, the data blocks: repository, Alembic env, pooling, service transaction, pytest
+# fixtures, factory_boy, asyncpg; factory_boy on SQLite here, everything on PostgreSQL 16 with --live ──
+PYD = "from harness_stubs.py_data import "
+FACTORY_BINDING = T(
+    "\n\n# ── harness: what the suite's conftest does for the factories (a sync engine; SQLite here) ──\n"
+    "from sqlalchemy import create_engine  # noqa: E402\n\n" + PYD + "Base  # noqa: E402\n\n\n"
+    "@pytest.fixture(autouse=True)\n"
+    "def _harness_bind_factory_session():\n"
+    '    engine = create_engine("sqlite://")\n'
+    "    Base.metadata.create_all(engine)\n"
+    "    Session.configure(bind=engine)\n"
+    "    yield\n"
+    "    Session.remove()\n"
+    "    engine.dispose()")
+
+
+def python_data_files() -> dict[str, list[B | T | S]]:
+    return {
+        "harness_stubs/py_data.py": [stub("py_data.py")],
+        "app/repository.py": [
+            T(PYD + "decode_cursor, encode_cursor  # harness: the app's opaque cursor helpers"),
+            B(PY, 11, "from datetime import datetime"),
+        ],
+        "alembic.ini": [T("[alembic]\nscript_location = alembic")],
+        "alembic/env.py": [
+            T(PYD + "Base, settings  # harness: the app's metadata and settings"),
+            B(PY, 12, "# alembic/env.py — configure for async"),
+            T("\n\nrun_migrations_online()  # harness: env.py's entry point (online mode only)"),
+        ],
+        "alembic/versions/0001_harness.py": [stub("alembic_revision.py")],
+        "app/engine.py": [T(PYD + "settings  # harness: the app's settings"), B(PY, 13, "from sqlalchemy.ext.asyncio import create_async_engine")],
+        "app/orders.py": [
+            T("from uuid import UUID\n\nfrom sqlalchemy.ext.asyncio import AsyncSession\n\n"
+              + PYD + "CreateOrderRequest, Order, OrderRepository\n\n\n"
+              "class _OrderServiceParts:  # harness: the audit method the fragment's class calls\n"
+              "    @property\n"
+              "    def audit(self) -> list[tuple[UUID, str, UUID]]:\n"
+              '        return self.__dict__.setdefault("_audit", [])\n\n'
+              "    async def _audit_log(self, tenant_id: UUID, action: str, entity_id: UUID) -> None:\n"
+              "        self.audit.append((tenant_id, action, entity_id))"),
+            B(PY, 15, "class OrderService:",
+              subs=(("class OrderService:", "class OrderService(_OrderServiceParts):"),)),
+        ],
+        "app/pg.py": [B(PY, 20, "from collections.abc import AsyncGenerator")],
+        "tests/conftest.py": [T(PYD + "Base, User  # harness: the app's models"), B(PY, 16, "from collections.abc import AsyncGenerator")],
+        "tests/test_factories.py": [
+            T("import pytest\n\n" + PYD + "User  # harness: the app's model"),
+            B(PY, 17, "from uuid import UUID, uuid4"),
+            FACTORY_BINDING,
+        ],
+        "tests/test_python_data_live.py": [stub("test_python_data_live.py")],
+    }
+
+
+DATA_ENV = {"DATABASE_URL": "postgresql+asyncpg://harness@127.0.0.1:1/harness"}  # lazy: nothing connects
+UNITS.append(Unit(
+    name="pack-python-data",
+    own=[PY],
+    files=python_data_files(),
+    typecheck=["app/repository.py", "alembic/env.py", "app/engine.py", "app/orders.py", "app/pg.py",
+               "tests/conftest.py", "tests/test_factories.py"],
+    imports=["app.repository", "app.engine", "app.orders", "app.pg"],
+    env=DATA_ENV,
+    pyright_ignore=[
+        *[(PY, f'"{name}" is not exported from module "factory"', f"factory.{name}(",
+           f"factory_boy (py.typed) re-exports its declarations in factory/__init__.py without __all__ or "
+           f"'as' aliases, which pyright reads as private; factory.{name} is the documented API. "
+           "test_factories.py builds a user with them.")
+          for name in ("LazyFunction", "Sequence", "Faker")],
+        (PY, '"Meta" overrides symbol of same name in class "SQLAlchemyModelFactory"', "class Meta:",
+         "factory_boy's documented nested Meta options class; pyright compares it with the base's own Meta. "
+         "test_factories.py creates and flushes a user through it."),
+    ],
+    smoke=smoke("smoke_python_data.py"),
+    pytest="run",
+    pytest_args=["tests/test_factories.py"],
+))
+
+UNITS.append(Unit(
+    name="pack-python-data-live",
+    own=[PY],
+    files=python_data_files(),
+    typecheck=[],  # pack-python-data type-checks the same files
+    imports=[],
+    env=DATA_ENV,
+    pytest="collect",
+    live="run",
+    pytest_args=["tests/test_python_data_live.py"],
+))
+
+# ── languages/python.md, the test-pattern blocks (strict pytest-asyncio markers, AsyncMock, monkeypatch) ──
+UNITS.append(Unit(
+    name="pack-python-tests",
+    own=[PY],
+    files={
+        "harness_stubs/py_tests.py": [stub("py_tests.py")],
+        "tests/conftest.py": [T(
+            "import pytest\n\n"
+            "from harness_stubs.py_tests import OrderService, UserService\n\n\n"
+            "@pytest.fixture  # harness: the service under test, wired to the doc's mock_mailer\n"
+            "def user_service(mock_mailer):\n"
+            "    return UserService(mock_mailer)\n\n\n"
+            "@pytest.fixture\n"
+            "def order_service():\n"
+            "    return OrderService()")],
+        "tests/test_async_and_mocks.py": [
+            T("from harness_stubs.py_tests import (  # harness: the app's names\n"
+              "    TENANT_ID, ConflictError, CreateUserRequest, Mailer, OrderService, UserService, load_config,\n"
+              "    make_order_request,\n)"),
+            B(PY, 18, "import asyncio"),
+            B(PY, 19, "# monkeypatch: replace attributes/env vars — test-scoped, auto-restored"),
+        ],
+    },
+    pytest="run",
+))
+
+# ── languages/python.md, the Django blocks: tenant manager + Order (django-model-utils tracker), DRF serializer,
+# JWT tenant middleware, audit signals — a Django project on SQLite with real simplejwt tokens ─────────
+UNITS.append(Unit(
+    name="pack-python-django",
+    own=[PY],
+    files={
+        "harness_django_settings.py": [stub("py_django_settings.py")],
+        "harness_urls.py": [T("urlpatterns: list[object] = []  # harness: no views; the smoke calls the middleware")],
+        "accounts/models.py": [T(
+            "from django.contrib.auth.models import AbstractUser\nfrom django.db import models\n\n\n"
+            "class User(AbstractUser):  # harness: the project's user, with its tenant\n"
+            "    tenant_id = models.UUIDField(null=True)")],
+        "myapp/models.py": [
+            B(PY, 24, "from django.db import models"),
+            T("\n\nclass AuditLog(models.Model):  # harness: the audit model the signals write\n"
+              "    tenant_id = models.UUIDField()\n"
+              "    entity_type = models.CharField(max_length=50)\n"
+              "    entity_id = models.BigIntegerField()\n"
+              "    action = models.CharField(max_length=20)\n"
+              "    actor_id = models.BigIntegerField(null=True)\n"
+              "    changes = models.JSONField(default=dict)"),
+        ],
+        "myapp/serializers.py": [
+            T("from myapp.models import Order  # harness: the model above"),
+            B(PY, 25, "from rest_framework import serializers"),
+        ],
+        "myapp/middleware.py": [B(PY, 26, "import threading")],
+        "myapp/signals.py": [
+            T("from myapp.models import AuditLog, Order\n\n\n"
+              "def get_current_user_id() -> int:  # harness: the app's actor lookup\n"
+              "    return 1"),
+            B(PY, 27, "from django.db.models.signals import post_save, pre_delete"),
+        ],
+    },
+    imports=[],  # Django modules import only after django.setup(): the smoke imports them
+    env={"DJANGO_SETTINGS_MODULE": "harness_django_settings"},
+    pyright_ignore=django_ignores(PY, "smoke_python_django.py"),
+    smoke=smoke("smoke_python_django.py"),
+))
