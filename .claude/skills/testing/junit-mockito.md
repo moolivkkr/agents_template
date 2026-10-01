@@ -422,3 +422,5 @@ mvn jacoco:report                           # generate HTML coverage report
 - Never test implementation details — test behavior and outcomes.
 - Test tenant isolation explicitly: verify that tenant A cannot access tenant B's data.
 - JaCoCo minimum 80% line coverage — exclude config, DTOs, and Application class.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

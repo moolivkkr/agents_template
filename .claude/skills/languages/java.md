@@ -1082,3 +1082,5 @@ dependencies {
 - Checked exceptions only at system boundaries (I/O, external calls)
 - Domain layer: unchecked `RuntimeException` subclasses
 - Never swallow exceptions — log + rethrow or convert
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 YAML block parsed (duplicate keys fail).

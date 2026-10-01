@@ -862,3 +862,5 @@ process.on("SIGINT", () => void gracefulShutdown("SIGINT"));
   pools, flush telemetry.
 - Log all resilience events (circuit open, retry attempt, degraded mode) at WARN level
 - Partial response with degradation flag is better than no response
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 YAML blocks parsed (duplicate keys fail), kubeconform -strict (Kubernetes 1.37.1 schemas).

@@ -113,3 +113,5 @@ scope the classifier missed.
 They compose: a PLATFORM class runs full depth with every agent at its frontmatter effort; a TRIVIAL
 class skips most agents entirely. Consult **both** — one picks the engine, the other picks how
 far the car drives.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed.

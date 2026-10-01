@@ -684,10 +684,12 @@ pub async fn create_order_with_inventory(
 
 ### Migration Patterns
 ```bash
-# Create migration
+# Create migration (writes migrations/<YYYYMMDDHHMMSS>_create_orders_table.sql)
 sqlx migrate add create_orders_table
+```
 
-# Migration file: migrations/20240115_create_orders_table.sql
+```sql
+-- migrations/20240115093000_create_orders_table.sql
 CREATE TABLE orders (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id UUID NOT NULL REFERENCES tenants(id),
@@ -703,6 +705,14 @@ CREATE TABLE orders (
 CREATE INDEX idx_orders_tenant_status ON orders(tenant_id, status) WHERE deleted_at IS NULL;
 CREATE INDEX idx_orders_tenant_created ON orders(tenant_id, created_at DESC) WHERE deleted_at IS NULL;
 
+ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON orders
+    USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
+    WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
+```
+
+```bash
 # Run migrations
 sqlx migrate run
 
@@ -1057,3 +1067,5 @@ async fn main() -> anyhow::Result<()> {
 - Prefer `&str` over `String` in function params when not taking ownership
 - Use `tracing` crate for structured logging (not `log` + `env_logger`)
 - Pin dependency versions in `Cargo.lock` (commit it for binaries, not for libraries)
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 SQL block parsed with libpg_query 17.7 and executed on PostgreSQL 17.11.

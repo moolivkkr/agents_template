@@ -55,3 +55,5 @@ Log every escalation to `execution.jsonl`, so post-gate lessons can show which a
 ## Cost check after a phase
 
 `/usage` in the session shows the phase's spend and attributes it to subagents, skills, and MCP servers. Record the total in `manifest.json` under `cost_estimate`, along with the number of escalations.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed.

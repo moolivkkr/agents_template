@@ -44,19 +44,23 @@ Lessons are authored per-phase (`agent_state/phases/N/lessons.md`) and aggregate
 first and fall back to the per-phase files, so retrieval works even if aggregation hasn't run yet.
 
 ```bash
-# Lesson/pattern sources: root indices + per-phase lesson files (fallback).
+# Lesson/pattern sources that exist: root indices + per-phase lesson files (fallback), one per line.
 _mem_sources() {
-  ls agent_state/patterns.md agent_state/lessons.md agent_state/phases/*/lessons.md 2>/dev/null
+  local f
+  for f in agent_state/patterns.md agent_state/lessons.md agent_state/phases/*/lessons.md; do
+    if [ -f "$f" ]; then printf '%s\n' "$f"; fi
+  done
 }
 
 # 1. Resolve IDs from the index (cheap — index is small)
 memory_search() {
-  local q="$1"
+  local q="$1" f files=()
+  while IFS= read -r f; do files+=("$f"); done < <(_mem_sources)
+  [ ${#files[@]} -gt 0 ] || return 1   # no sources: grep with no file arguments would read stdin
   # Try the category/tag index first (exact section lines)
-  grep -iE "^- (${q}):" $(_mem_sources) 2>/dev/null
+  grep -hiE "^- (${q}):" "${files[@]}"
   # Fall back to a keyword scan over entry summaries only
-  grep -inE "^\s*-\s*\*\*(Summary|Pattern|Tags)\:\*\*.*${q}" \
-       $(_mem_sources) 2>/dev/null
+  grep -inE "^[[:space:]]*-[[:space:]]*\*\*(Summary|Pattern|Tags):\*\*.*${q}" "${files[@]}"
 }
 ```
 
@@ -69,13 +73,17 @@ Fetch a single entry block by ID (e.g. `P-005`, `L-3-002`) — the smallest usef
 
 ```bash
 memory_get() {
-  local id="$1"
-  # Print from the "### <id>" heading to the next "### " heading
+  local id="$1" f files=()
+  # Existing files only: awk (BSD and mawk alike) stops at the first file it cannot open, so a
+  # missing root lessons.md used to hide every per-phase file behind it
+  while IFS= read -r f; do files+=("$f"); done < <(_mem_sources)
+  [ ${#files[@]} -gt 0 ] || return 1
+  # Print the first "### <id>" entry: from its heading to the next "### " heading or end of file
   awk -v id="### ${id}" '
-    $0 ~ "^"id"([^0-9]|$)" {p=1}
-    p && /^### / && $0 !~ "^"id"([^0-9]|$)" && NR>1 {exit}
-    p {print}
-  ' agent_state/lessons.md agent_state/patterns.md agent_state/phases/*/lessons.md 2>/dev/null
+    p && (FNR == 1 || /^### /) { exit }
+    $0 ~ "^"id"([^0-9]|$)" { p = 1 }
+    p { print }
+  ' "${files[@]}"
 }
 ```
 
@@ -137,3 +145,5 @@ inverted index (Index by Category / Index by Tag). That inverted index **is** th
 grep against it gives keyword-precision lookups at near-zero cost. The uncertain-match middle that a
 vector DB would help with is rare at project-lesson scale (dozens of entries, not millions), so the
 grep index captures ~all the value at none of the infrastructure cost.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 3 run in fixture scenarios on macOS bash 3.2.57 (2 also on Linux bash 5.2.37 with GNU tools).

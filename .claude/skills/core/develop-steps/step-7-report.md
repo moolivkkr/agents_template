@@ -56,7 +56,9 @@ Total agents: N run, N failed, N retried
 
 Write the pipeline_complete entry to the execution log:
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_complete\",\"phase\":${PHASE},\"status\":\"<gate_passed|gate_failed|gate_forced>\",\"total_duration_s\":<N>,\"agents_run\":<N>,\"agents_failed\":<N>}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_complete\",\"phase\":${PHASE},\"status\":\"<gate_passed|gate_failed|gate_forced>\",\"total_duration_s\":<N>,\"agents_run\":<N>,\"agents_failed\":<N>}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

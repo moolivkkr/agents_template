@@ -221,17 +221,17 @@ func TestWidgetProvider(t *testing.T) {
 
 ## Pact Broker
 ```bash
-# Publish contract from consumer CI
+# Publish contract from consumer CI. The token comes from the PACT_BROKER_TOKEN env var (a CI
+# secret), which the CLI reads itself — not a --broker-token argument that shows up in `ps` and logs
 pact-broker publish ./pacts \
-  --consumer-app-version=$(git rev-parse HEAD) \
-  --branch=$(git branch --show-current) \
-  --broker-base-url=https://pact-broker.example.com \
-  --broker-token=$PACT_BROKER_TOKEN
+  --consumer-app-version="$(git rev-parse HEAD)" \
+  --branch="$(git branch --show-current)" \
+  --broker-base-url=https://pact-broker.example.com
 
 # Can I Deploy? — check before deployment
 pact-broker can-i-deploy \
   --pacticipant=widget-dashboard \
-  --version=$(git rev-parse HEAD) \
+  --version="$(git rev-parse HEAD)" \
   --to-environment=production \
   --broker-base-url=https://pact-broker.example.com
 ```
@@ -248,7 +248,7 @@ consumer-tests:
   steps:
     - run: npm test          # generates pact files
     - run: pact-broker publish ./pacts --consumer-app-version=$GIT_SHA
-    - run: pact-broker can-i-deploy --pacticipant=widget-dashboard --version=$GIT_SHA --to=production
+    - run: pact-broker can-i-deploy --pacticipant=widget-dashboard --version=$GIT_SHA --to-environment=production   # --to is the legacy tag form
 
 # Provider CI pipeline
 provider-verify:
@@ -267,3 +267,5 @@ provider-verify:
 - Contract tests replace integration tests at service boundaries — not unit tests
 - Keep contract scope narrow — test API shape, not business logic
 - Provider version should be the git SHA — enables traceability
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 YAML block parsed (duplicate keys fail).

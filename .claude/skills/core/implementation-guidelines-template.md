@@ -17,6 +17,8 @@ tags:
 > **Depth expectation:** Each section must contain enough detail that a new engineer can implement the pattern without asking follow-up questions. Include code snippets, configuration examples, and anti-patterns where applicable.
 >
 > **Reference:** See the cert-manager IMPLEMENTATION_GUIDELINES for the depth and specificity expected in a production-quality output.
+>
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 JSON blocks parsed + response-envelope rules; 2 blocks not checked (template placeholder only).
 
 ---
 
@@ -245,7 +247,7 @@ Performance is not an afterthought — it is a design constraint applied to ever
 
 > **Agent guidance:** Load `api-excellence.md` skill pack. Define REST conventions, versioning, error responses, and authentication. Ask about GraphQL/gRPC if the BRD mentions real-time or inter-service communication.
 
-```markdown
+````markdown
 ## 2. API Design
 
 ### 2.1 API Style & Versioning
@@ -343,7 +345,7 @@ logged server-side under the same `request_id`.
 - Default: `application/json`
 - Supported: {{SUPPORTED_CONTENT_TYPES}}
 - File uploads: `multipart/form-data`
-```
+````
 
 ---
 
@@ -414,7 +416,7 @@ logged server-side under the same `request_id`.
 
 > **Agent guidance:** Determine auth strategy from BRD (JWT, session-based, OAuth). Ask about RBAC vs ABAC, API key support, and service-to-service auth. Reference `resiliency-patterns.md` for token refresh patterns.
 
-```markdown
+````markdown
 ## 4. Authentication & Authorization
 
 ### 4.1 Authentication Strategy
@@ -466,7 +468,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 
 - **Method:** {{S2S_AUTH_METHOD}} (e.g., mTLS, shared JWT, API keys)
 - **Secret management:** {{S2S_SECRET_MANAGEMENT}}
-```
+````
 
 ---
 
@@ -474,7 +476,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 
 > **Agent guidance:** Load `code-quality.md` for error handling patterns. Define domain error types that map to HTTP status codes. Every error must be structured, logged, and user-friendly.
 
-```markdown
+````markdown
 ## 5. Error Handling
 
 ### 5.1 Error Taxonomy
@@ -517,7 +519,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 ```{{LANG}}
 {{ERROR_WRAPPING_EXAMPLE}}
 ```
-```
+````
 
 ---
 
@@ -525,7 +527,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 
 > **Agent guidance:** Load `observability-patterns.md` skill pack. Define structured logging format, log levels, metrics, and tracing. tenant_id must appear on every log line and metric in multi-tenant systems.
 
-```markdown
+````markdown
 ## 6. Logging & Observability
 
 ### 6.1 Structured Logging
@@ -597,7 +599,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 ```{{LANG}}
 {{REQUEST_LOGGER_MIDDLEWARE}}
 ```
-```
+````
 
 ---
 
@@ -605,7 +607,7 @@ Request → Rate Limiter → Auth (JWT/session) → RBAC → Tenant Scoping → 
 
 > **Agent guidance:** Load `testing-principles.md` skill pack. Define framework choices, coverage targets, test data management. Ask about CI integration and test parallelism.
 
-```markdown
+````markdown
 ## 7. Testing Strategy
 
 ### 7.1 Test Pyramid
@@ -651,7 +653,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - Parallelism: {{TEST_PARALLELISM}} (e.g., Go: -parallel=4, Jest: --maxWorkers=50%)
 - Timeout: {{TEST_TIMEOUT}} per test suite
 - Flaky test policy: {{FLAKY_TEST_POLICY}} (e.g., quarantine after 2 failures, fix within 48h)
-```
+````
 
 ---
 
@@ -659,7 +661,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 > **Agent guidance:** Load `security-owasp.md` skill pack. Cover OWASP Top 10 mitigations, input validation, output encoding, secrets management, and CORS. Reference NFR-SEC-* from BRD.
 
-```markdown
+````markdown
 ## 8. Security
 
 ### 8.1 OWASP Top 10 Mitigations
@@ -717,7 +719,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 | `Content-Security-Policy` | `{{CSP_POLICY}}` |
 | `X-XSS-Protection` | `0` (rely on CSP instead) |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
-```
+````
 
 ---
 
@@ -826,7 +828,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 > **Agent guidance:** Define Docker configuration, CI/CD pipeline stages, environment promotion, rollback strategy, and health checks. Reference the BRD deployment requirements.
 
-```markdown
+````markdown
 ## 11. Deployment & CI/CD
 
 ### 11.1 Docker
@@ -871,7 +873,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 |----------|-------|----------|
 | `{{HEALTH_ENDPOINT}}` | Liveness | 200 OK |
 | `{{READY_ENDPOINT}}` | DB + cache connectivity | 200 OK with dependency status |
-```
+````
 
 ---
 
@@ -879,7 +881,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 > **Agent guidance:** Define API documentation strategy (OpenAPI), code comment standards, ADR format, and runbook requirements.
 
-```markdown
+````markdown
 ## 12. Documentation
 
 ### 12.1 API Documentation
@@ -922,7 +924,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - Location: `docs/runbooks/`
 - Required for: every production alert, deployment procedure, incident type
 - Format: step-by-step with commands, expected outputs, escalation paths
-```
+````
 
 ---
 
@@ -930,7 +932,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 > **Agent guidance:** Load `git-workflow.md` skill pack. Define branching strategy, commit conventions, PR process, and code review rules.
 
-```markdown
+````markdown
 ## 13. Git Workflow
 
 ### 13.1 Branching Strategy
@@ -969,7 +971,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 - `{{MAIN_BRANCH}}`: {{MAIN_BRANCH_RULES}} (e.g., require PR, require CI pass, require review)
 - Force push: {{FORCE_PUSH_POLICY}} (e.g., never on main, allowed on feature branches)
-```
+````
 
 ---
 
@@ -1010,7 +1012,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 
 > **Agent guidance:** If the BRD mentions multiple organizations, workspaces, or teams, this section is required. Ask about isolation level, data partitioning strategy, and tenant-scoped operations. If single-tenant, mark as N/A.
 
-```markdown
+````markdown
 ## 15. Multi-Tenancy
 
 ### 15.1 Isolation Model
@@ -1064,7 +1066,7 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 - **Init scripts:** `localstack/init/ready.d/` (auto-run on container start)
 - **Multi-region simulation:** {{MULTI_REGION}} (geo-router nginx | single region)
 - **Skill pack:** `~/.claude/skills/infrastructure/localstack-aws-local.md`
-```
+````
 
 ---
 

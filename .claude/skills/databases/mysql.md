@@ -18,7 +18,7 @@ CREATE TABLE users (
 
 ## Indexes
 ```sql
--- Always index FK columns
+-- Name the FK column's index yourself (InnoDB otherwise adds one named after the constraint)
 ALTER TABLE orders ADD INDEX idx_orders_user_id (user_id);
 
 -- Covering index: include all columns needed by query
@@ -27,7 +27,9 @@ CREATE INDEX idx_orders_user_status ON orders(user_id, status, created_at);
 -- Prefix index for long VARCHAR (use full-text for search)
 CREATE INDEX idx_name ON users(name(50));
 ```
-Rule: every FK must have an index — MySQL doesn't create them automatically.
+Rule: every FK column is the leftmost column of an index. InnoDB requires one and creates it
+silently when the FK is added without one; declare it in the migration so its name and column order
+are yours (a composite index such as `(user_id, status, created_at)` also covers the FK).
 
 ## Queries
 ```sql
@@ -46,8 +48,8 @@ UPDATE accounts SET balance = balance - 100 WHERE id = 1;
 UPDATE accounts SET balance = balance + 100 WHERE id = 2;
 COMMIT;
 ```
-- Default isolation: `READ COMMITTED` — appropriate for most OLTP
-- `REPEATABLE READ` for operations that must see a consistent snapshot
+- InnoDB's default isolation is `REPEATABLE READ` (consistent snapshot per transaction, gap locks)
+- `READ COMMITTED` (set per session or transaction) suits most OLTP: fewer gap locks and deadlocks
 
 ## Migrations
 - Use Flyway, Liquibase, or Goose — versioned, repeatable
@@ -59,3 +61,5 @@ COMMIT;
 - `DATETIME(6)` not `DATETIME` — microsecond precision
 - Connection pool: set `max_open_conns` and `max_idle_conns` explicitly
 - Avoid `SELECT *` — list columns explicitly in application queries
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 SQL blocks executed on MySQL 8.4.11; 2 claims in the text proven on MySQL 8.4.11.

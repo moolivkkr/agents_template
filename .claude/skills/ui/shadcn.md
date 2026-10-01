@@ -339,3 +339,5 @@ toast.promise(saveData(payload), {
 - Use `AlertDialog` for destructive confirmations (delete, remove), NOT regular `Dialog`
 - Use `Sheet` for mobile navigation and side panels
 - Use `Skeleton` for ALL loading states — match the shape of loaded content
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

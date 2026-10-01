@@ -454,3 +454,5 @@ When using this YAML format, the following validation rules apply:
 8. **Touch targets** must be >= 44px for all interactive elements on mobile layout
 
 The `design_quality_reviewer` can parse this YAML format to automate all 10 dimension checks.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 6 YAML blocks parsed (duplicate keys fail).

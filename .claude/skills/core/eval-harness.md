@@ -278,3 +278,5 @@ and `expected_artifacts.json` lists the files with per-file assertions:
   earns its place permanently. Never delete a task to make a verdict look better.
 - `/eval` measures the framework, not a user's project — run it in this repo against the fixed
   suite, not against downstream project code.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 JSON blocks parsed + the shape of agent_state/eval/ suite files.

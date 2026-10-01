@@ -33,24 +33,26 @@ only those for the per-phase gate. Full regression still runs at `/accept` (glob
 ### Step 1 — Identify Changed Files
 
 ```bash
-# Files changed in this phase (since phase branch or last gate)
-LAST_GATE_SHA=$(git log --format=%H -1 -- agent_state/phases/$((PHASE-1))/gate.passed 2>/dev/null)
-if [ -z "$LAST_GATE_SHA" ]; then
-  LAST_GATE_SHA=$(git merge-base HEAD main 2>/dev/null || echo "HEAD~20")
+# Files changed in this phase: since the commit it started from (base_sha, written at Wave 0c).
+# No usable base means the scope is unknown → FULL regression (Safety Guarantee 4). Never guess:
+# merge-base with main is HEAD itself on main (zero changes → "skip"), and HEAD~20 is not the phase.
+BASE="$(cat "agent_state/phases/${PHASE:?}/base_sha" 2>/dev/null)"
+if [ -n "$BASE" ] && CHANGED_FILES="$(git diff --name-only "$BASE" HEAD)"; then
+  printf '%s\n' "$CHANGED_FILES" | sed '/^$/d' > /tmp/changed_files.txt
+  CHANGED_COUNT=$(wc -l < /tmp/changed_files.txt | tr -d ' ')
+  echo "Phase $PHASE changed $CHANGED_COUNT files since ${BASE}"
+else
+  echo "⚠ No usable base commit for Phase $PHASE — run the FULL regression (fallback_reason: no_base)"
+  exit 1   # the caller runs everything; impact selection stops here
 fi
-
-CHANGED_FILES=$(git diff --name-only "$LAST_GATE_SHA" HEAD)
-echo "$CHANGED_FILES" > /tmp/changed_files.txt
-CHANGED_COUNT=$(echo "$CHANGED_FILES" | wc -l | tr -d ' ')
-echo "Phase $PHASE changed $CHANGED_COUNT files"
 ```
 
 ### Step 2 — Map Files to Packages/Modules
 
 ```bash
-# Extract unique packages/directories from changed files
-CHANGED_PACKAGES=$(echo "$CHANGED_FILES" | xargs -I{} dirname {} | sort -u)
-echo "$CHANGED_PACKAGES" > /tmp/changed_packages.txt
+# Extract unique packages/directories from changed files (one per line; "." for root files)
+while IFS= read -r f; do dirname "$f"; done < /tmp/changed_files.txt | sort -u > /tmp/changed_packages.txt
+CHANGED_PACKAGES=$(cat /tmp/changed_packages.txt)
 ```
 
 ### Step 3 — Classify Change Scope
@@ -68,30 +70,22 @@ echo "$CHANGED_PACKAGES" > /tmp/changed_packages.txt
 ### Step 4 — Determine Affected Tests
 
 ```bash
-# For Go projects:
-# Find test files in changed packages
-AFFECTED_TESTS=""
-for PKG in $(cat /tmp/changed_packages.txt); do
-  # Direct tests in the changed package
-  TESTS=$(find "$PKG" -name '*_test.go' 2>/dev/null)
-  AFFECTED_TESTS="$AFFECTED_TESTS $TESTS"
+# For Go projects: a package is affected when it changed or imports a changed package (test imports
+# included). go list resolves the real import paths; grepping test files for "./internal/x" never
+# matches a Go import (they are module paths), so dependents were silently left out.
+MOD="$(go list -m)" || exit 1
+go list -f '{{.ImportPath}} {{join .Imports " "}} {{join .TestImports " "}} {{join .XTestImports " "}}' ./... \
+  > /tmp/go_imports.txt || exit 1
+AFFECTED_GO_PKGS="$(awk -v mod="$MOD" '
+  FILENAME == ARGV[1] { changed[($0 == ".") ? mod : mod "/" $0] = 1; next }
+  { for (i = 1; i <= NF; i++) if ($i in changed) { print $1; next } }' /tmp/changed_packages.txt /tmp/go_imports.txt | sort -u)"
+AFFECTED_COUNT=$(printf '%s\n' "$AFFECTED_GO_PKGS" | sed '/^$/d' | wc -l | tr -d ' ')
+TOTAL_PKGS=$(wc -l < /tmp/go_imports.txt | tr -d ' ')
+echo "Affected: $AFFECTED_COUNT / $TOTAL_PKGS packages ($(( TOTAL_PKGS > 0 ? AFFECTED_COUNT * 100 / TOTAL_PKGS : 0 ))%)"
 
-  # Tests that import the changed package (direct dependents)
-  PKG_IMPORT=$(echo "$PKG" | sed 's|^|./|')
-  DEPENDENT_TESTS=$(grep -rl "$PKG_IMPORT" --include='*_test.go' . 2>/dev/null)
-  AFFECTED_TESTS="$AFFECTED_TESTS $DEPENDENT_TESTS"
-done
-
-# For TypeScript/React projects:
-# Find test files that import from changed directories
-for DIR in $(cat /tmp/changed_packages.txt); do
-  TESTS=$(grep -rl "from.*['\"].*${DIR}" --include='*.test.*' --include='*.spec.*' . 2>/dev/null)
-  AFFECTED_TESTS="$AFFECTED_TESTS $TESTS"
-done
-
-AFFECTED_COUNT=$(echo "$AFFECTED_TESTS" | tr ' ' '\n' | sort -u | wc -l | tr -d ' ')
-TOTAL_TESTS=$(find . -name '*_test.go' -o -name '*.test.*' -o -name '*.spec.*' 2>/dev/null | wc -l | tr -d ' ')
-echo "Affected: $AFFECTED_COUNT / $TOTAL_TESTS tests ($(( AFFECTED_COUNT * 100 / TOTAL_TESTS ))%)"
+# For TypeScript/React projects: let the runner walk the import graph. A grep for the directory name
+# misses relative ("../x") and aliased ("@/x") imports.
+#   npx vitest related --run $(cat /tmp/changed_files.txt)      # Jest: npx jest --findRelatedTests …
 ```
 
 ### Step 5 — Apply Selection or Fallback
@@ -103,17 +97,17 @@ if [ "$AFFECTED_COUNT" -eq 0 ]; then
   echo "No tests affected — skip regression (test-only or docs change)"
   REGRESSION_CMD="echo 'No regression needed'"
 
-elif [ "$(( AFFECTED_COUNT * 100 / TOTAL_TESTS ))" -gt "$SELECTION_THRESHOLD" ]; then
-  echo ">${SELECTION_THRESHOLD}% tests affected — running full regression"
+elif [ "$(( AFFECTED_COUNT * 100 / TOTAL_PKGS ))" -gt "$SELECTION_THRESHOLD" ]; then
+  echo ">${SELECTION_THRESHOLD}% packages affected — running full regression"
   REGRESSION_CMD="$FULL_TEST_CMD"
 
 else
-  echo "Running targeted regression: $AFFECTED_COUNT tests"
-  # For Go: run specific packages
-  REGRESSION_CMD="go test $(echo "$CHANGED_PACKAGES" | sed 's|^|./|' | tr '\n' ' ') ./..."
-  # For TS: run with path filter
-  # REGRESSION_CMD="npx vitest run $(echo "$AFFECTED_TESTS" | tr ' ' '\n' | sort -u | tr '\n' ' ')"
+  echo "Running targeted regression: $AFFECTED_COUNT packages"
+  # For Go: exactly the affected packages (a trailing ./... would run every package again)
+  REGRESSION_CMD="go test $(printf '%s\n' "$AFFECTED_GO_PKGS" | tr '\n' ' ')"
+  # For TS: REGRESSION_CMD="npx vitest related --run $(tr '\n' ' ' < /tmp/changed_files.txt)"
 fi
+echo "regression: $REGRESSION_CMD"
 ```
 
 ## Safety Guarantees
@@ -147,3 +141,5 @@ Log the selection decision in the gate checkpoint:
 - After a forced gate: trust is low — run full regression
 - After `--reset-phase`: clean slate — run full regression
 - During `/accept`: always full regression (global acceptance)
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 4 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 run in fixture scenarios on macOS bash 3.2.57; 1 JSON block parsed.

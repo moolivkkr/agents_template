@@ -72,10 +72,14 @@ A TAG/EDGE has at most one TTL column; expired data is filtered on read and remo
 - **Bind starting VIDs whenever possible** (`GO ... FROM <vid>`); property-first queries need an
   index and are slower — design VIDs so hot lookups start from a known id.
 - **Set `vid_type` and `partition_num` at creation** — both are immutable; size `partition_num`
-  for the cluster (a common default is 10–20 × storaged count).
+  for the cluster (a common default is 10–20 × storaged count). `replica_factor` must not exceed the
+  number of storaged hosts ("Host not enough!"): a single-host dev/test cluster creates the space with
+  `replica_factor=1`.
 - After schema DDL, remember NebulaGraph applies changes **asynchronously** — wait/ retry before
   inserting against a brand-new TAG/EDGE in tests.
 - Use **parameterized statements / batches** for bulk load; single-row `INSERT` per call does not scale.
 - Migrations: version nGQL DDL like SQL (create space/tag/edge/index, then `REBUILD`). There is no
   built-in ORM — access via the official client (Go `nebula-go`, Python `nebula3-python`).
 - `snake_case` property names to match the Go/service stack.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 5 nGQL blocks executed on NebulaGraph 3.8.0; 6 claims in the text proven on NebulaGraph 3.8.0.

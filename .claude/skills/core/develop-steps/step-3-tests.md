@@ -189,3 +189,5 @@ If `docs/design/phases/${PHASE}/specs/*.wireframe.html` exists:
 **Why this matters:** Without re-audit, the Step 1 audit report becomes "write-only" — gaps are detected but nobody verifies they were closed. This step closes that loop.
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 JSON blocks parsed + agent_state/manifest_schema.json.

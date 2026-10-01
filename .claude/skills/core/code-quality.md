@@ -466,3 +466,5 @@ When reading review reports, the gate step (`~/.claude/skills/core/develop-steps
 - Test every ~100 lines — never batch-write large untested changes
 - Name things for the reader, not the writer — clarity over brevity
 - When in doubt, choose the simpler solution
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

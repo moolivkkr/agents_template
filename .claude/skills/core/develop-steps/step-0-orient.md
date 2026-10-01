@@ -4,16 +4,23 @@
 
 ### Detect current phase
 ```bash
-LAST_PASSED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | grep -oP 'phases/\K\d+' | sort -n | tail -1)
-PHASE=${ARG_PHASE:-$(( ${LAST_PASSED:-0} + 1 ))}
+# Highest N with agent_state/phases/N/gate.passed. No grep -P: macOS grep rejects it (exit 2), which
+# left LAST_PASSED empty and silently restarted every project at Phase 1.
+LAST_PASSED=0
+for g in agent_state/phases/*/gate.passed; do
+  n="${g#agent_state/phases/}"; n="${n%/gate.passed}"
+  case "$n" in ''|*[!0-9]*) continue ;; esac   # the unmatched glob itself, or a non-numeric dir
+  if [ "$n" -gt "$LAST_PASSED" ]; then LAST_PASSED="$n"; fi
+done
+PHASE="${ARG_PHASE:-$((LAST_PASSED + 1))}"
 echo "▶ Running Phase $PHASE"
 ```
 
 ### Initialize Execution Log
 
 ```bash
-mkdir -p agent_state/phases/${PHASE}
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_start\",\"phase\":${PHASE},\"attempt\":${ATTEMPT:-1}}" >> agent_state/phases/${PHASE}/execution.jsonl
+mkdir -p "agent_state/phases/${PHASE:?}"
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"pipeline_start\",\"phase\":${PHASE},\"attempt\":${ATTEMPT:-1}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
 
 ### Failure Pattern Detection
@@ -22,15 +29,15 @@ Check if previous attempts at this phase failed at specific steps:
 
 ```bash
 # Check for previous gate.failed files
-PREV_FAILURES=$(ls agent_state/phases/${PHASE}/gate.failed* 2>/dev/null)
-if [ -n "$PREV_FAILURES" ]; then
-  echo "⚠ Phase ${PHASE} has previous failure(s):"
-  for f in $PREV_FAILURES; do
-    BLOCKERS=$(python3 -c "import json; d=json.load(open('$f')); print(', '.join(b.get('gate_item','?') for b in d.get('blockers',[])))" 2>/dev/null)
-    echo "  - $(basename $f): blocked by $BLOCKERS"
-  done
-  echo "  → Extra scrutiny will be applied to previously-failing steps"
-fi
+SEEN_FAILURE=false
+for f in "agent_state/phases/${PHASE:?}"/gate.failed*; do
+  [ -e "$f" ] || continue
+  if [ "$SEEN_FAILURE" = false ]; then echo "⚠ Phase ${PHASE} has previous failure(s):"; SEEN_FAILURE=true; fi
+  BLOCKERS=$(python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print(', '.join(b.get('gate_item','?') for b in d.get('blockers',[])))" "$f" 2>/dev/null) \
+    || BLOCKERS="(unreadable — open $f)"
+  echo "  - $(basename "$f"): blocked by $BLOCKERS"
+done
+if [ "$SEEN_FAILURE" = true ]; then echo "  → Extra scrutiny will be applied to previously-failing steps"; fi
 ```
 
 When a step that previously failed is reached:
@@ -44,19 +51,15 @@ When a step that previously failed is reached:
 Before starting implementation, check for and create a lock:
 
 ```bash
-LOCK_FILE="agent_state/phases/${PHASE}/.lock"
-if [ -f "$LOCK_FILE" ]; then
-  LOCK_OWNER=$(cat "$LOCK_FILE" | head -1)
-  LOCK_TIME=$(cat "$LOCK_FILE" | tail -1)
-  echo "⚠ Phase ${PHASE} is locked by ${LOCK_OWNER} since ${LOCK_TIME}"
-  echo "  If this is stale, remove with: rm ${LOCK_FILE}"
+LOCK_FILE="agent_state/phases/${PHASE:?}/.lock"
+# noclobber makes the create atomic (of two sessions starting at once, one gets the lock) and never
+# overwrites a lock someone else holds
+if ! ( set -C; printf '%s\n%s\n' "$(whoami)@$(hostname)" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$LOCK_FILE" ) 2>/dev/null; then
+  echo "⚠ Phase ${PHASE} is locked by $(head -1 "$LOCK_FILE") since $(sed -n 2p "$LOCK_FILE")"
+  echo "  If this is stale, remove with: rm \"$LOCK_FILE\""
   echo "  Proceeding may cause file conflicts in agent_state/phases/${PHASE}/"
   # In --auto mode: STOP. In interactive mode: ask user to confirm.
 fi
-
-# Create lock
-echo "$(whoami)@$(hostname)" > "$LOCK_FILE"
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$LOCK_FILE"
 ```
 
 Release lock at the end of Step 6 (gate write):
@@ -65,6 +68,7 @@ rm -f "agent_state/phases/${PHASE}/.lock"
 ```
 
 This is advisory — it warns but doesn't prevent. Two developers CAN override, but they're warned.
+(`/pause` reads the lock to tell that `/develop` was running, so a resumed run meets its own lock.)
 
 ### Gate check
 If PHASE > 1 and `agent_state/phases/$((PHASE-1))/gate.passed` is missing:
@@ -110,25 +114,26 @@ When comparing Phase N data-contracts.md against Phase N-1 actual implementation
 Hard blocks CANNOT be force-gated. Fix the contract or provide a migration path (deprecated field alias).
 
 ```bash
-# Quick staleness check
-if [ $PHASE -gt 1 ]; then
+# Quick staleness check — BLOCKING (step 3 above): a stale contract stops the phase
+if [ "${PHASE:?}" -gt 1 ]; then
   PREV_MANIFEST="agent_state/phases/$((PHASE-1))/manifest.json"
   CONTRACTS="docs/design/phases/${PHASE}/specs/data-contracts.md"
   if [ -f "$PREV_MANIFEST" ] && [ -f "$CONTRACTS" ]; then
     echo "Validating data contracts against Phase $((PHASE-1)) manifest..."
     # Extract api_routes from previous manifest and verify they still exist in contracts
-    python3 -c "
+    python3 - "$PREV_MANIFEST" "$CONTRACTS" "$((PHASE-1))" <<'PY' \
+      || { echo "⛔ BLOCKED: data-contracts.md is stale or unreadable — re-run /plan --phase=${PHASE} or update it"; exit 1; }
 import json, sys
-manifest = json.load(open('$PREV_MANIFEST'))
+manifest = json.load(open(sys.argv[1]))
 routes = manifest.get('artifacts', {}).get('api_routes', [])
-contracts = open('$CONTRACTS').read()
+contracts = open(sys.argv[2]).read()
 stale = [r for r in routes if r.split()[-1] not in contracts]
 if stale:
     print('⚠ STALE CONTRACTS — routes in previous manifest not found in data-contracts.md:')
     for r in stale: print(f'  - {r}')
     sys.exit(1)
-print('✅ Data contracts consistent with Phase $((PHASE-1)) manifest')
-" || echo "⚠ Contract validation failed — review data-contracts.md before proceeding"
+print(f'✅ Data contracts consistent with Phase {sys.argv[3]} manifest')
+PY
   fi
 fi
 ```
@@ -151,11 +156,16 @@ Before implementation begins, validate schema compatibility across phases:
 5. Add to manifest: `"breaking_changes": [{"field": "...", "action": "removed|type_changed", "resolution": "versioned|confirmed|restored"}]`
 
 ```bash
-# Schema evolution validation
-if [ $PHASE -gt 1 ]; then
+# Schema evolution validation — writes reports/schema_evolution.md (read by Breaking Change
+# Propagation below and by the force-gate refusal in Step 6) and BLOCKS on any breaking change
+if [ "${PHASE:?}" -gt 1 ]; then
   echo "Validating schema evolution across all previous phases..."
   CURRENT_CONTRACTS="docs/design/phases/${PHASE}/specs/data-contracts.md"
+  REPORT="agent_state/phases/${PHASE}/reports/schema_evolution.md"
+  SCHEMA_RC=0
   if [ -f "$CURRENT_CONTRACTS" ]; then
+    mkdir -p "$(dirname "$REPORT")"
+    echo "# Schema evolution — Phase ${PHASE}" > "$REPORT"
     for PREV_PHASE in $(seq 1 $((PHASE - 1))); do
       PREV_CONTRACTS="docs/design/phases/${PREV_PHASE}/specs/data-contracts.md"
       if [ -f "$PREV_CONTRACTS" ]; then
@@ -201,9 +211,15 @@ if breaking:
     sys.exit(1)
 else:
     print('✅ Schema evolution clean: Phase ${PREV_PHASE} → Phase ${PHASE}')
-" || echo "⚠ Schema evolution validation failed — review before proceeding"
+" >> "$REPORT" 2>&1 || SCHEMA_RC=1   # a crash (unreadable contracts) blocks too
       fi
     done
+    cat "$REPORT"
+  fi
+  if [ "$SCHEMA_RC" -ne 0 ]; then
+    echo "⛔ BLOCKED: breaking schema change(s) above (or the check could not run) — route each to the user:"
+    echo "   restore the field, version the endpoint, or confirm the removal (manifest breaking_changes[])."
+    exit 1
   fi
 fi
 ```
@@ -221,8 +237,9 @@ When a breaking change is confirmed (not restored):
 
 ```bash
 # Breaking change propagation — check all consuming phases
-if [ $PHASE -gt 1 ] && [ -f "agent_state/phases/${PHASE}/reports/schema_evolution.md" ]; then
-  BREAKING_COUNT=$(grep -c "⛔ BREAKING" "agent_state/phases/${PHASE}/reports/schema_evolution.md" 2>/dev/null || echo 0)
+if [ "${PHASE:?}" -gt 1 ] && [ -f "agent_state/phases/${PHASE}/reports/schema_evolution.md" ]; then
+  # grep -c prints 0 AND exits 1 on no match: "|| echo 0" would make the count "0<newline>0"
+  BREAKING_COUNT=$(grep -c "⛔ BREAKING" "agent_state/phases/${PHASE}/reports/schema_evolution.md" || true)
   if [ "$BREAKING_COUNT" -gt 0 ]; then
     echo "⚠ ${BREAKING_COUNT} breaking change(s) detected — checking consuming phases..."
     for PREV_PHASE in $(seq 1 $((PHASE - 1))); do
@@ -252,13 +269,16 @@ Before loading `phase_context.md`, verify it's not stale relative to the BRD:
 ```bash
 CONTEXT_FILE="docs/design/phases/${PHASE}/phase_context.md"
 BRD_FILE="docs/BRD.md"
+# GNU stat first: GNU `stat -f %m` succeeds with file-system info on stdout, which poisoned the
+# BSD-first form on Linux; BSD stat rejects -c and prints nothing to stdout
+mtime() { stat -c %Y "${1}" 2>/dev/null || stat -f %m "${1}"; }
 if [ -f "$CONTEXT_FILE" ] && [ -f "$BRD_FILE" ]; then
-  CONTEXT_MTIME=$(stat -f %m "$CONTEXT_FILE" 2>/dev/null || stat -c %Y "$CONTEXT_FILE")
-  BRD_MTIME=$(stat -f %m "$BRD_FILE" 2>/dev/null || stat -c %Y "$BRD_FILE")
+  CONTEXT_MTIME=$(mtime "$CONTEXT_FILE")
+  BRD_MTIME=$(mtime "$BRD_FILE")
   if [ "$BRD_MTIME" -gt "$CONTEXT_MTIME" ]; then
     echo "⚠ WARNING: BRD was modified AFTER phase_context.md was generated."
-    echo "  BRD modified:     $(date -r $BRD_MTIME 2>/dev/null || date -d @$BRD_MTIME)"
-    echo "  Context generated: $(date -r $CONTEXT_MTIME 2>/dev/null || date -d @$CONTEXT_MTIME)"
+    echo "  BRD modified:     $(date -r "$BRD_MTIME" 2>/dev/null || date -d "@$BRD_MTIME")"
+    echo "  Context generated: $(date -r "$CONTEXT_MTIME" 2>/dev/null || date -d "@$CONTEXT_MTIME")"
     echo "  Consider re-running /plan --phase=${PHASE} to refresh phase_context.md"
     echo "  Or proceed with caution — new BRD requirements may be missing from this phase."
   fi
@@ -274,16 +294,17 @@ Before starting implementation, check if phase specs are older than 30 days:
 
 ```bash
 SPEC_DIR="docs/design/phases/${PHASE}/specs"
+mtime() { stat -c %Y "${1}" 2>/dev/null || stat -f %m "${1}"; }   # GNU first (see above)
 if [ -d "$SPEC_DIR" ]; then
   NOW=$(date +%s)
   for SPEC in "$SPEC_DIR"/*.md; do
     [ -f "$SPEC" ] || continue
-    SPEC_MTIME=$(stat -f %m "$SPEC" 2>/dev/null || stat -c %Y "$SPEC")
+    SPEC_MTIME=$(mtime "$SPEC")
     DAYS_OLD=$(( (NOW - SPEC_MTIME) / 86400 ))
     if [ "$DAYS_OLD" -gt 60 ]; then
-      echo "⛔ Phase ${PHASE} spec $(basename $SPEC) is ${DAYS_OLD} days old — strongly recommend /plan --refresh before /develop"
+      echo "⛔ Phase ${PHASE} spec $(basename "$SPEC") is ${DAYS_OLD} days old — strongly recommend /plan --refresh before /develop"
     elif [ "$DAYS_OLD" -gt 30 ]; then
-      echo "⚠ Phase ${PHASE} spec $(basename $SPEC) is ${DAYS_OLD} days old — consider re-running /plan to refresh"
+      echo "⚠ Phase ${PHASE} spec $(basename "$SPEC") is ${DAYS_OLD} days old — consider re-running /plan to refresh"
     fi
   done
 fi
@@ -379,7 +400,7 @@ Before starting the pipeline, estimate total token usage for this phase. These e
 
 8. Add to execution.jsonl:
    ```bash
-   echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"estimate\",\"phase\":${PHASE},\"estimated_tokens\":${TOTAL_TOKENS},\"components\":${NUM_COMPONENTS},\"has_ui\":${HAS_UI}}" >> agent_state/phases/${PHASE}/execution.jsonl
+   echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"estimate\",\"phase\":${PHASE},\"estimated_tokens\":${TOTAL_TOKENS},\"components\":${NUM_COMPONENTS},\"has_ui\":${HAS_UI}}" >> "agent_state/phases/${PHASE}/execution.jsonl"
    ```
 
 ---
@@ -571,3 +592,5 @@ Agents reading `{{PHASE-1}}` in their instructions should resolve this to `PHASE
 - All spec files at once — load your component's spec only
 
 ---
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 12 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 9 run in fixture scenarios on macOS bash 3.2.57 (5 also on Linux bash 5.2.37 with GNU tools); 3 JSON blocks parsed.

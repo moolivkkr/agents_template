@@ -479,3 +479,5 @@ public class GenericExceptionMapper implements ExceptionMapper<Exception> {
 - SmallRye Health for health checks — auto-exposed, Kubernetes-ready
 - Profiles via `%dev.`, `%prod.`, `%test.` prefixes in properties
 - `@Valid` on resource method parameters for Bean Validation — same as Spring
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

@@ -123,14 +123,16 @@ Strict-Transport-Security: max-age=31536000; includeSubDomains
 - Use separate secrets per environment (dev/staging/prod)
 - Audit secret access; alert on anomalous access patterns
 
-```bash
+```gitignore
 # .gitignore must include
 .env
 .env.*
+!.env.example
 *.pem
 *.key
 credentials.json
 ```
+(`.env.*` also matches `.env.example`; the `!` line keeps the committed, secret-free example.)
 
 ## Critical Rules
 

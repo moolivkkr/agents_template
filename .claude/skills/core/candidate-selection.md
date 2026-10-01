@@ -82,8 +82,9 @@ mkdir -p "$WT_ROOT"
 for i in $(seq 1 "${N}"); do
   BR="cand/phase-${PHASE}/c${i}"
   WT="${WT_ROOT}/c${i}"
-  # Fresh branch off BASE, checked out into an isolated worktree.
-  git worktree add -b "$BR" "$WT" "$BASE"
+  # Fresh branch off BASE, checked out into an isolated worktree. Stop on failure: N-1 trees would
+  # silently turn a best-of-N run into fewer candidates.
+  git worktree add -b "$BR" "$WT" "$BASE" || { echo "⛔ worktree for candidate c${i} failed"; exit 1; }
 done
 git worktree list   # verify N isolated trees
 ```
@@ -185,8 +186,10 @@ WINNER="c${WIN}"                       # e.g. c2
 WT_ROOT="agent_state/phases/${PHASE}/candidates"
 WIN_BR="cand/phase-${PHASE}/${WINNER}"
 
-# 1. Merge the winner's branch into the working tree (the phase's real branch).
-git merge --no-ff "$WIN_BR" -m "phase ${PHASE}: adopt candidate ${WINNER} (selected — see candidate_selection.md)"
+# 1. Merge the winner's branch into the working tree (the phase's real branch). A failed merge stops
+#    here: the cleanup below deletes branches and must only run once the winner is in.
+git merge --no-ff "$WIN_BR" -m "phase ${PHASE}: adopt candidate ${WINNER} (selected — see candidate_selection.md)" \
+  || { echo "⛔ merge of $WIN_BR failed — resolve it, then run the cleanup"; exit 1; }
 
 # 2. Apply grafts, if any. Prefer cherry-picking the specific commits/files named in the graft list
 #    from the runner-up branch; otherwise a scoped follow-up commit. NEVER blind-merge a whole loser.
@@ -247,3 +250,5 @@ The `solution_selector` agent additionally writes the full rationale + rubric ta
 
 They compose: a PLATFORM class runs full+ADR depth, runs the implementers and selector at their frontmatter effort, and
 turns on N-candidate generation. A STANDARD class runs full waves, one implementation, no candidates.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 run in fixture scenarios on macOS bash 3.2.57.

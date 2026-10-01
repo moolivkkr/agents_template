@@ -22,11 +22,11 @@ spec:
             requests: { cpu: "100m", memory: "128Mi" }
             limits:   { cpu: "500m", memory: "512Mi" }
           livenessProbe:
-            httpGet: { path: /health, port: 8080 }
+            httpGet: { path: /healthz, port: 8080 }   # the runtime contract's paths (resiliency-patterns.md)
             initialDelaySeconds: 10
             periodSeconds: 10
           readinessProbe:
-            httpGet: { path: /ready, port: 8080 }
+            httpGet: { path: /readyz, port: 8080 }
             initialDelaySeconds: 5
             periodSeconds: 5
           env:
@@ -45,15 +45,22 @@ spec:
 # ConfigMap: non-sensitive config
 apiVersion: v1
 kind: ConfigMap
+metadata:
+  name: api-config
 data:
   LOG_LEVEL: "info"
   PORT: "8080"
-
-# Secret: sensitive values (base64 encoded, or use external-secrets-operator)
+---
+# Secret: sensitive values. base64 is encoding, not encryption: never commit one with real values.
+# Create it at deploy time (external-secrets-operator, or kustomize secretGenerator from a gitignored
+# secrets.env); this is its shape only — the name and key the Deployment above reads.
 apiVersion: v1
 kind: Secret
+metadata:
+  name: db-secret
+type: Opaque
 stringData:
-  DATABASE_URL: "postgres://..."
+  url: "postgres://..."
 ```
 Prefer `external-secrets-operator` + AWS Secrets Manager / Vault over in-cluster Secrets.
 
@@ -61,8 +68,10 @@ Prefer `external-secrets-operator` + AWS Secrets Manager / Vault over in-cluster
 ```yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
+metadata:
+  name: api
 spec:
-  scaleTargetRef: { kind: Deployment, name: api }
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
   minReplicas: 2
   maxReplicas: 10
   metrics:
@@ -84,3 +93,5 @@ spec:
 ## Non-prod lab cluster
 Local dev/qa environments (Lima + k3s, per-app namespaces, digest promotion, reset, rollback, and the
 gotchas measured there): see `lima-k8s-lab.md` in this directory.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 YAML blocks parsed (duplicate keys fail), kubeconform -strict (Kubernetes 1.37.1 schemas).

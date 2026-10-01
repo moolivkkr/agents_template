@@ -98,3 +98,5 @@ mockRepo.EXPECT().FindByID(gomock.Any(), gomock.Any()).
 - Prefer `gomock.Any()` for context arguments — tests should not assert on context values
 - Use `gomock.Eq()` for value comparisons, `gomock.Nil()` for nil checks
 - Keep mock expectations close to the function call they verify
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

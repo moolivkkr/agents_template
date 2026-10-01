@@ -31,7 +31,8 @@ Order of preference:
 data "vault_generic_secret" "db" {
   path = "secret/data/prod/api/database"
 }
-# The value is fetched at apply/runtime — the literal never appears in code or state diffs.
+# The literal never appears in code, but the provider writes what it reads to the STATE in cleartext
+# (and to plans that interpolate it): keep state encrypted and access-restricted (terraform.md).
 ```
 
 ## Never in an env file (the most common leak)
@@ -105,3 +106,5 @@ committed file matches the `.env` pattern (only `.env.example` allowed). Test th
 secret store stubbed to verify it fails **loudly and refuses to start** on a missing secret rather than
 falling back to a hardcoded default. For rotation, test that the app accepts both old and new secret during
 the overlap window (dual-secret acceptance).
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 HCL block: OpenTofu 1.12.6 fmt -check, init -backend=false + validate; 1 YAML block parsed (duplicate keys fail), kubeconform -strict (Kubernetes 1.37.1 schemas); 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

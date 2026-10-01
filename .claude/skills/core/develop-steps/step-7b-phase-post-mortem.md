@@ -25,9 +25,11 @@ Read `agent_state/phases/${PHASE}/execution.jsonl`:
 - If retry_rate > 30%: flag `"⚠ High retry rate — consider improving specs or skill packs"`
 
 ```bash
-# Calculate retry rate from execution log
-AGENTS_RUN=$(grep '"status":"completed"' agent_state/phases/${PHASE}/execution.jsonl | wc -l)
-AGENTS_RETRIED=$(grep '"status":"failed"' agent_state/phases/${PHASE}/execution.jsonl | jq -r '.agent' 2>/dev/null | sort -u | wc -l)
+# Calculate retry rate from execution log. jq, not grep '"status":"completed"': a line written as
+# "status": "completed" (json.dumps' default spacing) is still a completed agent; malformed lines skip.
+LOG="agent_state/phases/${PHASE:?}/execution.jsonl"
+AGENTS_RUN=$(jq -R -r 'fromjson? | select(.status == "completed") | .agent // "?"' "$LOG" | wc -l | tr -d ' ')
+AGENTS_RETRIED=$(jq -R -r 'fromjson? | select(.status == "failed") | .agent // "?"' "$LOG" | sort -u | wc -l | tr -d ' ')
 if [ "$AGENTS_RUN" -gt 0 ]; then
   RETRY_RATE=$(( AGENTS_RETRIED * 100 / AGENTS_RUN ))
   echo "Retry rate: ${RETRY_RATE}% (${AGENTS_RETRIED} of ${AGENTS_RUN} agents retried)"
@@ -130,9 +132,10 @@ elif len(trend) == 1:
 
 ```bash
 # Gate health analysis
-GATE_FORCED=$(ls agent_state/phases/${PHASE}/gate.forced 2>/dev/null)
-GATE_FAILED=$(ls agent_state/phases/${PHASE}/gate.failed* 2>/dev/null | wc -l | tr -d ' ')
-if [ -n "$GATE_FORCED" ]; then
+P="agent_state/phases/${PHASE:?}"
+GATE_FAILED=0
+for f in "$P"/gate.failed*; do [ -e "$f" ] && GATE_FAILED=$((GATE_FAILED + 1)); done
+if [ -f "$P/gate.forced" ]; then
   echo "  Gate: FORCED — review agent_state/phases/${PHASE}/gate.forced for details"
 elif [ "$GATE_FAILED" -gt 0 ]; then
   echo "  Gate: PASSED on attempt $((GATE_FAILED + 1)) (${GATE_FAILED} previous failure(s))"
@@ -186,5 +189,7 @@ Add post-mortem data to the phase manifest:
 ### Execution Log Entry
 
 ```bash
-echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"postmortem_complete\",\"phase\":${PHASE},\"retry_rate_pct\":${RETRY_RATE:-0},\"systemic_patterns\":${PATTERN_COUNT:-0},\"carried_forward_trend\":\"${CF_TREND:-baseline}\"}" >> agent_state/phases/${PHASE}/execution.jsonl
+echo "{\"ts\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"event\":\"postmortem_complete\",\"phase\":${PHASE},\"retry_rate_pct\":${RETRY_RATE:-0},\"systemic_patterns\":${PATTERN_COUNT:-0},\"carried_forward_trend\":\"${CF_TREND:-baseline}\"}" >> "agent_state/phases/${PHASE}/execution.jsonl"
 ```
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 5 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 run in fixture scenarios on macOS bash 3.2.57 (1 also on Linux bash 5.2.37 with GNU tools); 1 JSON block parsed.

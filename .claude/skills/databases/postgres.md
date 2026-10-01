@@ -48,7 +48,7 @@ CREATE INDEX idx_users_email ON users(email);
 -- Partial: filtered queries (saves space, faster for common filters)
 CREATE INDEX idx_users_active ON users(created_at) WHERE is_active = true;
 
--- Composite: multi-column queries (order matters — most selective first)
+-- Composite: multi-column queries (order matters — equality columns first, then range/sort)
 CREATE INDEX idx_orders_user_status ON orders(user_id, status);
 
 -- INCLUDE columns for index-only scans
@@ -86,6 +86,7 @@ SELECT u.id, count(o.id) FROM active_users u LEFT JOIN orders o ON o.user_id = u
 ## Row-Level Security (Multi-Tenancy)
 ```sql
 ALTER TABLE certificates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE certificates FORCE ROW LEVEL SECURITY;  -- without FORCE the table owner bypasses the policy
 CREATE POLICY tenant_isolation ON certificates
   USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
 ```
@@ -103,31 +104,39 @@ BEGIN ISOLATION LEVEL READ COMMITTED;  -- default, fine for most ops
 BEGIN ISOLATION LEVEL REPEATABLE READ; -- for aggregate consistency
 ```
 - Keep transactions short — acquire locks late, release early
-- Use `SELECT ... FOR UPDATE` for optimistic locking on specific rows
+- Use `SELECT ... FOR UPDATE` to lock specific rows (pessimistic); optimistic locking is a `version`
+  column checked in the `UPDATE ... WHERE version = $n`
 
 ## Pagination
 ```sql
--- Cursor-based (preferred for large datasets)
-SELECT * FROM certificates
+-- Cursor-based (keyset) — the only pagination: the cursor encodes the last row's (created_at, id)
+SELECT id, serial, status, created_at FROM certificates
 WHERE tenant_id = $1 AND (created_at, id) < ($2, $3)
 ORDER BY created_at DESC, id DESC
-LIMIT $4
+LIMIT $4;
 
--- Offset-based (simpler, OK for small datasets / admin UIs)
-SELECT * FROM certificates WHERE tenant_id = $1
-ORDER BY created_at DESC LIMIT $2 OFFSET $3
+-- ❌ NEVER — OFFSET: rows shift between pages under concurrent writes, and every page re-reads and
+-- discards all the rows before it
+-- SELECT * FROM certificates WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3;
 ```
-- Cursor-based avoids counting all rows — O(1) vs O(n)
+- An index on `(tenant_id, created_at DESC, id DESC)` serves the cursor query: each page is a short
+  index range scan, whatever its depth (OFFSET reads and throws away every row it skips)
 - Always include a tie-breaker column (id) in cursor
 
 ## JSONB Patterns
 ```sql
 -- Store flexible config in JSONB
-CREATE TABLE policies (id uuid, tenant_id uuid, config jsonb NOT NULL DEFAULT '{}');
--- Query JSONB
-SELECT * FROM policies WHERE config->>'algorithm' = 'ECDSA-P256';
--- Index JSONB for queries
+CREATE TABLE policies (
+  id        uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  tenant_id uuid NOT NULL,
+  config    jsonb NOT NULL DEFAULT '{}'
+);
+-- Index JSONB for containment queries
 CREATE INDEX ON policies USING GIN (config jsonb_path_ops);
+-- Query with containment (@>): the jsonb_path_ops index serves @>, @? and @@ only
+SELECT id, config FROM policies WHERE tenant_id = $1 AND config @> '{"algorithm": "ECDSA-P256"}';
+-- config->>'algorithm' = '…' can't use that index; it needs an expression index:
+-- CREATE INDEX ON policies ((config->>'algorithm'));
 ```
 
 ## Migrations
@@ -137,7 +146,10 @@ CREATE INDEX ON policies USING GIN (config jsonb_path_ops);
 - Forward-only in production — DOWN migrations are dev-only safety net
 - One concern per migration file
 - Test with `BEGIN; <migration>; ROLLBACK;` before applying
-- Never `ALTER TABLE ... ADD COLUMN ... DEFAULT ...` on large tables in production — use three-step: add nullable, backfill, set not null
+- `ADD COLUMN ... DEFAULT <constant>` (even `NOT NULL`) is metadata-only since PostgreSQL 11 — no table
+  rewrite. A volatile default (`DEFAULT gen_random_uuid()`, `clock_timestamp()`) rewrites the whole table
+  under an exclusive lock: on large tables use three steps (add nullable, backfill in batches, then
+  `NOT NULL` via a validated `CHECK` constraint)
 - Use `goose`, `flyway`, `alembic`, or `prisma migrate` — not ad-hoc SQL scripts
 
 ## Performance
@@ -151,4 +163,6 @@ CREATE INDEX ON policies USING GIN (config jsonb_path_ops);
 - JSONB for flexible attributes; avoid EAV anti-pattern
 - ALL queries use parameterized placeholders — no exceptions, no interpolation
 - RLS for multi-tenant isolation — defense-in-depth alongside application WHERE clauses
-- Cursor-based pagination for APIs; offset for admin/reporting UIs only
+- Cursor-based pagination for every list — APIs and admin UIs alike; no OFFSET
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 7 SQL blocks parsed with libpg_query 17.7 and executed on PostgreSQL 17.11; 4 claims in the text proven on PostgreSQL 17.11.

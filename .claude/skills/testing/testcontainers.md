@@ -131,3 +131,5 @@ endpoint := fmt.Sprintf("http://%s:%s", host, port.Port())
 - Reuse helper functions (like `NewTestDB`) — don't duplicate container setup across tests
 - Use `WithInitScripts` to apply migrations instead of running them manually
 - Prefer module packages (`postgres.Run`, `redis.Run`) over raw `GenericContainer` when available
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

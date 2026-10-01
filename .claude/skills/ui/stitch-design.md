@@ -280,3 +280,5 @@ difference, not a pixel percentage: "`OrdersList` uses a 13px secondary label; s
 - Calling `delete_project` to "clean up".
 - Auditing only the pages the current phase touched, when Stitch is the design source of truth. Unaudited pages drift silently; the page inventory covers the whole app.
 - Changing code to match a `reconstructed` baseline nobody reviewed. That locks in whatever Stitch guessed.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed.

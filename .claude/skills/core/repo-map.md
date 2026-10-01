@@ -175,4 +175,3 @@ without reading bodies, and only the final span is read in full.
   symbols weighted up), then apply Part D. They must **shrink** the map as they pull real files into context.
 - Grade findings with the same Evidence/Localization grading the consumer already uses (Confirmed requires
   file:line; Deduced shows the reference chain; Inferred/Hypothesized states what would confirm it).
-```

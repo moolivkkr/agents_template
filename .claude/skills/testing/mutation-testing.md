@@ -20,10 +20,13 @@ Mutation runs are expensive, so run them on changed **source** files only. Exclu
 code, mocks and migrations:
 
 ```bash
-P="${PHASE}"; BASE="$(cat agent_state/phases/$P/base_sha)"
-git diff --name-only --diff-filter=AM "$BASE"..HEAD -- . ':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude' \
-  | grep -Ev '(_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|(^|/)test_[^/]*\.py|_test\.py|Test\.java|/mocks?/|/generated/|/migrations/)' \
-  > agent_state/phases/$P/mutation_scope.txt
+P="${PHASE:?}"; BASE="$(cat "agent_state/phases/$P/base_sha")" || exit 1
+# git diff on its own line: in a pipe its failure (bad base) is hidden behind grep's exit code,
+# and grep -v exits 1 for "no lines left", which is a valid empty scope
+CHANGED="$(git diff --name-only --diff-filter=AM "$BASE"..HEAD -- . ':(exclude)agent_state' ':(exclude)docs' ':(exclude).claude')" || exit 1
+printf '%s\n' "$CHANGED" \
+  | grep -Ev '^$|(_test\.go|\.test\.[jt]sx?|\.spec\.[jt]sx?|(^|/)test_[^/]*\.py|_test\.py|Test\.java|/mocks?/|/generated/|/migrations/)' \
+  > "agent_state/phases/$P/mutation_scope.txt" || true
 ```
 
 ## Commands
@@ -94,3 +97,5 @@ tests.
 | Chasing 100 % | Equivalent mutants make it unreachable; effort goes into arguing, not testing. |
 | Adding assertions on implementation details to kill a mutant | It kills the mutant but pins the code, not the behaviour. Assert the spec's outcome. |
 | Counting not-covered mutants as survivors | It mixes "no test ran this" with "a test ran it and didn't notice". Report both, separately. |
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 run in fixture scenarios on macOS bash 3.2.57; 1 JSON block parsed.

@@ -231,14 +231,23 @@ def test_TC_SEC_20101_other_users_order_is_not_found(client, alice, bob_order):
 ## Computing the inventory
 
 ```bash
-P="${PHASE}"
+P="${PHASE:?}"
 # Source mode (while writing tests): does a non-skipped test NAMED with each ID exist?
 python3 .claude/hooks/tc-inventory.py --phase "$P" --out /tmp/tc_source.json
 # Results mode (the evidence): did that test run and PASS? Pass every runner sidecar that exists.
+SIDECARS=()
+for s in test_results e2e_results mobile_e2e_results acceptance_report performance_results system_test_results; do
+  if [ -f "agent_state/phases/$P/reports/$s.json" ]; then SIDECARS+=("agent_state/phases/$P/reports/$s.json"); fi
+done
+# No sidecar would quietly turn this into source mode (no proof anything ran), and an empty
+# --diff-base makes tc-inventory skip the test-weakening check: either one stops here.
+[ ${#SIDECARS[@]} -gt 0 ] || { echo "⛔ no runner sidecars in agent_state/phases/$P/reports"; exit 1; }
+BASE="$(cat "agent_state/phases/$P/base_sha" 2>/dev/null)"
+[ -n "$BASE" ] || { echo "⛔ no agent_state/phases/$P/base_sha"; exit 1; }
 python3 .claude/hooks/tc-inventory.py --phase "$P" \
-  --results $(ls agent_state/phases/$P/reports/{test_results,e2e_results,mobile_e2e_results,acceptance_report,performance_results,system_test_results}.json 2>/dev/null) \
-  --diff-base "$(cat agent_state/phases/$P/base_sha)" \
-  --out agent_state/reconciliation/phase-$P/specs_vs_tests.json
+  --results "${SIDECARS[@]}" \
+  --diff-base "$BASE" \
+  --out "agent_state/reconciliation/phase-$P/specs_vs_tests.json"
 ```
 
 The output is an `sdlc.test-results/v1` sidecar (`tier: tc-inventory`). It FAILs on any of:
@@ -339,3 +348,5 @@ With more than 50 rows for your tier:
 | `t.Skip` / `it.skip` on a TC test to get green | Skipped tests don't count, and the weakening check flags the new skip | Fix the test or the code; quarantine only with an issue and an expiry |
 | Gate passes on "most tests pass" | Missing tests never get written | HIGH+MEDIUM must all pass |
 | A test named with an ID that tests something else | False coverage | Name states the behaviour; `spec_test_reconciler` reads HIGH-priority tests against their rows |
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 run in fixture scenarios on macOS bash 3.2.57 (1 also on Linux bash 5.2.37 with GNU tools).

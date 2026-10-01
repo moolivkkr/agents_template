@@ -46,7 +46,9 @@ Run in order. Stop at the first failure and reject.
 The `old_string` / search block must match **exactly once** in the target file.
 
 ```bash
-COUNT=$(grep -Fc "$SEARCH_BLOCK" "$FILE" 2>/dev/null || echo 0)
+# Occurrences of the whole (multi-line) block: 0, 1, or 2 meaning "more than one". Not grep -c: it
+# counts LINES matching ANY line of the block, so a block absent as a whole can still count 1.
+COUNT=$(python3 -c 'import sys; s = open(sys.argv[1], encoding="utf-8").read(); b = sys.argv[2]; i = s.find(b); print(0 if not b or i < 0 else (1 if s.find(b, i + 1) < 0 else 2))' "$FILE" "$SEARCH_BLOCK") || COUNT=0
 ```
 
 | Match count | Verdict |
@@ -62,16 +64,22 @@ For diff/patch edits, the equivalent check is `git apply --check` (the hunk must
 Apply the edit to a **scratch copy**, then syntax-check that copy. Never the live file.
 
 ```bash
-TMP=$(mktemp)
+# Same file name in a scratch dir: the checkers pick the parser from the extension (a bare mktemp file
+# made tsc fail on every edit, and eslint "ignore" it with exit 0 — broken TS passed)
+TMP="$(mktemp -d)/$(basename "$FILE")"
 # produce the edited content into $TMP (do NOT touch $FILE yet)
 
 case "$FILE" in
   *.go)          gofmt -e "$TMP" >/dev/null ;;                    # parse check (no build needed)
-  *.ts|*.tsx)    npx --no-install tsc --noEmit "$TMP" 2>/dev/null || npx --no-install eslint "$TMP" ;;
-  *.js|*.jsx)    node --check "$TMP" ;;
-  *.py)          python -m py_compile "$TMP" ;;
+  *.ts|*.tsx|*.mts|*.cts|*.js|*.jsx|*.mjs)                        # syntax only, with the project's typescript
+                 node -e 'const ts = require("typescript"), f = process.argv[1];
+                   const r = ts.transpileModule(require("fs").readFileSync(f, "utf8"), { fileName: f, reportDiagnostics: true, compilerOptions: { jsx: "preserve" } });
+                   for (const d of r.diagnostics) console.error(f + ": " + ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+                   process.exit(r.diagnostics.length ? 1 : 0)' "$TMP" ;;
+  *.cjs)         node --check "$TMP" ;;
+  *.py)          python3 -m py_compile "$TMP" ;;
   *.json)        jq empty "$TMP" ;;
-  *.yaml|*.yml)  python -c "import yaml,sys; yaml.safe_load(open('$TMP'))" ;;
+  *.yaml|*.yml)  python3 -c 'import sys, yaml; list(yaml.safe_load_all(open(sys.argv[1])))' "$TMP" ;;  # all documents
   *)             : ;;  # no known checker — skip (uniqueness + deletion guard still applied)
 esac
 ```
@@ -123,3 +131,5 @@ Only after all rungs pass is the edit committed to the live file. Then normal wa
 - **Cheaper than a test cycle.** A parse check is milliseconds; discovering the same breakage via a
   failed build + fix loop is minutes.
 - **Deterministic.** grep/gofmt/tsc/jq — no LLM judgment, no new infra. Pure ACI guardrail.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 2 run in fixture scenarios on macOS bash 3.2.57.

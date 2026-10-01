@@ -69,3 +69,5 @@ await $('~orders.list').waitForDisplayed({ timeout: 15000 });
 - Implicit waits set globally to 30s: use explicit `waitForDisplayed` on specific elements.
 - Running the full suite on a paid device farm per commit: run smoke there, and the full suite on
   simulators and emulators.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

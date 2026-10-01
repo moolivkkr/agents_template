@@ -28,6 +28,7 @@ PUT /widgets
   },
   "mappings": {
     "properties": {
+      "id":          { "type": "keyword" },
       "tenant_id":   { "type": "keyword" },
       "name":        { "type": "text", "analyzer": "widget_analyzer", "fields": { "raw": { "type": "keyword" } } },
       "description": { "type": "text", "analyzer": "standard" },
@@ -196,18 +197,19 @@ POST /_aliases
 
 ## Pagination
 
-### from/size (Offset — for small result sets)
+### from/size (Offset — not for list APIs)
 ```json
 POST /widgets/_search
 {
   "from": 0,
   "size": 20,
   "query": { ... },
-  "sort": [{ "created_at": "desc" }, { "_id": "asc" }]
+  "sort": [{ "created_at": "desc" }, { "id": "asc" }]
 }
 ```
-- Maximum `from + size` <= 10000 (default `index.max_result_window`)
-- Acceptable for: admin UIs with < 10000 total results
+- Maximum `from + size` <= 10000 (default `index.max_result_window`), and each page re-collects every
+  hit before it; pages shift as documents are indexed. Lists (APIs and admin UIs alike) page with
+  `search_after` below — from/size is for a fixed top-N, never a paging control
 
 ### search_after (Cursor — for large result sets)
 ```json
@@ -216,7 +218,7 @@ POST /widgets/_search
 {
   "size": 20,
   "query": { ... },
-  "sort": [{ "created_at": "desc" }, { "_id": "asc" }]
+  "sort": [{ "created_at": "desc" }, { "id": "asc" }]
 }
 
 // Page 2 — use sort values from last hit of page 1
@@ -224,15 +226,18 @@ POST /widgets/_search
 {
   "size": 20,
   "query": { ... },
-  "sort": [{ "created_at": "desc" }, { "_id": "asc" }],
+  "sort": [{ "created_at": "desc" }, { "id": "asc" }],
   "search_after": ["2026-01-15T10:30:00.000Z", "w42"]
 }
 ```
 - `search_after` uses sort values as cursor — no depth limit
-- Always include a tiebreaker field (`_id`) in sort — ensures deterministic ordering
+- Always include a unique tiebreaker in the sort — ensures deterministic ordering. Not `_id`: it has no
+  doc values, and Elasticsearch 8+ refuses to sort on it ("Fielddata access on the _id field is
+  disallowed"). Copy the id into a `keyword` field (`id` in the mapping above), or page inside a
+  point in time (PIT), which adds the `_shard_doc` tiebreaker itself
 - Encode `search_after` values as opaque base64 cursor for API consumers
 
-### scroll (Deep pagination — for data export only)
+### scroll (legacy — bulk export only)
 ```json
 POST /widgets/_search?scroll=5m
 {
@@ -249,7 +254,8 @@ POST /_search/scroll
 ```
 - Scroll creates a point-in-time snapshot — use for data exports, not real-time search
 - Always clear scroll contexts when done: `DELETE /_search/scroll`
-- Prefer `search_after` for user-facing pagination
+- Elastic no longer recommends scroll for deep pagination: use `search_after` with a point in time
+  (PIT) for exports too; never for user-facing pagination
 
 ## Performance
 - Refresh interval: `1s` default (near real-time). Set to `30s` for write-heavy workloads
@@ -291,3 +297,5 @@ const result = await client.search({ index: "widgets", body: searchQuery });
 - Shard size 10-50GB — monitor and reindex when shards grow too large
 - Tenant isolation via `filter` clause on every query — never return cross-tenant results
 - Custom analyzers for search quality — edge_ngram for autocomplete, language analyzers for stemming
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 9 JSON blocks in Dev Tools console format: every request body parsed (not run against Elasticsearch).

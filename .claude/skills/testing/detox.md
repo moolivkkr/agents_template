@@ -104,3 +104,5 @@ describe('Login', () => {
 - Debug builds in CI: Metro dependency, LogBox overlays, slow JS.
 - `by.text()` selectors on the device tier: use the testID contract.
 - Sharing state between `it` blocks without `launchApp({ newInstance: true })`: order-dependent tests.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

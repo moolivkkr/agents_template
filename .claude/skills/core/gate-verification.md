@@ -38,15 +38,19 @@ Reuse the Evidence Grading Protocol (`backend_audit_agent.md`):
 
 Concrete re-verifications the parent runs itself (do not delegate):
 ```bash
-# Tests actually run — the project's own command, exit code kept (a bare `| tee` would report tee's 0)
-set -o pipefail
-CMD="$(jq -r '.commands["test:unit"]' agent_state/config/verify-commands.json)"
-PHASE="${PHASE}" bash -o pipefail -c "$CMD" 2>&1 | tee /tmp/gate_unit.log; echo "exit=${PIPESTATUS[0]:-$?}"
-# TC coverage the deterministic way (names of tests that ran and passed; not grep)
-python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results agent_state/phases/${PHASE}/reports/test_results.json \
-  --diff-base "$(cat agent_state/phases/${PHASE}/base_sha)" --out /tmp/gate_tc.json
-# No suppression sneaked in to force a pass (tc-inventory's weakening list covers skip/only/removed asserts)
-grep -rE '(//\s*nolint|@ts-ignore|eslint-disable)' <changed_files> && echo "⚠ suppression present"
+# Tests actually run — the project's own command, exit code kept (a bare `| tee` would report tee's 0).
+# No test:unit row (or no file) is a failure: jq -r would print "null" or nothing, and `bash -c ""` exits 0.
+CMD="$(jq -er '.commands["test:unit"] // empty' agent_state/config/verify-commands.json)" \
+  || { echo "⛔ no test:unit row in agent_state/config/verify-commands.json"; exit 1; }
+PHASE="${PHASE:?}" bash -o pipefail -c "$CMD" 2>&1 | tee /tmp/gate_unit.log; RC=${PIPESTATUS[0]}; echo "exit=$RC"
+# TC coverage the deterministic way (names of tests that ran and passed; not grep). An empty
+# --diff-base makes tc-inventory skip the weakening check, so a missing base_sha stops here.
+BASE="$(cat "agent_state/phases/${PHASE}/base_sha" 2>/dev/null)"
+[ -n "$BASE" ] || { echo "⛔ no base_sha for phase ${PHASE}"; exit 1; }
+python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results "agent_state/phases/${PHASE}/reports/test_results.json" \
+  --diff-base "$BASE" --out /tmp/gate_tc.json
+# No suppression added to force a pass (tc-inventory's weakening list covers skip/only/removed asserts)
+git diff -U0 "$BASE"..HEAD | grep -E '^\+.*(//[[:space:]]*nolint|@ts-ignore|eslint-disable)' && echo "⚠ suppression added"
 ```
 
 If a claimed item cannot be Confirmed by the parent's own command, the gate **blocks** — the
@@ -124,3 +128,5 @@ Write `agent_state/phases/${PHASE}/reports/gate_score.md`:
 ```
 A gate may write `gate.passed` ONLY when Layer 1 has zero unproven items, `gate_score ≥ threshold`,
 and no Layer 3 item was refuted.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0; 1 run in fixture scenarios on macOS bash 3.2.57.

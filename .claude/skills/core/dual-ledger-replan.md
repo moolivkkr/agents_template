@@ -223,3 +223,5 @@ replan_count: 1 / 3 (test_retry_max)
 
 Every replan feeds Post-Gate lessons: a phase that took 3 replans and a re-classification is
 a signal the spec or classification heuristics under-served this area.
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 1 JSON block parsed.

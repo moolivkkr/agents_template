@@ -98,3 +98,5 @@ npx vitest watch src/services/auth.test.ts
 - Use `-v` (verbose) when debugging — see individual test names and results
 - Combine with watch mode for the fastest feedback loop during development
 - After targeted tests pass, run the full suite once before committing
+
+> Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 bash blocks: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.
