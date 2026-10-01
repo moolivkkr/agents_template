@@ -129,6 +129,26 @@ SCHEMAS = {
     "lang": {"migrations": "languages/rust", "extra": None, "exclude": {}},
 }
 
+# docker-check.py: the Rust Dockerfiles, built for real (docker build) against docker/ — a minimal
+# service with axum, sqlx (rustls, a query! macro, embedded migrations) and the runtime contract — then
+# run: the image's USER is numeric, the process runs as that uid, /healthz answers 200, and the
+# HEALTHCHECK (where the image has one) reports healthy.
+# name: (doc, ```dockerfile block, [(old, new, count)] to compose a variant from a fragment, or None)
+DOCKERFILES = {
+    "debian": ("dockerfile-rust", 1, None),
+    "musl-alpine": ("dockerfile-rust", 2, None),
+    "scratch": ("dockerfile-rust", 3, None),
+    # "Build Optimization Tips" (block 4) is a fragment: its BuildKit cache-mount RUN put into the debian
+    # Dockerfile's build step, as the tip says (the binary leaves the cache-mounted target/ via cp)
+    "debian-cache-mounts": ("dockerfile-rust", 1, [
+        ("RUN cargo build --release --bin yourapp\n", "@FRAGMENT@\n", 1),
+        ("RUN strip target/release/yourapp\n", "RUN strip /app/yourapp-bin\n", 1),
+        ("COPY --from=builder /app/target/release/yourapp /app/yourapp", "COPY --from=builder /app/yourapp-bin /app/yourapp", 1),
+    ]),
+    "perf-chef": ("performance-rust", 1, None),
+}
+DOCKER_FRAGMENT = ("dockerfile-rust", 4)  # @FRAGMENT@ = its lines from the first RUN on
+
 # Blocks (or segments) that are deliberately not compiled, with the reason. Empty: every Rust block of
 # every pack is compiled (round 3, 2026-09-30).
 SKIP = {}

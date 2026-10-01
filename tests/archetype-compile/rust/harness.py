@@ -13,6 +13,8 @@ What it does, in order, and each step fails the run on its own:
      listed in units.SKIP with a reason. Anything else fails.
   3. Lint: a ``` fence inside a /// or //! doc comment must be ```text or ```ignore. A plain or
      ```rust fence there becomes a doctest that `cargo test` compiles, and a fragment never compiles.
+     Also: axum `:param` routes; Dockerfile Rust builders = the pinned toolchain; the Dockerfile
+     variants docker-check.py builds (units.DOCKERFILES) still compose and set a numeric USER.
   4. Assembles each unit as a crate of a cargo workspace (units.py says which blocks go in which
      module, plus the glue and harness-only stubs), writes it under target/work, and runs
      `cargo check --all-targets` per unit (tests and benches included) with a shared target dir.
@@ -114,7 +116,7 @@ def load_blocks():
     for stem, path in paths:
         counters = {}
         for lang, start, lines in blocks_of(path):
-            if lang in ("rust", "toml", "protobuf", "sql", "dockerfile"):
+            if lang in ("rust", "toml", "protobuf", "sql", "dockerfile", "dockerignore"):
                 counters[lang] = counters.get(lang, 0) + 1
                 found.setdefault((stem, lang), []).append(Block(stem, lang, counters[lang], start, lines))
     return found
@@ -551,6 +553,40 @@ def check_dockerfile_toolchain(blocks):
     return failures, seen
 
 
+def block_text(blocks, doc, lang, idx):
+    lst = blocks.get((doc, lang), [])
+    if not 1 <= idx <= len(lst):
+        raise ValueError(f"{doc}.md has {len(lst)} ```{lang} block(s); units.py wants #{idx}")
+    return "\n".join(lst[idx - 1].lines).strip("\n") + "\n"
+
+
+def docker_variants(blocks):
+    """{name: Dockerfile text} for units.DOCKERFILES (docker-check.py builds them), and the problems
+    found composing them — checked on every run, so a doc edit that breaks a variant fails cheaply."""
+    out, problems = {}, []
+    try:
+        frag_doc, frag_idx = cfg.DOCKER_FRAGMENT
+        frag = block_text(blocks, frag_doc, "dockerfile", frag_idx).split("\n")
+        fragment = "\n".join(frag[next(i for i, l in enumerate(frag) if l.startswith("RUN ")):]).strip("\n")
+    except (ValueError, StopIteration) as e:
+        return out, [f"units.DOCKER_FRAGMENT: {e or 'no RUN line'}"]
+    for name, (doc, idx, subs) in cfg.DOCKERFILES.items():
+        try:
+            text = block_text(blocks, doc, "dockerfile", idx)
+        except ValueError as e:
+            problems.append(f"units.DOCKERFILES[{name!r}]: {e}")
+            continue
+        for old, new, count in subs or []:
+            n = text.count(old)
+            if n != count:
+                problems.append(f"units.DOCKERFILES[{name!r}]: {old!r} matched {n} time(s) in {doc}.md dockerfile #{idx}, expected {count}")
+            text = text.replace(old, new.replace("@FRAGMENT@", fragment))
+        if not re.search(r"^USER\s+\d+(:\d+)?\s*$", text, re.M):
+            problems.append(f"{doc}.md dockerfile #{idx} ({name}): no numeric USER line (non-root, Kubernetes runAsNonRoot)")
+        out[name] = text
+    return out, problems
+
+
 def check_manifests(blocks, env):
     failures, notes = [], []
     resolved = resolved_packages(env)
@@ -698,6 +734,7 @@ def main():
     problems += lint_colon_routes(blocks)
     docker_problems, n_builders = check_dockerfile_toolchain(blocks)
     problems += docker_problems
+    problems += docker_variants(blocks)[1]
 
     total_rust = sum(len(l) for (f, lang), l in blocks.items() if lang == "rust")
     skipped = sorted(cfg.SKIP.items())
