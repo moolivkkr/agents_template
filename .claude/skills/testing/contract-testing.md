@@ -87,35 +87,33 @@ func TestWidgetConsumer(t *testing.T) {
 
 ### Python (pact-python)
 ```python
-import atexit
-from pact import Consumer, Provider
+from pact import Pact, match  # pact-python 3 (the Consumer/Provider API is the deprecated pact.v2)
 
-pact = Consumer("widget-dashboard").has_pact_with(
-    Provider("widget-service"),
-    pact_dir="./pacts",
-)
-pact.start_service()
-atexit.register(pact.stop_service)
+pact = Pact("widget-dashboard", "widget-service").with_specification("V4")
 
 def test_get_widget():
-    expected = {
-        "data": {
-            "id": "abc-123",
-            "name": "My Widget",
-            "status": "active",
-        }
-    }
-
     (pact
-     .given("a widget with ID abc-123 exists")
      .upon_receiving("a request to get widget abc-123")
+     .given("a widget with ID abc-123 exists")
      .with_request("GET", "/api/v1/widgets/abc-123")
-     .will_respond_with(200, body=Like(expected)))
+     .with_header("Authorization", match.like("Bearer token"))
+     .will_respond_with(200)
+     .with_header("Content-Type", "application/json")
+     .with_body({
+         "data": {
+             "id": match.like("abc-123"),
+             "name": match.like("My Widget"),
+             "status": match.like("active"),
+         },
+         "meta": {"request_id": match.like("req-123")},
+     }))
 
-    with pact:
-        client = WidgetClient(base_url=pact.uri)
+    with pact.serve() as srv:  # local mock provider; an unmatched or missing request fails here
+        client = WidgetClient(base_url=str(srv.url))
         widget = client.get_widget("abc-123")
         assert widget.name == "My Widget"
+
+    pact.write_file("./pacts")  # the contract the provider verifies
 ```
 
 ### TypeScript (pact-js)

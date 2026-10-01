@@ -35,7 +35,7 @@ opentelemetry-api==1.45.0
 opentelemetry-sdk==1.45.0
 opentelemetry-exporter-otlp-proto-grpc==1.45.0
 opentelemetry-instrumentation-fastapi==0.66b0
-opentelemetry-instrumentation-sqlalchemy==0.66b0
+opentelemetry-instrumentation-sqlalchemy==0.66b0  # no sample uses it (needs sqlalchemy<2.1): kept for the canary in smoke_observability.py
 opentelemetry-instrumentation-redis==0.66b0
 opentelemetry-instrumentation-httpx==0.66b0
 opentelemetry-instrumentation-logging==0.66b0

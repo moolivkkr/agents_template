@@ -1,7 +1,8 @@
 # harness smoke: websocket-pattern-python.md end to end — a ticket from the authenticated POST, the
-# /ws upgrade through TestClient AND a real uvicorn server with a real `websockets` client, tenant-scoped
-# rooms, and the Channels consumer under WebsocketCommunicator. The ticket store is an in-memory
-# implementation of the doc's TicketStore protocol (--live checks RedisTicketStore on a real Redis).
+# /ws upgrade through TestClient AND a real uvicorn server with a real `websockets` client, the Origin
+# allowlist, tenant-scoped rooms, and the Channels application (BrowserOriginValidator + consumer) under
+# WebsocketCommunicator. The ticket stores are in-memory stand-ins here (--live runs RedisTicketStore and
+# myapp/tickets.py on a real Redis).
 import asyncio
 import secrets
 import socket
@@ -13,7 +14,8 @@ import uvicorn
 from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 from websockets.asyncio.client import connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, InvalidStatus
+from websockets.typing import Origin
 
 from app.config import settings
 from app.main import create_app
@@ -56,6 +58,18 @@ with TestClient(app) as c:
 
     def ticket(tenant: uuid.UUID) -> str:
         return c.post("/api/v1/ws-tickets", headers=bearer(tenant)).json()["data"]["ticket"]
+
+    # Origin: a foreign page's handshake is refused outright (close before accept), and its ticket isn't
+    # even looked up: the same ticket still works from an allowed origin, or with no Origin (not a browser)
+    held = ticket(T1)
+    try:
+        with c.websocket_connect(f"/ws?ticket={held}", headers={"origin": "https://evil.example"}):
+            raise AssertionError("a foreign origin's handshake was accepted")
+    except WebSocketDisconnect as exc:
+        assert exc.code == 1008, exc.code
+    with c.websocket_connect(f"/ws?ticket={held}", headers={"origin": "http://localhost:3000"}) as ws:
+        ws.send_json({"type": "subscribe", "id": "o", "payload": {"room": f"tenant:{T1}"}})
+        assert ws.receive_json() == {"type": "ack", "ref": "o"}
 
     # no ticket / a made-up ticket: accepted, then closed with 4001
     for url in ("/ws", "/ws?ticket=forged"):
@@ -122,6 +136,13 @@ async def real_server() -> None:
             raise AssertionError("a forged ticket was accepted")
         except ConnectionClosed as exc:
             assert exc.rcvd is not None and exc.rcvd.code == 4001 and exc.rcvd.reason == "unauthorized", exc
+        # a foreign Origin: the server refuses the handshake with HTTP 403
+        try:
+            async with connect(f"ws://127.0.0.1:{port}/ws?ticket=forged", origin=Origin("https://evil.example")):
+                pass
+            raise AssertionError("a foreign origin's handshake was accepted")
+        except InvalidStatus as exc:
+            assert exc.response.status_code == 403, exc
         good = await store.issue(TicketClaims(user_id="u1", tenant_id=str(T1), roles=()))
         async with connect(f"ws://127.0.0.1:{port}/ws?ticket={good}") as ws:
             await ws.send('{"type": "subscribe", "id": "1", "payload": {"room": "tenant:%s"}}' % T1)
@@ -134,26 +155,53 @@ async def real_server() -> None:
 asyncio.run(real_server())
 
 
-# the Django Channels consumer, run by channels' own test communicator
+# the Django Channels application (myapp/asgi.py: BrowserOriginValidator around the URL router) and its
+# consumer, run by channels' own test communicator. The consumer's redeem_ticket is swapped for an
+# in-memory one here; --live runs myapp/tickets.py on Redis through the same application.
 import django  # noqa: E402
 
 django.setup()
 from channels.testing import WebsocketCommunicator  # noqa: E402
 
-import myapp.tickets as django_tickets  # noqa: E402
-from myapp.consumers import NotificationConsumer  # noqa: E402
+import myapp.consumers as consumers_module  # noqa: E402
+from myapp.asgi import application  # noqa: E402
 from myapp.routing import websocket_urlpatterns  # noqa: E402
+from myapp.tickets import TicketClaims as DjangoClaims  # noqa: E402
+
+_django_tickets: dict[str, DjangoClaims] = {}
 
 
-async def channels_consumer() -> None:
-    comm = WebsocketCommunicator(NotificationConsumer.as_asgi(), "/ws/notifications/?ticket=forged")
-    connected, _ = await comm.connect()
-    assert connected  # accepted first ...
-    closed = await comm.receive_output()
-    assert closed["type"] == "websocket.close" and closed["code"] == 4001, closed  # ... then 4001
+async def _memory_redeem(ticket: str) -> DjangoClaims | None:
+    return _django_tickets.pop(ticket, None)
 
-    good = django_tickets.issue_for_test(user_id="u1", tenant_id="t1")
-    comm = WebsocketCommunicator(NotificationConsumer.as_asgi(), f"/ws/notifications/?ticket={good}")
+
+consumers_module.redeem_ticket = _memory_redeem  # harness stand-in for the non-live smoke
+ALLOWED = [(b"origin", b"http://localhost:3000")]
+
+
+def communicator(path: str, headers: list[tuple[bytes, bytes]]) -> WebsocketCommunicator:
+    return WebsocketCommunicator(application, path, headers=headers)
+
+
+async def channels_app() -> None:
+    held = "held-ticket"
+    _django_tickets[held] = DjangoClaims(user_id="u1", tenant_id="t1", roles=())
+
+    # a foreign Origin: refused before the consumer runs (the ticket stays unredeemed)
+    foreign = communicator(f"/ws/notifications/?ticket={held}", [(b"origin", b"https://evil.example")])
+    connected, _ = await foreign.connect()
+    assert not connected
+    assert held in _django_tickets
+
+    # allowed Origin, and no Origin (not a browser): on to the ticket check
+    for headers in (ALLOWED, []):
+        comm = communicator("/ws/notifications/?ticket=forged", headers)
+        connected, _ = await comm.connect()
+        assert connected  # accepted first ...
+        closed = await comm.receive_output()
+        assert closed["type"] == "websocket.close" and closed["code"] == 4001, closed  # ... then 4001
+
+    comm = communicator(f"/ws/notifications/?ticket={held}", ALLOWED)
     connected, _ = await comm.connect()
     assert connected
     await comm.send_json_to({"type": "subscribe", "id": "1", "payload": {"room": "tenant:t1:orders"}})
@@ -162,10 +210,10 @@ async def channels_consumer() -> None:
     assert (await comm.receive_json_from())["code"] == "FORBIDDEN"
     await comm.disconnect()
 
-    reused = WebsocketCommunicator(NotificationConsumer.as_asgi(), f"/ws/notifications/?ticket={good}")
+    reused = communicator(f"/ws/notifications/?ticket={held}", ALLOWED)
     await reused.connect()
     assert (await reused.receive_output())["code"] == 4001  # single use
 
 
-asyncio.run(channels_consumer())
+asyncio.run(channels_app())
 assert len(websocket_urlpatterns) == 1

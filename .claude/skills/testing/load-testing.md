@@ -241,7 +241,7 @@ class WidgetUser(HttpUser):
 
     @task(3)  # weight: 3x more likely than other tasks
     def list_widgets(self):
-        self.client.get("/api/v1/widgets?page_size=20", headers=self.headers)
+        self.client.get("/api/v1/widgets?limit=20", headers=self.headers)  # the envelope's page size
 
     @task(2)
     def get_widget(self):

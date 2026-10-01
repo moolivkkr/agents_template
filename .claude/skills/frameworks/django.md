@@ -1,5 +1,7 @@
 # Django patterns for production-ready Python web applications.
 
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked, imported, `manage.py check` clean, and run on SQLite through DRF's APIClient (the tenant-scoped ViewSet, the serializer, the select_related/prefetch_related query counts). Django 6.1.1, Django REST framework 3.18.1.
+
 ## Project Layout
 ```text
 myproject/
@@ -23,13 +25,15 @@ manage.py
 ## Models
 ```python
 class User(models.Model):
-    email = models.EmailField(unique=True)
+    tenant_id = models.UUIDField()               # set from the verified token, never from input
+    email = models.EmailField(unique=True)       # unique=True already creates an index
+    is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = "users"
         ordering = ["-created_at"]
-        indexes = [models.Index(fields=["email"])]
+        indexes = [models.Index(fields=["tenant_id", "-created_at"])]  # the tenant's list, newest first
 ```
 - Always define `class Meta` with explicit `db_table`
 - `auto_now_add` for created; `auto_now` for updated
@@ -52,7 +56,12 @@ class UserViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return super().get_queryset().filter(is_active=True)
+        # Every query is scoped to the caller's tenant (from the authenticated user, never the request):
+        # another tenant's user is a 404
+        return super().get_queryset().filter(tenant_id=self.request.user.tenant_id, is_active=True)
+
+    def perform_create(self, serializer):
+        serializer.save(tenant_id=self.request.user.tenant_id)
 ```
 
 ## Query Optimization

@@ -121,7 +121,7 @@ def test_sort_produces_ordered_output(xs: list[int]):
 
 # Custom strategy for domain objects
 widget_strategy = st.fixed_dictionaries({
-    "name": st.text(min_size=1, max_size=255, alphabet=st.characters(whitelist_categories=("L", "N", "Z"))),
+    "name": st.text(min_size=1, max_size=255, alphabet=st.characters(categories=("L", "N", "Z"))),
     "description": st.text(max_size=2000),
     "priority": st.integers(min_value=0, max_value=10),
     "status": st.sampled_from(["active", "draft", "archived"]),

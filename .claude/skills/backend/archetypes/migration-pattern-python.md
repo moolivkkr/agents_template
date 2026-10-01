@@ -15,9 +15,9 @@ tags:
 
 # Migration Pattern Archetype — Python (Alembic)
 
-> **Canonical reference**: This is the Python counterpart to `backend/archetypes/migration-pattern.md` (Go/golang-migrate). Both produce identical database schemas — same tables, indexes, RLS policies, and constraints.
+> **Canonical reference**: This is the Python counterpart to `backend/archetypes/migration-pattern.md` (Go/golang-migrate). Both produce the same `widgets` and `widget_categories` tables, indexes, RLS policies and constraints. This chain also creates a `tenants` registry first, so the seed has a list of tenants to seed (see "Seed Data Migration").
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked; alembic 1.20.0 offline upgrade and downgrade SQL generated through env.py; the migration tests pass against PostgreSQL 16 as a NOSUPERUSER NOBYPASSRLS owner (`run.sh --live`: round trips, seed + backfill under FORCE ROW LEVEL SECURITY, and the batch backfill with rows). SQLAlchemy 2.1.1, asyncpg 0.31.0.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked; alembic 1.20.0 offline upgrade and downgrade SQL generated through env.py up to d4e5f6a7b8c9 (the batched backfill refuses `--sql` with its own message); the migration tests pass against PostgreSQL 16 with the two roles (`run.sh --live`, 12 passed): round trips as `app_migrator` (BYPASSRLS), env.py refusing `app_runtime`, the seed reaching a tenant with no widgets, a re-run adding nothing and not reviving a deleted default, `provision_tenant()` idempotent, RLS isolating `app_runtime`. `pg_locks` was read while a batch was paused mid-UPDATE (AccessShareLock + RowExclusiveLock on widgets, no AccessExclusiveLock; the application's SELECT and INSERT ran with `lock_timeout = 200ms`) and while `ALTER TABLE ... NO FORCE` was open (AccessExclusiveLock; the application's query timed out). SQLAlchemy 2.1.1, asyncpg 0.31.0.
 
 Complete Alembic migration setup for async SQLAlchemy + asyncpg. Every generated migration MUST follow this pattern.
 
@@ -29,6 +29,7 @@ alembic/
   env.py                         <- Migration environment (async)
   script.py.mako                 <- Template for new migrations
   versions/
+    20260115_095000_create_tenants_table.py
     20260115_100000_create_widgets_table.py
     20260115_100100_add_widget_categories.py
     20260115_100200_seed_default_categories.py
@@ -37,13 +38,31 @@ alembic/
 
 Naming convention: `YYYYMMDD_HHMMSS_description.py` — matches the Go archetype's timestamp format.
 
-**Who runs migrations.** A plain login role that owns the tables: not a superuser, no `BYPASSRLS`. The
-application connects as a different role that owns nothing (`infrastructure/saas-tenancy-models.md`).
-`FORCE ROW LEVEL SECURITY` applies RLS to the owner too, so any migration step that reads or writes
-rows — a data migration, a seed, even adding a foreign key, whose validation query reads both tables —
-first lifts `FORCE` for its own transaction and restores it before commit. The app role never owns the
-tables, so RLS keeps applying to it throughout. Run the migration tests as such a role
-(`tests/test_migrations.py`): a superuser skips RLS and hides every one of these failures.
+**Who runs migrations.** Two database roles, neither of them a superuser:
+
+- The **migration role** (`app_migrator` in the tests) owns the schema and every table, and has
+  `BYPASSRLS`. Only the migrate Job (or a developer running `alembic upgrade`) gets its credentials;
+  the application's Deployment never mounts them.
+- The **application role** (`app_runtime`) owns nothing and has no `BYPASSRLS`, so row-level security
+  applies to every query it makes (`infrastructure/saas-tenancy-models.md`). It reads and writes the
+  tables through `ALTER DEFAULT PRIVILEGES FOR ROLE app_migrator ... GRANT SELECT, INSERT, UPDATE,
+  DELETE ON TABLES TO app_runtime`, run once when the database is provisioned (the `db_roles` fixture
+  in `tests/test_migrations.py` has the statements).
+
+Data migrations, seeds and foreign-key validation read and write every tenant's rows. The migration
+role does that without changing any RLS setting, so a backfill batch holds row locks and `ROW
+EXCLUSIVE` on the table, and the application's reads and writes don't wait for it. `env.py` refuses to
+run as a role that RLS applies to, so the application's credentials can't start a migration that would
+fail halfway. Tables still get `FORCE ROW LEVEL SECURITY`, so a table owner without `BYPASSRLS` (a
+misconfigured deployment) is refused rather than shown every tenant.
+
+The trade-off, measured with `pg_locks` on PostgreSQL 16 by the migration tests:
+
+| Design | Locks on `widgets` while a backfill batch runs | Cost |
+|---|---|---|
+| Migration role with `BYPASSRLS` (this archetype) | `ROW EXCLUSIVE` plus the rows it updates. The application's `SELECT` and `INSERT` ran during a paused batch with `lock_timeout = 200ms`. | A role that sees every tenant's rows. As table owner it could already turn RLS off (`ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`), so `BYPASSRLS` only removes the error an accidental tenant-less query by that role would get. Keep its secret in the migrate Job. |
+| Owner without `BYPASSRLS`, `FORCE` lifted inside every batch (the previous version of this archetype) | `ACCESS EXCLUSIVE` from the `ALTER TABLE` until the batch commits. The application's `SELECT` timed out behind it. | Every batch blocks all reads and writes of the table, and its `ALTER TABLE` first waits for every running query on the table while new ones queue behind it. |
+| Owner without `BYPASSRLS`, `FORCE` lifted once around the whole backfill | Not measured separately: the same `ALTER TABLE`, so `ACCESS EXCLUSIVE` twice (lift, restore) if each runs in its own transaction, for the whole backfill if not. | If the backfill fails midway, `FORCE` stays off for the owner until someone restores it. |
 
 ## alembic.ini
 
@@ -112,7 +131,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import pool
+from sqlalchemy import Connection, pool, text
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
 # Import ALL models so Alembic auto-generates from their metadata
@@ -154,8 +173,29 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
-def do_run_migrations(connection) -> None:
+def check_migration_role(connection: Connection) -> None:
+    """Refuse to migrate as a role that row-level security applies to (the application's role).
+
+    Data migrations and seeds read and write every tenant's rows; under RLS they would fail halfway
+    through the chain instead of before it. See "Who runs migrations".
+    """
+    # Its own transaction, ended before alembic begins one. A query outside it would auto-begin a
+    # transaction that alembic then treats as the caller's: it would not commit it, and closing the
+    # connection would roll every migration back.
+    with connection.begin():
+        bypasses_rls = connection.execute(
+            text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+        ).scalar_one()
+    if not bypasses_rls:
+        raise RuntimeError(
+            "alembic must run as the migration role (owner of the tables, BYPASSRLS), "
+            "not as the application role: DATABASE_URL has the wrong credentials"
+        )
+
+
+def do_run_migrations(connection: Connection) -> None:
     """Run migrations with a live connection."""
+    check_migration_role(connection)
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
@@ -221,6 +261,56 @@ alembic current
 alembic history --verbose
 ```
 
+## Tenants Registry Migration
+
+```python
+# alembic/versions/20260115_095000_create_tenants_table.py
+
+"""Create the tenants registry.
+
+Revision ID: f0e1d2c3b4a5
+Revises:
+Create Date: 2026-01-15 09:50:00.000000+00:00
+
+One row per tenant: the list a seed or a backfill iterates over (a tenant with no widgets yet is still
+a tenant), and the row signup creates (app/db/tenants.py provision_tenant). RLS keys on id, so the
+application role sees only its own tenant's row.
+"""
+
+from __future__ import annotations
+
+from alembic import op
+import sqlalchemy as sa
+
+revision = "f0e1d2c3b4a5"
+down_revision = None
+branch_labels = None
+depends_on = None
+
+
+def upgrade() -> None:
+    op.create_table(
+        "tenants",
+        sa.Column("id", sa.Uuid(), primary_key=True),  # chosen by provisioning, not by the database
+        sa.Column("name", sa.String(255), nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.text("NOW()")),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
+    )
+
+    op.execute("ALTER TABLE tenants ENABLE ROW LEVEL SECURITY")
+    op.execute("ALTER TABLE tenants FORCE ROW LEVEL SECURITY")
+    op.execute("""
+        CREATE POLICY tenant_isolation ON tenants
+            USING (id = current_setting('app.current_tenant_id')::UUID)
+            WITH CHECK (id = current_setting('app.current_tenant_id')::UUID)
+    """)
+
+
+def downgrade() -> None:
+    op.execute("DROP POLICY IF EXISTS tenant_isolation ON tenants")
+    op.drop_table("tenants")
+```
+
 ## Table Creation Migration — UP + DOWN
 
 ```python
@@ -229,7 +319,7 @@ alembic history --verbose
 """Create widgets table.
 
 Revision ID: a1b2c3d4e5f6
-Revises:
+Revises: f0e1d2c3b4a5
 Create Date: 2026-01-15 10:00:00.000000+00:00
 """
 
@@ -241,7 +331,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers
 revision = "a1b2c3d4e5f6"
-down_revision = None
+down_revision = "f0e1d2c3b4a5"
 branch_labels = None
 depends_on = None
 
@@ -404,23 +494,21 @@ def upgrade() -> None:
         WHERE deleted_at IS NULL
     """)
 
-    # Add category_id FK to widgets. Creating a foreign key runs a validation query that reads widgets
-    # as the owner, and FORCE ROW LEVEL SECURITY applies RLS to it: with no tenant set,
-    # current_setting() raises. Lift FORCE for this transaction only (see "Who runs migrations").
-    op.execute("ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY")
+    # Add category_id FK to widgets. Creating a foreign key runs a validation query that reads both
+    # tables; the migration role has BYPASSRLS, so RLS neither hides rows from it nor refuses it for
+    # having no tenant set (see "Who runs migrations").
     op.add_column("widgets", sa.Column("category_id", sa.Uuid(), nullable=True))
     op.create_foreign_key(
         "fk_widgets_category", "widgets", "widget_categories",
         ["category_id"], ["id"], ondelete="SET NULL",
     )
-    op.execute("ALTER TABLE widgets FORCE ROW LEVEL SECURITY")
     op.execute("""
         CREATE INDEX idx_widgets_category
         ON widgets (category_id)
         WHERE deleted_at IS NULL AND category_id IS NOT NULL
     """)
 
-    # RLS for categories (after the foreign key, whose validation reads this table too)
+    # RLS for categories
     op.execute("ALTER TABLE widget_categories ENABLE ROW LEVEL SECURITY")
     op.execute("ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY")
     op.execute("""
@@ -442,10 +530,18 @@ def downgrade() -> None:
 
 ## Seed Data Migration
 
+What a seed means here, and what the tests prove:
+
+- Every tenant in the `tenants` registry when the migration runs gets the defaults, whether or not it
+  has any widgets yet (the old version seeded only tenants that had widgets, so new tenants got none).
+- Tenants created later get the same defaults from `provision_tenant()` (`app/db/tenants.py`): a
+  migration runs once, signup runs for every tenant.
+- Running it again adds nothing, and never brings back a default the tenant has since deleted.
+
 ```python
 # alembic/versions/20260115_100200_seed_default_categories.py
 
-"""Seed default categories for existing tenants.
+"""Seed default categories for every existing tenant.
 
 Revision ID: c3d4e5f6a7b8
 Revises: b2c3d4e5f6a7
@@ -463,47 +559,39 @@ down_revision = "b2c3d4e5f6a7"
 
 def upgrade() -> None:
     """
-    Insert default categories for every tenant that has widgets. These samples have no tenants
-    table; if your schema has one, select the tenants from it instead.
-    Uses ON CONFLICT DO NOTHING for idempotency (safe to re-run).
+    Insert the default categories for every live tenant in the registry, including tenants with no
+    widgets. Idempotent: a default the tenant already has (live or soft-deleted) is skipped, so a re-run
+    adds nothing and a category the tenant deleted stays deleted. ON CONFLICT DO NOTHING covers a
+    provision_tenant() for the same tenant committing at the same moment.
+    The migration role has BYPASSRLS, so it sees every tenant (see "Who runs migrations"). The list is
+    a snapshot: app/db/tenants.py keeps its own copy for tenants created later.
     """
-    # The owner runs this, and FORCE ROW LEVEL SECURITY applies to it: lift FORCE for this
-    # transaction only. ALTER TABLE holds an ACCESS EXCLUSIVE lock until commit, so keep it short.
-    op.execute("ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY")
-    op.execute("ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY")
     op.execute("""
-        INSERT INTO widget_categories (id, tenant_id, name, slug, description, sort_order, created_at, updated_at)
-        SELECT
-            gen_random_uuid(),
-            t.tenant_id,
-            category.name,
-            category.slug,
-            category.description,
-            category.sort_order,
-            NOW(),
-            NOW()
-        FROM (SELECT DISTINCT tenant_id FROM widgets) AS t
+        INSERT INTO widget_categories (tenant_id, name, slug, description, sort_order)
+        SELECT t.id, d.name, d.slug, d.description, d.sort_order
+        FROM tenants t
         CROSS JOIN (
             VALUES
                 ('General',    'general',    'Default category for uncategorized widgets', 0),
                 ('Internal',   'internal',   'Internal-use widgets',                       1),
                 ('Customer',   'customer',   'Customer-facing widgets',                    2),
                 ('Deprecated', 'deprecated', 'Widgets scheduled for removal',              3)
-        ) AS category(name, slug, description, sort_order)
+        ) AS d(name, slug, description, sort_order)
+        WHERE t.deleted_at IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM widget_categories c
+              WHERE c.tenant_id = t.id AND lower(c.slug) = d.slug
+          )
         ON CONFLICT DO NOTHING
     """)
-    op.execute("ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY")
-    op.execute("ALTER TABLE widgets FORCE ROW LEVEL SECURITY")
 
 
 def downgrade() -> None:
-    """Remove only the seeded default categories (by slug)."""
-    op.execute("ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY")
+    """Remove the default categories (by slug)."""
     op.execute("""
         DELETE FROM widget_categories
         WHERE slug IN ('general', 'internal', 'customer', 'deprecated')
     """)
-    op.execute("ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY")
 ```
 
 ## Data Migration (Backfill / Transform)
@@ -529,11 +617,9 @@ down_revision = "c3d4e5f6a7b8"
 
 def upgrade() -> None:
     """
-    Small tables (< 100K rows): single UPDATE, with FORCE lifted for this transaction (the owner runs
-    it; see "Who runs migrations").
+    Small tables (< 100K rows): one UPDATE. The migration role has BYPASSRLS, so it sees every
+    tenant's widgets (see "Who runs migrations").
     """
-    op.execute("ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY")
-    op.execute("ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY")
     op.execute("""
         UPDATE widgets w
         SET category_id = c.id, updated_at = NOW()
@@ -541,8 +627,6 @@ def upgrade() -> None:
         WHERE c.tenant_id = w.tenant_id AND c.slug = 'general' AND c.deleted_at IS NULL
           AND w.category_id IS NULL AND w.deleted_at IS NULL
     """)
-    op.execute("ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY")
-    op.execute("ALTER TABLE widgets FORCE ROW LEVEL SECURITY")
 
 
 def downgrade() -> None:
@@ -556,43 +640,47 @@ def downgrade() -> None:
 ## Large Table Batch Data Migration
 
 ```python
-# For tables > 100K rows, backfill in batches: each batch is its own short transaction, so no lock is
-# held for the whole run. A DO block may COMMIT between batches (PostgreSQL 11+) when it runs outside
-# a transaction, which autocommit_block() provides. FORCE is lifted and restored inside each batch,
-# so no other session ever sees it off.
+# For tables > 100K rows, backfill in batches. Inside autocommit_block() every statement commits on its
+# own, so each batch is a short transaction: no lock is held for the whole run, and a failure keeps the
+# batches already done (re-running continues where it stopped). The migration role has BYPASSRLS, so a
+# batch changes no RLS setting and takes no table lock: ROW EXCLUSIVE on widgets plus its rows, which
+# the application's reads and writes don't wait for.
+import sqlalchemy as sa
+from alembic import context, op
+
+BATCH_SIZE = 5000
+
+# No SKIP LOCKED: a row an application transaction holds is waited for rather than skipped, so the loop
+# can't stop while rows are left. The outer conditions repeat the inner ones so that a row the
+# application changed while the batch waited for it is checked again in its new state: a widget that
+# was just given a category keeps it.
+BATCH_UPDATE = sa.text("""
+    UPDATE widgets w
+    SET category_id = c.id, updated_at = NOW()
+    FROM widget_categories c
+    WHERE c.tenant_id = w.tenant_id AND c.slug = 'general' AND c.deleted_at IS NULL
+      AND w.category_id IS NULL AND w.deleted_at IS NULL
+      AND w.id IN (
+          SELECT w2.id
+          FROM widgets w2
+          JOIN widget_categories c2
+            ON c2.tenant_id = w2.tenant_id AND c2.slug = 'general' AND c2.deleted_at IS NULL
+          WHERE w2.category_id IS NULL AND w2.deleted_at IS NULL
+          LIMIT :batch_size
+      )
+""")
+
 
 def upgrade() -> None:
-    """Backfill category_id in batches of 5000."""
+    """Backfill category_id in batches of BATCH_SIZE until a batch updates nothing."""
+    if context.is_offline_mode():
+        # The loop's length depends on the data, so `alembic upgrade --sql` can't render it: generate
+        # SQL up to the revision before this one, and run this one against the database.
+        raise RuntimeError("the batched category backfill needs a live database; it has no --sql form")
     with op.get_context().autocommit_block():
-        op.execute("""
-            DO $$
-            DECLARE
-                updated integer;
-            BEGIN
-                LOOP
-                    ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
-                    ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
-                    UPDATE widgets w
-                    SET category_id = c.id, updated_at = NOW()
-                    FROM widget_categories c
-                    WHERE c.tenant_id = w.tenant_id AND c.slug = 'general' AND c.deleted_at IS NULL
-                      AND w.id IN (
-                          SELECT w2.id
-                          FROM widgets w2
-                          JOIN widget_categories c2
-                            ON c2.tenant_id = w2.tenant_id AND c2.slug = 'general' AND c2.deleted_at IS NULL
-                          WHERE w2.category_id IS NULL AND w2.deleted_at IS NULL
-                          LIMIT 5000
-                          FOR UPDATE OF w2 SKIP LOCKED
-                      );
-                    GET DIAGNOSTICS updated = ROW_COUNT;
-                    ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
-                    ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
-                    COMMIT;
-                    EXIT WHEN updated = 0;
-                END LOOP;
-            END $$
-        """)
+        bind = op.get_bind()
+        while bind.execute(BATCH_UPDATE, {"batch_size": BATCH_SIZE}).rowcount:
+            pass
 ```
 
 ## RLS Application-Level Setup
@@ -621,26 +709,90 @@ async def set_tenant_context(session: AsyncSession, tenant_id: UUID) -> None:
     )
 ```
 
+## Provisioning a New Tenant
+
+The seed covers the tenants that exist when it runs. Every tenant created afterwards gets the same
+defaults at signup, in the same transaction as its registry row, as the application role under RLS.
+
+```python
+# app/db/tenants.py
+
+from __future__ import annotations
+
+from uuid import UUID
+
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.db.rls import set_tenant_context
+
+_INSERT_TENANT = text("""
+    INSERT INTO tenants (id, name) VALUES (:tenant_id, :name)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING id
+""")
+
+# The seed migration's defaults (c3d4e5f6a7b8 keeps its own frozen copy). A default the tenant already
+# has, live or soft-deleted, is skipped, so a repeated call never brings back one the tenant deleted.
+_INSERT_DEFAULT_CATEGORIES = text("""
+    INSERT INTO widget_categories (tenant_id, name, slug, description, sort_order)
+    SELECT t.id, d.name, d.slug, d.description, d.sort_order
+    FROM tenants t
+    CROSS JOIN (
+        VALUES
+            ('General',    'general',    'Default category for uncategorized widgets', 0),
+            ('Internal',   'internal',   'Internal-use widgets',                       1),
+            ('Customer',   'customer',   'Customer-facing widgets',                    2),
+            ('Deprecated', 'deprecated', 'Widgets scheduled for removal',              3)
+    ) AS d(name, slug, description, sort_order)
+    WHERE t.id = :tenant_id AND t.deleted_at IS NULL
+      AND NOT EXISTS (
+          SELECT 1 FROM widget_categories c
+          WHERE c.tenant_id = t.id AND lower(c.slug) = d.slug
+      )
+    ON CONFLICT DO NOTHING
+""")
+
+
+async def provision_tenant(session: AsyncSession, tenant_id: UUID, name: str) -> bool:
+    """Create a tenant's registry row and its default categories. Returns False if it already existed.
+
+    Call it inside the caller's transaction (`async with session.begin():`) so both commit together.
+    tenant_id is chosen once by the signup flow (a new uuid4, or the identity provider's organisation
+    id from the verified token), never read from request input. Calling again with the same id changes
+    nothing, so a retried signup is safe.
+    """
+    await set_tenant_context(session, tenant_id)  # RLS: the new rows must belong to this tenant
+    created = (
+        await session.execute(_INSERT_TENANT, {"tenant_id": tenant_id, "name": name})
+    ).scalar_one_or_none() is not None
+    await session.execute(_INSERT_DEFAULT_CATEGORIES, {"tenant_id": tenant_id})
+    return created
+```
+
 ## Testing Migrations — Apply, Rollback, Re-apply
 
 ```python
 # tests/test_migrations.py
 
 """
-Verify that all migrations can be applied, rolled back, and re-applied cleanly — as a NON-superuser
-table owner, the way they run when deployed. A superuser skips row-level security, which hides every
-migration that breaks under FORCE ROW LEVEL SECURITY.
+Verify that all migrations apply, roll back and re-apply cleanly, as the two roles they run with when
+deployed: the migration role (owns the tables, BYPASSRLS) runs them, and the application role (owns
+nothing, no BYPASSRLS) reads the result under row-level security. Never as a superuser: a superuser
+skips RLS and hides every failure on the application's side.
 This catches common issues:
 - Missing downgrade logic
 - Non-idempotent operations
 - Foreign key dependency ordering
-- Data migrations that fail, or silently update nothing, under RLS
+- A seed that misses tenants, adds duplicates, or brings back a default a tenant deleted
+- An application role that can see another tenant's rows, or run the migrations
 """
 
 from __future__ import annotations
 
 import asyncio
 import uuid
+from dataclasses import dataclass
 
 import asyncpg
 import pytest
@@ -648,8 +800,20 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
-OWNER = "app_owner"  # owns the schema and runs the migrations: NOSUPERUSER NOBYPASSRLS
+from app.db.tenants import provision_tenant
+
+MIGRATOR = "app_migrator"  # owns the schema and runs the migrations: NOSUPERUSER BYPASSRLS
+RUNTIME = "app_runtime"  # the application: owns nothing, NOSUPERUSER NOBYPASSRLS
+DEFAULTS = ["customer", "deprecated", "general", "internal"]
+
+
+@dataclass(frozen=True)
+class DbRoles:
+    migrator_url: str
+    runtime_url: str
 
 
 def _plain(url: str) -> str:
@@ -658,29 +822,42 @@ def _plain(url: str) -> str:
 
 
 @pytest.fixture(scope="session")
-def owner_url(pg_url: str) -> str:
-    """A fresh database owned by a plain login role. pg_url is the superuser URL of the testcontainers
-    fixture in crud-repository-test-python.md, from a conftest.py this directory can see."""
-    password = uuid.uuid4().hex  # throwaway, per run (CREATE ROLE takes no bind parameters)
+def db_roles(pg_url: str) -> DbRoles:
+    """A fresh database and both roles, provisioned the way a deployment's database is (once, by an
+    administrator). pg_url is the superuser URL of the testcontainers fixture in
+    crud-repository-test-python.md, from a conftest.py this directory can see."""
+    passwords = {MIGRATOR: uuid.uuid4().hex, RUNTIME: uuid.uuid4().hex}  # throwaway, per run
+    db_url = make_url(pg_url).set(database="migrations_test")
 
-    async def create() -> None:
-        conn = await asyncpg.connect(_plain(pg_url))
-        try:
-            await conn.execute(f"CREATE ROLE {OWNER} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{password}'")
-            await conn.execute(f"CREATE DATABASE migrations_test OWNER {OWNER}")
+    async def provision() -> None:
+        admin = await asyncpg.connect(_plain(pg_url))
+        try:  # CREATE ROLE takes no bind parameters; the passwords are generated hex
+            await admin.execute(f"CREATE ROLE {MIGRATOR} LOGIN NOSUPERUSER BYPASSRLS PASSWORD '{passwords[MIGRATOR]}'")
+            await admin.execute(f"CREATE ROLE {RUNTIME} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{passwords[RUNTIME]}'")
+            await admin.execute(f"CREATE DATABASE migrations_test OWNER {MIGRATOR}")
         finally:
-            await conn.close()
+            await admin.close()
+        db = await asyncpg.connect(_plain(db_url.render_as_string(hide_password=False)))
+        try:  # every table the migration role creates is usable by the application role
+            await db.execute(
+                f"ALTER DEFAULT PRIVILEGES FOR ROLE {MIGRATOR} IN SCHEMA public "
+                f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO {RUNTIME}"
+            )
+        finally:
+            await db.close()
 
-    asyncio.run(create())
-    url = make_url(pg_url).set(username=OWNER, password=password, database="migrations_test")
-    return url.render_as_string(hide_password=False)
+    asyncio.run(provision())
+    return DbRoles(
+        migrator_url=db_url.set(username=MIGRATOR, password=passwords[MIGRATOR]).render_as_string(hide_password=False),
+        runtime_url=db_url.set(username=RUNTIME, password=passwords[RUNTIME]).render_as_string(hide_password=False),
+    )
 
 
 @pytest.fixture(scope="session")
-def alembic_config(owner_url: str) -> Config:
-    """Alembic config pointing at the test database, as the owner role."""
+def alembic_config(db_roles: DbRoles) -> Config:
+    """Alembic config pointing at the test database, as the migration role."""
     cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", owner_url)  # keep +asyncpg: env.py runs an async engine
+    cfg.set_main_option("sqlalchemy.url", db_roles.migrator_url)  # keep +asyncpg: env.py runs an async engine
     return cfg
 
 
@@ -720,49 +897,121 @@ class TestMigrations:
             # Re-apply
             command.upgrade(alembic_config, rev.revision)
 
-    def test_data_migrations_under_forced_rls(self, alembic_config: Config, owner_url: str) -> None:
-        """The seed and the backfill work for the owner with FORCE ROW LEVEL SECURITY on: each tenant
-        gets its default categories and every existing widget lands in "general". Afterwards FORCE is
-        back: without a tenant, the owner is refused instead of shown every row."""
+    def test_application_role_cannot_migrate(self, db_roles: DbRoles) -> None:
+        """env.py stops before the first migration when DATABASE_URL has the application's credentials."""
+        cfg = Config("alembic.ini")
+        cfg.set_main_option("sqlalchemy.url", db_roles.runtime_url)
+        with pytest.raises(RuntimeError, match="must run as the migration role"):
+            command.upgrade(cfg, "head")
+
+
+class TestSeedAndProvisioning:
+    """The default categories reach every tenant exactly once, and RLS holds for the application."""
+
+    def test_seed_covers_every_tenant(self, alembic_config: Config, db_roles: DbRoles) -> None:
+        """Every registered tenant gets the defaults, including one with no widgets; existing widgets
+        land in "general"."""
         command.downgrade(alembic_config, "base")
         command.upgrade(alembic_config, "b2c3d4e5f6a7")  # the schema, before the seed and backfill
-        tenants = [uuid.uuid4(), uuid.uuid4()]
-        asyncio.run(insert_widgets(owner_url, tenants))
+        busy, idle = uuid.uuid4(), uuid.uuid4()
+        for tenant in (busy, idle):
+            asyncio.run(as_tenant(db_roles.runtime_url, tenant, "INSERT INTO tenants (id, name) VALUES ($1, 'acme')", tenant))
+        asyncio.run(insert_widget(db_roles.runtime_url, busy))
 
         command.upgrade(alembic_config, "head")
 
-        for tenant in tenants:
-            slugs, uncategorized = asyncio.run(tenant_state(owner_url, tenant))
-            assert slugs == ["customer", "deprecated", "general", "internal"]
-            assert uncategorized == 0
+        for tenant in (busy, idle):
+            assert asyncio.run(live_slugs(db_roles.runtime_url, tenant)) == DEFAULTS
+        assert asyncio.run(uncategorized(db_roles.runtime_url, busy)) == 0
+
+    def test_seed_rerun_adds_nothing(self, alembic_config: Config, db_roles: DbRoles) -> None:
+        """Running the seed again adds no duplicate, and a default the tenant deleted stays deleted."""
+        command.downgrade(alembic_config, "base")
+        command.upgrade(alembic_config, "b2c3d4e5f6a7")
+        tenant = uuid.uuid4()
+        asyncio.run(as_tenant(db_roles.runtime_url, tenant, "INSERT INTO tenants (id, name) VALUES ($1, 'acme')", tenant))
+        command.upgrade(alembic_config, "c3d4e5f6a7b8")
+        asyncio.run(soft_delete_category(db_roles.runtime_url, tenant, "deprecated"))
+
+        command.stamp(alembic_config, "b2c3d4e5f6a7")  # mark the seed as not applied...
+        command.upgrade(alembic_config, "c3d4e5f6a7b8")  # ...and run it again
+
+        assert asyncio.run(live_slugs(db_roles.runtime_url, tenant)) == ["customer", "general", "internal"]
+        assert asyncio.run(category_rows(db_roles.runtime_url, tenant)) == 4  # the deleted one included
+
+    def test_provision_tenant_after_the_seed(self, alembic_config: Config, db_roles: DbRoles) -> None:
+        """A tenant that signs up later gets the defaults from provision_tenant(), as the application
+        role; calling it again changes nothing and doesn't bring back a deleted default."""
+        command.downgrade(alembic_config, "base")
+        command.upgrade(alembic_config, "head")
+        tenant = uuid.uuid4()
+
+        assert asyncio.run(provision(db_roles.runtime_url, tenant)) is True
+        assert asyncio.run(live_slugs(db_roles.runtime_url, tenant)) == DEFAULTS
+        asyncio.run(soft_delete_category(db_roles.runtime_url, tenant, "internal"))
+        assert asyncio.run(provision(db_roles.runtime_url, tenant)) is False
+        assert asyncio.run(live_slugs(db_roles.runtime_url, tenant)) == ["customer", "deprecated", "general"]
+
+    def test_application_role_sees_only_its_tenant(self, alembic_config: Config, db_roles: DbRoles) -> None:
+        """Under RLS the application sees its own tenant's rows only, and nothing without a tenant."""
+        command.downgrade(alembic_config, "base")
+        command.upgrade(alembic_config, "head")
+        mine, other = uuid.uuid4(), uuid.uuid4()
+        for tenant in (mine, other):
+            asyncio.run(provision(db_roles.runtime_url, tenant))
+        asyncio.run(insert_widget(db_roles.runtime_url, other))
+
+        assert asyncio.run(as_tenant(db_roles.runtime_url, mine, "SELECT id FROM tenants")) == [(mine,)]
+        assert asyncio.run(category_rows(db_roles.runtime_url, mine)) == 4  # not the other tenant's 4
+        assert asyncio.run(as_tenant(db_roles.runtime_url, mine, "SELECT id FROM widgets")) == []
         with pytest.raises(asyncpg.exceptions.UndefinedObjectError):  # app.current_tenant_id unset
-            asyncio.run(count_widgets_without_tenant(owner_url))
+            asyncio.run(count_widgets_without_tenant(db_roles.runtime_url))
 
 
-async def insert_widgets(url: str, tenants: list[uuid.UUID]) -> None:
-    conn = await asyncpg.connect(_plain(url))
-    try:
-        for tenant in tenants:
-            async with conn.transaction():  # under RLS every write names its tenant (app/db/rls.py)
-                await conn.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(tenant))
-                await conn.execute(
-                    "INSERT INTO widgets (tenant_id, name, created_by, updated_by) VALUES ($1, $2, $3, $3)",
-                    tenant, f"widget-{uuid.uuid4().hex[:8]}", uuid.uuid4(),
-                )
-    finally:
-        await conn.close()
-
-
-async def tenant_state(url: str, tenant: uuid.UUID) -> tuple[list[str], int]:
+async def as_tenant(url: str, tenant: uuid.UUID, sql: str, *args: object) -> list[tuple[object, ...]]:
+    """One transaction as `tenant`: under RLS every query names its tenant (app/db/rls.py)."""
     conn = await asyncpg.connect(_plain(url))
     try:
         async with conn.transaction():
             await conn.execute("SELECT set_config('app.current_tenant_id', $1, true)", str(tenant))
-            slugs = [r["slug"] for r in await conn.fetch("SELECT slug FROM widget_categories ORDER BY slug")]
-            uncategorized = await conn.fetchval("SELECT count(*) FROM widgets WHERE category_id IS NULL")
-        return slugs, uncategorized
+            return [tuple(row.values()) for row in await conn.fetch(sql, *args)]
     finally:
         await conn.close()
+
+
+async def insert_widget(url: str, tenant: uuid.UUID) -> None:
+    await as_tenant(
+        url, tenant,
+        "INSERT INTO widgets (tenant_id, name, created_by, updated_by) VALUES ($1, $2, $3, $3)",
+        tenant, f"widget-{uuid.uuid4().hex[:8]}", uuid.uuid4(),
+    )
+
+
+async def soft_delete_category(url: str, tenant: uuid.UUID, slug: str) -> None:
+    await as_tenant(url, tenant, "UPDATE widget_categories SET deleted_at = NOW() WHERE slug = $1", slug)
+
+
+async def live_slugs(url: str, tenant: uuid.UUID) -> list[object]:
+    rows = await as_tenant(url, tenant, "SELECT slug FROM widget_categories WHERE deleted_at IS NULL ORDER BY slug")
+    return [slug for (slug,) in rows]
+
+
+async def category_rows(url: str, tenant: uuid.UUID) -> object:
+    return (await as_tenant(url, tenant, "SELECT count(*) FROM widget_categories"))[0][0]
+
+
+async def uncategorized(url: str, tenant: uuid.UUID) -> object:
+    return (await as_tenant(url, tenant, "SELECT count(*) FROM widgets WHERE category_id IS NULL"))[0][0]
+
+
+async def provision(url: str, tenant: uuid.UUID) -> bool:
+    """provision_tenant() through the application's own session, as the application role."""
+    engine = create_async_engine(url, poolclass=NullPool)
+    try:
+        async with async_sessionmaker(engine)() as session, session.begin():
+            return await provision_tenant(session, tenant, "acme")
+    finally:
+        await engine.dispose()
 
 
 async def count_widgets_without_tenant(url: str) -> int:
@@ -810,17 +1059,18 @@ alembic upgrade head --sql > migration.sql
 ## Critical Rules
 
 - Every migration MUST have both `upgrade()` and `downgrade()` functions
-- Every table MUST have `tenant_id`, `deleted_at`, and `version` columns
-- Every table MUST have RLS enabled with a tenant isolation policy
+- Every tenant-owned table MUST have `tenant_id`, `deleted_at`, and `version` columns
+- Every table MUST have RLS enabled with a tenant isolation policy (the `tenants` registry keys it on `id`)
 - Every `downgrade()` MUST use `IF EXISTS` guards — safe to re-run
 - Every `downgrade()` MUST be the exact reverse of the `upgrade()`
 - Unique indexes MUST be scoped to tenant: `(tenant_id, column)` not just `(column)`
 - Unique indexes MUST use partial index `WHERE deleted_at IS NULL`
 - Schema migrations and seed data are SEPARATE files — never combine
 - Data migrations (backfills) are SEPARATE from schema changes
-- Migrations run as a non-superuser owner without `BYPASSRLS`; every step that reads or writes rows of a `FORCE ROW LEVEL SECURITY` table (data migrations, seeds, adding a foreign key) lifts `FORCE` inside its own transaction and restores it before commit — never across a commit
-- Migration tests run as that owner role, not a superuser (a superuser skips RLS and hides these failures)
-- Seed data MUST use `ON CONFLICT DO NOTHING` for idempotency
+- Migrations run as the migration role: owns the tables, has `BYPASSRLS`, is not a superuser, and its credentials go to the migrate Job only. The application connects as a role that owns nothing and has no `BYPASSRLS`; `env.py` refuses to migrate as such a role
+- Data migrations never toggle RLS: `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY` takes an `ACCESS EXCLUSIVE` lock, which blocks the application's queries on the table until the transaction ends
+- Migration tests run as those two roles, never a superuser (a superuser skips RLS and hides the application's failures)
+- Seeds select tenants from the `tenants` registry (not from whichever rows happen to exist), skip rows the tenant already has (soft-deleted ones included) and use `ON CONFLICT DO NOTHING`; tenants created later get the same defaults from `provision_tenant()`
 - Large table updates (> 100K rows) MUST use batch processing to avoid long locks
 - `CREATE INDEX CONCURRENTLY` cannot run inside a transaction — use `op.execute()` outside transaction context
 - Always use `op.execute()` for raw SQL (RLS, triggers, partial indexes) since Alembic ops don't support all PostgreSQL features

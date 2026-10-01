@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Compile-check the ```python samples in .claude/skills/backend/archetypes/*.md.
+"""Compile-check the ```python samples in every .claude/skills/**/*.md file.
 
 Run through run.sh (it provisions the pinned venv). What happens, deterministically, on every run:
 
-1. Every archetype markdown file is scanned. Each ```python block is extracted with its markdown line
-   numbers. A file's block count must equal EXPECTED in units.py; a block's first non-empty line must
-   equal the anchor its unit references it by. Either mismatch fails loudly: the doc changed, so the
-   config has to be looked at again rather than silently checking the wrong code.
+1. Every markdown file under .claude/skills is scanned: the archetypes (backend/archetypes/*.md, keyed by
+   bare file name, e.g. "crud-handler-python.md", their units in units.py) and every other pack (keyed by
+   the path relative to .claude/skills, e.g. "languages/python.md", their units in units_packs.py). Each
+   ```python block is extracted with its markdown line numbers. A file's block count must equal
+   EXPECTED; a block's first non-empty line must equal the anchor its unit references it by. Either
+   mismatch fails loudly: the doc changed, so the config has to be looked at again rather than silently
+   checking the wrong code.
 2. Every block must be referenced by a unit, listed in COMMENT_ONLY (verified to hold no code), or
    listed in SKIPS with a reason. Anything else fails.
 3. Each unit is assembled into .build/<unit>/ from blocks (+ minimal harness stubs for names a
@@ -19,6 +22,10 @@ Run through run.sh (it provisions the pinned venv). What happens, deterministica
 
 Stubs never stand in for a library a sample demonstrates: they only provide app-level names (an
 Order model, a settings object, a repository) that a fragment assumes exists.
+
+--inventory-only runs steps 1 and 2 (block counts, anchors, coverage, fence form) and builds nothing. It
+needs only the system python3 (no venv, no pyright, no third-party import), so tests/run-all.sh runs it
+(tests/archetype-compile-python-inventory.test.sh).
 """
 from __future__ import annotations
 
@@ -36,10 +43,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[2]
-# ARCHETYPE_DIR: check another copy of the docs (used to prove the harness fails on a bad sample)
-ARCH = Path(os.environ.get("ARCHETYPE_DIR") or REPO / ".claude" / "skills" / "backend" / "archetypes")
+# SKILLS_DIR / ARCHETYPE_DIR: check another copy of the docs (selftest.py uses them to prove the harness
+# fails on a bad sample). The archetypes are always read from ARCH, never as part of SKILLS.
+SKILLS = Path(os.environ.get("SKILLS_DIR") or REPO / ".claude" / "skills")
+ARCH = Path(os.environ.get("ARCHETYPE_DIR") or SKILLS / "backend" / "archetypes")
 STUBS = HERE / "stubs"
 BUILD = HERE / ".build"
+sys.dont_write_bytecode = True  # --inventory-only runs with the system python3: no __pycache__ in the repo
 
 sys.path.insert(0, str(HERE))
 import units as cfg  # noqa: E402  (the unit configuration lives next to this file)
@@ -59,7 +69,7 @@ class HarnessError(Exception):
 
 @dataclass
 class Block:
-    md: str
+    md: str  # the file's key (see md_path)
     index: int
     first_line: int  # markdown line number (1-based) of the block's first content line
     lines: list[str]
@@ -69,9 +79,30 @@ class Block:
         return next((ln.strip() for ln in self.lines if ln.strip()), "")
 
 
-def extract_other(md_path: Path, lang: str) -> list[Block]:
+def md_path(key: str) -> Path:
+    """A markdown file's key → its path. Archetypes are keyed by bare file name ("crud-handler-python.md");
+    every other pack by its path relative to .claude/skills ("languages/python.md")."""
+    return SKILLS / key if "/" in key else ARCH / key
+
+
+def md_key(path: Path) -> str:
+    if path.parent == ARCH:
+        return path.name
+    return path.relative_to(SKILLS).as_posix()
+
+
+def pack_files() -> list[Path]:
+    """Every .claude/skills markdown file outside the archetypes directory."""
+    skip = {(SKILLS / "backend" / "archetypes").resolve(), ARCH.resolve()}
+    return sorted(
+        p for p in SKILLS.rglob("*.md")
+        if not any(parent.resolve() in skip for parent in p.parents)
+    )
+
+
+def extract_other(key: str, lang: str) -> list[Block]:
     """Fenced blocks of another language (read-only inputs such as alembic.ini or .proto files)."""
-    lines = md_path.read_text(encoding="utf-8").split("\n")
+    lines = md_path(key).read_text(encoding="utf-8").split("\n")
     out: list[Block] = []
     i = 0
     while i < len(lines):
@@ -79,15 +110,16 @@ def extract_other(md_path: Path, lang: str) -> list[Block]:
             j = i + 1
             while j < len(lines) and not FENCE_CLOSE.match(lines[j]):
                 j += 1
-            out.append(Block(md_path.name, len(out), i + 2, lines[i + 1 : j]))
+            out.append(Block(key, len(out), i + 2, lines[i + 1 : j]))
             i = j + 1
             continue
         i += 1
     return out
 
 
-def extract(md_path: Path) -> list[Block]:
-    lines = md_path.read_text(encoding="utf-8").split("\n")
+def extract(path: Path) -> list[Block]:
+    key = md_key(path)
+    lines = path.read_text(encoding="utf-8").split("\n")
     blocks: list[Block] = []
     i = 0
     while i < len(lines):
@@ -98,13 +130,13 @@ def extract(md_path: Path) -> list[Block]:
             while j < len(lines) and not FENCE_CLOSE.match(lines[j]):
                 j += 1
             if j == len(lines):
-                raise HarnessError(f"{md_path.name}:{i + 1}: unterminated ```python block")
-            blocks.append(Block(md_path.name, len(blocks), start + 1, lines[start:j]))
+                raise HarnessError(f"{key}:{i + 1}: unterminated ```python block")
+            blocks.append(Block(key, len(blocks), start + 1, lines[start:j]))
             i = j + 1
             continue
         if FENCE_SUSPECT.match(line):
             raise HarnessError(
-                f"{md_path.name}:{i + 1}: Python fence in a form the extractor doesn't read ({line.strip()!r}); "
+                f"{key}:{i + 1}: Python fence in a form the extractor doesn't read ({line.strip()!r}); "
                 "use exactly ```python at column 0"
             )
         i += 1
@@ -207,7 +239,7 @@ class Build:
                 elif isinstance(part, S):
                     f.add_harness((STUBS / part.path).read_text(encoding="utf-8"), f"stubs/{part.path}")
                 elif isinstance(part, MD):
-                    other = extract_other(ARCH / part.md, part.lang)
+                    other = extract_other(part.md, part.lang)
                     if part.index >= len(other) or other[part.index].anchor != part.anchor:
                         raise HarnessError(
                             f"unit {self.unit.name}: {part.md} ```{part.lang} block #{part.index} no longer starts "
@@ -307,7 +339,7 @@ def doc_line(o: Origin) -> str:
     """The markdown line an origin points at ("" for harness lines)."""
     if not o.md:
         return ""
-    lines = (ARCH / o.md).read_text(encoding="utf-8").split("\n")
+    lines = md_path(o.md).read_text(encoding="utf-8").split("\n")
     return lines[o.line - 1] if 0 < o.line <= len(lines) else ""
 
 
@@ -459,24 +491,53 @@ def check_unit(unit: Unit, blocks: dict[str, list[Block]], live: bool) -> Result
 def load_blocks() -> tuple[dict[str, list[Block]], list[str]]:
     problems: list[str] = []
     blocks: dict[str, list[Block]] = {}
-    for md in sorted(ARCH.glob("*.md")):
+    for md in [*sorted(ARCH.glob("*.md")), *pack_files()]:
+        key = md_key(md)
         try:
             bl = extract(md)
         except HarnessError as exc:
             problems.append(str(exc))
             continue
-        want = cfg.EXPECTED.get(md.name, 0)
+        want = cfg.EXPECTED.get(key, 0)
         if len(bl) != want:
+            where = "units.py" if md.parent == ARCH else "units_packs.py"
             problems.append(
-                f"{md.name}: {len(bl)} python block(s), units.py EXPECTED says {want}. The doc changed: "
-                "add/re-map the blocks in units.py (and re-run) before trusting this check."
+                f"{key}: {len(bl)} python block(s), {where} EXPECTED says {want}. The doc changed: "
+                f"add/re-map the blocks in {where} (and re-run) before trusting this check."
             )
         if bl:
-            blocks[md.name] = bl
+            blocks[key] = bl
     for name in cfg.EXPECTED:
-        if not (ARCH / name).exists():
-            problems.append(f"units.py EXPECTED lists {name}, which no longer exists")
+        if not md_path(name).exists():
+            problems.append(f"EXPECTED lists {name}, which no longer exists")
     return blocks, problems
+
+
+def check_refs(blocks: dict[str, list[Block]]) -> list[str]:
+    """Every block reference of every unit still points at a block that starts with its anchor (and every
+    stub file exists). The full run checks the same thing while assembling; --inventory-only needs it
+    without building anything."""
+    problems: list[str] = []
+    for u in cfg.UNITS:
+        for rel, parts in u.files.items():
+            for p in parts:
+                if isinstance(p, B):
+                    bl = blocks.get(p.md, [])
+                    if p.index >= len(bl):
+                        problems.append(f"unit {u.name} ({rel}): {p.md} has no python block #{p.index}")
+                    elif bl[p.index].anchor != p.anchor:
+                        problems.append(
+                            f"unit {u.name} ({rel}): {p.md} python block #{p.index} (line {bl[p.index].first_line}) "
+                            f"starts with {bl[p.index].anchor!r}, the config expects {p.anchor!r}"
+                        )
+                elif isinstance(p, MD):
+                    other = extract_other(p.md, p.lang) if md_path(p.md).exists() else []
+                    if p.index >= len(other) or other[p.index].anchor != p.anchor:
+                        problems.append(f"unit {u.name} ({rel}): {p.md} ```{p.lang} block #{p.index} no longer "
+                                        f"starts with {p.anchor!r}")
+                elif isinstance(p, S) and not (STUBS / p.path).is_file():
+                    problems.append(f"unit {u.name} ({rel}): stub file stubs/{p.path} is missing")
+    return problems
 
 
 def coverage(blocks: dict[str, list[Block]]) -> tuple[list[str], dict[tuple[str, int], str], int]:
@@ -517,6 +578,8 @@ def main() -> int:
     ap.add_argument("--live", action="store_true", help="also run DB samples against Docker Postgres")
     ap.add_argument("--keep", action="store_true", help="keep .build/ afterwards")
     ap.add_argument("--list", action="store_true", help="list units and exit")
+    ap.add_argument("--inventory-only", action="store_true",
+                    help="check block counts, anchors, coverage and fences; build and run nothing")
     a = ap.parse_args()
 
     if a.list:
@@ -528,6 +591,18 @@ def main() -> int:
     cov_problems, skipped, checked = coverage(blocks)
     problems += cov_problems
     total_blocks = sum(len(b) for b in blocks.values())
+
+    if a.inventory_only:
+        problems += check_refs(blocks)
+        names = [u.name for u in cfg.UNITS]
+        problems += [f"unit name {n!r} is used twice" for n in sorted({n for n in names if names.count(n) > 1})]
+        for pr in problems:
+            print(f"ERROR {pr}")
+        print(
+            f"inventory: python blocks: {total_blocks} in {len(blocks)} file(s), {checked} checked by "
+            f"{len(cfg.UNITS)} unit(s), {len(skipped)} skipped with a reason; problems: {len(problems)}"
+        )
+        return 0 if not problems else 1
 
     units = [u for u in cfg.UNITS if not a.unit or u.name in a.unit]
     if a.unit and len(units) != len(set(a.unit)):

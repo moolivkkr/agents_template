@@ -95,8 +95,8 @@ WS = "websocket-pattern-python.md"
 WK = "worker-pattern-python.md"
 
 EXPECTED = {
-    AM: 10, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
-    EH: 7, GR: 5, MG: 8, OB: 22, PF: 28, WS: 8, WK: 8,
+    AM: 11, CH: 7, CHT: 11, CR: 15, CRT: 12, CS: 13, CST: 11, DF: 1,
+    EH: 7, GR: 5, MG: 10, OB: 23, PF: 28, WS: 10, WK: 8,
 }
 
 # Blocks that hold only comments. The harness verifies that; code added to one fails until it gets a unit.
@@ -171,7 +171,7 @@ def auth_pkg() -> dict[str, list[B | T | S | MD]]:
             B(AM, 1, "# app/dependencies/auth.py"),
             B(AM, 2, "# app/dependencies/auth.py (continued)"),
         ],
-        "app/middleware/request_id.py": [B(AM, 6, "# app/middleware/request_id.py")],
+        "app/middleware/request_id.py": [B(AM, 7, "# app/middleware/request_id.py")],
     }
 
 
@@ -180,14 +180,16 @@ def migration_files() -> dict[str, list[B | T | S | MD]]:
     return {
         "alembic.ini": [MD(MG, "ini", 0, "# alembic.ini")],
         "alembic/env.py": [B(MG, 0, "# alembic/env.py")],
+        "alembic/versions/20260115_095000_create_tenants_table.py": [
+            B(MG, 1, "# alembic/versions/20260115_095000_create_tenants_table.py")],
         "alembic/versions/20260115_100000_create_widgets_table.py": [
-            B(MG, 1, "# alembic/versions/20260115_100000_create_widgets_table.py")],
+            B(MG, 2, "# alembic/versions/20260115_100000_create_widgets_table.py")],
         "alembic/versions/20260115_100100_add_widget_categories.py": [
-            B(MG, 2, "# alembic/versions/20260115_100100_add_widget_categories.py")],
+            B(MG, 3, "# alembic/versions/20260115_100100_add_widget_categories.py")],
         "alembic/versions/20260115_100200_seed_default_categories.py": [
-            B(MG, 3, "# alembic/versions/20260115_100200_seed_default_categories.py")],
+            B(MG, 4, "# alembic/versions/20260115_100200_seed_default_categories.py")],
         "alembic/versions/20260115_100300_backfill_widget_category.py": [
-            B(MG, 4, "# alembic/versions/20260115_100300_backfill_widget_category.py")],
+            B(MG, 5, "# alembic/versions/20260115_100300_backfill_widget_category.py")],
     }
 
 
@@ -302,10 +304,9 @@ UNITS.append(Unit(
 ))
 
 # ── auth-middleware (composed with the real widgets router, service and error handlers) ────────────
-UNITS.append(Unit(
-    name="auth-middleware",
-    own=[AM],
-    files={
+def auth_app_files() -> dict[str, list[B | T | S | MD]]:
+    """auth-middleware-python.md's create_app() with the real widgets router, service and errors."""
+    return {
         **errors_pkg(),
         **domain_pkg(),
         **service_pkg(),
@@ -318,15 +319,38 @@ UNITS.append(Unit(
         **auth_pkg(),
         "app/dependencies/api_key.py": [B(AM, 3, "# app/dependencies/api_key.py")],
         "app/dependencies/rate_limit.py": [B(AM, 4, "# app/dependencies/rate_limit.py")],
-        "app/middleware/cors.py": [B(AM, 5, "# app/middleware/cors.py")],
-        "app/middleware/logging.py": [B(AM, 7, "# app/middleware/logging.py")],
-        "app/main.py": [B(AM, 8, "# app/main.py")],
-        "tests/test_auth.py": [B(AM, 9, "# tests/test_auth.py")],
+        "app/dependencies/rate_limit_redis.py": [B(AM, 5, "# app/dependencies/rate_limit_redis.py")],
+        "app/middleware/cors.py": [B(AM, 6, "# app/middleware/cors.py")],
+        "app/middleware/logging.py": [B(AM, 8, "# app/middleware/logging.py")],
+        "app/main.py": [B(AM, 9, "# app/main.py")],
+    }
+
+
+UNITS.append(Unit(
+    name="auth-middleware",
+    own=[AM],
+    files={
+        **auth_app_files(),
+        "tests/test_auth.py": [B(AM, 10, "# tests/test_auth.py")],
     },
     # no JWT_* variables: Settings takes the local/dev/test path (ephemeral key, per-env issuer/audience)
     env={"APP_ENV": "test"},
     pytest="run",
     smoke=smoke("smoke_auth_middleware.py"),
+))
+
+# --live only: RedisTenantRateLimiter shared by two uvicorn processes on Redis 7, against the in-process
+# TenantRateLimiter in the same two processes. Same blocks as above (checked there), so it owns none.
+UNITS.append(Unit(
+    name="auth-middleware-shared-limit",
+    own=[],
+    files={
+        **auth_app_files(),
+        "harness_ratelimit_app.py": [S("ratelimit_app.py")],
+        "tests/test_rate_limit_redis_live.py": [S("test_rate_limit_redis_live.py")],
+    },
+    live="run",
+    pytest_args=["tests/test_rate_limit_redis_live.py"],
 ))
 
 # ── crud-repository ────────────────────────────────────────────────────────────────────────────────
@@ -388,37 +412,44 @@ UNITS.append(Unit(
         # "Large Table Batch Data Migration" is an alternative upgrade() body shown without its file
         # header. The harness gives it one, as the next revision, so offline SQL and --live run it too.
         BATCH_REVISION: [
-            T('"""harness: the batch backfill from the doc, as a revision."""\n'
-              "from alembic import op\n\n"
+            T('"""harness: the batch backfill from the doc, as a revision."""\n\n'
               'revision = "e5f6a7b8c9d0"\ndown_revision = "d4e5f6a7b8c9"\nbranch_labels = None\ndepends_on = None\n'),
-            B(MG, 5, "# For tables > 100K rows, backfill in batches: each batch is its own short transaction, so no lock is"),
+            B(MG, 6, "# For tables > 100K rows, backfill in batches. Inside autocommit_block() every statement commits on its"),
             T("\n\ndef downgrade() -> None:  # harness: the fragment shows upgrade() only\n    pass"),
         ],
         "app/models/widget.py": [B(CR, 0, "# app/models/widget.py")],
-        "app/db/rls.py": [B(MG, 6, "# app/db/rls.py")],
-        # + harness (--live): the batch backfill with rows to move, as the non-superuser owner under FORCE
-        # RLS. Appended to the doc's module to share its session fixtures (one owner role per run).
-        "tests/test_migrations.py": [B(MG, 7, "# tests/test_migrations.py"), S("test_harness_batch_backfill.py")],
+        "app/db/rls.py": [B(MG, 7, "# app/db/rls.py")],
+        "app/db/tenants.py": [B(MG, 8, "# app/db/tenants.py")],
+        # + harness (--live): the batch backfill's locks read from pg_locks while a batch is paused, a
+        # row the application holds during a batch, and the FORCE-toggle design it replaced. Appended to
+        # the doc's module to share its session fixtures (one pair of roles per run).
+        "tests/test_migrations.py": [B(MG, 9, "# tests/test_migrations.py"), S("test_harness_batch_backfill.py")],
         # pg_url for --live: the repository tests' testcontainers fixtures, where this test can see them
         "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py")],
+        "harness_offline_check.py": [S("offline_batch_refused.py")],
     },
     typecheck=[
         "alembic/env.py",
+        "alembic/versions/20260115_095000_create_tenants_table.py",
         "alembic/versions/20260115_100000_create_widgets_table.py",
         "alembic/versions/20260115_100100_add_widget_categories.py",
         "alembic/versions/20260115_100200_seed_default_categories.py",
         "alembic/versions/20260115_100300_backfill_widget_category.py",
         BATCH_REVISION,
         "app/db/rls.py",
+        "app/db/tenants.py",
         "tests/test_migrations.py",
     ],
-    imports=["app.db.rls"],
+    imports=["app.db.rls", "app.db.tenants"],
     pytest="collect",
     live="run",
     env={"DATABASE_URL": "postgresql+asyncpg://harness@localhost:5432/harness"},
     post=[
-        ["{py}", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head", "--sql"],
-        ["{py}", "-m", "alembic", "-c", "alembic.ini", "downgrade", "head:base", "--sql"],
+        # offline SQL for the whole chain the doc ships; the batched backfill has no --sql form, which
+        # the last step checks: it fails with its own message after rendering everything before it
+        ["{py}", "-m", "alembic", "-c", "alembic.ini", "upgrade", "d4e5f6a7b8c9", "--sql"],
+        ["{py}", "-m", "alembic", "-c", "alembic.ini", "downgrade", "d4e5f6a7b8c9:base", "--sql"],
+        ["{py}", "harness_offline_check.py"],
     ],
 ))
 
@@ -484,61 +515,68 @@ UNITS.append(Unit(
     own=[OB],
     files={
         "harness_stubs/orders.py": [S("orders.py")],
-        "app/config.py": [B(OB, 19, "# app/config.py")],
-        "app/context.py": [B(OB, 20, "# app/context.py")],
-        "app/dependencies.py": [B(OB, 21, "# app/dependencies.py")],
+        "app/config.py": [B(OB, 20, "# app/config.py")],
+        "app/context.py": [B(OB, 21, "# app/context.py")],
+        "app/dependencies.py": [B(OB, 22, "# app/dependencies.py")],
         "app/db.py": [S("obs_db.py")],
         "app/middleware/auth_middleware.py": [S("obs_auth_middleware.py")],
         "app/observability/tracing.py": [B(OB, 0, "# app/observability/tracing.py")],
         "app/observability/instruments.py": [B(OB, 1, "# app/observability/instruments.py")],
-        "app/observability/metrics.py": [B(OB, 5, "# app/observability/metrics.py")],
-        "app/observability/app_metrics.py": [B(OB, 6, "# app/observability/app_metrics.py")],
+        "app/observability/sql_spans.py": [B(OB, 2, "# app/observability/sql_spans.py")],
+        # --live: sql_spans.py on asyncpg against PostgreSQL (pg_url from the repository tests' conftest)
+        "app/models/widget.py": [B(CR, 0, "# app/models/widget.py")],
+        "tests/conftest.py": [B(CRT, 0, "# tests/repositories/conftest.py")],
+        "tests/test_sql_spans_live.py": [S("test_sql_spans_live.py")],
+        "app/observability/metrics.py": [B(OB, 6, "# app/observability/metrics.py")],
+        "app/observability/app_metrics.py": [B(OB, 7, "# app/observability/app_metrics.py")],
         "app/observability/logging.py": [
-            B(OB, 11, "# app/observability/logging.py"),
-            B(OB, 12, "# app/observability/logging.py  (additional processor)"),
+            B(OB, 12, "# app/observability/logging.py"),
+            B(OB, 13, "# app/observability/logging.py  (additional processor)"),
         ],
-        "app/observability/logging_stdlib.py": [B(OB, 16, "# app/observability/logging_stdlib.py")],
-        "app/observability/__init__.py": [B(OB, 17, "# app/observability/__init__.py")],
-        "app/middleware/metrics_middleware.py": [B(OB, 7, "# app/middleware/metrics_middleware.py")],
-        "app/middleware/db_metrics.py": [B(OB, 9, "# app/middleware/db_metrics.py")],
-        "app/middleware/logging_middleware.py": [B(OB, 13, "# app/middleware/logging_middleware.py")],
-        "app/main.py": [B(OB, 18, "# app/main.py")],
-        "app/repositories/order_repository.py": [OBS_PRELUDE, B(OB, 3, "# app/repositories/order_repository.py")],
+        "app/observability/logging_stdlib.py": [B(OB, 17, "# app/observability/logging_stdlib.py")],
+        "app/observability/__init__.py": [B(OB, 18, "# app/observability/__init__.py")],
+        "app/middleware/metrics_middleware.py": [B(OB, 8, "# app/middleware/metrics_middleware.py")],
+        "app/middleware/db_metrics.py": [B(OB, 10, "# app/middleware/db_metrics.py")],
+        "app/middleware/logging_middleware.py": [B(OB, 14, "# app/middleware/logging_middleware.py")],
+        "app/main.py": [B(OB, 19, "# app/main.py")],
+        "app/repositories/order_repository.py": [OBS_PRELUDE, B(OB, 4, "# app/repositories/order_repository.py")],
         "app/services/order_service.py": [
             OBS_PRELUDE,
             T("from app.repositories.order_repository import OrderRepository"),
-            B(OB, 2, "# app/services/order_service.py"),
+            B(OB, 3, "# app/services/order_service.py"),
         ],
         "docs_fragments/propagation.py": [
-            OBS_PRELUDE, B(OB, 4, "# OpenTelemetry handles context propagation within the same process via")],
+            OBS_PRELUDE, B(OB, 5, "# OpenTelemetry handles context propagation within the same process via")],
         "docs_fragments/business_metrics.py": [
             OBS_PRELUDE,
             T("class _OrderServiceParts:  # harness: what the fragment's class has beyond this method\n"
               "    async def _process_order(self, ctx: RequestContext, req: CreateOrderRequest) -> Order: ..."),
-            B(OB, 8, "# Inside service methods — record business-level metrics",
+            B(OB, 9, "# Inside service methods — record business-level metrics",
               subs=(("class OrderService:", "class OrderService(_OrderServiceParts):"),)),
         ],
         "docs_fragments/prometheus.py": [
             T("from fastapi import FastAPI  # harness: the app the fragment instruments\napp = FastAPI()"),
-            B(OB, 10, "# app/main.py"),
+            B(OB, 11, "# app/main.py"),
         ],
         "docs_fragments/order_service_logging.py": [
             OBS_PRELUDE,
             T("from app.repositories.order_repository import OrderRepository\n"
               "class _OrderServiceParts:  # harness: the collaborator the fragment's class uses\n"
               "    _repo: OrderRepository"),
-            B(OB, 14, "# app/services/order_service.py",
+            B(OB, 15, "# app/services/order_service.py",
               subs=(("class OrderService:", "class OrderService(_OrderServiceParts):"),)),
         ],
         "docs_fragments/log_levels.py": [
             OBS_PRELUDE,
             T("import structlog\nlogger = structlog.get_logger()\norder: Order\nexc: Exception\n"
               "cb: CircuitBreaker\norder_id: str"),
-            B(OB, 15, "# ERROR — actionable, needs investigation", wrap="def _fragment() -> None:"),
+            B(OB, 16, "# ERROR — actionable, needs investigation", wrap="def _fragment() -> None:"),
         ],
     },
     env={"DATABASE_URL": "postgresql+asyncpg://harness@localhost:5432/harness", "ENVIRONMENT": "local"},
     smoke=smoke("smoke_observability.py"),
+    live="run",
+    pytest_args=["tests/test_sql_spans_live.py"],
 ))
 
 # ── performance (mostly fragments: each gets the app-level names it assumes from stubs/perf.py) ──────
@@ -625,24 +663,37 @@ UNITS.append(Unit(
         "app/ws/tickets.py": [B(WS, 1, "# app/ws/tickets.py")],
         "app/ws/endpoint.py": [B(WS, 2, "# app/ws/endpoint.py")],
         "app/ws/handlers.py": [B(WS, 3, "# app/ws/handlers.py")],
-        "app/ws/heartbeat.py": [B(WS, 6, "# app/ws/heartbeat.py")],
-        "app/main.py": [B(WS, 7, "# app/main.py")],
-        "myapp/tickets.py": [S("myapp_tickets.py")],
-        "myapp/consumers.py": [B(WS, 4, "# myapp/consumers.py")],
-        "myapp/routing.py": [B(WS, 5, "# myapp/routing.py")],
+        "app/ws/heartbeat.py": [B(WS, 8, "# app/ws/heartbeat.py")],
+        "app/main.py": [B(WS, 9, "# app/main.py")],
+        "myapp/tickets.py": [B(WS, 4, "# myapp/tickets.py")],
+        "myapp/consumers.py": [B(WS, 5, "# myapp/consumers.py")],
+        "myapp/routing.py": [B(WS, 6, "# myapp/routing.py")],
+        "myapp/asgi.py": [B(WS, 7, "# myapp/asgi.py")],
         "harness_django_settings.py": [S("django_settings.py")],
-        "tests/test_ws_tickets_live.py": [S("test_ws_tickets_live.py")],  # --live: RedisTicketStore
+        # --live: RedisTicketStore and myapp/tickets.py on Redis 7, through the Channels application
+        "tests/test_ws_tickets_live.py": [S("test_ws_tickets_live.py")],
     },
     typecheck=["app/ws/manager.py", "app/ws/tickets.py", "app/ws/endpoint.py", "app/ws/handlers.py",
-               "app/ws/heartbeat.py", "app/main.py", "myapp/consumers.py", "myapp/routing.py"],
+               "app/ws/heartbeat.py", "app/main.py", "myapp/tickets.py", "myapp/consumers.py",
+               "myapp/routing.py", "myapp/asgi.py"],
     imports=["app.ws.manager", "app.ws.tickets", "app.ws.endpoint", "app.ws.handlers", "app.ws.heartbeat",
              "app.main"],
     # REDIS_URL: the lifespan builds the client (lazy; nothing connects); the smoke overrides the store
+    # ALLOWED_ORIGINS for the Django settings; the FastAPI Settings gets the same list from its APP_ENV=test
+    # default
     env={"DJANGO_SETTINGS_MODULE": "harness_django_settings", "APP_ENV": "test",
-         "REDIS_URL": "redis://127.0.0.1:1/0"},
+         "REDIS_URL": "redis://127.0.0.1:1/0", "ALLOWED_ORIGINS": '["http://localhost:3000"]'},
     live="run",
     pytest_args=["tests/test_ws_tickets_live.py"],
     smoke=smoke("smoke_websocket.py"),
+    pyright_ignore=[(
+        WS, 'Argument of type "list[URLResolver | URLPattern]" cannot be assigned to parameter "routes"',
+        '"websocket": BrowserOriginValidator(URLRouter(websocket_urlpatterns), settings.ALLOWED_ORIGINS),',
+        "Channels' documented routing (URLRouter over re_path() patterns). pyright's bundled typeshed stub "
+        "for channels types `routes` as list[_ExtendedURLPattern | URLRouter], a type_check_only subclass "
+        "re_path() can't return. smoke_websocket.py and the --live test route handshakes through this "
+        "URLRouter to the consumer.",
+    )],
 ))
 
 # ── worker (Celery task applied in-process, dramatiq actor fn, asyncio worker, APScheduler, health) ──
@@ -667,3 +718,15 @@ UNITS.append(Unit(
     },
     smoke=smoke("smoke_worker.py"),
 ))
+
+
+# ── packs outside backend/archetypes: units_packs.py (keep this block LAST; it imports the names above) ──
+from units_packs import COMMENT_ONLY as _PACKS_COMMENT_ONLY  # noqa: E402
+from units_packs import EXPECTED as _PACKS_EXPECTED  # noqa: E402
+from units_packs import SKIPS as _PACKS_SKIPS  # noqa: E402
+from units_packs import UNITS as _PACKS_UNITS  # noqa: E402
+
+UNITS.extend(_PACKS_UNITS)
+EXPECTED.update(_PACKS_EXPECTED)
+COMMENT_ONLY.extend(_PACKS_COMMENT_ONLY)
+SKIPS.update(_PACKS_SKIPS)

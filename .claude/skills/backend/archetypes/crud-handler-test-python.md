@@ -265,7 +265,7 @@ class TestCreateWidget:
         # Pydantic catches min_length=1 -> 400 VALIDATION_FAILED (the handlers replace FastAPI's 422)
         err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
         assert err["details"] == [
-            {"field": "name", "code": "string_too_short", "message": "This value is too short."}
+            {"field": "name", "code": "too_short", "message": "This value is too short."}
         ]
         mock_service.create.assert_not_called()
 
@@ -279,7 +279,7 @@ class TestCreateWidget:
 
         err = assert_error_envelope(resp, 400, "VALIDATION_FAILED")
         assert err["details"][0]["field"] == "name"
-        assert err["details"][0]["code"] == "missing"
+        assert err["details"][0]["code"] == "required"
         mock_service.create.assert_not_called()
 
     @pytest.mark.asyncio

@@ -14,7 +14,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/error-handling-go.md` (Go) and `backend/archetypes/error-handling-typescript.md` (TypeScript). The wire shape all three produce is the error envelope in `~/.claude/skills/api/response-envelope.md` (`{"error": {code, message, details[], request_id, retryable}}`); if this file and the envelope ever disagree, the envelope wins.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and every handler path exercised through TestClient (AppError, validation, 404/405, catch-all 500). FastAPI 0.142.2, Starlette 1.7.0, Pydantic 2.13.5.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, and every handler path exercised through TestClient (AppError, validation, 404/405, catch-all 500); 14 pydantic validation failures (missing, too short/long, out of range, wrong type, bad UUID, bad date and datetime, enum, literal, list too long, extra field, a custom validator) come back as `details[].code` values from the closed set in `api/response-envelope.md`, and `tests/lib/field_codes.py --lang python` passes. FastAPI 0.142.2, Starlette 1.7.0, Pydantic 2.13.5.
 
 Complete error handling system for Python backend services (FastAPI, Starlette). Every generated Python service MUST follow this pattern.
 
@@ -31,8 +31,10 @@ from typing import Any
 class FieldError:
     """
     One entry of error.details[] — a field-level problem (VALIDATION_FAILED).
-    `code` is a stable lower_snake identifier; `message` comes from a fixed catalog,
-    never str(exc) or a raw validator message.
+    `code` is one of the closed set in api/response-envelope.md (required, invalid_type, invalid_format,
+    invalid_value, out_of_range, too_short, too_long, unknown_field, invalid_cursor, already_exists),
+    never a validator's own word; `message` comes from a fixed catalog, never str(exc) or a raw
+    validator message.
     """
 
     field: str
@@ -305,22 +307,45 @@ from app.errors.domain import (
 
 logger = logging.getLogger(__name__)
 
-# Pydantic error types ("missing", "string_too_long", ...) are stable lower_snake identifiers, so they
-# become details[].code. Messages come from this catalog. Pydantic's own `msg` is never sent: a custom
-# validator's ValueError text lands there and can carry internals.
-_FIELD_MESSAGES: dict[str, str] = {
-    "missing": "This field is required.",
-    "string_too_short": "This value is too short.",
-    "string_too_long": "This value is too long.",
-    "string_pattern_mismatch": "This value has an invalid format.",
-    "greater_than_equal": "This value is too small.",
-    "less_than_equal": "This value is too large.",
-    "int_parsing": "Must be a whole number.",
-    "uuid_parsing": "Must be a valid ID.",
-    "enum": "This value is not one of the allowed options.",
+# Pydantic's error types ("missing", "string_too_long", "greater_than_equal", ...) are its own vocabulary.
+# Each maps onto the closed details[].code set in api/response-envelope.md, with the message the client
+# sees; a type not listed is invalid_value. Pydantic's own `msg` is never sent: a custom validator's
+# ValueError text lands there and can carry internals.
+_PYDANTIC_FIELD_ERRORS: dict[str, tuple[str, str]] = {
+    "missing": ("required", "This field is required."),
+    "string_too_short": ("too_short", "This value is too short."),
+    "too_short": ("too_short", "Too few items."),
+    "string_too_long": ("too_long", "This value is too long."),
+    "too_long": ("too_long", "Too many items."),
+    "greater_than": ("out_of_range", "This value is too small."),
+    "greater_than_equal": ("out_of_range", "This value is too small."),
+    "less_than": ("out_of_range", "This value is too large."),
+    "less_than_equal": ("out_of_range", "This value is too large."),
+    "int_parsing": ("invalid_type", "Must be a whole number."),
+    "int_type": ("invalid_type", "Must be a whole number."),
+    "int_from_float": ("invalid_type", "Must be a whole number."),
+    "float_parsing": ("invalid_type", "Must be a number."),
+    "bool_parsing": ("invalid_type", "Must be true or false."),
+    "string_type": ("invalid_type", "Must be text."),
+    "uuid_parsing": ("invalid_format", "Must be a valid ID."),
+    "string_pattern_mismatch": ("invalid_format", "This value has an invalid format."),
+    # a malformed date / datetime string is reported as *_from_*_parsing, not date_parsing / datetime_parsing
+    "date_parsing": ("invalid_format", "Must be a date (YYYY-MM-DD)."),
+    "date_from_datetime_parsing": ("invalid_format", "Must be a date (YYYY-MM-DD)."),
+    "datetime_parsing": ("invalid_format", "Must be a date and time (RFC 3339)."),
+    "datetime_from_date_parsing": ("invalid_format", "Must be a date and time (RFC 3339)."),
+    "enum": ("invalid_value", "This value is not one of the allowed options."),
+    "literal_error": ("invalid_value", "This value is not one of the allowed options."),
+    "extra_forbidden": ("unknown_field", "This field is not accepted."),
 }
-_DEFAULT_FIELD_MESSAGE = "This value is invalid."
+_FALLBACK_FIELD_ERROR = ("invalid_value", "This value is invalid.")
 _LOCATIONS = {"body", "query", "path", "header", "cookie"}
+
+
+def field_error(loc: tuple, pydantic_type: str) -> FieldError:
+    """One pydantic error as a details[] entry: the path without its location, a code from the set."""
+    code, message = _PYDANTIC_FIELD_ERRORS.get(pydantic_type, _FALLBACK_FIELD_ERROR)
+    return FieldError(field=_field_path(loc), code=code, message=message)
 
 
 def request_id_of(request: Request) -> str:
@@ -408,14 +433,7 @@ def register_exception_handlers(app: FastAPI) -> None:
         if any(_is_malformed(e) for e in errors):
             return error_response(request, MalformedRequestError())
 
-        fields = [
-            FieldError(
-                field=_field_path(e["loc"]),
-                code=e["type"],
-                message=_FIELD_MESSAGES.get(e["type"], _DEFAULT_FIELD_MESSAGE),
-            )
-            for e in errors
-        ]
+        fields = [field_error(e["loc"], e["type"]) for e in errors]
         return error_response(request, ValidationFailedError(fields=fields))
 
     @app.exception_handler(StarletteHTTPException)
@@ -460,7 +478,7 @@ class, there is no `data` key, and every error response sets `X-Request-Id` = `r
     "code": "VALIDATION_FAILED",
     "message": "Some fields are invalid.",
     "details": [
-      { "field": "name", "code": "missing", "message": "This field is required." },
+      { "field": "name", "code": "required", "message": "This field is required." },
       { "field": "email", "code": "invalid_format", "message": "Enter a valid email address." }
     ],
     "request_id": "b7e1c2…",
@@ -668,6 +686,7 @@ except Exception:
 - Internal error messages (500, 503) MUST NOT leak to clients — always return the generic message
 - No client-visible field ever contains `str(exc)`, `repr(exc)`, `exc.args`, a raw pydantic `msg`, SQL, a constraint name, a driver/upstream message, a path or a traceback — the cause goes to the log under `request_id`
 - Validation errors (400 `VALIDATION_FAILED`) carry `details[]` from a fixed catalog; pydantic/FastAPI request validation is 400 `VALIDATION_FAILED`, not FastAPI's default 422
+- `details[].code` is one of the closed set in `api/response-envelope.md`. Pydantic's error types (`missing`, `string_too_short`, `greater_than_equal`, ...) are mapped onto it by `_PYDANTIC_FIELD_ERRORS`; an unmapped type becomes `invalid_value`
 - Malformed bodies are 400 `MALFORMED_REQUEST`; business-rule rejections are 422 `BUSINESS_RULE_VIOLATION`
 - `register_exception_handlers` MUST replace FastAPI's default `RequestValidationError` and `HTTPException` handlers — their `{"detail": ...}` bodies never reach a client
 - Every error response sets `X-Request-Id` (= `error.request_id`) and carries `retryable`

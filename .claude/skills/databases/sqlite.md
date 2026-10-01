@@ -30,7 +30,7 @@ def db():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     yield engine
-    # connection closes, memory freed automatically
+    engine.dispose()  # closes the pooled connection; the in-memory database goes with it
 ```
 
 ## Migrations

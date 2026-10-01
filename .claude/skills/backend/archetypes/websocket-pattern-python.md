@@ -16,7 +16,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `websocket-pattern.md` (language-neutral). Read that first for concepts and contracts.
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, the ticket + WebSocket flow driven through TestClient and a real uvicorn server with a `websockets` 17.1 client (bad ticket → close 4001, cross-tenant room → FORBIDDEN), the Channels consumer run with WebsocketCommunicator, and RedisTicketStore run on Redis 7 (`run.sh --live`). FastAPI 0.142.2, uvicorn 0.54.0, channels 4.3.2, Django 6.1.1, redis 8.1.0.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): imported, type-checked, the ticket + WebSocket flow driven through TestClient and a real uvicorn server with a `websockets` 17.1 client (bad ticket → close 4001, cross-tenant room → FORBIDDEN, a foreign `Origin` refused before accept: HTTP 403 from uvicorn), the Channels application (`BrowserOriginValidator` + consumer) run with WebsocketCommunicator, and `RedisTicketStore` and `myapp/tickets.py` run on Redis 7 (`run.sh --live`: single use, racing redemptions, TTL and expiry, a real ticket through the Channels application). FastAPI 0.142.2, uvicorn 0.54.0, channels 4.3.2, Django 6.1.1, redis 8.1.0.
 
 Python WebSocket servers use FastAPI's built-in WebSocket support (backed by Starlette/uvicorn) or Django Channels for Django projects.
 
@@ -236,6 +236,7 @@ import uuid
 from fastapi import APIRouter, Depends, Query, WebSocket, WebSocketDisconnect
 import structlog
 
+from app.config import settings  # auth-middleware-python.md: ALLOWED_ORIGINS
 from app.ws.handlers import handle_message, send_error
 from app.ws.manager import Connection, manager
 from app.ws.tickets import TicketStore, get_ticket_store
@@ -246,6 +247,17 @@ router = APIRouter()
 MAX_MESSAGE_SIZE = 65536  # 64KB
 
 
+def origin_allowed(websocket: WebSocket) -> bool:
+    """
+    CORS doesn't apply to WebSockets: any page a user visits can open a socket to this server, and a
+    browser always says which page with the Origin header. Refuse pages not in ALLOWED_ORIGINS. A
+    handshake without Origin isn't from a browser (a mobile app, a service); the ticket still has to
+    authenticate it.
+    """
+    origin = websocket.headers.get("origin")
+    return origin is None or origin in settings.allowed_origins
+
+
 @router.websocket("/ws")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -253,6 +265,13 @@ async def websocket_endpoint(
     tickets: TicketStore = Depends(get_ticket_store),
 ) -> None:
     """WebSocket endpoint authenticated by a single-use ticket — never a bearer token in the URL."""
+
+    # 0. A foreign page: refuse the handshake itself (close before accept = HTTP 403). It isn't a client
+    #    of ours, so it gets no close code or reason, and nothing about the ticket is looked up.
+    if not origin_allowed(websocket):
+        logger.warning("ws.origin_refused", origin=websocket.headers.get("origin"))
+        await websocket.close(code=1008)
+        return
 
     # 1. Accept, then authenticate. A close BEFORE accept is a refused handshake (ASGI: HTTP 403), which
     #    browsers report only as 1006. After accept the client gets close code 4001 and a reason, and
@@ -390,6 +409,56 @@ async def send_error(conn: Connection, ref: str | None, code: str, message: str)
 
 ## Django Channels Alternative
 
+The same single-use tickets, in the same Redis, for a Django project. `issue_ticket()` is called by the
+authenticated POST view that hands the browser its ticket (the counterpart of `POST /api/v1/ws-tickets`);
+the consumer redeems it.
+
+```python
+# myapp/tickets.py
+
+import json
+import secrets
+from dataclasses import asdict, dataclass
+
+from django.conf import settings
+from redis.asyncio import Redis
+
+TICKET_TTL_SECONDS = 30
+
+
+@dataclass(frozen=True, slots=True)
+class TicketClaims:
+    """Who the ticket was issued to, copied from the authenticated request at issue time."""
+
+    user_id: str
+    tenant_id: str
+    roles: tuple[str, ...]
+
+
+def _redis() -> Redis:
+    # settings.REDIS_URL, from the environment. A client per call: issuing and redeeming happen once per
+    # connection, and a short-lived client never outlives the event loop it was made on. Share one client
+    # per process instead if connections open at a high rate.
+    return Redis.from_url(settings.REDIS_URL)
+
+
+async def issue_ticket(claims: TicketClaims) -> str:
+    ticket = secrets.token_urlsafe(32)
+    async with _redis() as redis:
+        await redis.set(f"ws-ticket:{ticket}", json.dumps(asdict(claims)), ex=TICKET_TTL_SECONDS)
+    return ticket
+
+
+async def redeem_ticket(ticket: str) -> TicketClaims | None:
+    """The ticket's claims, deleted in the same step; None when unknown, expired or already used."""
+    async with _redis() as redis:
+        raw = await redis.getdel(f"ws-ticket:{ticket}")  # GETDEL (Redis >= 6.2): atomic, single use
+    if raw is None:
+        return None
+    data = json.loads(raw)
+    return TicketClaims(user_id=data["user_id"], tenant_id=data["tenant_id"], roles=tuple(data["roles"]))
+```
+
 ```python
 # myapp/consumers.py
 
@@ -399,7 +468,7 @@ from urllib.parse import parse_qs
 
 from channels.generic.websocket import AsyncJsonWebsocketConsumer
 
-from myapp.tickets import redeem_ticket  # atomic GET+DELETE of a single-use ticket (as app/ws/tickets.py)
+from myapp.tickets import redeem_ticket
 
 logger = logging.getLogger(__name__)
 
@@ -472,6 +541,42 @@ websocket_urlpatterns = [
 ]
 ```
 
+```python
+# myapp/asgi.py
+
+import os
+from urllib.parse import ParseResult
+
+from channels.routing import ProtocolTypeRouter, URLRouter
+from channels.security.websocket import OriginValidator
+from django.core.asgi import get_asgi_application
+
+os.environ.setdefault("DJANGO_SETTINGS_MODULE", "myproject.settings")
+django_asgi_app = get_asgi_application()  # sets Django up: import consumers and settings after this
+
+from django.conf import settings  # noqa: E402
+
+from myapp.routing import websocket_urlpatterns  # noqa: E402
+
+
+class BrowserOriginValidator(OriginValidator):
+    """
+    Channels' OriginValidator refuses (HTTP 403, before the consumer runs) a handshake whose Origin isn't
+    in the list. It also refuses one with no Origin; that isn't a browser (a mobile app, a service), so
+    let it through to the ticket check, as app/ws/endpoint.py does.
+    """
+
+    def valid_origin(self, parsed_origin: ParseResult | None) -> bool:
+        return parsed_origin is None or super().valid_origin(parsed_origin)
+
+
+application = ProtocolTypeRouter({
+    "http": django_asgi_app,
+    # CORS doesn't cover WebSockets. settings.py: ALLOWED_ORIGINS = json.loads(os.environ["ALLOWED_ORIGINS"])
+    "websocket": BrowserOriginValidator(URLRouter(websocket_urlpatterns), settings.ALLOWED_ORIGINS),
+})
+```
+
 ## Heartbeat with Background Task
 
 ```python
@@ -499,7 +604,6 @@ async def heartbeat_loop(interval: float = 30.0) -> None:
 ```python
 # app/main.py
 
-import os
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -517,8 +621,11 @@ from app.ws.tickets import router as tickets_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    # Startup: the ticket store, in the Redis every replica shares (REDIS_URL from the environment)
-    redis = Redis.from_url(os.environ["REDIS_URL"])
+    # Startup: the ticket store, in the Redis every replica shares (REDIS_URL, auth-middleware-python.md's
+    # Settings): required, since a ticket issued by one replica is redeemed by another
+    if not settings.redis_url:
+        raise RuntimeError("REDIS_URL must be set: WebSocket tickets live in Redis")
+    redis = Redis.from_url(settings.redis_url)
     app.state.tickets = RedisTicketStore(redis)
     yield
     # Shutdown: manager cleanup happens via WebSocketDisconnect handlers
@@ -542,7 +649,8 @@ def create_app() -> FastAPI:
 
 ## Critical Rules
 
-- Authenticate the upgrade with a single-use ticket (`POST /api/v1/ws-tickets`, redeemed with an atomic GET+DELETE) — never a bearer token in the URL
+- Refuse a handshake whose `Origin` isn't in `ALLOWED_ORIGINS` (settings, never a literal list) before anything else: CORS doesn't apply to WebSockets. FastAPI: `origin_allowed()`; Channels: `BrowserOriginValidator` around the URL router. No `Origin` means not a browser: the ticket decides
+- Authenticate the upgrade with a single-use ticket (`POST /api/v1/ws-tickets`, redeemed with an atomic GET+DELETE) — never a bearer token in the URL. Channels uses the same Redis store (`myapp/tickets.py`)
 - On an auth failure, `accept()` then `close(code=4001)`: a close before accept is a refused handshake (HTTP 403 under ASGI), which browsers report only as 1006
 - Use `asyncio.Lock` for connection manager state — Python asyncio is single-threaded but needs lock for coroutine safety
 - Always wrap `send_json` in try/except — client may disconnect between check and send
