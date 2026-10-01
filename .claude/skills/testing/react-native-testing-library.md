@@ -1,6 +1,6 @@
 # React Native Testing Library (RNTL) — component and integration tier
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against react-native 0.87.1, RNTL 14.0.1 and msw 2.15.0; the Jest config, setup, providers and the 4-state, userEvent and accessibility tests ran (5 tests, Jest 29.7, @react-native/jest-preset 0.87.1); the navigation excerpt type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against react-native 0.87.1 and RNTL 14.0.1; both Jest setups ran (6 tests each, Jest 29.7, @react-native/jest-preset 0.87.1): msw 2.15.0 with its config and msw 3.0.1 with the Babel-plugin variant; the navigation excerpt type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 Jest + `@testing-library/react-native` for testing RN screens and components in Node, with no
 device. This is where most mobile coverage belongs. Strategy and tier map: `mobile-testing-strategy.md`.
@@ -29,9 +29,9 @@ module.exports = {
 ```
 
 Verified 2026-09-30 on RN 0.87.1, Jest 29.7 (what the RN 0.87 app template pins), RNTL 14.0.1 and msw 2.15.0:
-without those three settings `msw/node` is not found, then fails to parse. **Pin `msw@^2` for this tier:**
-MSW 3 is ESM-only and its interceptors use `import.meta`, which this CommonJS setup can't load (see "MSW for
-React Native" below). `@shopify/flash-list` v2 also ships untranspiled ESM, so it is in the pattern.
+without those three settings `msw/node` is not found, then fails to parse. MSW 3 works too, with two Babel
+plugins instead (the variant in "MSW for React Native" below).
+`@shopify/flash-list` v2 also ships untranspiled ESM, so it is in the pattern.
 
 ```tsx
 // test/providers.tsx — every screen test renders inside this. A fresh QueryClient per test; no retries (a
@@ -126,13 +126,44 @@ afterAll(() => server.close());
 ```
 
 Jest tests run in Node, so `msw/node` is the correct entry point for the component and integration
-tiers, with **`msw@^2`** and the three Jest settings in §Setup. MSW 3 (3.0.0, 2026-09-28) does not load
-under `@react-native/jest-preset`: it ships ESM only, and even with msw and its dependencies transformed,
-`@mswjs/interceptors` stops at `import.meta.url` (checked with msw 3.0.1 on 2026-09-30). The separate
-`msw/native` entry (in-app mocking, e.g. for demos) also exists only in 2.x; MSW 3 removed it.
-`onUnhandledRequest: 'error'` makes an un-mocked call fail the test instead of reaching a real server.
-When MSW 3 becomes loadable here, the option is named `onUnhandledFrame` (`testing/msw.md`), and the old
-key is ignored rather than rejected at run time, so rename it in the same change.
+tiers. `onUnhandledRequest: 'error'` makes an un-mocked call fail the test instead of reaching a real server.
+The separate `msw/native` entry (in-app mocking, e.g. for demos) exists only in 2.x; MSW 3 removed it.
+
+**Two working setups (both run 2026-09-30 on RN 0.87.1 / Jest 29.7 / RNTL 14.0.1, the same six tests):**
+- **`msw@^2`:** the three settings in §Setup and the files above.
+- **`msw@^3`:** MSW 3 ships ESM only; its interceptors use `import.meta` and static class blocks, which the
+  preset's Babel config doesn't transform. Two Babel plugins and msw's ESM packages in the transform list load
+  it (below). Speed was close: 6.8 s against 5.6 s for msw 2 with a cold Jest cache, about 2 s for both warm.
+  The option is `onUnhandledFrame` there: MSW 3 ignores `onUnhandledRequest` at run time (it only warns and lets
+  the request through), so rename it in the same change.
+
+Use the major the project's web tests already use (the web packs here are on MSW 3), so handlers and
+envelope helpers can be shared; with no web app, either works.
+
+```js
+// jest.config.js — MSW 3 variant. npm i -D msw@^3 babel-plugin-transform-import-meta@^2 @babel/plugin-transform-class-static-block
+// (babel-plugin-transform-import-meta 3.x needs Babel 8; the RN 0.87 template is on Babel 7)
+module.exports = {
+  preset: '@react-native/jest-preset',
+  setupFilesAfterEnv: ['./jest.setup.ts'],
+  transform: {
+    '^.+\\.(js|mjs|ts|tsx)$': ['babel-jest', {
+      plugins: ['@babel/plugin-transform-class-static-block', 'babel-plugin-transform-import-meta'],
+    }],
+  },
+  transformIgnorePatterns: [
+    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo|react-navigation|@react-navigation|@shopify/flash-list|msw|@mswjs|@msw|rettime|until-async|cookie|@open-draft)/)',
+  ],
+};
+```
+
+```ts
+// jest.setup.ts — MSW 3 variant (test/msw-server.ts is unchanged)
+import { server } from './test/msw-server';
+beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));   // MSW 3's name for onUnhandledRequest
+afterEach(() => server.resetHandlers());
+afterAll(() => server.close());
+```
 
 ## Navigation
 

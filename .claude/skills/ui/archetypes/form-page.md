@@ -17,13 +17,13 @@ div.space-y-6
 │   │   ├── CardTitle → "User Information"
 │   │   └── CardDescription → "Basic profile details."
 │   └── CardContent
-│       └── Form (react-hook-form + zodResolver)
-│           └── form.space-y-6
+│       └── useForm (react-hook-form + zodResolver), each field a Controller
+│           └── form > FieldGroup
 │               ├── div.grid.gap-6.sm:grid-cols-2
-│               │   ├── FormField(name) > FormItem > FormLabel + Input + FormMessage
-│               │   └── FormField(email) > FormItem > FormLabel + Input(type=email) + FormMessage
-│               ├── FormField(role) > FormItem > FormLabel + Select + FormMessage
-│               ├── FormField(bio) > FormItem > FormLabel + Textarea + FormDescription + FormMessage
+│               │   ├── Field(name) > FieldLabel + Input + FieldError
+│               │   └── Field(email) > FieldLabel + Input(type=email) + FieldError
+│               ├── Field(role) > FieldLabel + Select + FieldError
+│               ├── Field(bio) > FieldLabel + Textarea + FieldDescription + FieldError
 │               └── div.flex.gap-4.justify-end
 │                   ├── Button(outline, type=button) → "Cancel" → navigate back
 │                   └── Button(type=submit, disabled=isSubmitting)
@@ -88,7 +88,7 @@ async function onSubmit(data: CreateUserInput) {
 - "Failed to load user data" + Retry button
 
 ### Validation Errors (inline)
-- `<FormMessage />` below each invalid field (red text, auto aria-describedby)
+- `<FieldError />` below each invalid field (red text, `role="alert"`; the control gets `aria-invalid`)
 - Submit button stays enabled — shows errors on attempt
 - Server 400 `VALIDATION_FAILED` `details[]` mapped to fields via `form.setError()` (`mapServerErrors`, ui/error-handling-patterns.md)
 

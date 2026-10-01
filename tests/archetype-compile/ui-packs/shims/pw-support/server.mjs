@@ -8,9 +8,12 @@ import { randomUUID } from "node:crypto";
 const port = Number(process.argv[2] ?? 4173);
 const sessions = new Set();
 const notes = [];
-const users = new Map([["alice@example.com", "password123"]]);
-if (process.env.E2E_ADMIN_EMAIL) users.set(process.env.E2E_ADMIN_EMAIL, process.env.E2E_ADMIN_PASSWORD ?? "");
-const persona = (email) => /^([a-z]+)@example\.com$/.exec(email)?.[1];
+// The seeded test users: the harness plays the seed step and exports their credentials (a fresh password per run).
+const users = new Map();
+for (const who of ["BUYER", "ADMIN"]) {
+  const email = process.env[`E2E_${who}_EMAIL`], password = process.env[`E2E_${who}_PASSWORD`];
+  if (email && password) users.set(email, password);
+}
 
 const page = (title, body) => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><title>${title}</title><script src="/app.js" defer></script></head>
@@ -77,7 +80,7 @@ createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { status: "ok" }, { "Content-Type": "application/json" });
   if (req.method === "POST" && url.pathname === "/api/v1/auth/login") {
     const { email = "", password = "" } = await readJson(req);
-    const ok = users.get(email) === password || (persona(email) && password === `${persona(email)}-pass-1`);
+    const ok = users.has(email) && users.get(email) === password;
     if (!ok) return error(res, 401, "UNAUTHENTICATED", "Invalid credentials");
     const sid = randomUUID();
     sessions.add(sid);

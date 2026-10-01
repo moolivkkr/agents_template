@@ -19,6 +19,7 @@ SCOPE = [
     "testing/msw.md", "testing/playwright.md", "testing/react-native-testing-library.md", "testing/detox.md",
     "testing/appium-mobile.md", "testing/mobile-testing-strategy.md", "testing/test-case-generation.md",
     "testing/test-case-traceability.md",
+    "../agents/templates/ui_developer.tmpl",   # its React 4-states example is what ui_developer copies first
 ]
 
 # Expected number of TS/JS blocks per file. A mismatch fails the run: a block was added or removed, so the
@@ -49,12 +50,13 @@ FILES = {
     "ui/vertix-portal-design-system.md": 2,
     "testing/msw.md": 7,
     "testing/playwright.md": 9,
-    "testing/react-native-testing-library.md": 7,
+    "testing/react-native-testing-library.md": 9,
     "testing/detox.md": 2,
     "testing/appium-mobile.md": 2,
     "testing/mobile-testing-strategy.md": 0,
     "testing/test-case-generation.md": 0,
     "testing/test-case-traceability.md": 1,
+    "../agents/templates/ui_developer.tmpl": 1,
 }
 
 SKIP = {
@@ -107,8 +109,9 @@ SHADCN = {
     **named("@/components/ui/button", "Button", "buttonVariants"),
     **named("@/components/ui/input", "Input"),
     **named("@/components/ui/label", "Label"),
-    **named("@/components/ui/form", "Form", "FormControl", "FormDescription", "FormField", "FormItem", "FormLabel",
-            "FormMessage"),
+    **named("@/components/ui/field", "Field", "FieldLabel", "FieldDescription", "FieldError", "FieldGroup", "FieldSet",
+            "FieldLegend", "FieldContent", "FieldTitle", "FieldSeparator"),
+    **named("@/components/ui/separator", "Separator"),
     **named("@/components/ui/select", "Select", "SelectContent", "SelectItem", "SelectTrigger", "SelectValue"),
     **named("@/components/ui/card", "Card", "CardHeader", "CardTitle", "CardDescription", "CardContent", "CardFooter"),
     **named("@/components/ui/badge", "Badge"),
@@ -154,6 +157,41 @@ def frag(path, wrap="jsx", prelude="", **kw):
 def shadcn_unit(name, refs, place, **kw):
     return {"name": name, "project": "web", "blocks": ["tailwind#1", *refs], "place": {"tailwind#1": UTILS, **place},
             "shims": ["shadcn"], "external": [envelope()], "auto": WEB, **kw}
+
+
+def rn_unit(variant):
+    """react-native-testing-library.md's two setups. msw2 (project rn/): its default Jest config + jest.setup.ts.
+    msw3 (project rn-msw3/): its MSW 3 variant config + setup. The same screen, providers and tests run in both, plus a
+    probe that an un-mocked request is rejected (the option name each major reads)."""
+    rntl = "react-native-testing-library"
+    msw3 = variant == "msw3"
+    own = [6, 7] if msw3 else [1, 5, 8]          # the config/setup blocks of this variant (+ the type-only navigation)
+    blocks = ["react-native-app-patterns#1", *[f"{rntl}#{n}" for n in sorted({2, 3, 4, 5, 9, *own})], "msw#1"]
+    place = {
+        "react-native-app-patterns#1": {"path": "screens/OrdersScreen.tsx"},
+        f"{rntl}#3": {"path": "screens/OrdersScreen.test.tsx"},
+        # one block, two files (its `// jest.setup.ts` line starts the second); the MSW 3 setup replaces the second
+        f"{rntl}#5": [{"path": "test/msw-server.ts", "until": "// jest.setup.ts"},
+                      *([] if msw3 else [{"path": "jest.setup.ts", "from": "// jest.setup.ts"}])],
+        f"{rntl}#4": frag("screens/LoginScreen.test.tsx", wrap="custom",
+                          open='test("harness: the userEvent excerpt, on a stub LoginScreen", async () => {', close="});"),
+        f"{rntl}#9": frag("screens/SaveOrder.test.tsx", wrap="custom",
+                          open='test("harness: the accessibility excerpt, on a stub button", async () => {\n'
+                               "  await render(<SaveOrderButton />);", close="});"),
+        "msw#1": {"path": "test/envelope.ts"},
+    }
+    if not msw3:
+        place[f"{rntl}#8"] = frag("samples/navigation.tsx", wrap="async",
+                                  prelude="declare const user: ReturnType<typeof userEvent.setup>;")
+    return {"name": "react-native-msw3" if msw3 else "react-native", "project": "rn-msw3" if msw3 else "rn",
+            "blocks": blocks, "external": [envelope("api/types.ts")], "shims": ["rn-app", "rn-probes"],
+            "auto": {**named("@testing-library/react-native", "render", "screen", "userEvent", "fireEvent", "act"),
+                     **named("@shopify/flash-list", "FlashList"), **named("@react-navigation/native", "NavigationContainer"),
+                     **named("./orders-parts", "useOrders", "OrdersSkeleton", "ErrorState", "EmptyState", "OrderRow"),
+                     **named("./other-screens", "LoginScreen", "SaveOrderButton"),
+                     **named("../screens/other-screens", "RootStack")},
+            "jest": ["screens"], "place": place,
+            "executed_blocks": [b for b in blocks if b != f"{rntl}#8"]}
 
 
 USER = 'import type { User } from "@/types/api";'
@@ -217,7 +255,7 @@ declare function handleSubmit(e: FormEvent<HTMLFormElement>): void;"""),
 declare const payload: { name: string };
 declare function saveData(p: { name: string }): Promise<void>;"""),
         "shadcn#15": frag("src/samples/card.tsx"),
-    }),
+    }, shims=["shadcn", "probes-shadcn"], vitest=["src/probes"], executed_blocks=["tailwind#1", "shadcn#3"]),
     shadcn_unit("accessibility-patterns", [f"accessibility-patterns#{n}" for n in (1, 2, 3, 4, 6)], {
         "accessibility-patterns#1": frag("src/samples/icon-buttons.tsx"),
         "accessibility-patterns#2": frag("src/samples/form-inputs.tsx"),
@@ -278,6 +316,21 @@ declare function ResourceCard(props: { item: Resource }): React.JSX.Element;"""}
 declare const title: string;
 declare const subtitle: string;"""),
         "professional-ui-standards#5": frag("src/samples/page-layout.tsx"),
+    }, shims=["shadcn", "app-queries"], remap=REMAP),
+    # The 4-states example in .claude/agents/templates/ui_developer.tmpl, over the real api-client and the same
+    # app-level resourceQueries (an infinite query of envelope pages) the pack examples use.
+    shadcn_unit("ui-developer-template", ["api-integration-patterns#1", "ui_developer#1"], {
+        "ui_developer#1": {"path": "src/components/resource-list.tsx", "auto": {**WEB, **named("@/lib/api-client", "ApiError")},
+                           "prelude": """
+import { resourceQueries } from "@/lib/queries/resources";
+import type { LucideIcon } from "lucide-react";
+import type { Resource } from "@/types/api";
+declare function t(key: string): string;
+declare function handleCreate(): void;
+declare function ResourceListSkeleton(): React.JSX.Element;
+declare function ErrorState(props: { message: string; requestId?: string; onRetry: () => void }): React.JSX.Element;
+declare function EmptyState(props: { icon: LucideIcon; title: string; description: string; action: { label: string; onClick: () => void } }): React.JSX.Element;
+declare function ResourceCard(props: { item: Resource }): React.JSX.Element;"""},
     }, shims=["shadcn", "app-queries"], remap=REMAP),
     shadcn_unit("loading-states", ["api-integration-patterns#1", "api-integration-patterns#4",
                                    *[f"loading-states#{n}" for n in (1, 2, 4, 5)]], {
@@ -360,22 +413,28 @@ declare function CursorPager(props: { hasMore: boolean; onNext: () => void; onFi
         "error-handling-patterns#3": frag("src/samples/mutation-toast.ts", wrap="function", prelude="""
 import { api } from "@/lib/api-client";
 declare const queryClient: QueryClient;"""),
-        "error-handling-patterns#4": frag("src/samples/server-validation.tsx", wrap="function", prelude="""
+        # the submit handler and the optimistic delete become hooks (form / mutation / queryClient are the
+        # component's), so src/probes/error-handling.test.tsx can drive them against MSW
+        "error-handling-patterns#4": frag("src/samples/server-validation.tsx", wrap="custom", prelude="""
 import type { UseMutationResult } from "@tanstack/react-query";
-import type { ApiSuccess, CreateUserRequest, User } from "@/types/api";
-declare const form: UseFormReturn<CreateUserRequest>;
-declare const createUser: UseMutationResult<ApiSuccess<User>, Error, { input: CreateUserRequest; idempotencyKey: string }>;"""),
-        "error-handling-patterns#5": frag("src/samples/optimistic-delete.ts", wrap="function", prelude="""
+import type { ApiSuccess, CreateUserRequest, User } from "@/types/api";""",
+            open="export function useCreateUserSubmit(\n  form: UseFormReturn<CreateUserRequest>,\n"
+                 "  createUser: UseMutationResult<ApiSuccess<User>, Error, { input: CreateUserRequest; idempotencyKey: string }>,\n) {",
+            close="  return { onSubmit };\n}"),
+        "error-handling-patterns#5": frag("src/samples/optimistic-delete.ts", wrap="custom", prelude="""
 import { api } from "@/lib/api-client";
-import type { ApiSuccess, User } from "@/types/api";
-declare const queryClient: QueryClient;"""),
+import type { ApiSuccess, User } from "@/types/api";""",
+            open="export function useDeleteUser() {\n  const queryClient = useQueryClient();", close="  return deleteUser;\n}"),
         "error-handling-patterns#6": frag("src/samples/toasts.ts", wrap="function", prelude="""
 declare function retry(): void;
 declare function saveData(p: { name: string }): Promise<void>;
 declare const payload: { name: string };
 declare function deleteItem(id: string): void;
 declare const id: string;"""),
-    }, remap=REMAP, auto={**WEB, **named("react-hook-form", "UseFormReturn")}),
+    }, remap=REMAP, auto={**WEB, **named("react-hook-form", "UseFormReturn")}, shims=["shadcn", "probes-errors"],
+       vitest=["src/probes"], vitest_setup=["./src/probes/setup.ts"],
+       executed_blocks=["api-integration-patterns#1", "api-integration-patterns#4", "error-handling-patterns#4",
+                        "error-handling-patterns#5"]),
     shadcn_unit("form-patterns", ["api-integration-patterns#1", "api-integration-patterns#4", "form-validation-protocol#2",
                                   "form-validation-protocol#3", *[f"form-patterns#{n}" for n in range(1, 4)]], {
         "form-validation-protocol#2": {"path": "src/lib/validations/user.ts"},
@@ -386,7 +445,9 @@ declare const id: string;"""),
 import { userQueries } from "@/lib/queries/users";
 import { updateUserSchema, type UpdateUserInput } from "@/lib/validations/user";
 declare function FormSkeleton(props: { fields: number }): React.JSX.Element;"""},
-    }, remap=REMAP),
+    }, remap=REMAP, shims=["shadcn", "probes-forms"], vitest=["src/probes"], vitest_setup=["./src/probes/setup.ts"],
+       executed_blocks=["tailwind#1", "api-integration-patterns#1", "form-validation-protocol#2", "form-patterns#1",
+                        "form-patterns#2"]),
     {"name": "form-validation-protocol", "project": "web", "remap": REMAP, "external": [envelope()],
      "blocks": ["api-integration-patterns#1", *[f"form-validation-protocol#{n}" for n in range(1, 12)]],
      "auto": {**WEB, **named("@/lib/api-client", "ApiError", "api")}, "place": {
@@ -454,6 +515,23 @@ declare const api: { getUser(id: string): Promise<import("@/types/api").ApiSucce
         "nextjs#3": {"path": "src/app/(dashboard)/users/actions.ts"},
         "form-validation-protocol#2": {"path": "src/lib/validations/user.ts"},
      }},
+    # The Tailwind CSS v4 token CSS: ui/tailwind.md's generated globals.css + its app tokens + ui/shadcn.md's
+    # overrides (```css blocks, extracted by their first line) become app/globals.css of a Next.js app built with
+    # @tailwindcss/postcss; Playwright (system Chrome) then reads computed styles of every token utility, in light
+    # and dark, and runs axe color-contrast on component-composition.md's Alert variants.
+    {"name": "shadcn-theme", "project": "web", "next_build": True,
+     "blocks": ["tailwind#1", "component-composition#2"],
+     "place": {"tailwind#1": UTILS, "component-composition#2": {"path": "src/components/common/alert.tsx", "auto": WEB}},
+     "external": [
+        envelope(),
+        {"doc": "ui/tailwind.md", "langs": ["css"], "prefix": "/* app/globals.css — written by", "path": "src/app/globals.css"},
+        {"doc": "ui/tailwind.md", "langs": ["css"], "prefix": "/* app/globals.css (continued)", "path": "src/app/globals.css"},
+        {"doc": "ui/shadcn.md", "langs": ["css"], "prefix": "/* app/globals.css — overrides", "path": "src/app/globals.css",
+         "append": "/* HARNESS: .units/ is git-ignored, and Tailwind's automatic source detection skips ignored files */\n"
+                   '@source "../";'},
+     ],
+     "shims": ["shadcn", "theme-app"], "compilerOptions": {"types": ["node"]},
+     "playwright": {"config": "playwright.config.ts", "server": ["{bin}/next", "start", "-p", "{port}", "-H", "localhost"]}},
     # testing/msw.md + the UI test in test-case-traceability.md: the mocks, server and setup files are the pack's
     # own; the screens they render (UserList, CreateUserForm, OrderList) and the fixtures are app-level stubs.
     {"name": "msw", "project": "web", "blocks": [*[f"msw#{n}" for n in range(1, 8)], "test-case-traceability#1"],
@@ -481,7 +559,10 @@ declare const api: { getUser(id: string): Promise<import("@/types/api").ApiSucce
      "auto": {**named("@playwright/test", "test", "expect"), "Page": ("@playwright/test", "type"),
               **named("./support", "signIn", "persona", "SESSION_COOKIE", "createNoteViaApi")},
      "playwright": {"config": "playwright.harness.config.ts", "server": "server.mjs",
-                    "env": {"E2E_ADMIN_EMAIL": "admin@example.com", "E2E_ADMIN_PASSWORD": "admin-pass-1"}},
+                    # the seeded test users; "{random}" = a fresh password per run (nothing to commit or leak)
+                    "env": {"E2E_BUYER_EMAIL": "buyer@example.com", "E2E_BUYER_PASSWORD": "{random}",
+                            "E2E_ADMIN_EMAIL": "admin@example.com", "E2E_ADMIN_PASSWORD": "{random}"},
+                    "junit": True},
      "executed_blocks": [f"playwright#{n}" for n in (1, 2, 4, 5, 7, 8, 9)],
      "place": {
         "playwright#3": frag("e2e/samples/locators.ts", wrap="function", prelude="declare const page: Page;"),
@@ -496,33 +577,7 @@ declare const api: { getUser(id: string): Promise<import("@/types/api").ApiSucce
     # React Native: react-native-app-patterns.md's OrdersScreen + react-native-testing-library.md's Jest config,
     # MSW server/setup and tests, run with Jest on @react-native/jest-preset (RN 0.87). msw.md's envelope helpers
     # are the typed helpers the RNTL tests import. The screen's hook/components and LoginScreen are app-level stubs.
-    {"name": "react-native", "project": "rn",
-     "blocks": ["react-native-app-patterns#1", *[f"react-native-testing-library#{n}" for n in range(1, 8)], "msw#1"],
-     "external": [envelope("api/types.ts")], "shims": ["rn-app"],
-     "auto": {**named("@testing-library/react-native", "render", "screen", "userEvent", "fireEvent", "act"),
-              **named("@shopify/flash-list", "FlashList"), **named("@react-navigation/native", "NavigationContainer"),
-              **named("./orders-parts", "useOrders", "OrdersSkeleton", "ErrorState", "EmptyState", "OrderRow"),
-              **named("./other-screens", "LoginScreen", "SaveOrderButton"),
-              **named("../screens/other-screens", "RootStack")},
-     "jest": ["screens"],
-     "executed_blocks": ["react-native-app-patterns#1", *[f"react-native-testing-library#{n}" for n in (1, 2, 3, 4, 5, 7)], "msw#1"],
-     "place": {
-        "react-native-app-patterns#1": {"path": "screens/OrdersScreen.tsx"},
-        "react-native-testing-library#3": {"path": "screens/OrdersScreen.test.tsx"},
-        # one block, two files (its `// jest.setup.ts` line starts the second)
-        "react-native-testing-library#5": [{"path": "test/msw-server.ts", "until": "// jest.setup.ts"},
-                                           {"path": "jest.setup.ts", "from": "// jest.setup.ts"}],
-        "react-native-testing-library#4": frag("screens/LoginScreen.test.tsx", wrap="custom",
-                                               open='test("harness: the userEvent excerpt, on a stub LoginScreen", async () => {',
-                                               close="});"),
-        "react-native-testing-library#6": frag("samples/navigation.tsx", wrap="async",
-                                               prelude="declare const user: ReturnType<typeof userEvent.setup>;"),
-        "react-native-testing-library#7": frag("screens/SaveOrder.test.tsx", wrap="custom",
-                                               open='test("harness: the accessibility excerpt, on a stub button", async () => {\n'
-                                                    "  await render(<SaveOrderButton />);",
-                                               close="});"),
-        "msw#1": {"path": "test/envelope.ts"},
-     }},
+    *[rn_unit(variant) for variant in ("msw2", "msw3")],
     # Device tiers: TYPE-CHECK ONLY (no simulator, emulator, Detox server or Appium server is started).
     {"name": "detox", "project": "device", "blocks": ["detox#1", "detox#2"],
      "compilerOptions": {"types": ["detox", "jest", "node"], "lib": ["es2023"]}},

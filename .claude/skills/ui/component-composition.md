@@ -12,7 +12,7 @@ tags:
 
 # Component Composition Patterns — shadcn/ui + React
 
-> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, class-variance-authority 0.7 and shadcn/ui component stubs on radix-ui 1.6; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, class-variance-authority 0.7 and shadcn/ui component stubs on radix-ui 1.6; the Alert also rendered in the Tailwind v4 theme probe (`next build` + Playwright on Chrome: token colors and axe WCAG 2 AA contrast, light and dark) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
 
 ## Component Hierarchy (Atomic Design for shadcn)
 
@@ -21,7 +21,7 @@ Primitives (from shadcn/ui — don't rebuild):
   Button, Input, Badge, Avatar, Skeleton, Separator, Label
 
 Molecules (compose primitives):
-  SearchInput, FormField, UserAvatar, StatusBadge, EmptyState
+  SearchInput, Field (label + control + error), UserAvatar, StatusBadge, EmptyState
 
 Organisms (compose molecules):
   DataTable, UserCard, NavigationMenu, CreateUserForm
@@ -75,9 +75,13 @@ const alertVariants = cva(
     variants: {
       variant: {
         default: "bg-background text-foreground",
-        destructive: "border-destructive/50 text-destructive bg-destructive/10",
-        warning: "border-yellow-500/50 text-yellow-700 bg-yellow-50",
-        success: "border-green-500/50 text-green-700 bg-green-50",
+        // Semantic tokens only, never palette colors: --warning / --success are app tokens (tailwind.md
+        // §Dark Mode), so every variant follows the theme and dark mode. Colored text sits on bg-card, as in
+        // shadcn's own Alert: on a 10% tint of its own color it drops under 4.5:1 (axe measured 4.0 for
+        // destructive and 4.37 for warning)
+        destructive: "border-destructive/50 bg-card text-destructive",
+        warning: "border-warning/50 bg-card text-warning",
+        success: "border-success/50 bg-card text-success",
       },
     },
     defaultVariants: { variant: "default" },
@@ -94,7 +98,7 @@ export function Alert({ title, description, variant, className }: AlertProps) {
   return (
     <div className={cn(alertVariants({ variant }), className)} role="alert">
       <h5 className="mb-1 font-medium leading-none tracking-tight">{title}</h5>
-      {description && <p className="text-sm opacity-80">{description}</p>}
+      {description && <p className="text-sm">{description}</p>}{/* no opacity-80: it cost contrast */}
     </div>
   );
 }

@@ -81,7 +81,7 @@ emulators. Hand those flows over complete and runnable, not as sketches.
 | RN version | {{RN_VERSION}} |
 | Component tier | Jest + @testing-library/react-native |
 | Device tier | {{MOBILE_E2E_TOOL}} |
-| API mocking | MSW v2 (`msw@^2`, `msw/node` in Jest; MSW 3 does not load under `@react-native/jest-preset`) |
+| API mocking | MSW (`msw/node` in Jest): the major the web tests use, set up per `react-native-testing-library.md` (msw@^3 needs two Babel plugins, msw@^2 three Jest settings) |
 | Platforms | iOS ≥ {{MIN_IOS}}, Android API ≥ {{MIN_ANDROID_API}} |
 
 ## Shortcuts that look safe here, and why they aren't
@@ -116,7 +116,7 @@ emulators. Hand those flows over complete and runnable, not as sketches.
 **STOP CONDITIONS**
 - `api-contracts.md` missing, or no generated contract types to type mocks with → write no integration-tier tests; report `⛔ Blocked: no contract types — cannot build typed mocks.`
 - A mobile TC-M* ID targets a screen element with no testID and no accessible name → do not invent a selector. Record the TC as `BLOCKED: element not addressable` and list it for the developer.
-- `msw` ≥ 3 in `package.json` → report it: MSW 3 is ESM-only and does not load under `@react-native/jest-preset` (Jest-tier `msw/node` fails to import), and it removed the in-app `msw/native` entry. The RN tiers pin `msw@^2` (`react-native-testing-library.md` §Setup).
+- `msw` in `package.json` but the Jest config lacks the settings its major needs (`react-native-testing-library.md`: msw@^3 → the import-meta and static-block Babel plugins; msw@^2 → `customExportConditions` with `node`) → report it: without them `msw/node` fails to import, so no component test can run. `msw/native` (in-app mocking) exists only in msw@^2.
 
 ---
 
