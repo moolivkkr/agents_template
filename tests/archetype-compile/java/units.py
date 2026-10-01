@@ -123,7 +123,7 @@ JAVA_BLOCKS = {
     "migration-pattern-java.md": 3,
     "observability-java.md": 17,
     "performance-java.md": 26,
-    "websocket-pattern-java.md": 7,
+    "websocket-pattern-java.md": 11,
     "worker-pattern-java.md": 8,
 }
 
@@ -431,8 +431,8 @@ UNITS = [
     Unit("performance-java", own=[b for b in rng(PERF, 1, 26) if b != f"{PERF}#18"], deps=EXCEPTIONS,
          stubs=("performance",)),
     Unit("performance-java-preview", own=ids(PERF, 18), stubs=("performance",), pom_extra=PREVIEW_POM),
-    Unit("websocket-pattern-java", own=rng("websocket-pattern-java.md", 1, 7), deps=ids(AUTH, 3),
-         stubs=("websocket",)),
+    Unit("websocket-pattern-java", own=rng("websocket-pattern-java.md", 1, 11),
+         deps=EXCEPTIONS + ENVELOPE + ids(AUTH, 3) + [(f"{EH}#3", File(only=("ErrorBody", "ApiError")))]),
     Unit("worker-pattern-java", own=rng("worker-pattern-java.md", 1, 8), stubs=("worker",)),
     Unit("grpc-pattern-java", own=rng(GRPC, 1, 7), deps=EXCEPTIONS + ENTITY + DTO + ENVELOPE + SERVICE_API,
          stubs=("grpc",), pom_extra=GRPC_POM, protos=PROTOS),

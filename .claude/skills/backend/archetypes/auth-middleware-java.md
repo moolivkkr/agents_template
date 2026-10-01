@@ -74,6 +74,8 @@ public class SecurityConfig {
                 .requestMatchers("/actuator/health", "/actuator/info").permitAll()
                 .requestMatchers("/api/v1/auth/login", "/api/v1/auth/register").permitAll()
                 .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
+                // WebSocket upgrade: authenticated by its single-use ticket (websocket-pattern-java.md), not a JWT
+                .requestMatchers("/ws").permitAll()
 
                 // Admin-only endpoints
                 .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
