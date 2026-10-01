@@ -28,6 +28,8 @@
 #                             test/lint/typecheck and blocks on non-zero (real execution, not self-
 #                             report). Only on an explicit-phase gate; advisory-skip when unconfigured.
 #   (c)  no dangling failure — no "failed" status without a LATER "completed" for the same agent.
+#   (f)  no pending debate   — every blocking debate request for the phase has a valid verdict that
+#                             reached docs/DECISIONS.md, or is auto-resolved/withdrawn (debate-status.py).
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
 #
@@ -57,6 +59,7 @@ exec 1>&2
 # 0. Locate the project root so this works regardless of the caller's cwd.
 #    Claude Code sets CLAUDE_PROJECT_DIR for hooks; fall back to git, then cwd.
 # ---------------------------------------------------------------------------
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"   # sibling tools (debate-status.py)
 PROJECT_DIR="${CLAUDE_PROJECT_DIR:-}"
 if [ -z "$PROJECT_DIR" ]; then
   PROJECT_DIR="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
@@ -473,6 +476,31 @@ done
 # Evidence can only be bound to committed code (explicit-phase gate).
 if [ "$CODE_DIRTY" = "true" ]; then
   fail "uncommitted code changes (${DIRTY_PATHS}) — commit them (untracked build/test output belongs in .gitignore or agent_state/), re-run the final verification (Wave 5v), then gate; evidence can't describe uncommitted code."
+fi
+
+# ---------------------------------------------------------------------------
+# 5a. Check (f): no pending debate. A blocking decision escalated to the debate team must have a valid
+#     verdict (or be auto-resolved in agent_state/debates/unresolved.json, or withdrawn with a reason)
+#     before the phase gates, and a verdict must reach docs/DECISIONS.md. debate-status.py is the only
+#     reader of agent_state/debates/ (the gate used to glob a name the protocol never wrote — review
+#     2026-09-30, D1/D2). A pending debate is a finding: gate.forced can override it.
+# ---------------------------------------------------------------------------
+echo "── (f) no pending debate ──"
+DEBATE_STATUS="${HOOK_DIR:-.claude/hooks}/debate-status.py"
+[ -f "$DEBATE_STATUS" ] || DEBATE_STATUS=".claude/hooks/debate-status.py"
+if ! ls agent_state/debates/*.json >/dev/null 2>&1; then
+  ok "no debates recorded"
+elif [ ! -f "$DEBATE_STATUS" ] || ! command -v python3 >/dev/null 2>&1; then
+  fail "agent_state/debates/ has debates but debate-status.py (or python3) is unavailable — can't tell whether one is pending (copy it from ~/.claude/hooks/startup/)."
+else
+  DEBATE_OUT="$(python3 "$DEBATE_STATUS" --root "$PWD" --phase "$PHASE" --check 2>&1)"; DEBATE_RC=$?
+  printf '%s\n' "$DEBATE_OUT" | grep -v '^BLOCKING: ' | sed 's/^/    /'
+  if [ "$DEBATE_RC" -eq 0 ]; then
+    ok "every blocking debate for phase $PHASE has a verdict (or is auto-resolved/withdrawn)"
+  else
+    while IFS= read -r b; do [ -n "$b" ] && fail "${b#BLOCKING: }"; done < <(printf '%s\n' "$DEBATE_OUT" | grep '^BLOCKING: ')
+    [ "$DEBATE_RC" -ne 2 ] && fail "debate-status.py failed (exit $DEBATE_RC)"
+  fi
 fi
 
 # ---------------------------------------------------------------------------

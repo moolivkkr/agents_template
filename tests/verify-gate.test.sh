@@ -327,6 +327,41 @@ echo '{"gate":{"passed":true}}' > "$D/agent_state/phases/1/manifest.json"
 echo '{"phase":1,"blockers":[{"x":1}],"user_rationale":"r","security_acknowledged":[{"finding":"IDOR","approved_by":"owner","reason":"flagged off"}]}' > "$D/agent_state/phases/1/gate.forced"
 LAST_OUT="$(run_hook "$D" 1)"; check "one acknowledgement cannot force a BLOCKING:3 security report" 2 "$?" "3 security finding"
 
+# (f) no pending debate (review 2026-09-30, D1/D2): the gate reads debates through debate-status.py
+debate_req() {  # debate_req <fixture> <topic> <phase|null> [extra-json-fields]
+  mkdir -p "$1/agent_state/debates"
+  printf '{"schema":"sdlc.debate-request/v1","type":"debate_request","topic":"%s","phase":%s,"from_agent":"backend_developer","decision":"pick one","options":[{"id":"A","label":"a"},{"id":"B","label":"b"}],"impact":"HIGH","domain":"architecture","blocking":true%s}\n' "$2" "$3" "${4:-}" > "$1/agent_state/debates/$2.request.json"
+}
+debate_verdict() {  # debate_verdict <fixture> <topic> <option> [promote:yes|no]
+  printf '{"schema":"sdlc.debate-verdict/v1","topic":"%s","phase":1,"status":"RESOLVED","verdict":"%s","verdict_label":"x","confidence":"HIGH","scores":{"A":{"total":7},"B":{"total":5}},"rationale":"r","decisive_factor":"brd","decision_id":"D-001"}\n' "$2" "$3" > "$1/agent_state/debates/$2.verdict.json"
+  if [ "${4:-yes}" = yes ]; then mkdir -p "$1/docs"; printf '# Decisions\n\n### D-001 — %s\n- link: agent_state/debates/%s.verdict.json\n' "$2" "$2" > "$1/docs/DECISIONS.md"; fi
+}
+D=$(new_phase debate_pending); full_phase "$D"; debate_req "$D" cache_strategy 1
+LAST_OUT="$(run_hook "$D" 1)"; check "pending blocking debate BLOCKs the gate (named)" 2 "$?" "debate 'cache_strategy' is pending"
+D=$(new_phase debate_resolved); full_phase "$D"; debate_req "$D" cache_strategy 1; debate_verdict "$D" cache_strategy A
+LAST_OUT="$(run_hook "$D" 1)"; check "debate with a promoted verdict PASSes" 0 "$?"
+D=$(new_phase debate_unpromoted); full_phase "$D"; debate_req "$D" cache_strategy 1; debate_verdict "$D" cache_strategy A no
+LAST_OUT="$(run_hook "$D" 1)"; check "verdict never promoted to DECISIONS.md BLOCKs" 2 "$?" "never promoted"
+D=$(new_phase debate_bad_option); full_phase "$D"; debate_req "$D" cache_strategy 1; debate_verdict "$D" cache_strategy C
+LAST_OUT="$(run_hook "$D" 1)"; check "verdict for an option the request never offered BLOCKs" 2 "$?" "not one of the requested options"
+D=$(new_phase debate_other_phase); full_phase "$D"; debate_req "$D" later_choice 2
+LAST_OUT="$(run_hook "$D" 1)"; check "another phase's pending debate does not block this gate" 0 "$?"
+D=$(new_phase debate_no_phase); full_phase "$D"; debate_req "$D" orphan_choice null
+LAST_OUT="$(run_hook "$D" 1)"; check "pending debate with no phase field still BLOCKs" 2 "$?" "orphan_choice"
+D=$(new_phase debate_auto); full_phase "$D"; debate_req "$D" log_format 1
+echo '{"phase":1,"decisions":[{"topic":"log_format","auto_resolved_with":"A","confidence":"LOW","reason":"escalation_limit_exceeded","needs_review":true}]}' > "$D/agent_state/debates/unresolved.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "debate auto-resolved in unresolved.json PASSes (flagged for review)" 0 "$?" "auto-resolved with a default"
+D=$(new_phase debate_nonblocking); full_phase "$D"; debate_req "$D" nice_to_have 1 ',"blocking":false'
+LAST_OUT="$(run_hook "$D" 1)"; check "non-blocking pending debate does not block" 0 "$?"
+D=$(new_phase debate_legacy); full_phase "$D"; mkdir -p "$D/agent_state/debates"
+echo '{"type":"debate_request","from_step":"step2","decision":"db","options":[{"id":"A"},{"id":"B"}],"impact":"HIGH","blocking":true}' > "$D/agent_state/debates/step2-database_choice.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "legacy <step>-<topic>.json request with no verdict BLOCKs (was invisible)" 2 "$?" "step2-database_choice"
+echo '{"topic":"database_choice","verdict":"A","confidence":"HIGH"}' > "$D/agent_state/debates/database_choice-verdict.json"
+LAST_OUT="$(run_hook "$D" 1)"; check "legacy request matched to its legacy <topic>-verdict.json PASSes" 0 "$?"
+D=$(new_phase debate_forced); full_phase "$D"; debate_req "$D" cache_strategy 1
+echo '{"phase":1,"blockers":[{"debate":"cache_strategy"}],"user_rationale":"owner decides next sprint"}' > "$D/agent_state/phases/1/gate.forced"
+LAST_OUT="$(run_hook "$D" 1)"; check "a pending debate is a finding gate.forced can override" 0 "$?" "FORCED PASS"
+
 echo "────────────────────────────────────────────"
 echo "verify-gate.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
