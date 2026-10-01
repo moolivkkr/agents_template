@@ -100,6 +100,7 @@ Full setup: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.m
 | `/design [--source=stitch]` / `/stitch <init\|generate\|variants\|edit\|theme\|sync\|status>` | UI design contract; Google Stitch renders (web DESKTOP / React Native MOBILE) normalized into wireframes behind the design gate |
 | `/ui-audit [--fix=design\|code\|all]` | Audit every built page (web + React Native) against design standards and its Stitch baseline; Stitch keeps the design for all pages |
 | `/review` | Code review on current changes |
+| `/board-review <group\|glob>` | Board review of a group of agents: seven hats (architect, senior dev, tester, SRE, DevOps, security, AI engineer) in parallel, Fable verifiers refute blind to severity, scores from verified findings; re-run after fixes to show scores moved |
 | `/diagnose` / `/hotfix` | Bug investigation / fast-track fix (reproduction-test-first) |
 | `/deploy --target=local` | Deploy locally |
 | `/accept` | Global acceptance after all phases — re-proves the BRD as it is now: `acceptance-map.py` flags FRs whose text changed since their tests were recorded (CHANGED), FRs with no TC-ACC rows (NEW) and missing SHALLs (PARTIAL); none may remain for READY |

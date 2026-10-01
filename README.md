@@ -225,6 +225,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup:eval` | Runs the framework's own eval suite and compares against a baseline (improve / regress / wash) |
 | `/startup:reset-phase` | Archives a phase's state and tags it so the phase can be re-developed cleanly |
 | `/startup:review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
+| `/startup:board-review` | Board review of a group of agents (`coding-testing`, `debate`, `requirements`, `reconcile`, `planning`, `review`, `ops`, `all`, or a glob): seven hats in parallel, verifiers on Fable try to refute every serious finding blind to its severity, `board-review.py` checks citations and derives scores; `--compare` shows score movement between runs |
 | `/startup:optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
 | `/startup:deploy` | Builds, migrates, deploys to local / staging / prod, validates health post-deploy |
 | `/startup:status` | Shows phase progress, BRD coverage, open issues, and next recommended action |

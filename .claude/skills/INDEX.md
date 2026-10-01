@@ -1,6 +1,6 @@
 # Skill Index
 
-> Machine- and human-readable index of every skill in `~/.claude/skills/` (211 files). Agents
+> Machine- and human-readable index of every skill in `~/.claude/skills/` (256 files). Agents
 > should consult this index and load only the skill files they need (by path) rather than
 > pulling whole large files blindly. Columns: **File** (path relative to `~/.claude/skills/`),
 > **Description** (one line), **Tags**. Redirect stubs are marked `↪` and point to their canonical target.
@@ -214,6 +214,20 @@
 | `databases/query-optimization.md` | Database query optimization — N+1 detection, index strategy, connection pooling, batch operations, query patterns, monitoring | database, performance, postgresql, indexing, connection-pool, monitoring |
 | `databases/redis.md` | Redis patterns for caching, sessions, and ephemeral data. | — |
 | `databases/sqlite.md` | SQLite patterns for embedded, testing, and single-writer use cases. | — |
+
+## Review (9)
+
+| File | Description | Tags |
+|------|-------------|------|
+| `review/board-review/protocol.md` | How a /board-review runs — findings format, severity and type, evidence rules, report-everything, blind verification on another model, scores derived from verified findings | review, board-review, verification |
+| `review/board-review/architect.md` | Board hat: architect — one source of truth per contract, ownership, hand-offs with a producer and consumer, ordering, bypass paths, leakage | review, board-review, architecture |
+| `review/board-review/senior_dev.md` | Board hat: senior developer — correct examples, named build gates, minimal diffs, fix-agent discipline, never weakening tests | review, board-review, development |
+| `review/board-review/tester.md` | Board hat: tester — can the gate see a failure, proven not counted, fresh evidence, right environment, flakes, oracles | review, board-review, testing |
+| `review/board-review/sre.md` | Board hat: SRE — failure modes built and tested, idempotent retries, health semantics, budgets, safe migrations, measured NFRs | review, board-review, reliability |
+| `review/board-review/devops.md` | Board hat: DevOps — runtime contract, one commands table, parity, reproducible and portable runs, promotion, installed hooks | review, board-review, devops |
+| `review/board-review/security.md` | Board hat: cyber security — security as an input, vulnerable instructions, prompt injection, supply chain, bypasses, security tests | review, board-review, security |
+| `review/board-review/ai_engineer.md` | Board hat: AI engineer — spawning and waiting, early hand-backs, who can ask whom, judge bias, effort and model routing, wording | review, board-review, prompting, llm |
+| `review/board-review/verifier.md` | Board verifier — refute each finding from its citation and a reproduction, rate severity blind, mark duplicates | review, board-review, verification |
 
 ## Requirements (10)
 

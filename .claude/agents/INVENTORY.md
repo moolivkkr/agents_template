@@ -61,7 +61,7 @@ Complete index of all agents in the SDLC pipeline.
 | Create demo scripts | `demo_documenter` | manual |
 | Execute demo setup | `demo_executor` | manual |
 | Validate demo works | `demo_validator` | manual |
-| Make a technical decision | `debate_moderator` | any agent (escalation) |
+| Make a technical decision | `debate_moderator` | the parent session, when an agent returns `NEEDS_DECISION <topic>` |
 | Review UI spec quality | `design_quality_reviewer` | `/plan` (UI phases) |
 | Surface assumptions before planning | `phase_assumptions_analyzer` | `/discuss` |
 | Research gray area decisions | `decision_researcher` | `/discuss` |
@@ -202,10 +202,10 @@ All agents are **plugin-agnostic** — they read `.claude/agents/plugins/<plugin
 
 | Agent | Model/effort | Input | Output | Notes |
 |---|---|---|---|---|
-| `debate_moderator` | opus/medium | debate_request JSON | verdict JSON + transcript | Orchestrates debate team |
+| `debate_moderator` | opus/medium | `<topic>.request.json`, handed over by the parent | transcript (the verdict is the arbitrator's) | Runs one debate: foreground spawns, child-status check, Fable second opinion on close HIGH calls |
 | `debate_researcher` | opus/medium | assigned option | research evidence | Subagent: one per option |
-| `debate_advocate` | opus/medium | assigned option + all research | argument | Subagent: argues FOR an option |
-| `debate_arbitrator` | opus/high | all arguments | verdict + scores | Subagent: final decision-maker |
+| `debate_advocate` | opus/medium | assigned option + all research | argument (no scores) | Subagent: argues for an option with evidence |
+| `debate_arbitrator` | opus/high | all arguments, presentation order | `<topic>.verdict.json` (sole writer) + D-NNN | Subagent: scores per domain rubric; `MODE: second-opinion` on Fable |
 | `solution_selector` | opus/high | N candidate impls + cross_test_matrix.md | reports/candidate_selection.md | Picks winning implementation via rubric + model-test voting; emits graft list (candidate-selection mode) |
 
 ### Infrastructure & Deployment
