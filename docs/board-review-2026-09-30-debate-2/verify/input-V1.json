@@ -1,0 +1,1136 @@
+{
+  "schema": "sdlc.board-verify-input/v1",
+  "verifier": "V1",
+  "hats": [
+    "architect",
+    "tester"
+  ],
+  "findings": [
+    {
+      "id": "ARCH-33",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/develop-orchestrator.md",
+      "line": 1523,
+      "evidence": "develop-orchestrator.md:1523-1531 (post-gate 4c): record each unresolved.json entry 'that has no D-NNN yet' with `--link agent_state/debates/unresolved.json`. Every such entry links to the same file, unresolved.json entries have no decision_id field (debate-protocol.md:331-338), and nothing after the gate checks that 4c ran.",
+      "problem": "Whether a default already has its D-NNN can't be determined deterministically, so re-running 4c (after a re-gate) duplicates entries. A topic that was auto-resolved and later debated gets both a provisional entry and the verdict's entry, both active. The step can also be skipped silently.",
+      "fix": "Write the returned D-NNN back into the unresolved.json entry (`decision_id`) and skip entries that have one. Run it before writing gate.passed and have debate-status flag an auto_resolved entry with no decision_id."
+    },
+    {
+      "id": "TEST-14",
+      "type": "a+c",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 203,
+      "evidence": "moderator:198-205 maps state to the return line using `.topics[] | select(...)` and the rule '`resolved`, no problems -> COMPLETE'; arbitrator:203-204 checks `... | .problems` and fixes what it lists. Gate reasons (no D-NNN, close call without second opinion, default_taken mismatch) are in `.gate`, not `.problems`. S13 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): `make_debate.py $D cache --no-promote`; `debate-status.py --json | jq '.topics[]|select(.topic==\"cache\")|{status,problems}'` -> {\"status\":\"resolved\",\"problems\":[]}; `debate-status.py --phase 1 --check` exit=2; gate exit=2 'verdict has no D-NNN in docs/DECISIONS.md'.",
+      "problem": "The moderator returns COMPLETE (and its DoD 'my first line matches what debate-status.py says' passes) for a topic the gate blocks; the parent relaunches the requester and finds out at Wave 6. Re-spawning the moderator doesn't help: step 1 (moderator:81) returns an 'already resolved' verdict as is, so neither the promotion nor a failed second opinion is ever retried, and under /autonomous the non-security blocker is force-gated after three cycles.",
+      "fix": "Use `debate-status.py --phase N --check` (exit code) or the topic's `.gate` list in moderator step 10 and the arbitrator's step 7/8 self-check; add a step-1 branch 'resolved but gate reasons listed' that re-runs only the missing step (promote, second opinion)."
+    },
+    {
+      "id": "TEST-07",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 306,
+      "evidence": "promoted() never reads the block's '- status:' line. S14 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): make_debate cache, then D-001 status changed to 'reversed' -> Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. exit=0 PASS.",
+      "problem": "A verdict whose ledger entry has been reversed (by an override or a later decision) still counts as promoted, so the gate certifies a resolved debate whose decision the ledger says is no longer in force.",
+      "fix": "Count only blocks with '- status: active' in promoted(); a reversed entry should mark the topic for re-run or require an override."
+    },
+    {
+      "id": "ARCH-02",
+      "type": "a+b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/develop-orchestrator.md",
+      "line": 1224,
+      "evidence": "develop-orchestrator.md:1224 '0c ... Pending, blocking or not: spawn one debate_moderator per request, in the foreground.' The only follow-up 0c gives is for non-blocking requests (:1226-1228 'relaunch that agent ... then go back to Wave 5v'). debate-status.py:471-473 checks that the verdict reached its requester only for blocking:false (default_taken); for a blocking request, a verdict alone clears check (f) (scratch repro (debate-status.py copied to /tmp scratchpad, fixtures written by repro*.py) S3a: request + verdict + D-NNN -> status=resolved, gate=[]).",
+      "problem": "The 0c dispatcher exists for requests orphaned until the gate, such as a NEEDS_DECISION the parent missed, one from /plan, or one written by the orchestrator itself. For a blocking request it produces a verdict and stops. Nobody relaunches the requesting agent with 'DECISION <topic>', and the code built so far was built without the decision. verify-gate check (f) passes because a verdict exists. The phase gates with the recorded decision in docs/DECISIONS.md and an implementation that never applied it, and under /autonomous no person sees it.",
+      "fix": "In 0c, treat a pending blocking request like a differing non-blocking one: after the verdict, relaunch from_agent (or the owning role) with the decision, then go back to Wave 5v. Make debate-status gate a blocking request until the request records `applied_by`/`applied_at` (set by the parent on relaunch), the same way default_taken works for non-blocking requests."
+    },
+    {
+      "id": "ARCH-24",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 224,
+      "evidence": "debate_arbitrator.md:224-229 marks the title `[provisional: LOW]` for LOW/INCOMPLETE and `[provisional: assumption]` for assumptions, 'or a soft call reads as settled'; for MODE promote with a disagreeing second opinion (:57-58) only the rationale gets '(second opinion chose <X>: for review)'. debate-status.py:455 lists that disagreement as a review reason.",
+      "problem": "A HIGH-impact call that the independent second opinion disagreed with is recorded under a clean title. Sessions see headings only (the rule's own rationale), so the most contested kind of verdict reads as settled.",
+      "fix": "Add `[provisional: second opinion disagrees]` (and for security `must_override`) to the title rule in step 8."
+    },
+    {
+      "id": "TEST-22",
+      "type": "c",
+      "agents": [
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_advocate.md",
+      "line": 105,
+      "evidence": "advocate:105 'Don't score your option or the others'; the only checks are DL-06 (a lint of the prompt TEXT, debate_cases.py:322-323) and T-007 R7 (eval only; regex 'weighted total|score \\(1-10\\)|self-assessed|[0-9]+(\\.[0-9])? */ *10', misses 'Score: 8' or '8 out of 10'). S17 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): cache.argument-A.md with '| Criterion | Score (1-10) |', '9/10', 'Weighted Total: 8.7' -> Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. exit=0 PASS.",
+      "problem": "Self-scores, which the protocol removed because they anchor the judge (D8.2), pass the gate in every real run; nothing outside the eval would ever notice them coming back.",
+      "fix": "Check argument files in debate-status (the same patterns as R7, plus 'out of 10' and 'Score:') and report them as a problem or review reason."
+    },
+    {
+      "id": "ARCH-01",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 203,
+      "evidence": "debate_arbitrator.md:203-204 'Then check it: python3 .claude/hooks/debate-status.py --json | jq ... | .problems. Fix each problem it lists.' and DoD :282 'debate-status.py lists no problem for it'; but debate_moderator.md:184-186 writes <topic>.transcript.md only in step 9, after steps 6-8 (arbitrator, second opinion, promote), and debate-status.py:269-277 requires <topic>.transcript.md for every RESOLVED verdict. scratch repro (debate-status.py copied to /tmp scratchpad, fixtures written by repro*.py) S1: research A/B + arguments A/B + verdict, no transcript yet -> status=invalid, problems=['verdict: no debate behind the verdict: missing cache.transcript.md'].",
+      "problem": "In every first-time RESOLVED debate the arbitrator's mandated self-check reports a problem that only the moderator can fix, because the moderator writes the transcript later. The arbitrator is told to fix every listed problem and its DoD can't pass, so it either writes the moderator's transcript itself (a second writer of a file the protocol gives to the moderator alone, written without knowing the children's first lines), or returns PARTIAL/BLOCKED. The moderator's step-4 table then treats an arbitrator PARTIAL as an evidence gap to pass back to the arbitrator ('EVIDENCE INCOMPLETE'), which makes no sense for the judge. The same happens in MODE promote, which also runs before step 9.",
+      "fix": "Have the moderator write the transcript skeleton (children, first lines, presentation order) before step 6 and append to it afterwards; or give debate-status a stage flag (e.g. --stage verdict) that leaves out the transcript requirement, and have the arbitrator use it."
+    },
+    {
+      "id": "TEST-10",
+      "type": "c",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 275,
+      "evidence": "'A verdict file alone is not a debate' (debate-status.py:268) is enforced only as: each research/argument/transcript file exists and has size > 0 (275). The shipped gate fixture itself proves it: tests/lib/make_debate.py:44-47 writes one-line stubs ('# Argument for option A') and verify-gate.test.sh:339 expects PASS. S7 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): every research/argument/transcript file replaced with 'x\\n' (2 bytes each) -> Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. exit=0 PASS.",
+      "problem": "A moderator that lacks the Agent tool and ignores moderator:59-63, or any agent, can write five placeholder files and a verdict itself; the gate certifies a debate nobody researched or argued. Researchers' 'cite every claim' (researcher:118) and the transcript's 'every child, its first line and file' (moderator:186-191) are never checked either.",
+      "fix": "Require minimal structure: each research brief has at least one URL or repo path citation and the template headings; each argument has the 'Weaknesses I Acknowledge' heading; the transcript names one debate_researcher per option (and advocate for HIGH) with a first line. Better: debate children append completion lines with the topic, and the check matches them. Change make_debate.py to write realistic artifacts."
+    },
+    {
+      "id": "TEST-35",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 59,
+      "evidence": "Promote mode: 'Then write the id into the verdict as `decision_id`. Change nothing else in the verdict.' (arbitrator:59). Nothing records a hash of the primary verdict before the promote step; debate-status.py only validates the final file.",
+      "problem": "A promote-mode arbitrator that has just read the second opinion can rewrite the verdict (and its scores) toward the second opinion's choice; the result validates and the disagreement disappears from review, with nothing to show the primary judgment changed.",
+      "fix": "Have the moderator record the primary verdict's sha256 in the transcript (or the verdict carry `primary_sha` over its pre-promote content) and have debate-status compare it, ignoring decision_id."
+    },
+    {
+      "id": "ARCH-03",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/plan.md",
+      "line": 28,
+      "evidence": "plan.md:28 handles only `NEEDS_DECISION <topic>` (run debate_moderator, relaunch). child-returns.md:81 'When to run it: right after the wave that raised it, not at the gate' and debate-protocol.md:105 'The debate still runs, right after the wave that raised it' assume waves. `grep -n 'debate-status\\|blocking' .claude/commands/{plan,discuss,design,init}.md` shows no debate-status call and no non-blocking dispatch. develop-orchestrator.md has no debate check before Wave 2 (debate-status appears only at :1220-1221, Wave 6 0c). Wave 5v (:1116-1145) re-runs tests and security only on stale code evidence and has no spec_impl_reconciler.",
+      "problem": "Every agent's operating contract tells it to file blocking:false and carry on with its default. When spec_writer, threat_model_agent or ux_designer does that in /plan, the agent returns COMPLETE and /plan never runs the debate. /develop builds Waves 2-5 on the default and first dispatches the debate at Wave 6 0c. If the verdict differs, 0c relaunches the requester, a /plan agent that edits the spec and not the code. Then Wave 5v finds no stale code evidence and re-runs nothing that compares the spec with the code. The gate passes code that implements the losing option while the spec and the ledger record the winner.",
+      "fix": "Add a closing step to /plan, /discuss and /design: run `debate-status.py --phase N`, dispatch every pending request (blocking or not), and relaunch requesters whose default lost. Add a Wave 0 check to develop-orchestrator that refuses to start Wave 2 while debate-status lists any pending or stale topic for the phase."
+    },
+    {
+      "id": "ARCH-11",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 101,
+      "evidence": "debate_arbitrator.md:98-102: an EVIDENCE INCOMPLETE gap caps confidence at MEDIUM and requires INCOMPLETE only 'If the gap is on the decisive criterion, or an option has no research at all'. debate_moderator.md:126,138: an advocate that returns PARTIAL/BLOCKED (or a progress note twice) is a gap. debate-status.py:273-277 requires <topic>.argument-<id>.md for every option of a RESOLVED HIGH-impact verdict. scratch repro (debate-status.py copied to /tmp scratchpad, fixtures written by repro*.py) S10: argument-B missing, RESOLVED MEDIUM -> status=invalid ('no debate behind the verdict: missing lib.argument-B.md').",
+      "problem": "The arbitrator's rule and the checker disagree about an advocate gap. Following its file exactly, the arbitrator writes a RESOLVED verdict capped at MEDIUM. The checker calls it invalid, the arbitrator is told to fix a problem it can't fix (the argument is the advocate's file), and the gate blocks a debate that the protocol says should have produced a usable verdict.",
+      "fix": "Pick one contract. Either the arbitrator writes INCOMPLETE whenever a required brief or argument is missing, or debate-status accepts a missing file when the transcript records it as a gap. Then say the same thing in both places."
+    },
+    {
+      "id": "TEST-01",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 234,
+      "evidence": "Rule: debate_arbitrator.md:134-135 \"Unverifiable, or about an older major version than the option's current one: the confidence can't exceed MEDIUM\". Check: debate-status.py:234-237 only requires an entry with a non-empty source and a result in {confirmed, contradicted, unverifiable}; the result value is never read again. Fixture = a passing implementation phase built with the tests/verify-gate.test.sh helpers (full_phase: implementer, review + verification floor, fresh PASS sidecars, manifest gate.passed=true) plus `python3 tests/lib/make_debate.py $D <topic>`; then set cache.verdict.json claims_checked=[{claim:'A scales',source:'memory',result:'unverifiable'}] (gap 3.0, confidence HIGH, impact HIGH, no second opinion). Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. Output: exit=0 'RESULT: \u2705 PASS'. Script /tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh scenario S1.",
+      "problem": "An arbitrator that can't verify the decisive claim (or verified it against an old major version) and still writes HIGH confidence passes the gate. Because HIGH confidence is what exempts a HIGH-impact debate from the Fable second opinion (debate-status.py:444-445), the one independent check is skipped exactly when the evidence is weakest, and nothing flags it for review.",
+      "fix": "In verdict_problems: if any claims_checked entry for the decisive factor has result 'unverifiable' (or as_of older than the option's current major), cap the allowed band at MEDIUM (so needs_second fires for HIGH impact). Add DS cases for unverifiable+HIGH."
+    },
+    {
+      "id": "TEST-29",
+      "type": "b",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/task.md",
+      "line": 20,
+      "evidence": "task.md:20-44 seeds the five requests with labels only; no option carries `initial_reasoning`. moderator:145-147 must leave it out of the arbitrator's view and arbitrator:79-81 must not read it; DL-21 only lints that the word appears (see the lint finding).",
+      "problem": "Whether the requester's opinion leaks into the judgment can't be measured: T-007 would score a moderator that forwards initial_reasoning, or an arbitrator that reads it, exactly the same.",
+      "fix": "Seed an initial_reasoning that argues for the wrong option (e.g. the document store, citing popularity) and assert the verdict still follows FR-020; or seed it on the close call and compare with a run without it."
+    },
+    {
+      "id": "ARCH-26",
+      "type": "a",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/develop-orchestrator.md",
+      "line": 1225,
+      "evidence": "develop-orchestrator.md:1174 '0b ... run FIRST, via the shared hook' vs :1214 '0c ... Run it before 0b' (:1161 orders 0 -> 0c -> 0b). :1224-1225 'spawn one debate_moderator per request ... Independent requests can share a message' with no cap; child-returns.md:34-38 and debate_moderator.md:222-225 cap it at four moderators at a time.",
+      "problem": "The gate section contradicts itself on order, and the dispatcher can launch five or more moderators in one message. Each holds up to four children, which crosses the 20-subagent default, and some spawns fail with 'Concurrent subagent limit reached'.",
+      "fix": "Delete 'run FIRST' from 0b. In 0c, say 'at most four moderators per message; dispatch the rest after they return'."
+    },
+    {
+      "id": "TEST-04",
+      "type": "c",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 126,
+      "evidence": "moderator:126 a PARTIAL/BLOCKED child becomes 'EVIDENCE INCOMPLETE: <option>' passed to the arbitrator, 'which caps its confidence at MEDIUM' (arbitrator:98-102). The gap is recorded only in the free-text transcript; debate-status.py:275 checks the transcript only for existence/size. Fixture = a passing implementation phase built with the tests/verify-gate.test.sh helpers (full_phase: implementer, review + verification floor, fresh PASS sidecars, manifest gate.passed=true) plus `python3 tests/lib/make_debate.py $D <topic>`; then write cache.transcript.md '- debate_researcher B: BLOCKED ... EVIDENCE INCOMPLETE: B: no benchmark data' and leave the verdict at HIGH confidence, HIGH impact, no second opinion. Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. Output: exit=0 PASS (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim_extra.sh S19).",
+      "problem": "When a researcher or advocate fails and the arbitrator ignores the cap, a HIGH-impact verdict decided on one-sided evidence passes as HIGH and skips the second opinion; no review reason is raised, so under /autonomous nobody ever sees that an option went unresearched.",
+      "fix": "Give the verdict a machine-readable `evidence_gaps` array (the moderator's EVIDENCE INCOMPLETE lines, copied by the arbitrator), have the moderator also write them to the transcript in a fixed form, and have debate-status cap the band at MEDIUM when either is non-empty."
+    },
+    {
+      "id": "TEST-09",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 398,
+      "evidence": "debate-status.py:398-402: a request with status 'withdrawn' and a withdrawn_reason of >= 20 characters is status 'withdrawn' with no gate reason and no review reason, whatever its domain. Withdrawal is instructed in moderator:128, child-returns.md:69 and develop-orchestrator.md:1231. S6 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): `make_debate.py $D token_storage --domain security --request-only`, then status='withdrawn', withdrawn_reason='no longer applies after the wave 5 fix'. Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. exit=0 PASS, no gate.forced, no security_acknowledged; debate-status: 'token_storage withdrawn problems=[] gate=[] review=[]'.",
+      "problem": "A pending security decision, which otherwise needs a person's override or a per-finding security acknowledgement to get past the gate, is cleared by any agent writing one sentence, and it disappears from the checkpoint and the /autonomous review log. Under the /autonomous fix loop this is the cheapest way to make the gate green.",
+      "fix": "Put every withdrawn topic on the review list; for domain security (and for blocking requests) require the withdrawal to cite a D-NNN or an override, or count it as a security finding that needs acknowledgement. Add DS/gate cases."
+    },
+    {
+      "id": "ARCH-08",
+      "type": "a",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 405,
+      "evidence": "debate-status.py:398-409 decides status in the order withdrawn -> invalid -> overridden -> stale, so an override wins over a changed request; override records (child-returns.md:108-109) carry no request_sha. scratch repro (debate-status.py copied to /tmp scratchpad, fixtures written by repro*.py) S11: verdict A, user override B, then the request is re-raised with a new decision text and a new option C -> status=overridden, gate=[]. debate_moderator.md:74-86 has no case for an `overridden` topic.",
+      "problem": "Once a person has overridden a topic, any later change to its request is invisible. A later phase that re-raises the decision with a new option or new constraints gets no debate, the gate passes, and the moderator (if spawned) has no rule for the state, so it may return the old override as 'already resolved'. The new decision is never made.",
+      "fix": "Record request_sha in <topic>.override.json and treat an override whose request_sha differs as stale (check `stale` before `overridden`). Add an `overridden` row to moderator step 1: a current override is returned as the decision, and a stale one is re-debated with PRIOR DECISION set to the override's D-NNN."
+    },
+    {
+      "id": "TEST-16",
+      "type": "b",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 97,
+      "evidence": "request_sha (debate-status.py:97-100) is the only freshness binding; debate-status.py never reads docs/BRD.md or docs/PROJECT_FACTS.md. The arbitrator scores brd_alignment/constraint_fit from the FR/NFR rows and facts the request touches (arbitrator:79-81, protocol anchors 277-279). For tests, acceptance-map.py marks an FR CHANGED when its text changes; nothing equivalent exists for verdicts.",
+      "problem": "If an FR/NFR or a PROJECT_FACTS constraint the verdict relied on is changed or retired, the verdict and its D-NNN stay 'resolved' and keep steering every later phase; nothing reopens the decision.",
+      "fix": "Record in the verdict the IDs (and a hash of the text) of the FR/NFR rows and facts it cites; have debate-status mark the topic stale (or review) when that text changes, mirroring acceptance-map.py."
+    },
+    {
+      "id": "TEST-12",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 453,
+      "evidence": "Disagreement is read from the second opinion's `verdict` field only (debate-status.py:453); second_problems (281-296) checks that its scores exist but never recomputes them (the primary's are recomputed at 249-264). S9 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): security close call, primary verdict B = hardened_default, second opinion scores A 9 on every criterion and B 3 (totals A 9.0, B 3.0) but verdict 'B'. Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. exit=0 PASS, review only 'LOW confidence'.",
+      "problem": "A self-inconsistent Fable second opinion (the same defect the 2026-09-30 review found in primaries: verdict not the highest total) counts as agreement. On a security topic a real disagreement must wait for a person (debate-status.py:469-470); here it passes the gate with no person and no review reason.",
+      "fix": "Recompute the second opinion's totals with totals(); treat its highest-scoring option as its verdict (or reject a mismatch as a problem), and validate its gap/band the same way as the primary. Add a DS case."
+    },
+    {
+      "id": "ARCH-16",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/skills/core/develop-steps/step-3-tests.md",
+      "line": 153,
+      "evidence": "step-3-tests.md:142-155: the e2e debate's options are A 'Architectural change', B 'Simplify the feature', C 'Known issue ... carried forward', then '\u2192 return NEEDS_DECISION ...; the parent runs debate_moderator and relaunches you \u2192 implement the verdict'. step-4-code-review-acceptance-tests.md:177-178 says the same for acceptance. child-returns.md:67 relaunches 'the requesting agent'. e2e_orchestrator.md:79 'You never edit product code'; acceptance_test_agent.md:378 'I did not edit product code'.",
+      "problem": "The verdict goes to an agent that isn't allowed to act on it. When e2e_orchestrator or acceptance_test_agent raises these debates and option A or B wins, the parent relaunches the test agent to 'implement the verdict', which its own file forbids. The architectural change has no named consumer, so it is left to the parent's improvisation or not done, and the step ends in 'still failing: BLOCK the gate'.",
+      "fix": "Add an `implementer` field (the owning role) to the request. In child-returns, relaunch the implementer with the decision first and the requester afterwards to re-test. In step 3 and step 4, name the owning developer role as the one who implements options A and B."
+    },
+    {
+      "id": "TEST-25",
+      "type": "a",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/task.md",
+      "line": 61,
+      "evidence": "task.md:61-64 runs each debate in its own copy with an empty docs/DECISIONS.md, then copies every copy's ledger entries into the scored workspace 'keeping the D-NNN links'. remember.sh decide assigns D-001 in an empty ledger (remember.sh:81-82), so all four verdicts get D-001. decision_blocks() keys blocks by id, so the last one wins (debate-status.py:299-303), and promoted() fails for the rest. S15 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): make_debate order_store + make_debate token_storage in one fixture (make_debate.py:48 hardcodes D-001) -> ledger '### D-001 \u2014 order_store', '### D-001 \u2014 token_storage'; gate exit=2 \"debate 'order_store' verdict has no D-NNN in docs/DECISIONS.md\".",
+      "problem": "R1 (`debate-status.py --check`, weight 0.15) fails on a perfectly correct T-007 run, so the eval's main validity check is always red and can't tell a good debate change from a bad one; an eval runner that 'fixes' it by renumbering has to edit arbitrator-owned verdicts. The same hardcoded D-001 means no gate test covers two promoted debates in one phase.",
+      "fix": "Seed each copy's DECISIONS.md with a distinct starting id (or run remember.sh in the scored workspace with --link), or score R1 per copy; make make_debate.py take --decision-id and add a gate case with two debates in one phase."
+    },
+    {
+      "id": "ARCH-17",
+      "type": "b",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 81,
+      "evidence": "debate_moderator.md:170-175: Fable unavailable means 'skip step 8, and return PARTIAL ... The gate keeps the topic open until a second opinion exists or a person decides'. :81 'Already resolved (a valid, current verdict exists): return it as is. Don't re-run the debate.' develop-orchestrator.md:1224 dispatches moderators only for 'Pending' requests. debate-status.py:459-466 leaves such a topic status=resolved with gate entries (no second opinion; no D-NNN). verify-gate.sh:500 'A pending debate is a finding: gate.forced can override it' (non-security).",
+      "problem": "A debate that stopped after the primary verdict has no resume path. On a later dispatch the moderator sees a valid, current verdict and returns it unchanged, and 0c doesn't dispatch resolved topics at all, so nothing retries the second opinion or the promote step. Under /autonomous a non-security topic in this state gets force-gated, the D-NNN is never written, and the next session re-decides it.",
+      "fix": "Add a moderator step-1 case: a verdict exists but the gate still lists a missing second opinion or promotion, so resume at step 7 or 8. Have 0c dispatch every topic with a non-empty `gate`, not only pending ones. If Fable stays unavailable, record the verdict with a `[provisional: no second opinion]` title instead of leaving it unrecorded."
+    },
+    {
+      "id": "TEST-31",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 91,
+      "evidence": "moderator:91-97 'Draw a random order once and record it' is the D8.3 bias control. debate-status.py:232-233 only checks presentation_order is a permutation; make_debate.py:51 always writes ['B','A']; T-007 pins eval_presentation_order (task.md:24,28; moderator:98-99), so the shuffle is never executed in the eval.",
+      "problem": "A moderator that always presents options in request order (the bias the shuffle exists to remove) passes the gate, every test and T-007.",
+      "fix": "In T-007, leave one HIGH debate unpinned and record its order across runs (or assert across all debates in a fixture that not every presentation_order equals request order); have the moderator log the drawn order and the command output in the transcript."
+    },
+    {
+      "id": "TEST-05",
+      "type": "c",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 291,
+      "evidence": "second_problems (debate-status.py:281-296) checks schema, verdict id, model, reverse order vs the CURRENT verdict, and scores; the second-opinion format has no request_sha or link to the primary it answered. moderator:84-86 re-runs a stale debate but never archives the old <topic>.second-opinion.json; moderator:170-175 says on a failed Fable spawn 'The gate keeps the topic open until a second opinion exists'. Fixture (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh S3): make_debate db; close call (gap 0.1) with a Fable second opinion; then request.decision edited (stale) and a new primary written (new request_sha, verdict flips A->B, same presentation order) with no new second opinion. Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. Output: exit=0 PASS; debate-status: 'db resolved problems=[] gate=[] review=[LOW confidence, second opinion (claude-fable-5-1) chose A]'.",
+      "problem": "After a request change, the re-run's Fable spawn fails, the moderator correctly returns PARTIAL, and the gate passes anyway on the previous run's second opinion, which judged a different request. The required independent check never happened for the decision now in force.",
+      "fix": "Add `request_sha` (and the primary's presentation_order) to sdlc.debate-second-opinion/v1 and reject a second opinion whose request_sha differs from the verdict's; have the moderator move the old second opinion, research and arguments aside when it re-runs a stale debate."
+    },
+    {
+      "id": "TEST-08",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 405,
+      "evidence": "Status 'overridden' (debate-status.py:405-407) skips the gate checks, which run only `if item['status'] == 'resolved'` (463). child-returns.md:108-111 says the parent must also append overrides.jsonl and run `remember.sh decide ... --reverses <D-NNN>`; moderator:231-234 delegates this to the parent. S5 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): make_debate db (D-001 active, option A), then db.override.json {user_override:'B', user_rationale:...}. Ledger still '### D-001 \u2014 db / - status: active'. Command: `CLAUDE_PROJECT_DIR=$D bash .claude/hooks/verify-gate.sh 1`. exit=0 PASS; topic 'overridden', review=[].",
+      "problem": "The person's override never reaches docs/DECISIONS.md and the gate doesn't notice: every new session and subagent reads D-001 (option A) as the active decision and 'does not re-litigate' it, so the user's choice is silently lost after the session ends.",
+      "fix": "For an overridden topic with a v1 verdict, require an active ledger block linking the override (or the verdict) whose `reverses` names the verdict's decision_id, and require the old block to be status reversed. Add DS cases."
+    },
+    {
+      "id": "ARCH-21",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 59,
+      "evidence": "debate_moderator.md:59-63 relies on the Agent tool being absent below depth 2 (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH`, '2 in the shipped settings'). new-project.sh:41 and autonomous.md:126 copy settings.json only when `[ -f .claude/settings.json ] ||` (absent); install.sh:141-157 never merges into an existing file. WebFetch code.claude.com/docs/en/sub-agents (this session): 'By default, a subagent can spawn subagents of its own, up to three layers below the main conversation.'",
+      "problem": "In any project that already had a .claude/settings.json (an adopted codebase via /init --from-code, or a team's own settings), the depth cap is the default 3. A wave agent that spawns the moderator itself then gets a moderator that has the Agent tool. The guard never fires, and the debate runs hidden from the parent's checkpoint and its circuit breaker, which is exactly what the guard exists to prevent.",
+      "fix": "Have new-project.sh and /autonomous Step 0 merge the `env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH` key into an existing settings.json (jq merge), and have /health warn when it's missing. As a second line of defence, the moderator also returns BLOCKED when its prompt lacks the parent-only `REQUEST:` header that child-returns step 3 adds."
+    },
+    {
+      "id": "TEST-06",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 310,
+      "evidence": "promoted() (debate-status.py:306-311): with decision_id, any block with that id whose '- link:' line equals the verdict path counts; without decision_id, ANY block linking the path counts. The path agent_state/debates/<topic>.verdict.json is the same for every re-run. S4 (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim.sh): make_debate db (D-001 'option A' active), request edited, verdict rewritten to B with no decision_id -> exit=0 PASS. S4b (/tmp/claude-501/-Users-kishoremoli-development-startup-agents/dd7de203-8961-486b-bc72-acd57dd003fe/scratchpad/tester-debate2/sim_s4b.sh): re-run records D-002 via the real remember.sh decide but without --reverses -> ledger has '### D-001 ... status: active ... decision: > option A' and '### D-002 ... status: active ... decision: > option B', gate exit=0 PASS.",
+      "problem": "A re-run that forgets PRIOR DECISION/--reverses (arbitrator:83-85) or never reaches the promote step leaves the ledger saying the old option is the active decision. The SessionStart hook and every subagent's Required Reading surface that stale entry as settled, so later phases build on the option the debate rejected, and the gate certified it.",
+      "fix": "In promoted(): require exactly one ACTIVE block linking the verdict, require it to be the verdict's decision_id, and require its 'decision:' line to contain the verdict_label (or record the verdict's request_sha in the ledger link, e.g. '#sha'). Add DS cases for both variants."
+    }
+  ],
+  "others": [
+    {
+      "id": "AI-01",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 203,
+      "problem": "The moderator returns `COMPLETE <topic>` for a debate the gate will block (arbitrator forgot remember.sh, second opinion in the wrong order, request_sha mis-copied). The parent relaunches the requeste"
+    },
+    {
+      "id": "AI-02",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 74,
+      "problem": "A request about, say, rate-limit strategy or session TTL labelled `operations` or `architecture` is judged on a rubric with no security criterion, needs no hardened default, and never reaches the pers"
+    },
+    {
+      "id": "AI-03",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 203,
+      "problem": "An arbitrator that mis-copies REQUEST_SHA (a 16-hex string handed over in a prompt) sees an empty problem list and returns COMPLETE; the verdict is stale from birth and the gate blocks. Likewise a ski"
+    },
+    {
+      "id": "AI-04",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 235,
+      "problem": "Two decision rules in one prompt disagree. An arbitrator that follows the Rules line for a close call picks the BRD-closer option, the checker rejects it, and step 7 tells it to 'fix each problem'. Th"
+    },
+    {
+      "id": "AI-05",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 144,
+      "problem": "The arbitrator applies the tie rule exactly as written and the gate rejects the verdict, with a message that says there is no tie_break when there is one. The model then has to guess which rule is rea"
+    },
+    {
+      "id": "AI-06",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 204,
+      "problem": "The recomputation in debate-status.py was added so the gate wouldn't trust the verdict's own claims, but the prompt lets the arbitrator satisfy it by editing the inputs. A MEDIUM-impact verdict with a"
+    },
+    {
+      "id": "AI-07",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 51,
+      "problem": "The second opinion exists to be independent of the first (same-model blind spots, order effects). If the Fable judge follows the protocol's 'one reader' rule to locate the briefs or check its own file"
+    },
+    {
+      "id": "AI-08",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 77,
+      "problem": "Under /autonomous the moderator hands back a question with no recommended default, and the parent is told to use the agent's recommended default, which doesn't exist. The parent improvises at the end "
+    },
+    {
+      "id": "AI-09",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 32,
+      "problem": "When one option uses a component PROJECT_FACTS marks retired, that is decisive evidence against it. The capitalised STOP tells the researcher (and the arbitrator) to halt and flag rather than record i"
+    },
+    {
+      "id": "AI-10",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 81,
+      "problem": "The moderator is the longest-running agent in a debate, so it is the most likely to end early. A re-spawned moderator re-runs every researcher and advocate, draws a new presentation order and may re-r"
+    },
+    {
+      "id": "AI-11",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 222,
+      "problem": "An arbitrator that ran step 8 and then ended its turn with a progress note is re-spawned, re-judges, and records a second active ledger entry for the same topic. If the re-judgment differs, the ledger"
+    },
+    {
+      "id": "AI-12",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 60,
+      "problem": "A project that already had .claude/settings.json (any existing codebase adopted with /init --from-code that used Claude Code before) runs at the default depth 3. A wave agent that spawns the moderator"
+    },
+    {
+      "id": "AI-13",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 223,
+      "problem": "Any other running subagent pushes four parallel debates over the limit. A moderator whose first spawns fail has no child of its own running, so 'after the current ones return' never comes; it must inv"
+    },
+    {
+      "id": "AI-14",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 109,
+      "problem": "The moderator needs each stage's results before the next (researchers -> advocates -> arbitrator -> second opinion). In fork mode its Agent calls return at once; the results arrive only after its turn"
+    },
+    {
+      "id": "AI-15",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 205,
+      "problem": "A verdict-side problem (arbitrator wrote no argument files, wrong rubric, totals mismatch) or the depth error comes back as plain BLOCKED, and the parent's only matching row sends the requesting agent"
+    },
+    {
+      "id": "AI-16",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 121,
+      "problem": "A child that reports COMPLETE but wrote to a slightly different path (research-b.md, research-<label>.md) leaves a hole the moderator notices but has no rule for; the arbitrator judges without that br"
+    },
+    {
+      "id": "AI-17",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 174,
+      "problem": "If the moderator omits `model: fable` (or the alias resolves elsewhere), the same-model second opinion passes the gate; under /autonomous the review reason only reaches the final report. The 'don't su"
+    },
+    {
+      "id": "AI-18",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/rubric.json",
+      "line": 23,
+      "problem": "The only measurement of order-robustness, the property the presentation-order shuffle and reversed second opinion exist for, runs on a case position bias can't flip. A prompt or effort change that mad"
+    },
+    {
+      "id": "AI-19",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/expected_trajectory.json",
+      "line": 57,
+      "problem": "An interactive /eval run in which the moderator behaves exactly as instructed is scored as a forbidden trajectory, so the eval can't be run interactively and penalizes correct behaviour."
+    },
+    {
+      "id": "AI-20",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 130,
+      "problem": "The 'quote' is still produced by the small model and can be paraphrased or invented; the verdict stores it as the source's words and marks the decisive claim 'confirmed'. The prompt already names the "
+    },
+    {
+      "id": "AI-21",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_advocate",
+        "debate_researcher"
+      ],
+      "file": ".claude/agents/core/debate_advocate.md",
+      "line": 74,
+      "problem": "Advocates rate their own weaknesses (almost always LOW, 'acceptable') and researchers report a strong-evidence count per option; both are ratings the arbitrator reads before scoring. General LLM-as-ju"
+    },
+    {
+      "id": "AI-22",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 94,
+      "problem": "General LLM-as-judge practice reports a label preference (towards 'A' or the first-listed id) separate from reading position. The shuffle hides the reading order but not which option the requester lis"
+    },
+    {
+      "id": "AI-23",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 165,
+      "problem": "For the arbitrator, the contract's trigger describes its own job, and 'never start another debate' reads as 'don't spawn one', which writing a request and returning NEEDS_DECISION doesn't do. A judge "
+    },
+    {
+      "id": "AI-24",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 33,
+      "problem": "A researcher or advocate that finds evidence against an active decision is told to append to DECISIONS.md, which the guard denies and which isn't its job; it may retry or route around the guard. The c"
+    },
+    {
+      "id": "AI-25",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_researcher",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/skills/core/develop-steps/step-0-orient.md",
+      "line": 540,
+      "problem": "If a /develop parent passes this guard on to debate work (it says ALL agents), a researcher stops after five reads and an arbitrator writes a verdict before reading every argument, the opposite of wha"
+    },
+    {
+      "id": "AI-26",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_arbitrator",
+        "debate_researcher",
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 245,
+      "problem": "Loading the protocol is optional in the boilerplate and nothing preloads it, so a researcher or advocate can skip it and gather evidence for the wrong criteria; the arbitrator can score from memory of"
+    },
+    {
+      "id": "AI-27",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 203,
+      "problem": "'May be written on my behalf' lets each child skip the step, and nobody else does it; for ad-hoc debates the model must invent a phase directory."
+    },
+    {
+      "id": "AI-28",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 281,
+      "problem": "Items that restate the process (e.g. arbitrator :285 'Every option was scored on every criterion...') add a self-review pass with no external signal; the items that map to a real check (debate-status."
+    },
+    {
+      "id": "AI-29",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 82,
+      "problem": "When new evidence reopens a decision recorded under another topic, the arbitrator records a new D-NNN without --reverses, leaving two active ledger entries that disagree."
+    },
+    {
+      "id": "AI-30",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_researcher"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 110,
+      "problem": "Vendor-published benchmarks and marketing echoed across blogs read as 'multiple sources agree'. Fetched third-party text that argues for an option enters the brief as evidence with nothing marking who"
+    },
+    {
+      "id": "AI-31",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 5,
+      "problem": "The settings are reasonable, but nothing would show whether research effort matters: an effort change on the researcher or advocate can't move any T-007 score except through the verdict label."
+    },
+    {
+      "id": "AI-32",
+      "hat": "ai_engineer",
+      "agents": [
+        "debate_moderator",
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 136,
+      "problem": "The requester's opinion, kept from the judge, reaches it second-hand through the arguments and briefs; the option the requester argued hardest for starts with the better-developed case."
+    },
+    {
+      "id": "ARCH-04",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 203,
+      "problem": "When a security second opinion disagrees (and in other gate-only states: no second opinion, not promoted, default_taken mismatch), the moderator returns COMPLETE. Under /autonomous the parent follows "
+    },
+    {
+      "id": "ARCH-05",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 453,
+      "problem": "Files from an earlier round of the same topic are judged against the new verdict. A clear-cut re-run is blocked for a person's decision because of the old round's second opinion. The reverse case also"
+    },
+    {
+      "id": "ARCH-06",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 179,
+      "problem": "On a stale re-run that ends as a close HIGH-impact call, the arbitrator that knows the prior D-NNN never writes the ledger, and the arbitrator that writes it (promote) was never told about the prior o"
+    },
+    {
+      "id": "ARCH-07",
+      "hat": "architect",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/remember.sh",
+      "line": 93,
+      "problem": "The rule 'one active decision per topic' depends on each writer remembering --reverses. A phase reset and redo, an ADR for a debated choice, or a missed PRIOR DECISION each leave two active D-NNN entr"
+    },
+    {
+      "id": "ARCH-09",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/skills/core/debate-protocol.md",
+      "line": 53,
+      "problem": "A slug reused in a later phase overwrites the earlier phase's request. The phase-1 debate drops out of `debate-status --phase 1`, so /worklog's phase-1 decisions and /reset-phase's archive lose it, an"
+    },
+    {
+      "id": "ARCH-10",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 145,
+      "problem": "The hand-off to the arbitrator lacks a field the verdict must carry. To get the phase it opens the request JSON, which shows initial_reasoning to an agent that is told not to read it, so the anchoring"
+    },
+    {
+      "id": "ARCH-12",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/pause.md",
+      "line": 275,
+      "problem": "The definition of an open debate is re-derived four ways from status values. /pause doesn't list stale topics or resolved topics that still block the gate (no second opinion, not promoted, security di"
+    },
+    {
+      "id": "ARCH-13",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/plan.md",
+      "line": 32,
+      "problem": "There are three ledgers for 'a default taken without a debate'. A default recorded under /plan --auto or /discuss --auto, following that command's own header, goes to auto-resolved.jsonl or decisions."
+    },
+    {
+      "id": "ARCH-14",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/skills/core/child-returns.md",
+      "line": 45,
+      "problem": "The contract for an unresolved.json entry is defined three ways: debate-protocol.md:331-338 and step-0-orient.md include domain and hardened, child-returns doesn't. A security default for missing data"
+    },
+    {
+      "id": "ARCH-15",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/discuss.md",
+      "line": 203,
+      "problem": "Two mechanisms own 'decide between known options before work starts'. The /discuss path skips the debate's rubric, its hardened-default rule for security, its second opinion and its ledger promotion, "
+    },
+    {
+      "id": "ARCH-18",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/accept.md",
+      "line": 688,
+      "problem": "Check (f) only ever looks at the phase being gated, and /accept never runs a project-wide check. A non-security debate forced past at phase N (verify-gate.sh:500), a topic left stale by a later reques"
+    },
+    {
+      "id": "ARCH-19",
+      "hat": "architect",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/skills/core/child-returns.md",
+      "line": 113,
+      "problem": "When a later phase re-decides a topic an earlier phase implemented (the stale or slug-reuse path), the ledger flips to the new decision but nothing marks the earlier phase's code as contradicting it. "
+    },
+    {
+      "id": "ARCH-20",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 311,
+      "problem": "The promotion check is satisfied by the previous round's entry, even a reversed one, because both rounds share one link path. A re-run whose arbitrator skipped remember.sh, or whose promote step never"
+    },
+    {
+      "id": "ARCH-22",
+      "hat": "architect",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/commands/worklog.md",
+      "line": 94,
+      "problem": "docs/WORKLOG.md, the human ledger of 'what was decided', reports an overridden debate as the arbitrator's choice with the reversed D-NNN. The person reading it sees the decision they overrode presente"
+    },
+    {
+      "id": "ARCH-23",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 98,
+      "problem": "New evidence or a new constraint added to a request's context doesn't make the verdict stale. The moderator's step 1 then returns the old verdict as 'already resolved', and the 'unless the request cit"
+    },
+    {
+      "id": "ARCH-25",
+      "hat": "architect",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/skills/core/debate-protocol.md",
+      "line": 169,
+      "problem": "The second-opinion contract is defined twice, differently, and the validator enforces neither version's extra fields, so a second opinion without a checked decisive claim passes."
+    },
+    {
+      "id": "ARCH-27",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/skills/core/debate-protocol.md",
+      "line": 58,
+      "problem": "The ownership table names one writer for a file that three roles edit, and the moderator's frontmatter doesn't declare its writes, so the dependency graph can't see them."
+    },
+    {
+      "id": "ARCH-28",
+      "hat": "architect",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 203,
+      "problem": "Nobody clearly owns the completion line. A child has to look up its phase in the request, or guess, and since 'may be written on my behalf' has no counterpart in the moderator, the lines get written t"
+    },
+    {
+      "id": "ARCH-29",
+      "hat": "architect",
+      "agents": [
+        "debate_researcher"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 18,
+      "problem": "The skill pack's scope and output paths conflict with the agent's contract. A researcher that follows it overruns its search budget or writes into requirements/research/, which /research owns, and lat"
+    },
+    {
+      "id": "ARCH-30",
+      "hat": "architect",
+      "agents": [
+        "debate_researcher",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 100,
+      "problem": "Stack and model names leak into a core agent's output template. For security, testing or operations debates the template asks for npm metrics, and the model-specific notes will go stale when the model"
+    },
+    {
+      "id": "ARCH-31",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 103,
+      "problem": "The previous run's defect class 'candidate mode replacing every role agent' came from spawns without subagent_type. A general-purpose spawn told to 'act as debate_researcher' would run without the age"
+    },
+    {
+      "id": "ARCH-32",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/commands/autonomous.md",
+      "line": 324,
+      "problem": "Read literally, /autonomous tells the parent to take architecture and feature decisions on the default without a debate. That conflicts with step 0, and a decision taken this way has no request file, "
+    },
+    {
+      "id": "ARCH-34",
+      "hat": "architect",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/skills/core/child-returns.md",
+      "line": 29,
+      "problem": "Waiting for children, the root of the 2026-09-30 'moderator returned before its researchers finished' defect, is still enforced only by prose. A harness setting exists that makes every spawn foregroun"
+    },
+    {
+      "id": "TEST-02",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 133,
+      "problem": "A verdict whose decisive claim was contradicted at source, and which kept the scores built on that claim, is certified as resolved HIGH confidence; the phase builds on a choice the arbitrator's own ch"
+    },
+    {
+      "id": "TEST-03",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 235,
+      "problem": "The decisive-claim re-check is self-graded: 'confirmed' with source 'memory' or 'n/a' and no quoted passage satisfies the gate, so a judge that never re-opened anything is indistinguishable from one t"
+    },
+    {
+      "id": "TEST-11",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 269,
+      "problem": "For MEDIUM-impact non-security topics an INCOMPLETE verdict needs no debate behind it at all; under /autonomous a non-security PARTIAL continues and only reaches the end-of-run log, so a verdict that "
+    },
+    {
+      "id": "TEST-13",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 456,
+      "problem": "A substituted same-model second opinion (what the moderator is told never to do) clears even a security close call; under /autonomous the review reason only reaches the end-of-run log. And since the m"
+    },
+    {
+      "id": "TEST-15",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 98,
+      "problem": "When a requester adds a constraint that rules out the chosen option, the verdict stays current and the gate passes; conversely an edit to initial_reasoning alone makes a valid verdict stale and forces"
+    },
+    {
+      "id": "TEST-17",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 224,
+      "problem": "A soft call reaches the ledger reading as settled, which is the exact failure the marker was added for (board review AI-17); every later session treats a LOW or assumption verdict as a firm decision."
+    },
+    {
+      "id": "TEST-18",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 136,
+      "problem": "An agent following an older prompt (the deployed ~/.claude copy can lag the repo) can settle a HIGH-impact security decision with a two-field JSON: no research, no scores, no ledger entry, no hardened"
+    },
+    {
+      "id": "TEST-19",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 344,
+      "problem": "A blocking security request with a one-character typo in its marker is invisible to the gate, the checkpoint and the dispatcher (0c); the requester stopped for a decision that the pipeline then never "
+    },
+    {
+      "id": "TEST-20",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/verify-gate.sh",
+      "line": 519,
+      "problem": "A security decision whose request file is malformed is a non-security finding for the force path; under /autonomous non-security blockers are force-gated automatically after three cycles (autonomous.m"
+    },
+    {
+      "id": "TEST-21",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 366,
+      "problem": "A pending request filed with a phase no /develop gate ever runs (0 during /init, or a phase later reset) blocks nothing, ever, including /accept; moderator:56-57 tells an ad-hoc invocation to write th"
+    },
+    {
+      "id": "TEST-23",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/hooks/debate-status.py",
+      "line": 242,
+      "problem": "On a close security call the arbitrator can name the permissive option (e.g. localStorage) as 'hardened' and pick it; the gate's hardened rule then passes. Only T-007 R4's label regex catches it, and "
+    },
+    {
+      "id": "TEST-24",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 204,
+      "problem": "The recomputation check (the gate's main independent oracle for verdicts) can be satisfied by moving the evidence to fit the conclusion; nothing tells the arbitrator which way round to fix it, and not"
+    },
+    {
+      "id": "TEST-26",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": "agent_state/eval/baselines/2026-07-07-seed.json",
+      "line": 6,
+      "problem": "Nothing can currently show whether a change to a debate agent (or its effort setting, task.md:92-94) helped or hurt; the debate agents' judgment is unmeasured, so a regression in any of them would shi"
+    },
+    {
+      "id": "TEST-27",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/commands/eval.md",
+      "line": 68,
+      "problem": "The trajectory half of T-007 can't be scored from evidence: a moderator that writes the verdict itself, spawns children in the background, or promotes before the second opinion scores the same as a co"
+    },
+    {
+      "id": "TEST-28",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/task.md",
+      "line": 54,
+      "problem": "A judge with strong position bias still picks PostgreSQL both times when a MUST requirement decides it, so R3 passes; position bias shows up on close calls, which T-007 never runs in both orders. The "
+    },
+    {
+      "id": "TEST-30",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/rubric.json",
+      "line": 37,
+      "problem": "A correct arbitrator that finds a clear gap loses 0.15 and skips the second opinion correctly, so R5 penalises good judgment and rewards an arbitrator that under-claims confidence; the second-opinion "
+    },
+    {
+      "id": "TEST-32",
+      "hat": "tester",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": "tests/lib/debate_cases.py",
+      "line": 361,
+      "problem": "The prompt regressions these lints exist to catch (anchoring on the requester, option-by-option scoring, a same-model second opinion) pass CI when the sentence is inverted but keeps its keywords; with"
+    },
+    {
+      "id": "TEST-33",
+      "hat": "tester",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": "tests/lib/debate_cases.py",
+      "line": 306,
+      "problem": "The naming-contract lint (the D1 defect: a file name the gate never looked for) can't fail inside any Claude Code worktree, where this framework's own reviews and many fix rounds run; outside one it i"
+    },
+    {
+      "id": "TEST-34",
+      "hat": "tester",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate"
+      ],
+      "file": ".claude/hooks/verify-gate.sh",
+      "line": 284,
+      "problem": "A failed debate child is masked by any later instance of the same role in another debate; the moderator's re-spawn/gap record for it is the only trace. Check (f) still blocks when the failed child wro"
+    }
+  ],
+  "note": "severity removed on purpose: rate each finding yourself from the evidence. 'others' are the remaining findings (not yours to verify): use their ids in duplicate_of when one of yours is the same problem"
+}

@@ -201,10 +201,22 @@ Decision: <label>. Confidence: <HIGH|MEDIUM|LOW>. Rubric: <domain>. Presentation
 ```
 
 Then check it: `python3 .claude/hooks/debate-status.py --json | jq '.topics[] | select(.topic=="<topic>") | .problems'`.
-Fix each problem it lists. That's an external signal, not a second guess.
+- **Fix each problem it lists in what you wrote:** arithmetic, missing criteria, `request_sha`,
+  `rubric`, `presentation_order`. That's an external signal, not a second guess.
+- **Don't change a score to make a problem go away.** A problem about the winner or the confidence
+  means your verdict or confidence has to follow your scores, not the other way round.
+- **Leave the `gate` items alone.** The ledger entry, the second opinion and the transcript belong
+  to the moderator's steps.
+
+Copy every `EVIDENCE INCOMPLETE:` line the moderator gave you into the verdict's `evidence_gaps`.
+The gate caps the confidence at MEDIUM when there are any.
 
 **Second-opinion mode** writes only `<topic>.second-opinion.json`:
-`{"schema":"sdlc.debate-second-opinion/v1","topic":…,"model":"<the exact model id from your system prompt>","verdict":…,"gap":…,"presentation_order":[…the reverse of the primary's…],"scores":{…every option, every criterion…},"decisive_factor":…,"claims_checked":[…]}`.
+`{"schema":"sdlc.debate-second-opinion/v1","topic":…,"request_sha":<REQUEST_SHA>,"model":"<the exact model id from your system prompt>","verdict":…,"gap":…,"presentation_order":[…the reverse of the primary's…],"scores":{…every option, every criterion…},"hardened_default":<security only>,"tie_break":<only if your verdict isn't your top total>,"decisive_factor":…,"claims_checked":[…]}`.
+- **Don't run `debate-status.py` in this mode.** Its output shows the first verdict, its totals and
+  its confidence.
+- **Your verdict is your own highest total.** The exceptions are the same as the primary's: the
+  hardened default for security below HIGH, or a recorded tie break.
 
 ### 8. Promote the verdict to the Decision Ledger (`MODE: primary` when clear-cut, else `MODE: promote`)
 
@@ -219,8 +231,11 @@ bash .claude/hooks/remember.sh decide --title "<topic, as a decision statement>"
   [--reverses D-MMM]   # when this overturns a prior decision
 ```
 
-It prints `D-NNN recorded`. Put that id in the verdict as `"decision_id"`. The gate blocks a v1
-verdict whose `D-NNN` block doesn't link to it.
+It prints `D-NNN recorded`. Put that id in the verdict as `"decision_id"`.
+- **`--decision` contains the verdict's `verdict_label` word for word.** The gate checks that the
+  active entry names the chosen option, so a re-run can't leave the old choice standing.
+- **If `remember.sh` refuses** with "D-NNN is already the active decision for …", pass
+  `--reverses D-NNN`. A re-run replaces the entry rather than adding a second live one.
 - **LOW or INCOMPLETE:** still record it. End the title with `[provisional: LOW]`, and add
   `(confidence: LOW, revisit if <reconsider_if>)` to the rationale. Every session sees ledger
   headings, so the marker has to be in the title, or a soft call reads as settled (board review

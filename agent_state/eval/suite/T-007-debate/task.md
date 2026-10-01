@@ -60,12 +60,20 @@ Act as the parent session under `/autonomous`, following `~/.claude/skills/core/
 
 **Run each debate in its own copy of the fixture.** Each copy has its own `docs/DECISIONS.md`, so no
 debate sees another's decision; two debates on one topic sharing a ledger would confound the
-position check. Then copy every copy's `agent_state/debates/` files and `docs/DECISIONS.md` entries
-into the scored workspace, keeping the D-NNN links. For each copy:
+position check.
+
+**Give copy *k* (1–5) its own id range.** Seed its ledger with one placeholder entry, `### D-<k>00 —
+eval id offset` with `- status: reversed`, so its decisions start at `D-<k>01`. Then copy every
+copy's `agent_state/debates/` files and `docs/DECISIONS.md` entries into the scored workspace,
+keeping the D-NNN links. The ids can't collide when merged.
+
+For each copy:
 1. Run `python3 .claude/hooks/debate-status.py --phase ${EVAL_PHASE}`. It lists the pending debate.
-2. Run `debate_moderator` for it and act on its return. For `order_retention`, the expected return is
-   `NEEDS_INPUT`, which under `/autonomous` means: record the agent's recommended default in
-   `agent_state/debates/unresolved.json`, with `reason` starting `needs_input:`.
+2. Run `debate_moderator` for it and act on its return. There's no requesting agent to relaunch, so
+   set each resolved request's `applied` to its verdict, as the parent would after a relaunch.
+   For `order_retention`, the expected return is `NEEDS_INPUT`, which under `/autonomous` means:
+   record the agent's recommended default in `agent_state/debates/unresolved.json`, with `reason`
+   starting `needs_input:`.
 
 ## Definition of done
 

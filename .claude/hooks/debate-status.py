@@ -29,7 +29,15 @@ human checkpoint should see.
   - needs a second opinion (HIGH impact, confidence below HIGH) and has none, or an invalid one
   - is a security decision a human must take: INCOMPLETE, or the second opinion disagrees (until
     <topic>.override.json records the human's choice)
-  - is a non-blocking request whose verdict differs from the default the requester built
+  - has a decision (verdict or override) the requester's work doesn't reflect yet: the request's
+    `applied` (or, for a non-blocking request, its `default_taken`) must name the decided option
+  - has more than one active D-NNN linking to its verdict, or one that names another option; an
+    override that never reached the ledger
+  - is a security or blocking request withdrawn without a person (`withdrawn_by: human:…`) or a
+    cited D-NNN
+Board review 2026-09-30-debate-2 found the round-1 version still trusted a few self-reported fields;
+the checks above, the confidence caps (an unverifiable decisive claim or a recorded evidence gap caps
+confidence at MEDIUM) and the second opinion's own consistency close them.
 Messages for security-domain topics start "security debate", so the gate can count them as
 security findings (a forced gate needs one acknowledgement each).
 
@@ -64,6 +72,9 @@ RUBRICS = {
 }
 DOMAINS = set(RUBRICS)
 CLAIM_RESULTS = {"confirmed", "contradicted", "unverifiable"}
+SECURITY_TERMS = re.compile(r"\b(auth\w*|token\w*|passwords?|credentials?|secrets?|crypt\w*|encrypt\w*|pii|cors|csrf|xss|"
+                            r"sessions?|tenant\w*|permissions?|rbac|acl|rate[ -]?limit\w*|oauth|jwt|cookies?|idor)\b", re.I)
+WITHDRAWN_OK = re.compile(r"\bD-\d+\b|raised inside debate [a-z0-9_-]+")
 NAMED = (".request.json", ".verdict.json", ".second-opinion.json", ".override.json")
 
 
@@ -165,6 +176,14 @@ def request_problems(req, rel):
             p.append("every option needs a label")
         if req.get("blocking") is False and req.get("status") != "withdrawn" and req.get("default_taken") not in ids:
             p.append("a non-blocking request must name the option the agent built as default_taken")
+        if req.get("applied") is not None and req.get("applied") not in ids:
+            p.append(f"applied {req.get('applied')!r} is not one of the options")
+        if (req.get("domain") or "") != "security" and not str(req.get("domain_reason") or "").strip():
+            text = " ".join([req.get("decision") or "", req.get("context") or ""] + [option_label(req, i) or "" for i in ids])
+            m = SECURITY_TERMS.search(text)
+            if m:
+                p.append(f"looks like a security decision (mentions '{m.group(0)}'): set domain to security, "
+                         "or say why it isn't in domain_reason (every security protection keys on the domain)")
     return p
 
 
@@ -254,8 +273,20 @@ def verdict_problems(ver, req, rel, root):
                 claimed = (ver["scores"].get(i) or {}).get("total")
                 if isinstance(claimed, (int, float)) and abs(claimed - t[i]) > 0.05:
                     p.append(f"option {i}'s total is {claimed} but its scores and the {domain} weights give {t[i]}")
+            cap, why = "HIGH", []
+            if any(c.get("result") == "unverifiable" for c in claims):
+                cap, why = "MEDIUM", why + ["a decisive claim is unverifiable"]
+            gaps = [g for g in ver.get("evidence_gaps") or [] if str(g).strip()]
+            tpath = os.path.join(root, "agent_state", "debates", f"{ver.get('topic')}.transcript.md")
+            if os.path.isfile(tpath):
+                gaps += [ln.strip() for ln in open(tpath, errors="replace") if ln.strip().startswith("EVIDENCE INCOMPLETE:")]
+            if gaps:
+                cap, why = "MEDIUM", why + ["the evidence has gaps (" + "; ".join(sorted(set(gaps))[:2]) + ")"]
+            derived["band"] = CONFIDENCE[min(CONFIDENCE.index(derived["band"]), CONFIDENCE.index(cap))]
+            derived["cap_reasons"] = why
             if conf in CONFIDENCE and CONFIDENCE.index(conf) > CONFIDENCE.index(derived["band"]):
-                p.append(f"confidence {conf} but the scores give a gap of {gap} ({derived['band']})")
+                p.append(f"confidence {conf} but the scores give a gap of {gap}" +
+                         (f" and {', '.join(why)}" if why else "") + f" ({derived['band']} at most)")
             v = ver.get("verdict")
             if v in t and t[v] < ranked[0][1] - 0.005:
                 hardened_ok = domain == "security" and v == ver.get("hardened_default") and derived["band"] != "HIGH"
@@ -275,12 +306,28 @@ def verdict_problems(ver, req, rel, root):
         missing = [n for n in need if not os.path.isfile(os.path.join(ddir, n)) or os.path.getsize(os.path.join(ddir, n)) == 0]
         if missing:
             p.append("no debate behind the verdict: missing " + ", ".join(missing))
+        thin = []
+        for n in need:
+            f = os.path.join(ddir, n)
+            if n in missing or not os.path.isfile(f):
+                continue
+            text = open(f, errors="replace").read()
+            if ".research-" in n and (len(text) < 200 or not re.search(r"https?://|[\w./-]+\.\w+:\d+", text)):
+                thin.append(n + " (a brief needs findings with a URL or file:line source)")
+            elif ".argument-" in n and len(text) < 200:
+                thin.append(n + " (an argument needs its evidence and weaknesses)")
+            elif n.endswith(".transcript.md") and not all(f"research-{i}" in text for i in ids):
+                thin.append(n + " (the transcript must list every child and its file)")
+        if thin:
+            p.append("debate artifacts too thin to be a debate: " + "; ".join(thin))
     return p, derived
 
 
 def second_problems(sec, ver, req, domain):
     p = []
     ids = option_ids(req)
+    if req is not None and sec.get("request_sha") != request_sha(req):
+        p.append("second opinion is from an earlier version of the request (request_sha differs)")
     if sec.get("schema") != SECOND_SCHEMA:
         p.append(f"second opinion is not {SECOND_SCHEMA}")
     if not sec.get("verdict") or (ids and sec.get("verdict") not in ids):
@@ -292,7 +339,16 @@ def second_problems(sec, ver, req, domain):
         p.append("second opinion didn't read the options in the reverse presentation order")
     rubric = RUBRICS.get(domain)
     if rubric and ids:
-        p += score_problems(sec.get("scores"), ids, rubric, "second opinion")
+        sp = score_problems(sec.get("scores"), ids, rubric, "second opinion")
+        p += sp
+        if not sp:
+            t = totals(sec["scores"], ids, rubric)
+            top = max(t.values())
+            v = sec.get("verdict")
+            if v in t and t[v] < top - 0.005 and not str(sec.get("tie_break") or "").strip() \
+                    and not (domain == "security" and v == sec.get("hardened_default")):
+                best = max(t, key=lambda k: t[k])
+                p.append(f"second opinion's verdict {v} scores {t[v]}, below its own top option {best} at {top}")
     return ["second opinion: " + x if not x.startswith("second opinion") else x for x in p]
 
 
@@ -303,12 +359,27 @@ def decision_blocks(text):
     return blocks
 
 
-def promoted(ver, blocks, rel):
+def linked(blocks, rel, active_only=True):
     link = re.compile(r"^- link:\s*" + re.escape(rel) + r"\s*$", re.M)
-    did = ver.get("decision_id")
-    if did:
-        return bool(blocks.get(did) and link.search(blocks[did]))
-    return any(link.search(b) for b in blocks.values())
+    return {d: b for d, b in blocks.items() if link.search(b) and (not active_only or re.search(r"^- status:\s*active\b", b, re.M))}
+
+
+def ledger_problems(ver, blocks, rel):
+    """Why the ledger doesn't (correctly) record this verdict, or [] when it does."""
+    act = linked(blocks, rel)
+    if not act:
+        return [f"has no active D-NNN in docs/DECISIONS.md linking to {rel} (remember.sh decide)"]
+    if len(act) > 1:
+        return [f"has {len(act)} active D-NNN entries linking to its verdict ({', '.join(sorted(act))}): reverse the older with --reverses"]
+    did, block = next(iter(act.items()))
+    out = []
+    if ver.get("decision_id") and ver.get("decision_id") != did:
+        out.append(f"verdict names {ver.get('decision_id')} but the active ledger entry for it is {did}")
+    m = re.search(r"^- decision:\s*>?\s*(.*)$", block, re.M)
+    label = str(ver.get("verdict_label") or "").strip().lower()
+    if m and label and label not in m.group(1).lower():
+        out.append(f"{did} records '{m.group(1).strip()}', not the verdict '{ver.get('verdict_label')}' (re-run left the old decision active?)")
+    return out
 
 
 def build(root, phase=None):
@@ -396,10 +467,17 @@ def build(root, phase=None):
 
         # status
         if req is not None and req.get("status") == "withdrawn":
-            ok = len((req.get("withdrawn_reason") or "").strip()) >= 20
+            reason = (req.get("withdrawn_reason") or "").strip()
+            ok = len(reason) >= 20
             item["status"] = "withdrawn" if ok else "invalid"
             if not ok:
                 item["problems"].append("request: withdrawn without a withdrawn_reason (a sentence: why it no longer applies)")
+            else:
+                item["review"].append("withdrawn: " + reason)
+                needs_person = domain == "security" or req.get("blocking", True) is not False
+                if needs_person and not str(req.get("withdrawn_by") or "").startswith("human:") and not WITHDRAWN_OK.search(reason):
+                    tag = "security debate" if domain == "security" else "debate"
+                    item["gate"].append(f"{tag} '{t}' was withdrawn without a person (withdrawn_by: human:<name>) or a D-NNN that decides it")
         elif item["problems"]:
             item["status"] = "invalid"
         elif ov is not None:
@@ -425,6 +503,22 @@ def build(root, phase=None):
 
         # review reasons and gate reasons
         sec_tag = "security debate" if domain == "security" else "debate"
+        if ov is not None and item["status"] == "overridden":
+            orel = ov[1]
+            if not linked(blocks, orel):
+                item["gate"].append(f"{sec_tag} '{t}': the override never reached docs/DECISIONS.md (remember.sh decide --link {orel}"
+                                    + (f" --reverses {ver.get('decision_id')})" if ver is not None and ver.get("decision_id") else ")"))
+            elif ver is not None and ver.get("decision_id") and ver.get("decision_id") in linked(blocks, ver_rel):
+                item["gate"].append(f"{sec_tag} '{t}': {ver.get('decision_id')} for the overridden verdict is still active (reverse it)")
+        decided = (ov[0].get("user_override") if ov is not None and item["status"] == "overridden"
+                   else ver.get("verdict") if ver is not None and item["status"] == "resolved" else None)
+        if req is not None and decided and req.get("schema") == REQ_SCHEMA:
+            applied = req.get("applied", req.get("default_taken"))
+            if applied != decided:
+                who = item["from_agent"] or "the requester"
+                built = f"built option {applied}" if applied else "hasn't applied it yet"
+                item["gate"].append(f"{sec_tag} '{t}': the decision is {decided} but {who} {built}: relaunch it with "
+                                    f"DECISION {t}, then set the request's applied to {decided}")
         if ver is not None and item["status"] in ("resolved", "overridden"):
             v1 = ver.get("schema") == VERDICT_SCHEMA
             if (item["confidence"] or "") == "LOW":
@@ -443,6 +537,8 @@ def build(root, phase=None):
                                       (f"; must_override: {ver.get('must_override')}" if ver.get("must_override") else ""))
             needs_second = v1 and impact == "HIGH" and derived is not None and \
                 (derived["band"] != "HIGH" or (item["confidence"] or "HIGH") != "HIGH")
+            if derived and derived.get("cap_reasons"):
+                item["review"].append("confidence capped at MEDIUM: " + "; ".join(derived["cap_reasons"]))
             disagrees = False
             if sec is not None:
                 sp = second_problems(sec, ver, req, domain or "architecture")
@@ -461,16 +557,14 @@ def build(root, phase=None):
                 if item["status"] == "resolved":
                     item["gate"].append(f"{sec_tag} '{t}' is a close HIGH-impact call with no second opinion ({t}.second-opinion.json)")
             if item["status"] == "resolved":
-                if v1 and not promoted(ver, blocks, ver_rel):
+                lp = ledger_problems(ver, blocks, ver_rel) if v1 else []
+                if lp:
                     item["review"].append("not promoted to docs/DECISIONS.md")
-                    item["gate"].append(f"{sec_tag} '{t}' verdict has no D-NNN in docs/DECISIONS.md linking to {ver_rel} (remember.sh decide)")
+                    item["gate"] += [f"{sec_tag} '{t}' verdict " + x for x in lp]
                 if domain == "security" and ver.get("status") == "INCOMPLETE":
                     item["gate"].append(f"security debate '{t}' is INCOMPLETE: a person decides (record it in {t}.override.json)")
                 if domain == "security" and disagrees:
                     item["gate"].append(f"security debate '{t}': the second opinion disagrees, so a person decides (record it in {t}.override.json)")
-                dt = (req or {}).get("default_taken")
-                if req is not None and req.get("blocking") is False and dt and dt != ver.get("verdict"):
-                    item["gate"].append(f"{sec_tag} '{t}': {item['from_agent'] or 'the requester'} built option {dt}, the verdict is {ver.get('verdict')}: relaunch it with the decision, then set default_taken to {ver.get('verdict')}")
         if req is not None and req_phase is None:
             item["review"].append("request has no phase field")
         if item["status"] == "pending":

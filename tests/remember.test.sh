@@ -81,6 +81,20 @@ after="$(grep -c '^### D-' "$D")"; uniq_ids="$(grep -o '^### D-[0-9]*' "$D" | so
   && ok "12 parallel decides record 12 entries with 12 distinct ids" || bad "parallel decides lost or duplicated entries ($before → $after, $uniq_ids distinct)"
 ls "$W/docs"/.DECISIONS.*.tmp >/dev/null 2>&1 && bad "temp files left behind in docs/" || ok "no temp files left behind"
 
+# One active decision per linked artifact (board review 2026-09-30-debate-2, AI-11): a second decide with the
+# same --link must reverse the first.
+CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "Store orders" --scope global --date 2026-10-01 --source debate \
+  --link agent_state/debates/order_store.verdict.json --decision "PostgreSQL" --rationale "atomic writes" >/dev/null 2>&1
+first="$(grep -o '^### D-[0-9]* — Store orders' "$D" | grep -o 'D-[0-9]*')"
+out="$(CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "Store orders again" --scope global --date 2026-10-01 --source debate \
+  --link agent_state/debates/order_store.verdict.json --decision "Document store" --rationale "re-run" 2>&1)"; rc=$?
+[ "$rc" != 0 ] && echo "$out" | grep -q "already the active decision" && ! grep -q 'Store orders again' "$D" \
+  && ok "a second decide for the same link is refused without --reverses" || bad "duplicate active decision recorded (rc=$rc)"
+CLAUDE_PROJECT_DIR="$W" bash "$R" decide --title "Store orders again" --scope global --date 2026-10-01 --source debate \
+  --link agent_state/debates/order_store.verdict.json --decision "Document store" --rationale "re-run" --reverses "$first" >/dev/null 2>&1 \
+  && awk -v f="$first" '$0 ~ "^### "f" " {p=1} p&&/^- status: reversed/{r=1} /^### /&&$0 !~ "^### "f" "{p=0} END{exit !r}' "$D" \
+  && ok "…and accepted with --reverses, which retires the first" || bad "--reverses for the same link failed"
+
 echo "────────────────────────────────────────────"
 echo "remember.test.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

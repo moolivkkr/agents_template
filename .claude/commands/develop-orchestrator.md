@@ -232,6 +232,10 @@ for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py ac
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
 P="agent_state/phases/${PHASE}"; mkdir -p "$P/junit" "$P/reports" agent_state/config
+# Decisions raised during /plan, /discuss or /design are made before any code is written
+# (child-returns.md § "Before a command finishes"): dispatch every topic this lists, then re-check.
+python3 .claude/hooks/debate-status.py --phase "${PHASE}" --check \
+  || echo "⛔ Open debates above: run debate_moderator for each (and relaunch requesters) before Wave 2"
 # 1. The project's real commands (IMPLEMENTATION_GUIDELINES §Commands and versions) as JSON. Every agent,
 #    test_runner and the gate's execution check (verify-gate.sh (e)) run exactly these — nobody guesses.
 python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out agent_state/config/verify-commands.json \

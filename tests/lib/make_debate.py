@@ -24,6 +24,7 @@ ap.add_argument("--phase", type=int, default=1); ap.add_argument("--domain", def
 ap.add_argument("--impact", default="HIGH"); ap.add_argument("--verdict", default="A")
 ap.add_argument("--no-promote", action="store_true"); ap.add_argument("--request-only", action="store_true")
 ap.add_argument("--blocking", default="true"); ap.add_argument("--default-taken")
+ap.add_argument("--decision-id", default="D-001"); ap.add_argument("--not-applied", action="store_true")
 a = ap.parse_args()
 
 d = os.path.join(a.root, "agent_state", "debates"); os.makedirs(d, exist_ok=True)
@@ -35,17 +36,23 @@ req = {"schema": "sdlc.debate-request/v1", "type": "debate_request", "topic": a.
        "options": [{"id": i, "label": f"option {i}"} for i in ids]}
 if a.default_taken:
     req["default_taken"] = a.default_taken
+if not a.request_only and not a.not_applied:
+    req["applied"] = a.verdict          # the parent relaunched the requester with the decision
 put(f"{a.topic}.request.json", req)
 if a.request_only:
     sys.exit(0)
 rubric = ds.RUBRICS[a.domain]
 scores = {i: {c: (8 if i == a.verdict else 5) for c in rubric} for i in ids}
 for i in ids:
-    put(f"{a.topic}.research-{i}.md", f"# Research: option {i}\n- claim (https://example.org/{i})\n")
+    put(f"{a.topic}.research-{i}.md", f"# Research: option {i}\n\n## Evidence by criterion\n| Criterion | For | Against | Source |\n"
+        f"|---|---|---|---|\n| brd_alignment | meets the in-scope FRs directly | none found | https://example.org/{i}/docs |\n"
+        f"| feasibility | the stack already does this | some migration work | docs/IMPLEMENTATION_GUIDELINES.md:42 |\n")
     if a.impact == "HIGH":
-        put(f"{a.topic}.argument-{i}.md", f"# Argument for option {i}\n")
-put(f"{a.topic}.transcript.md", "# Transcript\n")
-did = "D-001"
+        put(f"{a.topic}.argument-{i}.md", f"# Argument for option {i}\n\n## Top strengths\n1. Meets the in-scope FRs ({a.topic}.research-{i}.md).\n"
+            "## Why the alternatives fit worse\n- They need integrity checks in application code.\n"
+            "## Weaknesses I acknowledge\n- Migration effort; mitigated by expand/contract.\n")
+put(f"{a.topic}.transcript.md", "# Transcript\n" + "".join(f"- debate_researcher {i}: COMPLETE, {a.topic}.research-{i}.md\n" for i in ids))
+did = a.decision_id
 ver = {"schema": "sdlc.debate-verdict/v1", "topic": a.topic, "phase": a.phase, "impact": a.impact, "domain": a.domain,
        "status": "RESOLVED", "verdict": a.verdict, "verdict_label": f"option {a.verdict}", "confidence": "HIGH",
        "rubric": a.domain, "presentation_order": ["B", "A"], "scores": scores, "gap": 3.0, "decisive_factor": "brd_alignment",
@@ -57,4 +64,4 @@ put(f"{a.topic}.verdict.json", ver)
 if not a.no_promote:
     os.makedirs(os.path.join(a.root, "docs"), exist_ok=True)
     with open(os.path.join(a.root, "docs", "DECISIONS.md"), "a") as fh:
-        fh.write(f"\n### {did} — {a.topic}\n- status: active\n- link: agent_state/debates/{a.topic}.verdict.json\n")
+        fh.write(f"\n### {did} — {a.topic}\n- status: active\n- link: agent_state/debates/{a.topic}.verdict.json\n- decision: > option {a.verdict}\n")

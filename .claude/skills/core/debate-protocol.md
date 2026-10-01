@@ -104,8 +104,15 @@ checkpoint all use it; none of them glob file names.
     `default_taken`.
   - The debate still runs, right after the wave that raised it. The gate blocks until it has and,
     if the verdict differs, until the agent was relaunched with it and `default_taken` updated.
+- `applied`: set by the parent when it relaunches the requester with the decision. The gate checks
+  that the decision was applied, not just made. A non-blocking request's `default_taken` counts as
+  applied when the verdict agrees with it.
+- `domain_reason`: required when the request reads like a security decision (tokens, sessions,
+  auth, tenants, rate limits…) but `domain` isn't `security`. Every security protection keys on the
+  domain, so the gate asks why.
 - To drop a request that no longer applies, set `"status": "withdrawn"` and a `"withdrawn_reason"`
-  (at least a sentence). Don't delete it.
+  (at least a sentence). Don't delete it. A security or blocking request also needs
+  `"withdrawn_by": "human:<name>"` or a reason citing the `D-NNN` that settles it.
 
 ### Verdict (`sdlc.debate-verdict/v1`)
 
@@ -160,8 +167,11 @@ checkpoint all use it; none of them glob file names.
 - `hardened_default`: required for `domain: security` unless the status is `INCOMPLETE`. It names
   the more restrictive option, the one that fails closed. A security call below HIGH confidence that
   isn't the hardened default needs `must_override`, naming the MUST requirement that rules it out.
-- `decision_id`: the `D-NNN` that `remember.sh decide` returned. Its ledger block must link to this
-  verdict.
+- `decision_id`: the `D-NNN` that `remember.sh decide` returned. Exactly one active ledger block
+  may link to this verdict. It must be this id, and its decision must name `verdict_label`.
+  `remember.sh` refuses a second active entry for the same link unless it reverses the first.
+- `evidence_gaps`: the moderator's `EVIDENCE INCOMPLETE:` lines. Any gap (here or in the transcript),
+  or a decisive claim checked as `unverifiable`, caps the confidence at MEDIUM.
 - `kind: "assumption"` and `none_ideal: true` are carried when they apply.
 
 ### Second opinion (`sdlc.debate-second-opinion/v1`)
@@ -170,6 +180,10 @@ checkpoint all use it; none of them glob file names.
 
 **When it's required:** for HIGH impact whenever the recomputed gap, or the verdict's own
 confidence, is below HIGH.
+
+**It must belong to this request:** it carries the same `request_sha` as the verdict. A second
+opinion left from an earlier version of the request doesn't count. Its verdict must be its own
+highest total, with the same exceptions as the primary's.
 
 **How it stays independent:**
 - It reads the options in the reverse presentation order.

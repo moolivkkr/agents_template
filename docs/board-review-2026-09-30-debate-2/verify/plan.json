@@ -1,0 +1,15 @@
+{
+  "V1": {
+    "hats": [
+      "architect",
+      "tester"
+    ],
+    "count": 27
+  },
+  "V2": {
+    "hats": [
+      "ai_engineer"
+    ],
+    "count": 10
+  }
+}

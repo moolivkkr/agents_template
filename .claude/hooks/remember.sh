@@ -80,6 +80,15 @@ text = open(path).read() if os.path.exists(path) else "# DECISIONS\n\nSettled de
 live = re.sub(r"<!--.*?-->", "", text, flags=re.S)                       # ignore commented examples
 ids = [int(n) for n in re.findall(r"^### D-(\d+)", live, re.M)]
 new = f"D-{(max(ids) + 1 if ids else 1):03d}"
+# One active decision per artifact: a second entry linking the same verdict (a re-run, a re-spawned
+# arbitrator) must reverse the first, or the ledger holds two live answers to one question
+# (board review 2026-09-30-debate-2, AI-11/TEST-06).
+if link and link != "—":
+    for m in re.finditer(r"^### (D-\d+)\b.*?(?=^### |\Z)", live, re.M | re.S):
+        blk = m.group(0)
+        if re.search(r"^- status:\s*active\b", blk, re.M) and re.search(r"^- link:\s*" + re.escape(link) + r"\s*$", blk, re.M) \
+                and m.group(1) != reverses:
+            sys.exit(f"remember decide: {m.group(1)} is already the active decision for {link}; pass --reverses {m.group(1)} to replace it")
 if reverses:
     m = re.search(rf"^### {re.escape(reverses)}\b.*?(?=^### |\Z)", text, re.M | re.S)
     if not m:

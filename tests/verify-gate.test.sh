@@ -338,7 +338,7 @@ LAST_OUT="$(run_hook "$D" 1)"; check "pending blocking debate BLOCKs the gate (n
 D=$(new_phase debate_resolved); full_phase "$D"; python3 "$MKD" "$D" cache_strategy
 LAST_OUT="$(run_hook "$D" 1)"; check "a complete, promoted debate PASSes" 0 "$?"
 D=$(new_phase debate_unpromoted); full_phase "$D"; python3 "$MKD" "$D" cache_strategy --no-promote
-LAST_OUT="$(run_hook "$D" 1)"; check "verdict never promoted to DECISIONS.md BLOCKs" 2 "$?" "no D-NNN in docs/DECISIONS.md"
+LAST_OUT="$(run_hook "$D" 1)"; check "verdict never promoted to DECISIONS.md BLOCKs" 2 "$?" "D-NNN in docs/DECISIONS.md"
 D=$(new_phase debate_bad_option); full_phase "$D"; python3 "$MKD" "$D" cache_strategy --verdict C
 LAST_OUT="$(run_hook "$D" 1)"; check "verdict for an option the request never offered BLOCKs" 2 "$?" "not one of the requested options"
 D=$(new_phase debate_verdict_only); full_phase "$D"; python3 "$MKD" "$D" cache_strategy; rm "$D"/agent_state/debates/cache_strategy.research-*.md "$D"/agent_state/debates/cache_strategy.argument-*.md
@@ -368,9 +368,13 @@ LAST_OUT="$(run_hook "$D" 1)"; check "a pending security debate can't be forced 
 echo '{"phase":1,"blockers":[{"debate":"token_storage"}],"user_rationale":"ship it","security_acknowledged":[{"finding":"token_storage debate","approved_by":"owner","reason":"cookie chosen in review call"}]}' > "$D/agent_state/phases/1/gate.forced"
 LAST_OUT="$(run_hook "$D" 1)"; check "…and can with one" 0 "$?" "FORCED PASS"
 D=$(new_phase debate_artifact_words); full_phase "$D"; python3 "$MKD" "$D" io_model
-printf '# Research: A\nKnown weakness: blocking I/O on the hot path (BLOCKING in the old driver)\n' > "$D/agent_state/debates/io_model.research-A.md"
+printf '# Research: option A\n\n## Evidence by criterion\n| Criterion | For | Against | Source |\n|---|---|---|---|\n| feasibility | mature driver | blocking I/O on the hot path (BLOCKING in the old driver) | https://example.org/driver |\n' > "$D/agent_state/debates/io_model.research-A.md"
 echo '{"agent":"debate_researcher","phase":1,"status":"completed","report":"agent_state/debates/io_model.research-A.md","ts":"t"}' >> "$D/agent_state/phases/1/execution.jsonl"
 LAST_OUT="$(run_hook "$D" 1)"; check "a research brief that mentions 'blocking I/O' is not read as a BLOCKING finding" 0 "$?" "debate artifact exists"
+D=$(new_phase debate_two_in_phase); full_phase "$D"; python3 "$MKD" "$D" cache_strategy --decision-id D-001; python3 "$MKD" "$D" queue_choice --decision-id D-002
+LAST_OUT="$(run_hook "$D" 1)"; check "two complete debates in one phase PASS (distinct ledger entries)" 0 "$?"
+D=$(new_phase debate_not_applied); full_phase "$D"; python3 "$MKD" "$D" cache_strategy --not-applied
+LAST_OUT="$(run_hook "$D" 1)"; check "a verdict the requester was never relaunched with BLOCKs" 2 "$?" "hasn't applied it yet"
 D=$(new_phase debate_path_escape); full_phase "$D"; mkdir -p "$D/agent_state/debates"
 echo "rerun" > "$D/agent_state/phases/1/reports/rerun.md"
 sidecar "$D/agent_state/phases/1/reports/rerun.json" FAIL 10 3 ",\"code_sha\":\"$(code_sha "$D")\",\"dirty\":false"

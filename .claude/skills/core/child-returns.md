@@ -64,9 +64,10 @@ handles it and relaunches you.
 
    | Moderator returns | What you do |
    |---|---|
-   | `COMPLETE <topic>: <label> (<confidence>)` | Relaunch the requesting agent with its original prompt plus `DECISION <topic>: <label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.` In an interactive run, first show the user any review reasons the moderator listed. Under `--auto` they go to the review list below. |
-   | `PARTIAL` (INCOMPLETE verdict, or the second opinion couldn't run) | Interactive: show the user and ask whether to accept the verdict or decide themselves. `--auto`: a non-security topic continues with the verdict and goes to the review list; a security topic stops the run for the user (`/autonomous`: `awaiting_human`). |
-   | `BLOCKED <topic>: already decided by D-NNN` | Relaunch the requester with `DECISION <topic>: see D-NNN`, then withdraw the request (`"status": "withdrawn"`, `withdrawn_reason`). |
+   | `COMPLETE <topic>: <label> (<confidence>)` | Relaunch the requesting agent with its original prompt plus `DECISION <topic>: <label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.` Then set the request's `"applied"` to the verdict's option; the gate checks the decision was applied, not just made. In an interactive run, first show the user any review reasons the moderator listed. Under `--auto` they go to the review list below. |
+   | `PARTIAL <topic>: needs a person: …` (a security debate that is INCOMPLETE, or whose second opinion disagrees) | Ask the person. Their choice goes in `<topic>.override.json` (§ "When the user overrides a verdict"), even when they confirm the verdict. Under `/autonomous` the run stops (`awaiting_human`, `reason: "security_debate"`). |
+   | `PARTIAL` (INCOMPLETE verdict, or the second opinion couldn't run) | Interactive: show the user and ask whether to accept the verdict or decide themselves. `--auto`: a non-security topic continues with the verdict (relaunch, set `applied`) and goes to the review list. A security topic stops the run for the user (`/autonomous`: `awaiting_human`). |
+   | `BLOCKED <topic>: already decided by D-NNN` | Relaunch the requester with `DECISION <topic>: see D-NNN`, then withdraw the request (`"status": "withdrawn"`, a `withdrawn_reason` that cites the D-NNN). |
    | `BLOCKED` with request problems | Relaunch the requester to fix its request, then run the moderator again. |
    | `NEEDS_INPUT` (missing data or an ambiguous requirement) | Handle it as the `NEEDS_INPUT` row above. The question goes to the user, not to a debate. |
 
@@ -74,13 +75,39 @@ handles it and relaunches you.
    fix loop, a replan cap), write the request yourself first, with `from_agent` set to your command's
    name, then follow steps 2–4. The gate only sees debates that have a request file.
 
+## Before a command finishes, and before code is written
+
+Debates raised during `/plan`, `/discuss` or `/design` must be decided before `/develop` builds on
+them. Otherwise the code follows the requester's default, and the gate finds out after
+everything is built (board review 2026-09-30-debate-2, ARCH-03). So every command that spawns
+agents ends with:
+
+```bash
+python3 .claude/hooks/debate-status.py --phase "${PHASE}" --check
+```
+
+- **It exits 2:** run the moderator for every topic whose `gate` list isn't empty. That covers
+  pending requests and unfinished debates the moderator resumes. Relaunch requesters whose decision
+  isn't applied, and repeat. A topic waiting for a person stays open, and you report it to the user.
+- **`/develop`:** runs the same check before Wave 2. No code is written against an undecided choice.
+
+## Withdrawing a request
+
+A request that no longer applies gets `"status": "withdrawn"` and a `withdrawn_reason`. For a
+security-domain or blocking request, the gate also needs either of these:
+- the person who decided: `"withdrawn_by": "human:<name>"`
+- a reason that cites the `D-NNN` that settles it
+
+An agent can't make a security decision disappear on its own.
+
 ## Non-blocking requests
 
 An agent that continued on a default has filed a request with `"blocking": false` and
 `"default_taken": "<id>"`.
 - **When to run it:** right after the wave that raised it, not at the gate.
 - **If the verdict differs** from `default_taken`: relaunch that agent with the decision, then set the
-  request's `default_taken` to the verdict.
+  request's `applied` to the verdict. Until `applied` (or, for an agent that guessed right,
+  `default_taken`) matches the decision, the gate blocks.
 
 `debate-status.py --check` blocks the gate until both have happened. If code changed as a result, go
 back through the phase's re-verification (`/develop`: Wave 5v, including the security re-review)
@@ -108,7 +135,10 @@ How each kind of run surfaces them:
 1. Write `agent_state/debates/<topic>.override.json`: `{topic, original_verdict, user_override,
    user_rationale, overridden_at, phase}`.
 2. Append the same record to `overrides.jsonl`.
-3. Record the reversal: `remember.sh decide … --reverses <the verdict's D-NNN>`.
-4. Relaunch the agent that built on the verdict with `DECISION <topic>: <user_override> (override)`.
+3. Record the reversal: `remember.sh decide … --link agent_state/debates/<topic>.override.json
+   --reverses <the verdict's D-NNN>`. The gate checks the override reached the ledger and the old
+   entry is reversed.
+4. Relaunch the agent that built on the verdict with `DECISION <topic>: <user_override> (override)`,
+   then set the request's `applied` to `user_override`.
 5. If an earlier phase already implemented the reversed decision, add a carried-forward item to this
    phase's manifest.

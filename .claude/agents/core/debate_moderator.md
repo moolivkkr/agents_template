@@ -78,7 +78,13 @@ python3 .claude/hooks/debate-status.py --request-sha <topic>     # REQUEST_SHA f
   with the question for the human. A debate can't produce a fact about this project or decide what
   the product owner meant (protocol § "When a debate is the right tool"). This holds under `--auto`
   too; the parent records the default.
-- **Already resolved** (a valid, current verdict exists): return it as is. Don't re-run the debate.
+- **Already resolved:** a valid, current verdict exists, and the topic's `gate` list is empty or
+  only says the requester hasn't applied the decision yet. Return it as is; the parent relaunches
+  the requester. Don't re-run the debate.
+- **Started but unfinished:** a valid verdict, but `gate` lists a missing second opinion, a missing
+  or wrong ledger entry, or a missing transcript. Resume at that step (7, 8 or 9) instead of
+  re-running the debate. Read the `gate` list as well as `problems`: several states block the gate
+  without being a problem in the verdict itself (board review 2026-09-30-debate-2, TEST-14).
 - **An active `docs/DECISIONS.md` entry already decides it** under another topic: return `BLOCKED
   <topic>: already decided by D-NNN`, unless the request cites new evidence against it.
 - **A stale verdict** (the request changed since it was judged): run the debate. Pass the old
@@ -123,7 +129,7 @@ Act on the first line, and check the child's output file exists and isn't empty:
 | First line | What you do |
 |---|---|
 | `COMPLETE` | Use it. |
-| `PARTIAL` or `BLOCKED` | A gap, not a result to re-run. Record it in the transcript and pass `EVIDENCE INCOMPLETE: <option>: <what's missing>` to the arbitrator, which caps its confidence at MEDIUM. |
+| `PARTIAL` or `BLOCKED` | A gap, not a result to re-run. Write it into the transcript as a line starting `EVIDENCE INCOMPLETE: <option>: <what's missing>`, and pass the same line to the arbitrator. The gate reads those lines and caps the verdict's confidence at MEDIUM. |
 | `NEEDS_INPUT` | The question is missing data, which no debate settles. Stop and return `NEEDS_INPUT` with the child's question. |
 | `NEEDS_DECISION` | Debate children must not raise debates. Treat it as a gap. If the child wrote a request file, mark it withdrawn: `"status": "withdrawn"`, `"withdrawn_reason": "raised inside debate <topic>; recorded there as a gap"`. |
 | anything else | A progress note, not a result ("I'll now…", a summary of next steps, an offer to continue). Opus 5.5 sometimes ends a long turn that way. Re-spawn that child, waiting for it as above, with its original prompt plus `Your previous run ended before finishing (it returned: "<first line>"). Files already written: <paths>. Finish the assignment in this run.` At most two re-spawns, then it's a gap. Don't use SendMessage: a resumed agent runs in the background. |
@@ -139,7 +145,14 @@ score. Check the returns as in step 4.
 
 MEDIUM impact skips advocacy: the arbitrator judges the research briefs directly.
 
-### 6. Spawn the arbitrator (`MODE: primary`)
+### 6. Write the transcript so far, then spawn the arbitrator (`MODE: primary`)
+
+First write `agent_state/debates/<topic>.transcript.md` with what has happened up to now:
+- each child, its first line and its file
+- the `EVIDENCE INCOMPLETE:` lines
+- the presentation order
+
+The arbitrator's self-check and the gate both need it, and step 9 completes it.
 
 Give it:
 - **a neutral view of the request:** decision, context, domain, impact, kind, and the option ids and
@@ -181,9 +194,9 @@ Spawn the arbitrator once more, with `MODE: promote`. It reads the second opinio
 reconcile the two judgments yourself. `debate-status.py` compares them; a disagreement on a
 security topic waits for a person, and on other topics it goes to the review list.
 
-### 9. Write the transcript
+### 9. Complete the transcript
 
-Write `agent_state/debates/<topic>.transcript.md`:
+Bring `agent_state/debates/<topic>.transcript.md` up to date:
 - every child you spawned, with its first line and output file
 - re-spawns, gaps and spawn errors
 - the presentation order
@@ -198,11 +211,17 @@ It's an index to the artifacts, not a copy of them.
 python3 .claude/hooks/debate-status.py --json | jq '.topics[] | select(.topic=="<topic>")'
 ```
 
+Read both `problems` and `gate`.
+
 | The topic's state | Your first line |
 |---|---|
-| `resolved`, no problems | `COMPLETE <topic>: <verdict_label> (<confidence>)` |
+| `resolved`, and `gate` is empty or only says the decision isn't applied yet | `COMPLETE <topic>: <verdict_label> (<confidence>)` |
+| `gate` says a person decides (a security debate that is INCOMPLETE, or whose second opinion disagrees) | `PARTIAL <topic>: needs a person: <the gate reason>` |
 | verdict `INCOMPLETE`, or the second opinion couldn't run | `PARTIAL <topic>: <why>` |
-| problems listed (`invalid`) | `BLOCKED <topic>:`, with the problems |
+| `gate` lists a step you own (second opinion, ledger entry, transcript) | Do that step first (7, 8 or 9), then check again. |
+| problems listed (`invalid`), or `stale` | `BLOCKED <topic>:`, with the problems |
+
+Never return COMPLETE while `gate` lists anything but the not-yet-applied decision.
 
 After the first line, list every review reason (LOW confidence, a disagreeing second opinion,
 security not hardened, assumption). The parent shows them to the person or puts them on the review

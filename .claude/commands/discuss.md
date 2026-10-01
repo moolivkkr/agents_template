@@ -16,6 +16,8 @@ arguments:
 
 # /discuss — Pre-Planning Context Gathering
 
+> **Before this command finishes:** run `~/.claude/skills/core/child-returns.md` § "Before a command finishes", so every debate this phase raised is decided before `/develop` builds on it.
+>
 > **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
 
 > **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this

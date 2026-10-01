@@ -305,15 +305,28 @@ def merge(run):
                     st = stats[v.get("verifier")]
                     st["severity_up" if up else "severity_down"] += 1
             final[f["id"]] = item
-    # fold duplicates into their target
-    for fid in [k for k, f in final.items() if f.get("duplicate_of")]:
-        tgt = final.get(final[fid]["duplicate_of"])
-        if tgt is not None and tgt is not final[fid]:
-            tgt["agents"] = sorted(set(tgt.get("agents") or []) | set(final[fid].get("agents") or []))
-            tgt.setdefault("duplicates", []).append(fid)
-            if SEVERITIES.index(final[fid]["severity"]) < SEVERITIES.index(tgt["severity"]):
-                tgt["severity"] = final[fid]["severity"]
-            del final[fid]
+    # fold duplicates into their target, following chains (A dup of B, B dup of C -> both into C). Roots are
+    # computed on the original graph before anything is deleted; a cycle (two verifiers marking each other's
+    # finding) is left unfolded rather than guessed.
+    dup = {k: f["duplicate_of"] for k, f in final.items() if f.get("duplicate_of") in final and f.get("duplicate_of") != k}
+
+    def root(fid):
+        seen = set()
+        while fid in dup and fid not in seen:
+            seen.add(fid)
+            fid = dup[fid]
+        return fid
+    roots = {fid: root(fid) for fid in dup}
+    for fid, tgt_id in sorted(roots.items()):
+        if tgt_id == fid or roots.get(tgt_id, tgt_id) != tgt_id or fid not in final or tgt_id not in final:
+            continue
+        src, tgt = final[fid], final[tgt_id]
+        tgt["agents"] = sorted(set(tgt.get("agents") or []) | set(src.get("agents") or []))
+        tgt.setdefault("duplicates", []).append(fid)
+        if SEVERITIES.index(src["severity"]) < SEVERITIES.index(tgt["severity"]):
+            tgt["severity"] = src["severity"]
+        tgt["verified"] = bool(tgt.get("verified") or src.get("verified"))
+        del final[fid]
     hats = sorted(coverage)
     scores, basis = {}, {}
     for a in sorted(targets):

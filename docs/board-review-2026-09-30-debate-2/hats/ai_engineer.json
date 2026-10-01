@@ -1,0 +1,467 @@
+{
+  "schema": "sdlc.board-findings/v1",
+  "hat": "ai_engineer",
+  "run": "2026-09-30-debate-2",
+  "targets": [
+    "debate_moderator",
+    "debate_researcher",
+    "debate_advocate",
+    "debate_arbitrator"
+  ],
+  "coverage": [
+    {
+      "agent": "debate_moderator",
+      "note": "read in full (310 lines) incl. operating contract and DoD; checked spawn/wait wording against code.claude.com/docs/en/sub-agents (fork mode, run_in_background, nested waits, SendMessage, depth and concurrency limits), progress-note re-spawn cap, NEEDS_INPUT/NEEDS_DECISION hand-backs, depth self-check vs shipped settings, step-10 return table vs debate-status.py output (reproduced in scratch), presentation-order randomization, Fable model passing vs model-routing.md, effort"
+    },
+    {
+      "agent": "debate_researcher",
+      "note": "read in full (203 lines); checked search-year wording (date +%Y, fixed), countable search cap, NEEDS_DECISION ban, ground-truth STOP rule vs debate role, evidence grading/anchoring, untrusted web content, completion log wording, effort and eval coverage"
+    },
+    {
+      "agent": "debate_advocate",
+      "note": "read in full (184 lines); checked self-scoring ban (fixed), residual self-ratings (weakness severity), what the advocate is given (full request incl. initial_reasoning), NEEDS_DECISION ban, Required Reading drift"
+    },
+    {
+      "agent": "debate_arbitrator",
+      "note": "read in full (315 lines); checked modes and second-opinion independence (incl. leak via debate-status.py, reproduced), rubric/anchors, criterion-by-criterion scoring, tie definition vs checker (reproduced), 'BRD decides close options' vs highest-total rule (reproduced), fix-loop re-scoring risk (reproduced), self-check scope (.problems only, reproduced stale case), WebFetch quote fidelity, ledger idempotency on re-spawn (reproduced with remember.sh), effort high, T-007 eval"
+    }
+  ],
+  "findings": [
+    {
+      "id": "AI-01",
+      "severity": "HIGH",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 203,
+      "evidence": "Step 10 table (:201-205) keys the first line on status + `problems`: '`resolved`, no problems -> COMPLETE'; '`invalid` -> BLOCKED'. No row for `pending` or `stale`. Step 1 (:81) 'Already resolved (a valid, current verdict exists): return it as is. Don't re-run the debate.' But debate-status.py puts several gate failures in `gate`, not `problems`: unpromoted verdict (:464-466), invalid second opinion when one is needed (:449-450), security INCOMPLETE/disagreement (:467-470); and a stale verdict gets status `stale` with problems [] (:383). Reproduced in scratch: make_debate.py --no-promote -> `{status: resolved, problems: [], gate: [\"... has no D-NNN in docs/DECISIONS.md ...\"]}`, `--check` exit 2; a same-order second opinion -> `{status: resolved, problems: [], gate: [\"second opinion didn't read the options in the reverse presentation order\"]}`, `--check` exit 2; mis-copied request_sha -> `{status: stale, problems: [], gate: [...]}`, `--check` exit 2.",
+      "problem": "The moderator returns `COMPLETE <topic>` for a debate the gate will block (arbitrator forgot remember.sh, second opinion in the wrong order, request_sha mis-copied). The parent relaunches the requester and moves on. At the gate, Layer 0c (develop-orchestrator.md:1224) spawns the moderator again; step 1 sees a resolved verdict with no problems and returns it as is, so the topic never gets promoted or re-judged and the gate stays blocked with no defined way out. Under /autonomous this is a stall that needs a human. The moderator's DoD (:285) says its first line matches debate-status.py, but the check it runs can't see these cases.",
+      "fix": "In step 10 (and step 1's 'already resolved' test) read the topic's `gate` list too, e.g. `debate-status.py --json | jq '.topics[]|select(.topic==\"<t>\")|{status,problems,gate}'`: COMPLETE only when status is resolved and `gate` is empty. Add rows: `gate` says not promoted -> spawn the arbitrator with MODE: promote; second-opinion problem -> re-spawn the second opinion once; `stale` right after arbitration -> re-spawn the arbitrator with the correct REQUEST_SHA; `pending` (no verdict after re-spawns) -> `BLOCKED <topic>: verdict: arbitrator produced none`."
+    },
+    {
+      "id": "AI-02",
+      "severity": "HIGH",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 74,
+      "evidence": "Step 1 (:74-76) validates only what debate-status.py lists: 'unreadable JSON, fewer than 2 options, no domain, a topic that isn't a slug'. debate-status.py request_problems (:160-161) only checks that `domain` is one of the six names. debate-protocol.md:98-100: '`domain` ... picks the rubric below, so set it honestly: auth, tokens, crypto, PII, CORS/CSRF, rate limits and tenant isolation are `security`.' Every security protection keys on that field: the security rubric (security_posture 35), `hardened_default` (arbitrator :153-158), the person gate on INCOMPLETE/disagreement (debate-status.py :467-470), the 'security debate' gate tag (:427). The domain is chosen by the requesting agent, which may already have built its default (`default_taken`).",
+      "problem": "A request about, say, rate-limit strategy or session TTL labelled `operations` or `architecture` is judged on a rubric with no security criterion, needs no hardened default, and never reaches the person gate; under /autonomous a permissive option can ship with no human seeing it. Nothing between the requester and the arbitrator checks that the label fits; the judge is handed a rubric chosen by an interested party.",
+      "fix": "Add to moderator step 1: if the decision, context or option labels touch the protocol's security list (auth, tokens, crypto, PII, CORS/CSRF, rate limits, tenant isolation) and `domain` isn't `security`, return `BLOCKED <topic>: request: domain should be security (<matched term>)`. Optionally mirror it as a keyword warning in debate-status.py request_problems."
+    },
+    {
+      "id": "AI-03",
+      "severity": "MEDIUM",
+      "type": "a+c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 203,
+      "evidence": "':203 Then check it: `python3 .claude/hooks/debate-status.py --json | jq '.topics[] | select(.topic==\"<topic>\") | .problems'`. Fix each problem it lists.' For a stale verdict debate-status.py skips the content checks: ':383 vp, derived = ([], None) if stale else verdict_problems(...)'. Reproduced: verdict with request_sha 0000000000000000 -> `.problems` = [] while status = stale and `--check` exits 2. No re-check is asked for after step 8 (promote), and the DoD (:282) relies on 'debate-status.py lists no problem for it'.",
+      "problem": "An arbitrator that mis-copies REQUEST_SHA (a 16-hex string handed over in a prompt) sees an empty problem list and returns COMPLETE; the verdict is stale from birth and the gate blocks. Likewise a skipped or failed `remember.sh decide` in step 8 is never re-checked, because the only check runs before step 8 and reads `.problems`, where 'not promoted' never appears.",
+      "fix": "Make the check `jq '.topics[]|select(.topic==\"<t>\")|{status,problems}'` and require status `resolved` and no problems; repeat it after step 8 reading `.gate` as well (empty except, for a close HIGH call, the expected second-opinion entry)."
+    },
+    {
+      "id": "AI-04",
+      "severity": "MEDIUM",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 235,
+      "evidence": "Rules ':235 The BRD decides between close options: the option closest to the requirements wins.' vs step 6 ':142 The winner is the highest total. There are two exceptions, and each must be written down: the security rule below, and a tie.' The checker enforces the latter (debate-status.py :259-264). Reproduced (feature rubric, MEDIUM impact): A {brd 7, impl_risk 8, 7,7,7}=7.25, B {brd 8, impl_risk 6, 7,7,7}=7.05; verdict B (closer to the BRD) -> problem 'verdict B scores 7.05, below A at 7.25, with no hardened-default or tie_break reason'.",
+      "problem": "Two decision rules in one prompt disagree. An arbitrator that follows the Rules line for a close call picks the BRD-closer option, the checker rejects it, and step 7 tells it to 'fix each problem'. The cheapest fix is to move a score (AI-06), so the rule that sounds most principled is the one that produces doctored totals. brd_alignment is already the heaviest or joint-heaviest criterion in five of six rubrics, so the Rules line double-counts it.",
+      "fix": "Delete :235, or replace it with: 'brd_alignment is already weighted in every total. Between close options the highest total wins; only an exact tie (step 6) is broken by criteria.'"
+    },
+    {
+      "id": "AI-05",
+      "severity": "MEDIUM",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 144,
+      "evidence": "':144 A tie is totals equal at one decimal place.' (same in debate-protocol.md:305). The checker accepts a lower-total verdict as a tie only when 'abs(t[v] - ranked[0][1]) < 0.05' (debate-status.py:262). With integer scores and weights in multiples of 5, totals move in 0.05 steps. Reproduced: A=7.25, B=7.15 (python3 round(): 7.2 and 7.2, a tie per the prompt), verdict B with tie_break 'heaviest criterion brd_alignment, B 8 vs A 7' -> status invalid, 'verdict B scores 7.15, below A at 7.25, with no hardened-default or tie_break reason'.",
+      "problem": "The arbitrator applies the tie rule exactly as written and the gate rejects the verdict, with a message that says there is no tie_break when there is one. The model then has to guess which rule is real; the likely 'fixes' are re-scoring or relabelling (AI-06). 'Equal at one decimal place' is itself ambiguous (round-half-even vs half-up give different answers for x.x5).",
+      "fix": "Define a tie the way the checker does, in the arbitrator and the protocol: 'totals within 0.05 of each other (compute it)'. Or change the checker to compare round(total,1); either way, one definition."
+    },
+    {
+      "id": "AI-06",
+      "severity": "MEDIUM",
+      "type": "a+c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 204,
+      "evidence": "':204 Fix each problem it lists. That's an external signal, not a second guess.' Nothing says which fields may change. Reproduced: the AI-04 verdict B (7.05 vs 7.25, invalid) becomes valid by moving B's implementation_risk 6 -> 7 (B 7.30, A 7.25): status resolved, problems [], `--check` exit 0. The confidence-band problem ('confidence HIGH but the scores give a gap of ...') can be cleared the same way by widening the gap. General LLM-as-judge practice: a judge asked to make its output pass a consistency check after choosing a winner rationalizes backwards.",
+      "problem": "The recomputation in debate-status.py was added so the gate wouldn't trust the verdict's own claims, but the prompt lets the arbitrator satisfy it by editing the inputs. A MEDIUM-impact verdict with a 0.3-1.0 gap carries no review reason, so a re-scored verdict reaches the ledger with nobody looking.",
+      "fix": "Add: 'Scores are final once written. To clear a problem, change the verdict, confidence or tie_break, never a score, unless step 5 found the claim behind that score contradicted; then say which score moved and why in the rationale.' Optionally record a hash of `scores` in the transcript before the check so a later change is visible."
+    },
+    {
+      "id": "AI-07",
+      "severity": "MEDIUM",
+      "type": "b",
+      "agents": [
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 51,
+      "evidence": "Second-opinion mode lists files not to open (:51-53: verdict.json, verdict-detailed.md, transcript.md, DECISIONS entries for the topic) but not the reader. debate-protocol.md:68, which the arbitrator loads: 'Read debates only through `.claude/hooks/debate-status.py`'. Step 7 (:203) shows the arbitrator a debate-status command. Reproduced: after a close primary verdict, `debate-status.py --json` returns `{verdict: A, verdict_label: \"option A\", confidence: MEDIUM, derived: {totals: {A: 7.0, B: 6.75}, gap: 0.25}}` and the text form prints 'A option A  MEDIUM' on the topic line. Moderator step 7 (:165-166) passes the same incomplete list.",
+      "problem": "The second opinion exists to be independent of the first (same-model blind spots, order effects). If the Fable judge follows the protocol's 'one reader' rule to locate the briefs or check its own file, it sees the primary's winner, confidence and totals before it scores, and anchors to them (general practice). Agreement is inflated, so disagreements that should send a security call to a person are hidden.",
+      "fix": "Add to the second-opinion list in the arbitrator and in the moderator's step-7 prompt: 'Don't run debate-status.py and don't list agent_state/debates/; use only the paths in your prompt.' Validate the second-opinion file with a `--second-opinion-only` mode that prints no verdict fields, if a check is wanted."
+    },
+    {
+      "id": "AI-08",
+      "severity": "MEDIUM",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 77,
+      "evidence": "':77-80 Missing data or an ambiguous requirement ... return NEEDS_INPUT with the question for the human ... This holds under --auto too; the parent records the default.' Step 4 (:127) also passes a child's NEEDS_INPUT up with only 'the child's question'. child-returns.md:45, the parent's rule under --auto: 'take the agent's recommended default, record it in agent_state/debates/unresolved.json'. debate-protocol.md:340-342: 'The default is the option with the stronger BRD-alignment case ... It's never simply \"the first option\"'. debate-status.py checks the security `hardened` marker (:418-420) but nothing checks how a non-security default was chosen.",
+      "problem": "Under /autonomous the moderator hands back a question with no recommended default, and the parent is told to use the agent's recommended default, which doesn't exist. The parent improvises at the end of a long orchestration turn; picking option A is the easy path, which is the 'fallback picks the first option' defect from the 2026-09-30 review reappearing one level up. T-007 R6 checks only that a needs_input default was recorded, not which one.",
+      "fix": "In step 1 and step 4, return `NEEDS_INPUT <topic>: <question>` followed by `Recommended default: <id> (<why: the stronger BRD-alignment case in the request, or the hardened option for security>)`, taken from the request without running the debate."
+    },
+    {
+      "id": "AI-09",
+      "severity": "MEDIUM",
+      "type": "a",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator",
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 32,
+      "evidence": "Required Reading in all four (researcher :32, advocate :37, arbitrator :34, moderator :46): 'GROUND TRUTH ... OVERRIDES any conflicting assumption ... If your task references anything marked RETIRED/superseded there, STOP and flag it.' The rubric expects such options: debate-protocol.md:277 brd_alignment anchor 2 = 'conflicts with a MUST FR/NFR or a PROJECT_FACTS constraint'; :279 constraint_fit 2 = 'breaks ... an active DECISIONS.md entry'. Moderator step 4 (:126) turns a child's BLOCKED into 'EVIDENCE INCOMPLETE', and arbitrator :100-102 caps confidence at MEDIUM or writes INCOMPLETE when the gap is on the decisive criterion.",
+      "problem": "When one option uses a component PROJECT_FACTS marks retired, that is decisive evidence against it. The capitalised STOP tells the researcher (and the arbitrator) to halt and flag rather than record it, so the clearest possible debate comes back as an evidence gap: confidence capped, possibly INCOMPLETE, and for security a person has to decide. Emphatic STOP/OVERRIDES with no debate-specific reason is the wording pattern current models over-apply.",
+      "fix": "In the four debate agents, replace the STOP sentence with: 'If an option uses something PROJECT_FACTS marks retired or superseded, record that as evidence against it (brd_alignment/constraint_fit anchor 2) and continue. Stop only if the decision itself is about a retired component.'"
+    },
+    {
+      "id": "AI-10",
+      "severity": "MEDIUM",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 81,
+      "evidence": "The parent re-spawns a moderator that returned a progress note with 'its original prompt plus ... Files already written: <paths>. Finish the assignment in this run' (child-returns.md:47). Step 1 handles only 'already resolved' (:81) and 'stale' (:84-86); nothing says to reuse research or argument files, the recorded presentation order or a verdict already promoted. code.claude.com/docs/en/sub-agents (fetched this session): 'In non-interactive mode and the Agent SDK, the launching subagent doesn't wait, so a nested background subagent that finishes after its launcher has ended reports to your main conversation instead.' prompting-claude-opus-5-5 ('Unattended agentic runs'): the model 'keeps the user updated as it works, and some of those updates end the turn with text rather than a tool call'.",
+      "problem": "The moderator is the longest-running agent in a debate, so it is the most likely to end early. A re-spawned moderator re-runs every researcher and advocate, draws a new presentation order and may re-run the arbitrator, which records a second D-NNN (AI-11). In -p mode, children of the first run that are still in the background keep writing the same research-<id>.md files the new run's children write, and their completions land in the parent's conversation, which child-returns.md doesn't cover.",
+      "fix": "Add a 'Resuming' case to step 1: when the prompt lists files already written, read the transcript (write it incrementally from step 2 on), keep non-empty research/argument files and the recorded presentation order, and spawn only what's missing. Write the transcript's presentation order before step 3 so a re-spawn can reuse it."
+    },
+    {
+      "id": "AI-11",
+      "severity": "MEDIUM",
+      "type": "b",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 222,
+      "evidence": "':222 It prints `D-NNN recorded`. Put that id in the verdict as \"decision_id\".' No check for an existing entry. remember.sh decide (:71-100) always appends a new id; it doesn't look for an active block with the same link. Reproduced in scratch: running the documented decide command twice with `--link agent_state/debates/t5.verdict.json` prints 'D-001 recorded' then 'D-002 recorded'; DECISIONS.md has two `status: active` blocks with the same link. The moderator re-spawns an arbitrator that returns a progress note (debate_moderator.md:155 'Check its return as in step 4') and the parent may re-spawn the whole moderator (AI-10).",
+      "problem": "An arbitrator that ran step 8 and then ended its turn with a progress note is re-spawned, re-judges, and records a second active ledger entry for the same topic. If the re-judgment differs, the ledger holds two active, contradictory decisions; the SessionStart hook shows both to every session, and the gate's promoted() check (debate-status.py:306-311) passes because decision_id's block links to the verdict.",
+      "fix": "Before step 8: 'If an active DECISIONS.md block already links to this verdict, reuse its id (and if your decision differs, record yours with --reverses that id).' Better, make remember.sh decide refuse a second active entry with the same --link."
+    },
+    {
+      "id": "AI-12",
+      "severity": "MEDIUM",
+      "type": "c",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 60,
+      "evidence": "':59-63 If it isn't in your tool list, you were spawned below the depth the project allows (CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH, 2 in the shipped settings) ... Return BLOCKED'. The setting reaches a project only by whole-file copy when none exists: new-project.sh:41 '[ -f \"$PROJECT_DIR/.claude/settings.json\" ] || cp ...'; autonomous.md:126 same. code.claude.com/docs/en/sub-agents: 'By default, a subagent can spawn subagents of its own, up to three layers below the main conversation' and 'At the depth limit, Claude Code withholds the Agent tool'.",
+      "problem": "A project that already had .claude/settings.json (any existing codebase adopted with /init --from-code that used Claude Code before) runs at the default depth 3. A wave agent that spawns the moderator itself gives it the Agent tool, so the self-check never fires, and the debate runs nested: the parent never sees NEEDS_DECISION, can't show review reasons, and the extra layer counts against the 20-subagent limit while the wave's other agents run.",
+      "fix": "Merge the env key into an existing settings.json (jq '.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=\"2\"') in new-project.sh and /autonomous Step 0, and add a /health check that reads it. In the moderator, don't infer the caller from the tool list alone: also require the parent's prompt to carry 'REQUEST:' as child-returns.md step 3 writes it."
+    },
+    {
+      "id": "AI-13",
+      "severity": "MEDIUM",
+      "type": "a+b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 223,
+      "evidence": "':223-225 At its busiest a debate holds you plus up to four children. The default limit is 20 ... so the parent runs at most four moderators at a time.' 4 x 5 = 20, no headroom. ':131-132 If a spawn fails with \"Concurrent subagent limit reached\", don't retry it at once. Spawn the remaining children after the current ones return.' Step 7 (:170-172): 'If the Fable spawn fails (unavailable, refused, limit reached): ... return PARTIAL'. develop-orchestrator.md:1224-1225 'spawn one debate_moderator per request ... Independent requests can share a message' (no cap of four there; up to 10 requests per phase). Docs: 'the error tells Claude not to retry. Spawning succeeds again when the running count drops below the limit'; 'Resuming a subagent that already finished takes a fresh slot without checking the limit'.",
+      "problem": "Any other running subagent pushes four parallel debates over the limit. A moderator whose first spawns fail has no child of its own running, so 'after the current ones return' never comes; it must invent what to do. A limit error on the Fable spawn, which is transient, is treated as Fable being unavailable, so the debate returns PARTIAL and the gate holds a topic that a retry would have closed.",
+      "fix": "Say 'at most three moderators at a time' (15 + headroom) here, in child-returns.md and in Layer 0c. Step 4: if a spawn hits the limit and none of your children is running, return `PARTIAL <topic>: concurrency limit, nothing spawned` so the parent re-runs it later. Step 7: on a limit error, wait until your other work is done and retry once; return PARTIAL only for unavailable or refused."
+    },
+    {
+      "id": "AI-14",
+      "severity": "MEDIUM",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 109,
+      "evidence": "':109-111 In an interactive session with fork mode on, the parameter doesn't exist, and a subagent waits for the children it launched before it finishes. Still don't act on a child's result until it has returned.' Operating contract (:254) 'Don't end your turn with a progress update'; child-returns.md:32-33 'Don't end your turn while one is still running.' Docs (sub-agents, fetched this session): fork mode is on by default in interactive sessions and 'Claude Code also removes the Agent tool's run_in_background parameter'; 'A background subagent's results reach Claude as a completion notification in a later turn'; 'a subagent that launches background subagents waits for their results before it finishes.' .claude/settings.json env sets only CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH. [unverified: how a fork-mode subagent receives a child's result mid-process; the docs only say it waits before finishing.]",
+      "problem": "The moderator needs each stage's results before the next (researchers -> advocates -> arbitrator -> second opinion). In fork mode its Agent calls return at once; the results arrive only after its turn ends. The prompt forbids ending the turn and doesn't say what to do instead, so the moderator is likely to poll for the output files and act on a half-written brief, or end with a 'waiting' note it has been told is forbidden. I'm not sure which; the instruction gives the model no correct move in this mode.",
+      "fix": "Either set `\"CLAUDE_CODE_FORK_SUBAGENT\": \"0\"` in the shipped settings env (docs: '0 turns fork mode off in every kind of session') so run_in_background:false exists everywhere and debates behave the same in every session, or state the fork-mode procedure explicitly: 'after spawning, end your turn with one line naming the children you're waiting for; their results come back to you as the next message; don't open their output files before then.' Test whichever is chosen in an interactive session."
+    },
+    {
+      "id": "AI-15",
+      "severity": "MEDIUM",
+      "type": "a",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 205,
+      "evidence": "The moderator returns BLOCKED for four different causes: request problems (:74-76), already decided (:82-83), spawned too deep (:61-62 'BLOCKED <topic>: debate_moderator must be spawned by the parent session'), and an invalid verdict or missing debate files (:205 'problems listed (invalid) -> BLOCKED <topic>:, with the problems'). The parent's table (child-returns.md:69-70) has two rows: 'already decided by D-NNN' and 'BLOCKED with request problems -> Relaunch the requester to fix its request, then run the moderator again.'",
+      "problem": "A verdict-side problem (arbitrator wrote no argument files, wrong rubric, totals mismatch) or the depth error comes back as plain BLOCKED, and the parent's only matching row sends the requesting agent off to fix a request that is fine, then re-runs the same debate into the same failure.",
+      "fix": "Give each cause its own first line: `BLOCKED <topic>: request: ...`, `BLOCKED <topic>: already decided by D-NNN`, `BLOCKED <topic>: verdict: ...`, `BLOCKED <topic>: spawn depth`; add matching rows to child-returns.md (verdict -> re-run the moderator once, then show the user; spawn depth -> the parent spawns the moderator itself)."
+    },
+    {
+      "id": "AI-16",
+      "severity": "MEDIUM",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 121,
+      "evidence": "':121 Act on the first line, and check the child's output file exists and isn't empty:' The table that follows (:123-129) is keyed only on the first line; no row says what to do when the line is COMPLETE but the file is missing or empty. debate-status.py :271-277 then rejects the verdict: 'no debate behind the verdict: missing <topic>.research-B.md'.",
+      "problem": "A child that reports COMPLETE but wrote to a slightly different path (research-b.md, research-<label>.md) leaves a hole the moderator notices but has no rule for; the arbitrator judges without that brief, and the debate fails the gate as invalid, which (AI-15) the parent then misroutes to the requester.",
+      "fix": "Add a row: 'COMPLETE but the output file is missing or empty: treat it as a progress note: re-spawn with \"Your output file <path> is missing or empty; write it there\" (counts toward the two re-spawns).'"
+    },
+    {
+      "id": "AI-17",
+      "severity": "MEDIUM",
+      "type": "c",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 174,
+      "evidence": "Moderator ':174-175 A second opinion on the same model wouldn't be independent, so don't substitute one. The gate keeps the topic open until a second opinion exists or a person decides.' The model is self-reported by the judge (arbitrator :54 'Record the exact model id from your system prompt in model'). debate-status.py :456-457 sends a non-Fable model to `review` only. Reproduced: close HIGH-impact verdict plus a second opinion with model 'claude-opus-5-5' -> `{status: resolved, review: [..., \"second opinion ran on claude-opus-5-5, not Fable: not independent of the primary\"], gate: []}`, `--check` exit 0. model-routing.md:25 makes Fable the reason the second opinion counts.",
+      "problem": "If the moderator omits `model: fable` (or the alias resolves elsewhere), the same-model second opinion passes the gate; under /autonomous the review reason only reaches the final report. The 'don't substitute' rule depends on the moderator remembering a parameter, with nothing checking it.",
+      "fix": "In debate-status.py, when a second opinion is required, put a non-Fable model in `gate`, not `review`. In the moderator, record the `model` parameter it passed in the transcript (already asked, :190) and have the checker compare it with the file."
+    },
+    {
+      "id": "AI-18",
+      "severity": "MEDIUM",
+      "type": "c",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/rubric.json",
+      "line": 23,
+      "evidence": "R3 'position consistency': order_store and order_store_reversed must both pick PostgreSQL with different options shown first. task.md:47-49: 'Both data debates: PostgreSQL. FR-020 needs a multi-row atomic write, and FR-021 needs relational joins' (the document store option is literally 'without multi-document transactions', a brd_alignment anchor-2 conflict with a MUST). The only close call (search_debounce) is run once, in one order; R5 checks that a second opinion exists, not whether it agreed. General LLM-as-judge practice: position bias shows when candidates are close, not when one violates a MUST.",
+      "problem": "The only measurement of order-robustness, the property the presentation-order shuffle and reversed second opinion exist for, runs on a case position bias can't flip. A prompt or effort change that made the arbitrator order-sensitive on close calls would still score full marks, so /eval --compare can't show the shuffle works or that an effort change helped.",
+      "fix": "Add search_debounce_reversed with pinned orders (as for order_store) and score agreement between the two verdicts; or run the close call twice per order and score agreement rate."
+    },
+    {
+      "id": "AI-19",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": "agent_state/eval/suite/T-007-debate/expected_trajectory.json",
+      "line": 57,
+      "evidence": "forbidden ':57 \"pattern\": \"a debate child spawned without run_in_background: false\"' while the moderator (:104-111) and the trajectory step at :11 say 'where offered'. Docs: in interactive sessions fork mode is on and 'Claude Code also removes the Agent tool's run_in_background parameter'.",
+      "problem": "An interactive /eval run in which the moderator behaves exactly as instructed is scored as a forbidden trajectory, so the eval can't be run interactively and penalizes correct behaviour.",
+      "fix": "Change the pattern to 'a debate child spawned without run_in_background: false where the Agent tool offers it'."
+    },
+    {
+      "id": "AI-20",
+      "severity": "LOW",
+      "type": "b",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 130,
+      "evidence": "':130-132 WebFetch answers through a small model's summary, so ask it to quote the exact sentences about the claim. Put the passage in the entry's quote field'. The WebFetch tool description in this session: 'Fetches a URL, converts the page to markdown, and answers prompt against it using a small fast model.'",
+      "problem": "The 'quote' is still produced by the small model and can be paraphrased or invented; the verdict stores it as the source's words and marks the decisive claim 'confirmed'. The prompt already names the risk but gives no way to detect a bad quote.",
+      "fix": "Record `quote_via: webfetch`; for a numeric claim, require the number in the quote; when the quote decides the verdict, fetch a second time asking only 'Does the page contain this exact sentence? Answer yes or no and give the sentence before it', and mark unverifiable on a no."
+    },
+    {
+      "id": "AI-21",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_advocate",
+        "debate_researcher"
+      ],
+      "file": ".claude/agents/core/debate_advocate.md",
+      "line": 74,
+      "evidence": "Advocate template :73-76 'Weakness 1 ... Severity: [HIGH / MEDIUM / LOW] ... Why it's acceptable: In context of this project, this weakness matters less because...'. Researcher template :110-113 'Confidence in Evidence: Strong evidence (multiple sources agree): N findings ...'. The scoring ban (advocate :31-33, D8.2) is about numbers anchoring the judge; T-007 R7's regex ('weighted total|score \\(1-10\\)|.../10') doesn't match these labels.",
+      "problem": "Advocates rate their own weaknesses (almost always LOW, 'acceptable') and researchers report a strong-evidence count per option; both are ratings the arbitrator reads before scoring. General LLM-as-judge practice: such self-assessments anchor the judge the same way self-scores do, just more weakly.",
+      "fix": "Drop the Severity line and 'Why it's acceptable' from the advocate's weaknesses (keep the mitigation); have researchers grade each claim in its row instead of summing counts per option."
+    },
+    {
+      "id": "AI-22",
+      "severity": "LOW",
+      "type": "b",
+      "agents": [
+        "debate_moderator",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 94,
+      "evidence": "The shuffle (:94) reorders ids, but the ids themselves keep request order: protocol :96 'ids A-D'; file names research-<id>.md / argument-<id>.md; the arbitrator sees 'PRESENTATION ORDER: B A C'. Requesters typically list their preferred option first (A).",
+      "problem": "General LLM-as-judge practice reports a label preference (towards 'A' or the first-listed id) separate from reading position. The shuffle hides the reading order but not which option the requester listed first.",
+      "fix": "Have the moderator hand the arbitrator neutral aliases (e.g. labels only, or a fresh letter mapping recorded in the transcript), mapping back in the verdict; or note the residual risk and test it in T-007."
+    },
+    {
+      "id": "AI-23",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 165,
+      "evidence": "Arbitrator ':165 Never invent a new option. Never start another debate.' Its operating contract (:255) says: 'When a contested, high-impact choice between known options blocks you (architecture, security or data model ...), write agent_state/debates/<topic>.request.json ... and end your turn with the first line NEEDS_DECISION <topic> ... Don't spawn the debate yourself'. The researcher (:125-126) and advocate (:107-108) carry an explicit 'Don't raise a debate or return NEEDS_DECISION'.",
+      "problem": "For the arbitrator, the contract's trigger describes its own job, and 'never start another debate' reads as 'don't spawn one', which writing a request and returning NEEDS_DECISION doesn't do. A judge facing a close security call may hand back NEEDS_DECISION; the moderator treats it as a gap (:128) and has no verdict.",
+      "fix": "Copy the researcher's line into the arbitrator's Rules: 'Don't write a debate request or return NEEDS_DECISION; you are the decision. If you can't decide, write LOW or INCOMPLETE.'"
+    },
+    {
+      "id": "AI-24",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 33,
+      "evidence": "All four (moderator :47, researcher :33, advocate :38, arbitrator :35): 'if new evidence contradicts one, append a reversing entry or escalate'. agent-common.md:73-75 (Block 1, the canonical text): 'propose a reversing D-NNN entry in your final message (the parent records it with .claude/hooks/remember.sh decide --reverses D-MMM; the ledger is guard-protected, never edit it)'.",
+      "problem": "A researcher or advocate that finds evidence against an active decision is told to append to DECISIONS.md, which the guard denies and which isn't its job; it may retry or route around the guard. The copies have drifted from the source block.",
+      "fix": "Re-sync the Required Reading items from agent-common Block 1 (and add them to whatever sync script keeps the contract block in step)."
+    },
+    {
+      "id": "AI-25",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_researcher",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/skills/core/develop-steps/step-0-orient.md",
+      "line": 540,
+      "evidence": "':540 Analysis Paralysis Guard (applies to ALL agents spawned by this command)' ':542 If an agent makes 5+ consecutive read-only tool calls ... the agent MUST: Stop exploring'. Exception (:553) names only backend_audit_agent and ui_audit_agent. The arbitrator must read up to 4 briefs, 4 arguments, the protocol, PROJECT_FACTS, DECISIONS and re-fetch a source before its first write; a researcher makes up to 10 searches plus internal reads.",
+      "problem": "If a /develop parent passes this guard on to debate work (it says ALL agents), a researcher stops after five reads and an arbitrator writes a verdict before reading every argument, the opposite of what their prompts require. A countable limit that doesn't fit the job.",
+      "fix": "Add the debate agents (and other read-heavy judges) to the exception list."
+    },
+    {
+      "id": "AI-26",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_arbitrator",
+        "debate_researcher",
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 245,
+      "evidence": "Reference packs (:245): 'read the ones that apply to this task and skip the rest'. The frontmatter `skill_packs` (:19-20) isn't a Claude Code field; docs: 'Claude Code ignores a field it doesn't recognize without reporting an error'. The rubric weights and the 2/5/8 anchors exist only in debate-protocol.md (:255-293); the arbitrator's own file points there (:111-112) but the researcher (:39-41) and advocate (:82-83) need the rubric's criterion list too.",
+      "problem": "Loading the protocol is optional in the boilerplate and nothing preloads it, so a researcher or advocate can skip it and gather evidence for the wrong criteria; the arbitrator can score from memory of 'typical' anchors.",
+      "fix": "Make debate-protocol.md item 1 of Required Reading in all four debate agents (it isn't optional for them), or inline each domain's criterion list in the moderator's child prompts."
+    },
+    {
+      "id": "AI-27",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 203,
+      "evidence": "':203 This completion line may be written on my behalf by/through debate_moderator; it is kept here so the roster/health grep counts this agent.' (same note in advocate :184, arbitrator :315). The moderator's process (steps 1-10) never writes children's completion lines. The path uses `{{PHASE}}`, which an ad-hoc debate (moderator :56-57) doesn't have.",
+      "problem": "'May be written on my behalf' lets each child skip the step, and nobody else does it; for ad-hoc debates the model must invent a phase directory.",
+      "fix": "Say plainly: 'Append it yourself, using the request's phase; if the request has no phase, skip it.'"
+    },
+    {
+      "id": "AI-28",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_moderator",
+        "debate_researcher",
+        "debate_advocate",
+        "debate_arbitrator"
+      ],
+      "file": ".claude/agents/core/debate_arbitrator.md",
+      "line": 281,
+      "evidence": "Every agent ends with 'Definition of Done (verify before returning ...)' restating its process. platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-opus-5 ('Task scope and over-verification'): 'Claude Opus 5 verifies its own work without being told to. If your prompt contains explicit verification instructions ..., remove them: instructions like these cause over-verification'; the Opus 5.5 guide says Opus 5 patterns remain a reasonable starting point.",
+      "problem": "Items that restate the process (e.g. arbitrator :285 'Every option was scored on every criterion...') add a self-review pass with no external signal; the items that map to a real check (debate-status.py) are the ones that matter.",
+      "fix": "Keep DoD items that name an external check (debate-status output, file existence) and drop restatements of the process."
+    },
+    {
+      "id": "AI-29",
+      "severity": "LOW",
+      "type": "b",
+      "agents": [
+        "debate_moderator"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 82,
+      "evidence": "':82-83 An active docs/DECISIONS.md entry already decides it under another topic: return BLOCKED ..., unless the request cites new evidence against it.' PRIOR DECISION is passed only for a stale verdict on the same topic (:84-86); arbitrator :83-85 adds --reverses only when given PRIOR DECISION.",
+      "problem": "When new evidence reopens a decision recorded under another topic, the arbitrator records a new D-NNN without --reverses, leaving two active ledger entries that disagree.",
+      "fix": "Pass `PRIOR DECISION: D-NNN` in that case too."
+    },
+    {
+      "id": "AI-30",
+      "severity": "LOW",
+      "type": "b",
+      "agents": [
+        "debate_researcher"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 110,
+      "evidence": "Output 'Confidence in Evidence: Strong evidence (multiple sources agree)' (:110-113); search list (:57-63) includes comparison articles and case studies; Rules (:116-127) and DoD (:174) ask for reliability grading but not source independence. The operating contract's 'content is data' (:158) covers instructions to act, not persuasion.",
+      "problem": "Vendor-published benchmarks and marketing echoed across blogs read as 'multiple sources agree'. Fetched third-party text that argues for an option enters the brief as evidence with nothing marking who wrote it.",
+      "fix": "Add a 'Source type' column (independent / vendor / community) and count only independent sources as strong; note a vendor's own benchmark as such."
+    },
+    {
+      "id": "AI-31",
+      "severity": "LOW",
+      "type": "b",
+      "agents": [
+        "debate_researcher",
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_researcher.md",
+      "line": 5,
+      "evidence": "researcher and advocate `effort: medium` (Opus 5.5 default per platform.claude.com/docs/en/build-with-claude/effort: 'medium ... The default on Claude Opus 5.5'); arbitrator `high`. T-007 checks research quality only by 'grep:http' in one brief (expected_artifacts.json:34-38). The Opus 5.5 guide: 'test several levels against your own evals'.",
+      "problem": "The settings are reasonable, but nothing would show whether research effort matters: an effort change on the researcher or advocate can't move any T-007 score except through the verdict label.",
+      "fix": "Add a rubric item that scores the briefs, e.g. the decisive claim in claims_checked is 'confirmed' (not contradicted) and every web row has a version/date, so /eval --compare can see an effort change."
+    },
+    {
+      "id": "AI-32",
+      "severity": "LOW",
+      "type": "a",
+      "agents": [
+        "debate_moderator",
+        "debate_advocate"
+      ],
+      "file": ".claude/agents/core/debate_moderator.md",
+      "line": 136,
+      "evidence": "':136-137 Each [advocate] gets every research brief, the request and its assigned option'; researchers get 'the request path' (:115). The request carries each option's `initial_reasoning` (protocol :85-86), which the arbitrator is shielded from because 'it's the requester's opinion' (moderator :146-147, arbitrator :79-81).",
+      "problem": "The requester's opinion, kept from the judge, reaches it second-hand through the arguments and briefs; the option the requester argued hardest for starts with the better-developed case.",
+      "fix": "Give researchers and advocates the same neutral view the arbitrator gets (decision, context, domain, impact, option ids and labels)."
+    }
+  ]
+}

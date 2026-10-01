@@ -146,6 +146,23 @@ check("BR-26", True, any(c["id"] == "ARCH-01" and c["direction"] == "down" for c
 sc = open(f"{RUN}/scorecard.md").read()
 check("BR-27", True, "| a1 |" in sc and "| V1 | fable |" in sc and "## Refuted" in sc, "scorecard.md has the table, verifier stats and refuted list")
 
+# duplicate chains fold into one finding, and a verified duplicate makes the target verified
+RUN3 = os.path.join(W, "docs", "board-review-2026-10-03-debate")
+write(f"{RUN3}/hats/tester.json", hat("tester", [finding("TEST-01", "HIGH"), finding("TEST-02", "MEDIUM")], coverage=("a1", "a2")))
+write(f"{RUN3}/hats/ai_engineer.json", hat("ai_engineer", [finding("AI-01", "HIGH")], coverage=("a1", "a2")))
+write(f"{RUN3}/hats/architect.json", hat("architect", [finding("ARCH-01", "MEDIUM")], coverage=("a1", "a2")))
+br("select", "--dir", RUN3)
+write(f"{RUN3}/verify/V1.json", {"schema": "sdlc.board-verification/v1", "verifier": "V1", "model": "fable", "hats": ["architect", "tester"],
+                                  "verdicts": [v("TEST-01", duplicate_of="AI-01"), v("TEST-02", sev="LOW")]})
+write(f"{RUN3}/verify/V2.json", {"schema": "sdlc.board-verification/v1", "verifier": "V2", "model": "fable", "hats": ["ai_engineer"],
+                                  "verdicts": [v("AI-01", duplicate_of="ARCH-01")]})
+rc, out = br("merge", "--dir", RUN3)
+m3 = json.load(open(f"{RUN3}/merged.json"))
+F3 = {f["id"]: f for f in m3["findings"]}
+check("BR-31", (0, ["ARCH-01", "TEST-02"]), (rc, sorted(F3)), "a duplicate chain (TEST-01 → AI-01 → ARCH-01) folds into one finding")
+check("BR-32", ("HIGH", True, ["AI-01", "TEST-01"]), (F3["ARCH-01"]["severity"], F3["ARCH-01"]["verified"], sorted(F3["ARCH-01"]["duplicates"])),
+      "the target keeps the highest severity and becomes verified when a folded duplicate was")
+
 # a verifier that changed nothing across >= 10 findings is flagged
 RUN2 = os.path.join(W, "docs", "board-review-2026-10-02-debate")
 many = [finding(f"SEC-{i:02d}", "HIGH") for i in range(1, 12)]
