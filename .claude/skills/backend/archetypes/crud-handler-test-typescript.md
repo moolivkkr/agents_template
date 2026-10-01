@@ -896,12 +896,13 @@ src/modules/widget/
 // src/modules/widget/widget.controller.spec.ts
 
 import { Test, TestingModule } from "@nestjs/testing";
-import { INestApplication, ValidationPipe, HttpStatus } from "@nestjs/common";
+import { HttpStatus } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
 import request from "supertest";
 import { WidgetController } from "./widget.controller";
 import { WidgetService } from "./widget.service";
 import { JwtAuthGuard } from "../../guards/jwt-auth.guard";
-import { AppErrorFilter, validationExceptionFactory } from "../../filters/app-error.filter";
+import { configureApp } from "../../app.setup";
 import type { Widget } from "../../domain/entity";
 
 /** Factory: builds a test widget with defaults. */
@@ -923,7 +924,7 @@ function makeWidget(overrides: Partial<Widget> = {}): Widget {
 }
 
 describe("WidgetController (e2e)", () => {
-  let app: INestApplication;
+  let app: NestExpressApplication;
   let widgetService: jest.Mocked<Partial<WidgetService>>;
 
   beforeEach(async () => {
@@ -952,24 +953,15 @@ describe("WidgetController (e2e)", () => {
             tenantId: "bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb",
             roles: ["user"],
           };
-          req.requestId = "test-request-id"; // what the request-id middleware sets in production
           return true;
         },
       })
       .compile();
 
-    app = module.createNestApplication();
+    app = module.createNestApplication<NestExpressApplication>();
 
-    // Apply the same ValidationPipe and error filter as production
-    app.useGlobalPipes(
-      new ValidationPipe({
-        whitelist: true,
-        transform: true,
-        forbidNonWhitelisted: true,
-        exceptionFactory: validationExceptionFactory,
-      }),
-    );
-    app.useGlobalFilters(new AppErrorFilter());
+    // The production setup, not a copy: request id, body limit, CORS, appValidationPipe(), AppErrorFilter
+    configureApp(app);
 
     await app.init();
   });
@@ -987,16 +979,19 @@ describe("WidgetController (e2e)", () => {
 
       const res = await request(app.getHttpServer())
         .post("/api/v1/widgets")
+        .set("X-Request-Id", "test-request-id") // well formed, so the request-id middleware keeps it
         .send({ name: "New Widget", description: "desc" })
         .expect(HttpStatus.CREATED);
 
       expect(res.body.data.name).toBe("New Widget");
       expect(res.body.meta.request_id).toBe("test-request-id");
+      expect(res.headers["x-request-id"]).toBe("test-request-id");
     });
 
     it("returns 400 VALIDATION_FAILED for invalid body — empty name", async () => {
       const res = await request(app.getHttpServer())
         .post("/api/v1/widgets")
+        .set("X-Request-Id", "test-request-id")
         .send({ name: "", description: "desc" })
         .expect(HttpStatus.BAD_REQUEST);
 
@@ -1131,11 +1126,8 @@ describe("WidgetController (e2e)", () => {
         .useValue({ canActivate: () => false })
         .compile();
 
-      const restrictedApp = module.createNestApplication();
-      restrictedApp.useGlobalPipes(
-        new ValidationPipe({ whitelist: true, transform: true, exceptionFactory: validationExceptionFactory }),
-      );
-      restrictedApp.useGlobalFilters(new AppErrorFilter());
+      const restrictedApp = module.createNestApplication<NestExpressApplication>();
+      configureApp(restrictedApp);
       await restrictedApp.init();
 
       const res = await request(restrictedApp.getHttpServer())
@@ -1170,7 +1162,7 @@ describe("WidgetController (e2e)", () => {
 - `limit` MUST default to 20 and be capped at 100 — out-of-range values are rejected with 400 `VALIDATION_FAILED`
 - Sort fields MUST be allow-listed — values outside the list are rejected with 400 `VALIDATION_FAILED`; unknown filter fields are dropped
 - NestJS tests MUST use `Test.createTestingModule` with `overrideGuard` / `overrideProvider` for isolation
-- NestJS `ValidationPipe` MUST be configured with `whitelist: true`, `transform: true` and `exceptionFactory: validationExceptionFactory`, and `AppErrorFilter` registered, in tests — matching production
+- NestJS tests MUST build the app with `configureApp(app)` (`src/app.setup.ts`) — the production request id, body limit, `appValidationPipe()` (whitelist, forbidNonWhitelisted, transform, `exceptionFactory: validationExceptionFactory`) and `AppErrorFilter`; never a hand-built `ValidationPipe`
 - Use `vi.fn()` (vitest) for Express mocks, `jest.fn()` for NestJS mocks
 - Every mock MUST be reset in `beforeEach` to prevent cross-test contamination
 - Zod validation tests (Express) MUST verify that invalid input is rejected BEFORE calling the service

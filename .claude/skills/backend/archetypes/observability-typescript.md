@@ -286,6 +286,7 @@ Auto-instrumentation handles basic HTTP spans. This middleware enriches them wit
 // src/middleware/tracing.middleware.ts
 import { trace, SpanStatusCode } from '@opentelemetry/api';
 import { Request, Response, NextFunction } from 'express';
+import { requestIdOf } from './request-id'; // the one request-id source (auth-middleware-typescript.md)
 
 export function tracingMiddleware(req: Request, res: Response, next: NextFunction): void {
   const span = trace.getActiveSpan();
@@ -298,7 +299,7 @@ export function tracingMiddleware(req: Request, res: Response, next: NextFunctio
   // token (requestContextMiddleware copies it from req.user, which the auth middleware sets), never from a
   // client header.
   span.setAttribute('tenant_id', req.tenantId || 'unknown');
-  span.setAttribute('request_id', String(req.id)); // pino-http types req.id as string | number | object
+  span.setAttribute('request_id', requestIdOf(req));
   if (req.userId) {
     span.setAttribute('user_id', req.userId);
   }
@@ -337,6 +338,7 @@ import {
 } from '@nestjs/common';
 import { Observable, tap } from 'rxjs';
 import { trace, SpanStatusCode } from '@opentelemetry/api';
+import { requestIdOf } from '../middleware/request-id'; // the one request-id source
 
 @Injectable()
 export class TracingInterceptor implements NestInterceptor {
@@ -353,7 +355,7 @@ export class TracingInterceptor implements NestInterceptor {
     // Enrich span
     span.updateName(`${controllerName}.${handlerName}`);
     span.setAttribute('tenant_id', req.tenantId || 'unknown');
-    span.setAttribute('request_id', req.id);
+    span.setAttribute('request_id', requestIdOf(req));
     span.setAttribute('nestjs.controller', controllerName);
     span.setAttribute('nestjs.handler', handlerName);
 
@@ -957,21 +959,14 @@ export const logger: Logger = pino({
 // src/middleware/logging.middleware.ts
 import pinoHttp from 'pino-http';
 import { logger } from '../lib/logger';
-import { randomUUID } from 'node:crypto';
-
-// Bounded charset and length: an inbound ID can't inject log lines or bloat every record
-const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
+import { requestIdOf } from './request-id';
 
 export const httpLogger = pinoHttp({
   logger,
 
-  // Accept a well-formed inbound request ID, otherwise generate one, and echo it
-  genReqId: (req, res) => {
-    const inbound = req.headers['x-request-id'];
-    const id = typeof inbound === 'string' && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`;
-    res.setHeader('X-Request-ID', id);
-    return id;
-  },
+  // The one request-id source (auth-middleware-typescript.md): a well-formed inbound X-Request-Id or a new
+  // one, cached on the request and echoed — so req.id here = meta.request_id = error.request_id
+  genReqId: (req, res) => requestIdOf(req, res),
 
   // Custom log message
   customLogLevel: (_req, res, err) => {
@@ -995,7 +990,7 @@ export const httpLogger = pinoHttp({
   // Add custom attributes to every request log (tenantId comes from the verified token, via req.user)
   customProps: (req) => ({
     tenant_id: (req as any).tenantId || 'unknown',
-    request_id: req.id,
+    request_id: requestIdOf(req),
   }),
 
   // Quiet health check endpoints
@@ -1023,11 +1018,15 @@ This automatically logs every request completion with method, path (without the 
 // src/logger/logger.module.ts
 import { Module } from '@nestjs/common';
 import { LoggerModule as PinoLoggerModule } from 'nestjs-pino';
+import { requestIdOf } from '../middleware/request-id';
 
 @Module({
   imports: [
     PinoLoggerModule.forRoot({
       pinoHttp: {
+        // the one request-id source — without it pino-http numbers requests 1, 2, 3… per process, and the
+        // log's req.id never matches the envelope's request_id
+        genReqId: (req, res) => requestIdOf(req, res),
         level: process.env.LOG_LEVEL || 'info',
         ...(process.env.NODE_ENV !== 'production'
           ? { transport: { target: 'pino-pretty', options: { colorize: true } } }
@@ -1209,7 +1208,8 @@ import { Request, Response, NextFunction } from 'express';
 import type pino from 'pino';
 import { logger } from '../lib/logger';
 import type { AuthUser } from '../types/auth';
-import { randomUUID } from 'node:crypto';
+import { unauthenticated } from '../errors/domain-errors';
+import { requestIdOf } from './request-id';
 
 declare global {
   namespace Express {
@@ -1222,23 +1222,15 @@ declare global {
   }
 }
 
-// Bounded charset and length: an inbound ID can't inject log lines or bloat every record
-const VALID_ID = /^[A-Za-z0-9._-]{8,128}$/;
-
 export function requestContextMiddleware(req: Request, res: Response, next: NextFunction): void {
-  // Request ID. pino-http's genReqId already set a validated req.id, so reuse it. Otherwise accept a
-  // well-formed inbound ID, or generate one.
-  const inbound = req.header('x-request-id');
-  const requestId =
-    typeof req.id === 'string' && req.id ? req.id : inbound && VALID_ID.test(inbound) ? inbound : `req_${randomUUID()}`;
-  req.id = requestId;
-  res.setHeader('X-Request-ID', requestId);
+  // Request ID: the one source (src/middleware/request-id.ts) — the same id pino-http's genReqId resolved
+  const requestId = requestIdOf(req, res);
 
   // Tenant and user come from the VERIFIED token that the auth middleware put on req.user. Never
-  // from a client header such as X-Tenant-ID: anyone can send one.
+  // from a client header such as X-Tenant-ID: anyone can send one. The error handler writes the 401
+  // envelope (and WWW-Authenticate) — middleware never builds an error body itself.
   if (!req.user?.tenantId) {
-    res.set('WWW-Authenticate', 'Bearer');
-    res.status(401).json({ error: { code: 'UNAUTHENTICATED', message: 'Sign in to continue.', request_id: requestId, retryable: false } });
+    next(unauthenticated());
     return;
   }
   req.tenantId = req.user.tenantId;
@@ -1416,11 +1408,12 @@ const port = Number(process.env.PORT) || 3000;
 
 // --- Middleware order matters ---
 
-// 1. Body parsing
-app.use(express.json({ limit: '1mb' }));
-
-// 2. HTTP request/response logging (pino-http; validates or generates the request ID)
+// 1. HTTP request/response logging. pino-http's genReqId is requestIdOf (src/middleware/request-id.ts): the
+//    request ID is resolved first, so even a body-parser rejection is logged and answered with it
 app.use(httpLogger);
+
+// 2. Body parsing (malformed JSON / over the limit → 400 MALFORMED_REQUEST from the error handler)
+app.use(express.json({ limit: '1mb' }));
 
 // 3. Health checks (before auth/tenant — no tenant_id required)
 app.use(createHealthRouter({ prisma, requiredMigration: latestShippedMigration() }));
@@ -1479,12 +1472,15 @@ import './instrumentation';       // MUST be first
 import './lib/runtime-metrics';
 
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Logger } from 'nestjs-pino';
 import { AppModule } from './app.module';
+import { configureApp } from './app.setup'; // request id, body limit, CORS, ValidationPipe, error filter
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bufferLogs: true });
   app.useLogger(app.get(Logger));
+  configureApp(app);
   app.enableShutdownHooks();
 
   const port = Number(process.env.PORT) || 3000;

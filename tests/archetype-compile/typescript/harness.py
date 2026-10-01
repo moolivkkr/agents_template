@@ -423,9 +423,14 @@ def check_unit(unit: dict, d: str, src: Source, run_tests: bool) -> tuple[bool, 
         if not ok:
             return ok, out
     if ok and run_tests and unit.get("node_probe"):
-        ok, out = run_node_probe(d, unit["node_probe"])
-        if not ok:
-            return ok, out
+        probes = unit["node_probe"] if isinstance(unit["node_probe"], list) else [unit["node_probe"]]
+        outs = []
+        for entry in probes:
+            ok, pout = run_node_probe(d, entry)
+            if not ok:
+                return ok, pout
+            outs.append(pout[len("node probe: "):] if pout.startswith("node probe: ") else pout)
+        out = "node probe: " + " | ".join(outs)
     if not ok or not run_tests or not unit.get("vitest"):
         return ok, out
     ok, vout = run_vitest(d, unit["vitest"], unit.get("vitest_env", {}))

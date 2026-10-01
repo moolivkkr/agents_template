@@ -310,9 +310,17 @@ class Widget:
 ```typescript
 // src/graphql/resolvers/widget.ts
 
+import { GraphQLError } from 'graphql';
 import type { Context } from '../context'; // tenantId/userId from the verified token, per-request loaders
 import { toUserError } from '../errors'; // domain error → UserError; null for anything else
 import type { CreateWidgetInput, Widget, WidgetFilter } from '../types';
+
+// A bad argument is a GraphQL error carrying the envelope's VALIDATION_FAILED code and details[]
+function invalidArgument(field: string, message: string): GraphQLError {
+  return new GraphQLError('Some fields are invalid.', {
+    extensions: { code: 'VALIDATION_FAILED', details: [{ field, code: 'invalid_value', message }] },
+  });
+}
 
 export const widgetResolvers = {
   Query: {
@@ -325,7 +333,11 @@ export const widgetResolvers = {
       args: { first?: number; after?: string; filter?: WidgetFilter },
       ctx: Context,
     ) => {
-      const first = Math.min(args.first ?? 20, 100);
+      // Reject, never clamp: a client asking for 500 must not silently get 100 and think it has everything
+      const first = args.first ?? 20;
+      if (!Number.isInteger(first) || first < 1 || first > 100) {
+        throw invalidArgument('first', 'Must be a whole number from 1 to 100.');
+      }
       return ctx.widgetService.list(ctx.tenantId, first, args.after, args.filter);
     },
   },
