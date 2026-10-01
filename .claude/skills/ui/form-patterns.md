@@ -12,15 +12,20 @@ tags:
 
 # Form Patterns — React Hook Form + Zod + shadcn/ui
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, react-hook-form 7.89, @hookform/resolvers 5.9, Zod 4.6 and shadcn/ui Form stubs; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Canonical Form Setup
 
 ```tsx
 "use client";
+import { useRef } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { api, ApiError } from "@/lib/api-client";
+import { mapServerErrors } from "@/lib/form-errors";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -34,10 +39,8 @@ import {
 // 1. Schema — shared between client and server
 const createUserSchema = z.object({
   name: z.string().min(2, "Name must be at least 2 characters").max(50),
-  email: z.string().email("Enter a valid email address"),
-  role: z.enum(["admin", "member", "viewer"], {
-    required_error: "Select a role",
-  }),
+  email: z.email("Enter a valid email address"),               // Zod 4: z.email(), not z.string().email()
+  role: z.enum(["admin", "member", "viewer"], { error: "Select a role" }), // Zod 4: `error`, not required_error
 });
 type CreateUserInput = z.infer<typeof createUserSchema>;
 
@@ -47,29 +50,21 @@ export function CreateUserForm({ onSuccess }: { onSuccess?: () => void }) {
     resolver: zodResolver(createUserSchema),
     defaultValues: { name: "", email: "", role: undefined },
   });
+  // One Idempotency-Key per user action: reused if this submit is retried, replaced after a success
+  const idempotencyKey = useRef(crypto.randomUUID());
 
   async function onSubmit(data: CreateUserInput) {
     try {
-      await api.users.create(data);
+      await api.users.create({ input: data, idempotencyKey: idempotencyKey.current });
+      idempotencyKey.current = crypto.randomUUID();
       toast.success("User created");
       form.reset();
       onSuccess?.();
-    } catch (error: any) {
-      // error.details is already unwrapped from the backend envelope
-      // by the HTTP client (see api-integration-patterns.md).
-      // Backend sends: {"error": {"code": "VALIDATION_ERROR", "details": {"fields": {...}}}}
-      // HTTP client normalizes to: error.status, error.code, error.details
-      if (error.status === 422 && error.details?.fields) {
-        mapServerErrors(form, error.details.fields);
-      } else if (error.status === 422 && error.details?.field) {
-        // Single field validation error
-        form.setError(error.details.field as any, {
-          type: "server",
-          message: error.details.reason ?? error.message,
-        });
-      } else {
-        toast.error(error.message ?? "Failed to create user");
-      }
+    } catch (error) {
+      // The HTTP client (api-integration-patterns.md) throws the error envelope as ApiError. A 400
+      // VALIDATION_FAILED carries error.details: [{ field, code, message }] (api/response-envelope.md).
+      if (error instanceof ApiError && error.code === "VALIDATION_FAILED" && mapServerErrors(form, error.details)) return;
+      toast.error(error instanceof ApiError ? error.message : "Failed to create user");
     }
   }
 
@@ -119,21 +114,31 @@ export function CreateUserForm({ onSuccess }: { onSuccess?: () => void }) {
 }
 ```
 
-## Server Error Mapping (422 → Field Errors)
+## Server Error Mapping (400 `VALIDATION_FAILED` → Field Errors)
 
-The backend error envelope is `{"error": {"code": "VALIDATION_ERROR", "details": {"fields": {...}}}}`.
-The HTTP client in `api-integration-patterns.md` unwraps the outer `.error` layer, so by the time
-errors reach these functions, `error.details` already contains the inner details object.
+The error envelope is the one in `api/response-envelope.md`: a 400 with
+`{"error": {"code": "VALIDATION_FAILED", "message": "…", "details": [{"field": "email", "code": "invalid_format", "message": "…"}], "request_id": "…", "retryable": false}}`.
+The HTTP client in `api-integration-patterns.md` throws it as `ApiError`, so `error.details` is that
+`FieldError[]`. `details[].field` is the contract's wire name (snake_case), the same name the form field uses
+(`form-validation-protocol.md` §Field Name Matching).
 
 ```tsx
-import { UseFormReturn } from "react-hook-form";
+// lib/form-errors.ts
+import type { FieldValues, Path, UseFormReturn } from "react-hook-form";
+import type { FieldError } from "@/types/api";
 
-// Maps multi-field validation errors from backend to react-hook-form field errors.
-// Backend sends: details.fields = { "email": "invalid format", "name": "required" }
-function mapServerErrors(form: UseFormReturn<any>, fieldErrors: Record<string, string>) {
-  Object.entries(fieldErrors).forEach(([field, message]) => {
-    form.setError(field as any, { type: "server", message });
-  });
+// Puts each details[] entry on its form field. Returns false when no field matched, so the caller shows
+// error.message in a toast instead.
+export function mapServerErrors<T extends FieldValues>(form: UseFormReturn<T>, details: FieldError[]): boolean {
+  const values = form.getValues();
+  let mapped = false;
+  for (const d of details) {
+    if (d.field in values) {
+      form.setError(d.field as Path<T>, { type: "server", message: d.message });
+      mapped = true;
+    }
+  }
+  return mapped;
 }
 ```
 
@@ -142,7 +147,8 @@ function mapServerErrors(form: UseFormReturn<any>, fieldErrors: Record<string, s
 ### Edit Form (pre-populated)
 ```tsx
 function EditUserForm({ userId }: { userId: string }) {
-  const { data: user, isLoading } = useQuery(userQueries.detail(userId));
+  // The query caches the envelope { data, meta }; `select` hands the form the user itself
+  const { data: user, isLoading } = useQuery({ ...userQueries.detail(userId), select: (res) => res.data });
   const form = useForm<UpdateUserInput>({
     resolver: zodResolver(updateUserSchema),
     values: user, // Pre-populate when data arrives

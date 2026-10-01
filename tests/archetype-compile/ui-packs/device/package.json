@@ -1,0 +1,15 @@
+{
+  "name": "ui-packs-device",
+  "private": true,
+  "description": "Detox + WebdriverIO (Appium) type-check project for tests/archetype-compile/ui-packs (run ../run.sh). Type-check only: no simulator, emulator or Appium server is started. Versions pinned exactly; each checked with `npm view <pkg> version` on 2026-09-30.",
+  "license": "UNLICENSED",
+  "devDependencies": {
+    "@types/jest": "29.5.14",
+    "@types/node": "26.6.3",
+    "@wdio/globals": "9.31.3",
+    "@wdio/types": "9.32.0",
+    "detox": "20.51.4",
+    "typescript": "7.0.2",
+    "webdriverio": "9.32.0"
+  }
+}

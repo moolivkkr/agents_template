@@ -12,6 +12,8 @@ tags:
 
 # Accessibility Patterns — WCAG 2.2 AA Implementation Reference
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, lucide-react 1.49 and shadcn/ui component stubs on radix-ui 1.6; type-checked only (one comment-only block skipped) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Semantic HTML Rules — Decision Table
 
 | User Action | Correct Element | Never Use |
@@ -136,8 +138,8 @@ Common failures:
   Skip to main content
 </a>
 
-// 2. Language attribute
-<html lang="en">
+// 2. Language attribute — on the root element: <html lang="en"> in index.html (Vite)
+//    or in app/layout.tsx (Next.js)
 
 // 3. Main landmark
 <main id="main-content">{children}</main>

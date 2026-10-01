@@ -12,6 +12,8 @@ tags:
 
 # Secure rendering — DOM XSS rules for UI code
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess), and the XSS-RENDER checks ran in 3 Vitest 5.0.3 tests (jsdom 30.1, DOMPurify 3.4.16) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 The API returns raw text: escaping belongs to **rendering**, and this file owns it (board review
 2026-09-30, SEC-09). It complements `~/.claude/skills/security/secure-coding.md` §3–§4 (tokens, CSP
 headers, CORS) and applies to React, Vue, Angular and Svelte, plus React Native `WebView`.

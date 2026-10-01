@@ -1,5 +1,7 @@
 # React Native Testing Library (RNTL) — component and integration tier
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against react-native 0.87.1, RNTL 14.0.1 and msw 2.15.0; the Jest config, setup, providers and the 4-state, userEvent and accessibility tests ran (5 tests, Jest 29.7, @react-native/jest-preset 0.87.1); the navigation excerpt type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 Jest + `@testing-library/react-native` for testing RN screens and components in Node, with no
 device. This is where most mobile coverage belongs. Strategy and tier map: `mobile-testing-strategy.md`.
 
@@ -16,10 +18,31 @@ device. This is where most mobile coverage belongs. Strategy and tier map: `mobi
 module.exports = {
   preset: '@react-native/jest-preset',   // Expo projects: preset: 'jest-expo'
   setupFilesAfterEnv: ['./jest.setup.ts'],
+  // msw@2's `msw/node` export maps the preset's "react-native" condition to null; "node" lets Jest find it
+  testEnvironmentOptions: { customExportConditions: ['node', 'require', 'react-native'] },
+  // msw@2's ESM-only dependencies ship .mjs files: run them through Babel like the app's code
+  transform: { '^.+\\.(js|mjs|ts|tsx)$': 'babel-jest' },
   transformIgnorePatterns: [
-    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo|react-navigation|@react-navigation)/)',
+    'node_modules/(?!((jest-)?react-native|@react-native(-community)?|expo(nent)?|@expo|react-navigation|@react-navigation|@shopify/flash-list|rettime|until-async|@open-draft)/)',
   ],
 };
+```
+
+Verified 2026-09-30 on RN 0.87.1, Jest 29.7 (what the RN 0.87 app template pins), RNTL 14.0.1 and msw 2.15.0:
+without those three settings `msw/node` is not found, then fails to parse. **Pin `msw@^2` for this tier:**
+MSW 3 is ESM-only and its interceptors use `import.meta`, which this CommonJS setup can't load (see "MSW for
+React Native" below). `@shopify/flash-list` v2 also ships untranspiled ESM, so it is in the pattern.
+
+```tsx
+// test/providers.tsx — every screen test renders inside this. A fresh QueryClient per test; no retries (a
+// retried 503 would hide the error state); gcTime Infinity, so no 5-minute GC timer keeps Jest running.
+import { useState, type ReactNode } from 'react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+export function TestProviders({ children }: { children: ReactNode }) {
+  const [client] = useState(() => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } }));
+  return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+}
 ```
 
 Matchers such as `toBeOnTheScreen`, `toHaveTextContent`, `toBeVisible`, `toHaveAccessibleName`,
@@ -51,23 +74,24 @@ import { http } from 'msw';
 import { server } from '../test/msw-server';
 import { page, apiError } from '../test/envelope';        // typed helpers (msw.md)
 import { orderFixture } from '../test/fixtures';
+import { TestProviders } from '../test/providers';       // a screen with TanStack Query needs its provider
 import { OrdersScreen } from './OrdersScreen';
 
 test('TC-MCMP-20112 renders orders from GET /api/v1/orders (data state)', async () => {
   server.use(http.get('*/api/v1/orders', () => page([orderFixture({ id: 'o1', total_cents: 4200, status: 'open' })])));
-  await render(<OrdersScreen />);
+  await render(<OrdersScreen />, { wrapper: TestProviders });
   expect(await screen.findByText('Order o1')).toBeOnTheScreen();
 });
 
 test('TC-MCMP-20113 shows the empty state when data is []', async () => {
   server.use(http.get('*/api/v1/orders', () => page([])));
-  await render(<OrdersScreen />);
+  await render(<OrdersScreen />, { wrapper: TestProviders });
   expect(await screen.findByText(/no orders yet/i)).toBeOnTheScreen();
 });
 
 test('TC-MCMP-20114 shows a retry on 503 UNAVAILABLE', async () => {
   server.use(http.get('*/api/v1/orders', () => apiError(503, 'UNAVAILABLE', 'Try again shortly.')));
-  await render(<OrdersScreen />);
+  await render(<OrdersScreen />, { wrapper: TestProviders });
   expect(await screen.findByRole('button', { name: /retry/i })).toBeOnTheScreen();
 });
 ```
@@ -93,17 +117,22 @@ expect(await screen.findByText('Welcome')).toBeOnTheScreen();
 // test/msw-server.ts — Jest runs in Node, so use msw/node here
 import { setupServer } from 'msw/node';
 export const server = setupServer();
+
 // jest.setup.ts
-beforeAll(() => server.listen({ onUnhandledFrame: 'error' }));   // MSW 2: onUnhandledRequest
+import { server } from './test/msw-server';
+beforeAll(() => server.listen({ onUnhandledRequest: 'error' }));   // msw@2's name (MSW 3: onUnhandledFrame)
 afterEach(() => server.resetHandlers());
 afterAll(() => server.close());
 ```
 
 Jest tests run in Node, so `msw/node` is the correct entry point for the component and integration
-tiers. The separate `msw/native` entry (for mocking inside the running app, e.g. for demos) was
-removed in MSW 3.0.0. **Pin `msw@^2`** if the app itself uses in-app mocking. `onUnhandledFrame:
-'error'` (MSW 2: `onUnhandledRequest`) makes an un-mocked call fail the test instead of hitting a real
-server; MSW 3 no longer has `onUnhandledRequest` (see `testing/msw.md`).
+tiers, with **`msw@^2`** and the three Jest settings in §Setup. MSW 3 (3.0.0, 2026-09-28) does not load
+under `@react-native/jest-preset`: it ships ESM only, and even with msw and its dependencies transformed,
+`@mswjs/interceptors` stops at `import.meta.url` (checked with msw 3.0.1 on 2026-09-30). The separate
+`msw/native` entry (in-app mocking, e.g. for demos) also exists only in 2.x; MSW 3 removed it.
+`onUnhandledRequest: 'error'` makes an un-mocked call fail the test instead of reaching a real server.
+When MSW 3 becomes loadable here, the option is named `onUnhandledFrame` (`testing/msw.md`), and the old
+key is ignored rather than rejected at run time, so rename it in the same change.
 
 ## Navigation
 

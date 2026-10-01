@@ -12,6 +12,8 @@ tags:
 
 # Advanced State Patterns — Complex UI State Management
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, TanStack Query 5.104, React Router 7.18 and Zod 4.6; the offline mutation queue also ran in 2 Vitest 5.0.3 tests on fake-indexeddb 6.2.5 + MSW 3.0.1 (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 Reference patterns for optimistic updates, WebSocket integration, offline-first, URL state, and cross-tab sync. All patterns use TanStack Query + React.
 
 ---
@@ -24,6 +26,7 @@ Optimistic updates show the result immediately, then reconcile with the server r
 ```typescript
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import type { ApiSuccess, Item } from "@/types/api"; // the one envelope (api/response-envelope.md)
 
 export function useDeleteItem() {
   const queryClient = useQueryClient();
@@ -37,16 +40,13 @@ export function useDeleteItem() {
       await queryClient.cancelQueries({ queryKey: ["items", "list"] });
 
       // Snapshot the previous value for rollback
-      const previousItems = queryClient.getQueryData<ApiResponse<Item[]>>(["items", "list"]);
+      const previousItems = queryClient.getQueryData<ApiSuccess<Item[]>>(["items", "list"]);
 
-      // Optimistically remove the item from the cache
-      queryClient.setQueryData<ApiResponse<Item[]>>(["items", "list"], (old) => {
+      // Optimistically remove the item from the cache. meta (request_id, pagination) stays as the server sent
+      // it: there is no item count in the envelope to adjust, and onSettled refetches anyway.
+      queryClient.setQueryData<ApiSuccess<Item[]>>(["items", "list"], (old) => {
         if (!old) return old;
-        return {
-          ...old,
-          data: old.data.filter((item) => item.id !== deletedId),
-          meta: old.meta ? { ...old.meta, total: old.meta.total - 1 } : old.meta,
-        };
+        return { ...old, data: old.data.filter((item) => item.id !== deletedId) };
       });
 
       return { previousItems };
@@ -82,7 +82,7 @@ export function useCreateItem() {
 
     onMutate: async (newItem) => {
       await queryClient.cancelQueries({ queryKey: ["items", "list"] });
-      const previousItems = queryClient.getQueryData<ApiResponse<Item[]>>(["items", "list"]);
+      const previousItems = queryClient.getQueryData<ApiSuccess<Item[]>>(["items", "list"]);
 
       // Create a temporary item with a temp ID
       const optimisticItem: Item = {
@@ -92,13 +92,9 @@ export function useCreateItem() {
         updated_at: new Date().toISOString(),
       };
 
-      queryClient.setQueryData<ApiResponse<Item[]>>(["items", "list"], (old) => {
+      queryClient.setQueryData<ApiSuccess<Item[]>>(["items", "list"], (old) => {
         if (!old) return old;
-        return {
-          ...old,
-          data: [optimisticItem, ...old.data],
-          meta: old.meta ? { ...old.meta, total: old.meta.total + 1 } : old.meta,
-        };
+        return { ...old, data: [optimisticItem, ...old.data] };
       });
 
       return { previousItems };
@@ -133,9 +129,9 @@ export function useToggleItemStatus(id: string) {
 
     onMutate: async (newStatus) => {
       await queryClient.cancelQueries({ queryKey: ["items", "detail", id] });
-      const previousItem = queryClient.getQueryData<ApiResponse<Item>>(["items", "detail", id]);
+      const previousItem = queryClient.getQueryData<ApiSuccess<Item>>(["items", "detail", id]);
 
-      queryClient.setQueryData<ApiResponse<Item>>(["items", "detail", id], (old) => {
+      queryClient.setQueryData<ApiSuccess<Item>>(["items", "detail", id], (old) => {
         if (!old) return old;
         return { ...old, data: { ...old.data, status: newStatus } };
       });
@@ -192,7 +188,7 @@ export function useWebSocket() {
   const queryClient = useQueryClient();
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempts = useRef(0);
-  const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined); // React 19: useRef needs an initial value
 
   const connect = useCallback(async () => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
@@ -292,7 +288,10 @@ ws.onopen = () => {
 
 ### Pattern: Mutation Queue with Offline Support
 ```typescript
-import { onlineManager, MutationCache } from "@tanstack/react-query";
+// lib/offline-queue.ts
+import { onlineManager } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { ApiError, fetcher } from "@/lib/api-client"; // session cookie + CSRF header + the envelope (api-integration-patterns.md)
 
 // Track online status
 onlineManager.setEventListener((setOnline) => {
@@ -310,6 +309,8 @@ onlineManager.setEventListener((setOnline) => {
 const DB_NAME = "app-mutation-queue";
 const STORE_NAME = "mutations";
 
+type QueuedMutation = { id: number; endpoint: string; method: string; body: unknown; idempotencyKey: string; timestamp: number };
+
 async function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.open(DB_NAME, 1);
@@ -321,43 +322,48 @@ async function openDB(): Promise<IDBDatabase> {
   });
 }
 
-async function queueMutation(mutation: { endpoint: string; method: string; body: unknown }) {
+export async function queueMutation(mutation: { endpoint: string; method: string; body: unknown }) {
   const db = await openDB();
   const tx = db.transaction(STORE_NAME, "readwrite");
-  tx.objectStore(STORE_NAME).add({
-    ...mutation,
-    timestamp: Date.now(),
-    status: "pending",
+  // One Idempotency-Key per queued action: a replay after a lost response is not applied twice
+  tx.objectStore(STORE_NAME).add({ ...mutation, idempotencyKey: crypto.randomUUID(), timestamp: Date.now() });
+  await new Promise<void>((resolve, reject) => {
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
   });
 }
 
-async function flushMutationQueue() {
+export async function flushMutationQueue() {
   const db = await openDB();
-  const tx = db.transaction(STORE_NAME, "readwrite");
-  const store = tx.objectStore(STORE_NAME);
-  const allMutations = await new Promise<any[]>((resolve) => {
-    const request = store.getAll();
+  // Read the queue in its own transaction. An IndexedDB transaction commits as soon as it has no pending
+  // request, so it can't stay open across `await fetch(...)`: a delete after the await would throw
+  // TransactionInactiveError and the sent mutation would stay queued, to be sent again.
+  const queued = await new Promise<QueuedMutation[]>((resolve, reject) => {
+    const request = db.transaction(STORE_NAME).objectStore(STORE_NAME).getAll();
     request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error);
   });
 
-  for (const mutation of allMutations.filter((m) => m.status === "pending")) {
+  for (const mutation of queued) {
     try {
-      await fetch(mutation.endpoint, {
+      await fetcher(mutation.endpoint, {
         method: mutation.method,
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(mutation.body),
+        headers: { "Idempotency-Key": mutation.idempotencyKey },
       });
-      store.delete(mutation.id);
-    } catch {
-      // Will retry on next sync
-      break; // Stop processing if network still failing
+    } catch (e) {
+      // Still offline (fetch threw), or 429/503 (retryable): keep this and the rest for the next "online"
+      if (!(e instanceof ApiError) || e.retryable) break;
+      // Rejected (4xx/500): replaying won't help — tell the user and drop it so it can't block the queue
+      toast.error(`A change made offline couldn't be saved: ${e.message}`);
     }
+    db.transaction(STORE_NAME, "readwrite").objectStore(STORE_NAME).delete(mutation.id);
   }
 }
 
 // Flush queue when coming back online
 window.addEventListener("online", () => {
-  flushMutationQueue();
+  void flushMutationQueue();
 });
 ```
 
@@ -403,14 +409,15 @@ const filterSchema = z.object({
 });
 
 type Filters = z.infer<typeof filterSchema>;
+const DEFAULTS: Filters = filterSchema.parse({});
 
 export function useURLFilters() {
   const [searchParams, setSearchParams] = useSearchParams();
 
-  // Parse and validate current URL params
-  const filters: Filters = filterSchema.parse(
-    Object.fromEntries(searchParams.entries())
-  );
+  // Parse and validate current URL params. The URL is user input: a hand-edited ?limit=5 falls back to the
+  // defaults instead of throwing during render.
+  const parsed = filterSchema.safeParse(Object.fromEntries(searchParams.entries()));
+  const filters: Filters = parsed.success ? parsed.data : DEFAULTS;
 
   // Update URL params (replaces history entry — no back-button spam)
   function setFilters(updates: Partial<Filters>) {
@@ -420,8 +427,7 @@ export function useURLFilters() {
 
     const params = new URLSearchParams();
     Object.entries(merged).forEach(([key, value]) => {
-      const defaultValue = filterSchema.shape[key as keyof Filters]._def.defaultValue?.();
-      if (value !== defaultValue) {
+      if (value !== DEFAULTS[key as keyof Filters]) {   // keep the URL short: defaults are implied
         params.set(key, String(value));
       }
     });

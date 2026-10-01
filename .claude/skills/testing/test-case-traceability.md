@@ -1,5 +1,7 @@
 # Test Case ID Traceability — Spec-to-Test Inventory Enforcement
 
+> Code samples compile-checked: the UI test example (TypeScript): type-checked, and its 2 tests ran in Vitest 5.0.3 + MSW 3.0.1 + jsdom (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Purpose
 
 Every test case a spec defines must exist as a test that **ran and passed**. Without that, a spec can
@@ -188,12 +190,12 @@ func TestOrderTotal(t *testing.T) {
 ```typescript
 describe('OrderList', () => {
   it('TC-UI-20107 shows a skeleton while loading', async () => {
-    render(<OrderList />)
+    renderWithProviders(<OrderList />)   // QueryClientProvider, retries off (msw.md)
     expect(screen.getByTestId('orders.skeleton')).toBeVisible()
   })
   it('TC-SEC-20102 renders a stored script payload as text', async () => {
     server.use(ordersHandler([order({ note: '<img src=x onerror="window.__xss=1">' })]))
-    render(<OrderList />)
+    renderWithProviders(<OrderList />)
     expect(await screen.findByText('<img src=x onerror="window.__xss=1">')).toBeVisible()
     expect((window as any).__xss).toBeUndefined()
   })

@@ -1,5 +1,7 @@
 # React patterns for functional, accessible, maintainable UIs.
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, TanStack Query 5.104, react-hook-form 7.89 and Zod 4.6; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Component Structure
 ```typescript
 // Keep components focused: presentational vs container
@@ -40,20 +42,21 @@ const { mutate: updateUser } = useMutation({
 
 ## Custom Hooks
 ```typescript
-// Extract logic from components
+// Extract logic from components: the hook owns the query, the mutation and the form state
 function useUserForm(userId: string) {
-    const { data } = useQuery(...)
-    const { mutate } = useMutation(...)
-    const [form, setForm] = useState(...)
+    const { data: user } = useQuery({ queryKey: ["users", userId], queryFn: () => api.getUser(userId) })
+    const { mutate, isPending } = useMutation({ mutationFn: api.updateUser })
+    const form = useForm<UserFormValues>({ values: user && { name: user.name } })
+    const handleSubmit = form.handleSubmit((values) => mutate({ id: userId, ...values }))
     // return only what the component needs
-    return { form, handleSubmit, isSubmitting }
+    return { form, handleSubmit, isSubmitting: isPending }
 }
 ```
 
 ## Forms
 ```typescript
-// react-hook-form + zod
-const schema = z.object({ email: z.string().email() })
+// react-hook-form + zod (Zod 4: z.email(), not z.string().email())
+const schema = z.object({ email: z.email() })
 const { register, handleSubmit, formState: { errors } } = useForm({
     resolver: zodResolver(schema)
 })

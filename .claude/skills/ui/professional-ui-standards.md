@@ -12,6 +12,8 @@ tags:
 
 # Professional UI Standards — Generic House Defaults
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) for 3 of 5 blocks (the two class-name lists aren't code) against React 19.3 and TanStack Query 5.104; type-checked only (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 > **⛔ Precedence (see `~/.claude/skills/ui/README.md`).** If the project names a design system
 > (`agent_registry.json` → `tech_profile.frontend.design_system`), **that file OVERRIDES the Colors,
 > Border-Radius, and Shadow sections below** — use its semantic tokens instead of the generic shadcn
@@ -104,7 +106,9 @@ EVERY data-dependent component MUST render all 4 states. No exceptions.
 
 ```tsx
 function ResourceList() {
-  const { data, isLoading, isError, error, refetch } = useQuery(resourceQueries.list());
+  // A list is a cursor-paginated infinite query: pages of the envelope { data: Resource[], meta }
+  const { data, isLoading, isError, error, refetch } = useInfiniteQuery(resourceQueries.list());
+  const items = data?.pages.flatMap((p) => p.data) ?? [];
 
   // 1. LOADING — skeleton matching content layout
   if (isLoading) {
@@ -137,7 +141,7 @@ function ResourceList() {
   }
 
   // 3. EMPTY — icon + message + CTA
-  if (!data?.length) {
+  if (items.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center gap-4 py-16 text-center">
         <div className="rounded-full bg-muted p-4">
@@ -157,7 +161,7 @@ function ResourceList() {
   // 4. DATA — the actual content
   return (
     <div className="space-y-3">
-      {data.map((item) => (
+      {items.map((item) => (
         <ResourceCard key={item.id} item={item} />
       ))}
     </div>

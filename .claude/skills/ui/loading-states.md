@@ -12,6 +12,8 @@ tags:
 
 # Loading State Patterns — Skeletons, Suspense, Progressive Loading
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3 and TanStack Query 5.104; `loading.tsx` also in a `next build` (Next.js 16.3.8) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 ## Primary Rule: Skeleton Screens (NOT Spinners)
 
 Skeleton screens match the layout of loaded content. They reduce perceived load time and prevent layout shift.
@@ -169,7 +171,9 @@ export default function DashboardPage() {
 
 ```tsx
 function UserList() {
-  const { data, isLoading, isFetching } = useQuery(userQueries.list());
+  // Lists are cursor-paginated infinite queries (api-integration-patterns.md): pages of { data, meta }
+  const { data, isLoading, isFetching } = useInfiniteQuery(userQueries.list());
+  const users = data?.pages.flatMap((p) => p.data) ?? [];
 
   // isLoading = true on FIRST load only (no cached data)
   if (isLoading) return <ListSkeleton />;
@@ -183,7 +187,7 @@ function UserList() {
         </div>
       )}
       {/* Render stale data while refetching */}
-      {data?.map(user => <UserRow key={user.id} user={user} />)}
+      {users.map(user => <UserRow key={user.id} user={user} />)}
     </div>
   );
 }

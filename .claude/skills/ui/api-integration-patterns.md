@@ -12,6 +12,8 @@ tags:
 
 # API Integration Patterns — HTTP Client + TanStack Query
 
+> Code samples compile-checked: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against React 19.3, TanStack Query 5.104 and axios 1.20; the fetch and Axios clients ran in 5 Vitest 5.0.3 tests against MSW 3.0.1, and the providers + prefetching page in a `next build` (Next.js 16.3.8) (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 The response shape is defined once, in `~/.claude/skills/api/response-envelope.md`; the TypeScript types
 below are generated from it (`ui/type-generation-protocol.md`). Token handling follows
 `~/.claude/skills/security/secure-coding.md` §3 and `~/.claude/skills/infrastructure/auth-session-flows.md`.
@@ -52,7 +54,8 @@ them. Never put one in a URL either, because URLs end up in logs.
 
 ```tsx
 // lib/api-client.ts
-import type { ApiErrorBody, ApiSuccess, FieldError } from "@/types/api"; // generated from the envelope
+// Envelope types + the contract's payload types, generated (ui/type-generation-protocol.md)
+import type { ApiErrorBody, ApiSuccess, CreateUserRequest, FieldError, UpdateUserRequest, User } from "@/types/api";
 
 // Same-origin by default: the ingress routes /api to the backend, so one build runs in dev, qa and prod.
 // If the API is on another origin, the base URL is a build-time value named the way the bundler exposes
@@ -77,7 +80,9 @@ export class ApiError extends Error {
 // in a header the server requires. SameSite alone is not enough for every browser/flow.
 export function csrfToken(): string | undefined {
   if (typeof document === "undefined") return undefined;
-  return document.cookie.split("; ").find((c) => c.startsWith("csrf_token="))?.split("=")[1];
+  const pair = document.cookie.split("; ").find((c) => c.startsWith("csrf_token="));
+  // Everything after the first "=": base64 tokens end in "=" padding, and the value may be URL-encoded.
+  return pair ? decodeURIComponent(pair.slice("csrf_token=".length)) : undefined;
 }
 
 export async function fetcher<T>(path: string, init: RequestInit = {}): Promise<ApiSuccess<T>> {
@@ -245,6 +250,7 @@ export const userQueries = {
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { userQueries } from "@/lib/queries/users";
 import { api, ApiError } from "@/lib/api-client";
+import type { UpdateUserRequest } from "@/types/api";
 import { toast } from "sonner";
 
 // READ (list) — pages of { data: User[], meta.pagination }
@@ -326,14 +332,29 @@ import type { ApiSuccess, ApiErrorBody, Pagination, User } from "@/types/api";
 
 ```tsx
 // app/(dashboard)/users/page.tsx — Server Component
+import { cookies } from "next/headers";
 import { dehydrate, HydrationBoundary } from "@tanstack/react-query";
+import type { ApiSuccess, User } from "@/types/api";
 import { makeQueryClient } from "@/lib/query-client";
 import { userQueries } from "@/lib/queries/users";
 import { UserList } from "@/components/features/user-list";
 
+// On the server `fetcher`'s "/api" has no page origin to resolve against, and there is no browser cookie
+// jar: call your own API by its internal URL and forward ONLY the session cookie.
+async function firstUsersPage(): Promise<ApiSuccess<User[]>> {
+  const session = (await cookies()).get("session")?.value;
+  const res = await fetch(`${process.env.API_INTERNAL_URL}/api/v1/users?limit=20`, {
+    headers: session ? { Cookie: `session=${session}` } : {},
+    cache: "no-store", // per-user data: never in a shared cache
+  });
+  if (!res.ok) throw new Error(`GET /api/v1/users failed: ${res.status}`);
+  return res.json();
+}
+
 export default async function UsersPage() {
   const queryClient = makeQueryClient();
-  await queryClient.prefetchInfiniteQuery(userQueries.list());
+  // Same queryKey as the client's useUsers(), so the client hydrates instead of refetching
+  await queryClient.prefetchInfiniteQuery({ ...userQueries.list(), queryFn: firstUsersPage });
 
   return (
     <HydrationBoundary state={dehydrate(queryClient)}>
@@ -344,7 +365,9 @@ export default async function UsersPage() {
 ```
 
 A server-side prefetch runs without the browser's cookies unless you forward them explicitly (Next.js
-`cookies()`). Forward only the session cookie, and only to your own API origin.
+`cookies()`, as above). Forward only the session cookie, and only to your own API origin. A prefetch that
+fails is swallowed by `prefetchInfiniteQuery` and the client fetches instead, so check the server log rather
+than assuming the page was prefetched.
 
 ## HTTP Client Error Interceptor
 

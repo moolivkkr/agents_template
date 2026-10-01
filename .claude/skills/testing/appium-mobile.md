@@ -1,5 +1,7 @@
 # Appium — WebDriver device E2E (real iOS devices, device farms, hybrid apps)
 
+> Code samples compile-checked: capabilities and locators: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against WebdriverIO 9.32 types only; no Appium server or device (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 Use Appium when Maestro or Detox can't do the job:
 - the test must run on **real iPhones** (Maestro and Detox support iOS simulators only);
 - the tests run on a **device farm** (BrowserStack, Sauce Labs, AWS Device Farm), which speak WebDriver;
@@ -26,15 +28,16 @@ npx appium --port 4723
 ## Capabilities
 
 ```ts
+// Typed by WebdriverIO, so a misspelled capability fails to compile
 // iOS simulator
-{ platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:deviceName': 'iPhone 16',
-  'appium:platformVersion': '26.0', 'appium:app': '/abs/path/App.app', 'appium:noReset': false }
+export const iosSimulator = { platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:deviceName': 'iPhone 16',
+  'appium:platformVersion': '26.0', 'appium:app': '/abs/path/App.app', 'appium:noReset': false } satisfies WebdriverIO.Capabilities;
 // Real iPhone — needs a signed .ipa, and WebDriverAgent signing (xcodeOrgId / xcodeSigningId, or a prebuilt WDA)
-{ platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:udid': '<device-udid>',
-  'appium:app': '/abs/path/App.ipa' }
+export const iosDevice = { platformName: 'iOS', 'appium:automationName': 'XCUITest', 'appium:udid': '<device-udid>',
+  'appium:app': '/abs/path/App.ipa' } satisfies WebdriverIO.Capabilities;
 // Android emulator
-{ platformName: 'Android', 'appium:automationName': 'UiAutomator2', 'appium:avd': 'Pixel_8_API_36',
-  'appium:app': '/abs/path/app-release.apk', 'appium:autoGrantPermissions': false }
+export const androidEmulator = { platformName: 'Android', 'appium:automationName': 'UiAutomator2', 'appium:avd': 'Pixel_8_API_36',
+  'appium:app': '/abs/path/app-release.apk', 'appium:autoGrantPermissions': false } satisfies WebdriverIO.Capabilities;
 ```
 
 ## Locators
@@ -47,7 +50,7 @@ npx appium --port 4723
 
 ```ts
 // inside it('TC-ME2E-20101 signs in and shows orders', …) — the ID goes in the test title
-await $('~login.email').setValue(process.env.E2E_BUYER_EMAIL);
+await $('~login.email').setValue(process.env.E2E_BUYER_EMAIL!);   // set by the seed step; never a literal
 await $('~login.submit').click();
 await $('~orders.list').waitForDisplayed({ timeout: 15000 });
 ```

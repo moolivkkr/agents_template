@@ -1,5 +1,7 @@
 # Detox — gray-box device E2E for React Native
 
+> Code samples compile-checked: `.detoxrc.js` and the test: tsc (TypeScript 7.0.2, strict + noUncheckedIndexedAccess) against detox 20.51.4's types only; nothing ran on a simulator or emulator (`tests/archetype-compile/ui-packs/run.sh`, 2026-09-30).
+
 Wix's E2E framework. Unlike Maestro, Detox is linked into the app and **synchronises with it**: it
 waits for the JS thread, network requests, timers and animations to go idle before each action, so
 tests are less flaky on busy apps. The cost is a tight coupling to the RN version.
