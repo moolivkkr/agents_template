@@ -1081,7 +1081,7 @@ async function getWidget(tenantId: string, id: string): Promise<Widget> {
 type Result<T, E = Error> = { ok: true; value: T } | { ok: false; error: E };
 
 function parseConfig(raw: unknown): Result<Config, ValidationError> {
-  const parsed = ConfigSchema.safeParse(raw);
+  const parsed = ConfigSchema.safeParse(raw, { reportInput: true }); // see fieldCode below
   if (!parsed.success) {
     return {
       ok: false,
@@ -1136,31 +1136,57 @@ const CreateWidgetSchema = z.object({
 
 type CreateWidgetInput = z.infer<typeof CreateWidgetSchema>;
 
-// Zod issue → envelope details[] entry. Zod's issue codes are stable lower_snake ids (Zod 4: invalid_type,
-// too_small, too_big, invalid_format, invalid_value, …; Zod 3's invalid_string / invalid_enum_value are gone —
-// pin the ones you emit in data-contracts.md). issue.message is NOT sent: custom refinements can carry
-// anything, and it isn't written for your users. Each code maps to a fixed catalog message; keying the map by
-// Zod's own code type makes a renamed code a compile error. (Finer codes — required vs too_short — are in
-// backend/archetypes/crud-handler-typescript.md.)
-const FIELD_MESSAGES: Partial<Record<z.core.$ZodIssue["code"], string>> = {
-  invalid_type: "This field is required or has the wrong type.",
-  too_small: "This value is too short or too small.",
-  too_big: "This value is too long or too large.",
+// Zod issue → envelope details[] entry. details[].code is the closed set in api/response-envelope.md:
+// Zod's own codes (too_small, too_big, …) are MAPPED onto it, never sent. issue.message isn't sent either:
+// custom refinements can carry anything, and it isn't written for your users. Each code has one catalog
+// message (a Record over the set: a missing or stray code is a compile error).
+type FieldCode =
+  | "required" | "invalid_type" | "invalid_format" | "invalid_value" | "out_of_range"
+  | "too_short" | "too_long" | "unknown_field" | "invalid_cursor" | "already_exists";
+
+const FIELD_MESSAGES: Record<FieldCode, string> = {
+  required: "This field is required.",
+  invalid_type: "This value has the wrong type.",
   invalid_format: "This value has the wrong format.",
   invalid_value: "Choose one of the allowed values.",
+  out_of_range: "This value is out of range.",
+  too_short: "This value is too short.",
+  too_long: "This value is too long.",
+  unknown_field: "This field is not allowed.",
+  invalid_cursor: "This cursor isn't valid. Start from the first page.",
+  already_exists: "This value is already in use.",
 };
 
-function toFieldErrors(issues: z.core.$ZodIssue[]): FieldError[] {
-  return issues.map((issue) => ({
-    field: issue.path.join("."),
-    code: issue.code,
-    message: FIELD_MESSAGES[issue.code] ?? "This value is invalid.",
-  }));
+const SIZED = new Set(["string", "array", "set"]); // lengths: too_short / too_long; numbers, dates: out_of_range
+
+function fieldCode(issue: z.core.$ZodIssue): FieldCode {
+  switch (issue.code) {
+    case "invalid_type": // parse with { reportInput: true }: a missing field has input === undefined
+      return issue.input === undefined ? "required" : "invalid_type";
+    case "too_small":
+      if (issue.origin === "string" && issue.minimum === 1) return "required";
+      return SIZED.has(issue.origin) ? "too_short" : "out_of_range";
+    case "too_big":
+      return SIZED.has(issue.origin) ? "too_long" : "out_of_range";
+    case "invalid_format":
+      return "invalid_format";
+    case "unrecognized_keys":
+      return "unknown_field";
+    default: // invalid_value (enum), custom, …
+      return "invalid_value";
+  }
 }
 
-// Validation — safeParse returns Result-like structure
+function toFieldErrors(issues: z.core.$ZodIssue[]): FieldError[] {
+  return issues.map((issue) => {
+    const code = fieldCode(issue);
+    return { field: issue.path.join("."), code, message: FIELD_MESSAGES[code] };
+  });
+}
+
+// Validation — safeParse returns Result-like structure (reportInput: see fieldCode; the input is never sent)
 function validateInput(raw: unknown): CreateWidgetInput {
-  const result = CreateWidgetSchema.safeParse(raw);
+  const result = CreateWidgetSchema.safeParse(raw, { reportInput: true });
   if (!result.success) {
     throw new ValidationError(toFieldErrors(result.error.issues)); // → 400 VALIDATION_FAILED
   }

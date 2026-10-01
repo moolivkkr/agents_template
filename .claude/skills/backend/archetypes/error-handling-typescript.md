@@ -26,13 +26,32 @@ Complete error handling system for TypeScript backend services (Express, NestJS)
 // src/errors/app-error.ts
 
 /**
+ * The details[].code values — exactly the closed set in api/response-envelope.md, so a client maps them
+ * once for every service. A validator's own words (Zod too_small, class-validator min, AJV minimum …) are
+ * mapped onto these; a code outside the set is a compile error. Add a code there before adding it here.
+ */
+export const FIELD_CODES = [
+  "required",
+  "invalid_type",
+  "invalid_format",
+  "invalid_value",
+  "out_of_range",
+  "too_short",
+  "too_long",
+  "unknown_field",
+  "invalid_cursor",
+  "already_exists",
+] as const;
+export type FieldCode = (typeof FIELD_CODES)[number];
+
+/**
  * FieldError is one entry of error.details[] — field-level problems for VALIDATION_FAILED.
- * `code` is a stable lower_snake identifier; `message` comes from a fixed catalog, never from
+ * `code` is from the closed set; `message` comes from a fixed catalog, never from
  * an exception or a validator's raw text.
  */
 export interface FieldError {
   field: string;
-  code: string;
+  code: FieldCode;
   message: string;
 }
 
@@ -84,7 +103,7 @@ export class AppError extends Error {
   }
 
   /** Append a field-level problem (VALIDATION_FAILED). Returns this for chaining. */
-  withField(field: string, code: string, message: string): this {
+  withField(field: string, code: FieldCode, message: string): this {
     this.details.push({ field, code, message });
     return this;
   }
@@ -123,23 +142,26 @@ nothing from a parser, driver or upstream error reaches the client.
 ```typescript
 // src/errors/domain-errors.ts
 
-import { AppError, type FieldError } from "./app-error";
+import { AppError, type FieldCode, type FieldError } from "./app-error";
 
-/** details[].message per lower_snake field code. Validator text (Zod, class-validator) is never sent. */
-export const FIELD_MESSAGES = {
+export type { FieldCode } from "./app-error";
+
+/**
+ * details[].message per code — a Record over the closed set, so every code has exactly one catalog message
+ * (a missing or extra key is a compile error). Validator text (Zod, class-validator) is never sent.
+ */
+export const FIELD_MESSAGES: Record<FieldCode, string> = {
   required: "This field is required.",
   invalid_type: "This value has the wrong type.",
   invalid_format: "This value isn't in the right format.",
   invalid_value: "This value isn't allowed.",
+  out_of_range: "This value is out of range.",
   too_short: "This value is too short.",
   too_long: "This value is too long.",
-  too_small: "This value is too small.",
-  too_big: "This value is too large.",
   unknown_field: "This field isn't allowed.",
-} as const;
-
-/** A details[].code that has a catalog message — so FIELD_MESSAGES[code] is always a string. */
-export type FieldCode = keyof typeof FIELD_MESSAGES;
+  invalid_cursor: "This cursor isn't valid. Start from the first page.",
+  already_exists: "This value is already in use.",
+};
 
 // --- 400 MALFORMED_REQUEST: JSON parse errors, wrong content type, body too large ---
 
@@ -149,7 +171,7 @@ export function malformedRequest(cause?: unknown): AppError {
 
 // --- 400 VALIDATION_FAILED: the input fails schema/validation; details[] lists the fields ---
 
-export function validationError(field: string, code: string, message: string): AppError {
+export function validationError(field: string, code: FieldCode, message: string): AppError {
   return multiValidationError([{ field, code, message }]);
 }
 
@@ -401,8 +423,8 @@ const CONSTRAINT_CODES: Record<string, FieldCode> = {
   isEnum: "invalid_value",
   minLength: "too_short",
   maxLength: "too_long",
-  min: "too_small",
-  max: "too_big",
+  min: "out_of_range",
+  max: "out_of_range",
   whitelistValidation: "unknown_field", // forbidNonWhitelisted
 };
 
@@ -590,7 +612,7 @@ try {
 ```typescript
 // src/errors/index.ts
 
-export { AppError, isAppError, type FieldError, type ErrorResponseBody } from "./app-error";
+export { AppError, isAppError, FIELD_CODES, type FieldError, type ErrorResponseBody } from "./app-error";
 export {
   FIELD_MESSAGES,
   type FieldCode,

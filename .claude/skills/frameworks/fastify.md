@@ -403,7 +403,11 @@ Every error body is the envelope in `api/response-envelope.md`:
 // src/errors.ts
 import type { FastifyError, FastifyReply, FastifyRequest, FastifySchemaValidationError } from "fastify";
 
-export type FieldError = { field: string; code: string; message: string }; // code is lower_snake
+// details[].code: exactly the closed set in api/response-envelope.md (a stray code is a compile error)
+export type FieldCode =
+  | "required" | "invalid_type" | "invalid_format" | "invalid_value" | "out_of_range"
+  | "too_short" | "too_long" | "unknown_field" | "invalid_cursor" | "already_exists";
+export type FieldError = { field: string; code: FieldCode; message: string };
 
 export class AppError extends Error {
   constructor(
@@ -431,15 +435,20 @@ export function errorBody(err: AppError, requestId: string) {
   };
 }
 
-// Ajv keyword → stable lower_snake code + catalog message. Ajv's own `message` is not sent.
-const AJV_FIELD_ERRORS: Record<string, { code: string; message: string }> = {
+// Ajv keyword → a code from the closed set + catalog message. Ajv's own `message` is not sent.
+const AJV_FIELD_ERRORS: Record<string, { code: FieldCode; message: string }> = {
   required: { code: "required", message: "This field is required." },
   minLength: { code: "too_short", message: "This value is too short." },
   maxLength: { code: "too_long", message: "This value is too long." },
-  minimum: { code: "too_small", message: "This value is too small." },
-  maximum: { code: "too_large", message: "This value is too large." },
+  minimum: { code: "out_of_range", message: "This value is out of range." },
+  maximum: { code: "out_of_range", message: "This value is out of range." },
+  exclusiveMinimum: { code: "out_of_range", message: "This value is out of range." },
+  exclusiveMaximum: { code: "out_of_range", message: "This value is out of range." },
+  minItems: { code: "too_short", message: "This list is too short." },
+  maxItems: { code: "too_long", message: "This list is too long." },
   format: { code: "invalid_format", message: "This value has the wrong format." },
-  enum: { code: "invalid_choice", message: "Choose one of the allowed values." },
+  pattern: { code: "invalid_format", message: "This value has the wrong format." },
+  enum: { code: "invalid_value", message: "Choose one of the allowed values." },
   type: { code: "invalid_type", message: "This value has the wrong type." },
   additionalProperties: { code: "unknown_field", message: "This field is not allowed." },
 };
@@ -450,7 +459,7 @@ function toFieldErrors(validation: FastifySchemaValidationError[]): FieldError[]
     const path = v.instancePath.replace(/^\//, "").replaceAll("/", ".");
     const named = (v.params.missingProperty ?? v.params.additionalProperty) as string | undefined;
     const field = [path, named].filter(Boolean).join(".");
-    return { field, ...(AJV_FIELD_ERRORS[v.keyword] ?? { code: "invalid", message: "This value is invalid." }) };
+    return { field, ...(AJV_FIELD_ERRORS[v.keyword] ?? { code: "invalid_value", message: "This value isn't allowed." }) };
   });
 }
 
