@@ -22,6 +22,8 @@ arguments:
 
 # /init — Project Initialization
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 > **Auto mode.** `--auto` is set, OR `agent_state/autonomous/run.json` has `"status":"running"` (this
 > command was invoked by `/autonomous`). In auto mode, never wait for the user: every "surface to
 > user" / "escalate to user" / STOP-for-input point below instead auto-resolves with the recommended

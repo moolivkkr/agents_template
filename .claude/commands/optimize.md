@@ -24,6 +24,8 @@ arguments:
 
 # /optimize — Standalone Code Optimization
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Clean code, no dead code, effective code — without changing behaviour. Runs the optimization agents
 outside of `/develop`, with a before/after comparison of tests, review findings and code metrics.
 

@@ -227,7 +227,7 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 
 ```bash
 # 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
-for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py debate-status.py; do
+for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py debate-status.py remember.sh; do
   [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
@@ -268,27 +268,22 @@ The wave prompts below omit this line only for brevity — you must add it to ea
 
 ## Spawning agents and reading what they return
 
-**Spawn in the foreground.** Pass `run_in_background: false` on every Agent call in this
-orchestrator.
-- **Why:** an Agent call without it runs in the background, so this turn can end, and a wave can be
-  "verified", while its agents are still working. That was reproduced on 2026-09-30.
-- **Parallel work:** independent agents of one wave go in a single message. They run in parallel,
-  and the turn waits for all of them.
-
-**Read the first line of every return** and act on it:
-
-| First line | What you do |
-|---|---|
-| `COMPLETE` / `PARTIAL` / `BLOCKED` | The wave's own handling below. |
-| `NEEDS_INPUT` | Interactive: ask the user (AskUserQuestion for choices), then relaunch the same agent with its original prompt plus the answers. `--auto`: take the agent's recommended default, record it in `agent_state/debates/unresolved.json` and the manifest's `known_issues[]`, and relaunch. |
-| `NEEDS_DECISION <topic>` | Run the debate. 1) `python3 .claude/hooks/debate-status.py --phase ${PHASE}` shows the request and its problems, if any. 2) Apply the circuit breaker (3 per step, 10 per phase; `step-0-orient.md`). 3) Spawn `debate_moderator` in the foreground with `REQUEST: agent_state/debates/<topic>.request.json` plus the GROUND TRUTH line. 4) When it returns `COMPLETE`, relaunch the requesting agent with its original prompt plus `DECISION <topic>: <verdict_label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.` In an interactive run, show the user any review reasons the moderator listed (LOW, INCOMPLETE, a disagreeing second opinion, assumption) before relaunching. Under `--auto` they go to the checkpoint. |
-| anything else | A progress note ("I'll now…", a plan, an offer to continue) is not a result. Opus 5.5 can end a long turn that way. Re-spawn the agent in the foreground with its original prompt plus `Your previous run ended before finishing (it returned: "<first line>"). Files already written: <paths>. Finish the assignment in this run.` Allow at most two re-spawns, then log it `failed` in `execution.jsonl`. Don't use SendMessage for this: a resumed agent runs in the background. |
+Follow `~/.claude/skills/core/child-returns.md` for every spawn in this orchestrator. In short:
+- **Wait for every agent you spawn** before verifying its wave. Where the Agent tool offers
+  `run_in_background`, pass `false` and put a wave's independent agents in one message. In an
+  interactive session with fork mode on, the parameter doesn't exist, so wait for each completion.
+- **Act on the first line of each return:**
+  - `NEEDS_INPUT`: ask the user, or under `--auto` record a default.
+  - `NEEDS_DECISION <topic>`: run `debate_moderator`, then relaunch the agent with the decision.
+  - A progress note: re-spawn the agent, at most twice.
+- **Escalating yourself:** when this orchestrator needs a decision (an architectural failure in a
+  fix loop, a replan cap), write `agent_state/debates/<topic>.request.json` yourself, with
+  `from_agent: develop-orchestrator`, and then run the debate the same way.
+- **Run non-blocking requests at the end of the wave that raised them.**
 
 The project settings cap nesting at two levels (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2`):
 - this session → `debate_moderator` → researchers, advocates and arbitrators is the deepest a debate goes
 - a wave agent never spawns the moderator itself
-
----
 
 ## Wave 1: ORIENT + AUDIT
 
@@ -1036,7 +1031,7 @@ For each report with BLOCKING findings:
   2. Re-spawn ONLY the reviewer/reconciler that raised them. Code changed, so the test evidence is
      now stale; Wave 5v refreshes it before the gate (the gate rejects stale evidence).
   3. Repeat max 2 rounds per report. If still BLOCKING after 2 rounds → carry to Wave 5 as a
-     classified failure, or escalate to debate_moderator if architectural.
+     classified failure, or, if architectural, raise a debate yourself (child-returns.md § Escalating yourself).
 Anti-rationalization: "the fix looks right, no need to re-run" is WRONG — always re-run the agent.
 ```
 
@@ -1119,7 +1114,7 @@ The adaptive replan protocol determines which tiers to re-run. The **safety guar
 - **Git diff expanded beyond predicted scope:** Re-run ALL tiers
 - If acceptance failed in Wave 4 → re-run acceptance after code fixes regardless of category
 
-Max 3 iteration cycles. If architectural issue → invoke debate_moderator.
+Max 3 iteration cycles. If architectural issue → raise a debate yourself (`~/.claude/skills/core/child-returns.md` § Escalating yourself).
 
 **Verify:**
 ```bash
@@ -1180,7 +1175,7 @@ sufficient. The parent MUST also run Layer 1 (independent file:line re-verificat
 trust the subagent's report), Layer 2 (numeric `gate_score ≥ 0.90`), and Layer 3 (cross-model
 refutation of high-stakes claims) before writing `gate.passed`.
 
-**Order:** Layer 0 (below) → Layer 0b roster + debate dispatch → Layer 1 re-verification → Layer 2
+**Order:** Layer 0 (below) → Layer 0c debate dispatch → Layer 0b roster + hook → Layer 1 re-verification → Layer 2
 score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_score.md` → only then
 `gate.passed`.
 
@@ -1233,8 +1228,9 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
     PY
     ```
 
-0c. **Debate dispatcher — no orphaned decisions.** Every debate request for this phase needs a
-    verdict before the gate, and `verify-gate.sh` check (f) blocks until it has one.
+0c. **Debate dispatcher — no orphaned decisions. Run it before 0b**, because the hook in 0b blocks
+    on any open debate. Every debate request for this phase needs a verdict before the gate, and
+    `verify-gate.sh` check (f) blocks until it has one.
     `debate-status.py` is the only reader of `agent_state/debates/`, because file names were never
     reliable: the old glob here matched nothing the protocol wrote.
     ```bash
@@ -1244,8 +1240,9 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
     ```
     - **Pending, blocking or not:** spawn one `debate_moderator` per request, in the foreground.
       Independent requests can share a message.
-    - **Non-blocking request whose verdict differs from the default the agent took:** relaunch that
-      agent with the decision.
+    - **Non-blocking request whose verdict differs from `default_taken`:** relaunch that agent with
+      the decision, set `default_taken` to the verdict, then go back to Wave 5v (including the security
+      re-review) before gating. The relaunch changed code after the final verification.
     - **Under `--auto`:** a decision you resolve with a default instead goes into `unresolved.json`
       and `known_issues[]`.
     - **Withdrawing:** a request that no longer applies gets `"status": "withdrawn"` and a

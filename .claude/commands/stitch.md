@@ -27,6 +27,8 @@ arguments:
 
 # /stitch — Google Stitch design workbench
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 `/design --source=stitch` uses Stitch inside the pipeline. `/stitch` is for working with Stitch on
 its own: setting it up once, exploring layouts, fixing a blocked screen, restyling after a theme
 change, and pulling renders into the contract.

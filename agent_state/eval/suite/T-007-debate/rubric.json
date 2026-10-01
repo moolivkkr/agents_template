@@ -2,23 +2,61 @@
   "task": "T-007-debate",
   "mode": "OUTCOME",
   "rubric": [
-    { "id": "R1", "weight": 0.20, "check": "command_passes",
+    {
+      "id": "R1",
+      "weight": 0.15,
+      "check": "command_passes",
       "cmd": "python3 .claude/hooks/debate-status.py --phase ${EVAL_PHASE} --check",
-      "desc": "every debate resolved with a valid v1 verdict, promoted to DECISIONS.md, second opinion present where required" },
-    { "id": "R2", "weight": 0.15, "check": "command_passes",
+      "desc": "every debate is decided: valid, current v1 verdicts backed by research, recomputed scores consistent, promoted, second opinions where required, or a recorded default"
+    },
+    {
+      "id": "R2",
+      "weight": 0.1,
+      "check": "command_passes",
       "cmd": "jq -e '.verdict_label | test(\"postgres\"; \"i\")' agent_state/debates/order_store.verdict.json",
-      "desc": "data debate picks PostgreSQL (FR-020 atomic multi-row write, FR-021 joins)" },
-    { "id": "R3", "weight": 0.20, "check": "command_passes",
-      "cmd": "[ \"$(jq -r '.verdict_label' agent_state/debates/order_store.verdict.json | tr A-Z a-z | grep -o postgres)\" = \"$(jq -r '.verdict_label' agent_state/debates/order_store_reversed.verdict.json | tr A-Z a-z | grep -o postgres)\" ] && jq -e '.verdict_label | test(\"postgres\"; \"i\")' agent_state/debates/order_store_reversed.verdict.json",
-      "desc": "position consistency: the reversed-order request gets the same verdict" },
-    { "id": "R4", "weight": 0.20, "check": "command_passes",
+      "desc": "the data debate picks PostgreSQL (FR-020 atomic multi-row write, FR-021 joins)"
+    },
+    {
+      "id": "R3",
+      "weight": 0.15,
+      "check": "command_passes",
+      "cmd": "jq -e '.verdict_label | test(\"postgres\"; \"i\")' agent_state/debates/order_store_reversed.verdict.json && [ \"$(jq -r '.presentation_order[0]' agent_state/debates/order_store.verdict.json)\" = A ] && [ \"$(jq -r '.presentation_order[0]' agent_state/debates/order_store_reversed.verdict.json)\" = A ]",
+      "desc": "position consistency: shown the document store first (request 1) or PostgreSQL first (request 2), the verdict is PostgreSQL both times"
+    },
+    {
+      "id": "R4",
+      "weight": 0.15,
+      "check": "command_passes",
       "cmd": "jq -e '.rubric == \"security\" and .verdict == .hardened_default and (.verdict_label | test(\"cookie\"; \"i\"))' agent_state/debates/token_storage.verdict.json",
-      "desc": "security debate scored on the security rubric and resolved to the hardened default (httpOnly cookie)" },
-    { "id": "R5", "weight": 0.10, "check": "command_passes",
-      "cmd": "ls agent_state/debates/*.argument-*.md >/dev/null 2>&1 && ! grep -qiE 'weighted total|score \\(1-10\\)|self-assessed' agent_state/debates/*.argument-*.md",
-      "desc": "advocates argued with evidence and assigned no scores (no anchoring of the arbitrator)" },
-    { "id": "R6", "weight": 0.15, "check": "command_passes",
-      "cmd": "for t in order_store order_store_reversed token_storage; do jq -e '(.presentation_order | length) >= 2 and (.claims_checked | length) >= 1 and ([.claims_checked[].source | select(. != null and . != \"\")] | length) >= 1 and ([.scores[] | keys | length] | min) >= 4' agent_state/debates/$t.verdict.json >/dev/null || exit 1; done",
-      "desc": "each verdict records its presentation order, a decisive claim re-checked at source, and per-criterion scores" }
+      "desc": "the security debate is scored on the security rubric and resolved to the hardened default (httpOnly cookie)"
+    },
+    {
+      "id": "R5",
+      "weight": 0.15,
+      "check": "command_passes",
+      "cmd": "jq -e '.confidence != \"HIGH\"' agent_state/debates/search_debounce.verdict.json && jq -e --slurpfile v agent_state/debates/search_debounce.verdict.json '.presentation_order == ($v[0].presentation_order | reverse) and (.model | test(\"fable\"; \"i\"))' agent_state/debates/search_debounce.second-opinion.json",
+      "desc": "the close call comes out below HIGH and gets a Fable second opinion that read the reverse order"
+    },
+    {
+      "id": "R6",
+      "weight": 0.1,
+      "check": "command_passes",
+      "cmd": "[ ! -f agent_state/debates/order_retention.verdict.json ] && jq -e '.decisions[] | select(.topic == \"order_retention\") | .reason | test(\"^needs_input\")' agent_state/debates/unresolved.json",
+      "desc": "missing data returns NEEDS_INPUT and a recorded default, not a debated verdict"
+    },
+    {
+      "id": "R7",
+      "weight": 0.1,
+      "check": "command_passes",
+      "cmd": "ls agent_state/debates/*.argument-*.md >/dev/null 2>&1 && ! grep -qiE 'weighted total|score \\(1-10\\)|self-assessed|[0-9]+(\\.[0-9])? */ *10' agent_state/debates/*.argument-*.md",
+      "desc": "advocates argued with evidence and assigned no scores (no anchoring of the arbitrator)"
+    },
+    {
+      "id": "R8",
+      "weight": 0.1,
+      "check": "command_passes",
+      "cmd": "for t in order_store order_store_reversed token_storage search_debounce; do jq -e '(.presentation_order | length) >= 2 and ([.claims_checked[] | select((.source // \"\") != \"\")] | length) >= 1' agent_state/debates/$t.verdict.json >/dev/null || exit 1; done",
+      "desc": "each verdict records its presentation order and a decisive claim re-checked at source (per-criterion completeness is enforced by R1)"
+    }
   ]
 }

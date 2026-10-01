@@ -311,7 +311,10 @@ You run inside a pipeline as a subagent. You have no way to ask the user anythin
 
 **Finish in this run.** Your final message ends your run, and nobody reads anything before it. Don't end your turn with a progress update, a plan for what you'll do next, an offer to continue, or a list of choices that don't block you: do the next step instead. End it when the assignment is done, or when you're blocked or need input or a decision.
 
-**If you spawn agents** (only where this file tells you to), pass `run_in_background: false` on every Agent call and put parallel ones in one message. Without it the child runs in the background, and your turn can end before its result exists. A child's reply that doesn't start with `COMPLETE`, `PARTIAL`, `BLOCKED`, `NEEDS_INPUT` or `NEEDS_DECISION` is a progress note, not a result. Re-spawn that child in the foreground with its original prompt and the files it already wrote, at most twice.
+**If you spawn agents** (only where this file tells you to), follow `~/.claude/skills/core/child-returns.md`:
+- Where the Agent tool offers `run_in_background`, pass `false` and put parallel spawns in one message; otherwise wait for every child's completion before using its result.
+- A child's reply that doesn't start with `COMPLETE`, `PARTIAL`, `BLOCKED`, `NEEDS_INPUT` or `NEEDS_DECISION` is a progress note, not a result. Re-spawn that child with its original prompt and the files it already wrote, at most twice.
+- A child's `NEEDS_INPUT` or `NEEDS_DECISION <topic>` is yours to pass up: end your own turn with the same first line and its question, so your parent can ask the user or run the debate and relaunch you.
 
 **Scope.** Your assignment and this file set the scope. Deliver all of it, and nothing beyond it: problems you notice outside your assignment go in your final message as follow-ups, not into your changes.
 

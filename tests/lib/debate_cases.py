@@ -311,7 +311,8 @@ for p in glob.glob(os.path.join(REPO, ".claude", "**", "*"), recursive=True):
 check("DL-01", [], offenders, "no agent, command or skill uses the old debate file names (one naming contract)")
 
 mod = read(".claude/agents/core/debate_moderator.md")
-check("DL-02", True, mod.count("run_in_background: false") >= 3, "the moderator spawns researchers, advocates and arbitrators in the foreground")
+check("DL-02", True, "pass `false`" in mod and "run_in_background" in mod and mod.count("waiting for all") >= 2 and "child-returns.md" in mod,
+      "the moderator waits for its researchers and advocates (run_in_background false where offered) and loads child-returns.md")
 check("DL-03", [], re.findall(r"\b\d+[- ]minute|\b\d+ minutes? max", mod), "the moderator has no minute budgets (a subagent has no clock)")
 check("DL-04", True, "Agent tool" in mod and "BLOCKED" in mod and "SendMessage" in mod, "the moderator handles a missing Agent tool and doesn't resume children via SendMessage")
 for n, f in zip("abc", ("debate_moderator", "debate_arbitrator", "debate-protocol")):
@@ -323,7 +324,9 @@ check("DL-06", [], re.findall(r"Score \(1-10\)|Weighted Total|self-assessed", ad
 arb = read(".claude/agents/core/debate_arbitrator.md")
 check("DL-07", True, all(k in arb for k in ("PRESENTATION ORDER", "criterion by criterion", "claims_checked", "hardened_default", "MODE: second-opinion")),
       "the arbitrator scores criterion by criterion in the given order, re-checks claims, applies the hardened default, has a second-opinion mode")
-check("DL-08", [], re.findall(r"20\d\d 20\d\d", read(".claude/agents/core/debate_researcher.md")), "the researcher doesn't search hard-coded years")
+yrs = {f: re.findall(r"20\d\d[ -]20\d\d|provider 20\d\d", read(f)) for f in (".claude/agents/core/debate_researcher.md",
+       ".claude/skills/core/deep-research.md", ".claude/skills/core/auto-research.md")}
+check("DL-08", {f: [] for f in yrs}, yrs, "the researcher and its research packs don't hard-code search years")
 
 proto = read(".claude/skills/core/debate-protocol.md")
 rubric_rows = re.findall(r"^\| `(\w+)` \| (.+) \|$", proto.split("## Rubrics by domain")[1].split("### Score anchors")[0], re.M)
@@ -337,8 +340,8 @@ check("DL-11", sorted(crit), sorted(crit & anchored), "every rubric criterion ha
 check("DL-12", True, "security_posture 35" in proto.replace("**", ""), "the security rubric weighs security posture heaviest")
 
 contract = read(".claude/skills/core/agent-common.md")
-check("DL-13", True, "NEEDS_DECISION <topic>" in contract and "Finish in this run" in contract and "run_in_background: false" in contract,
-      "the operating contract has the NEEDS_DECISION hand-back, finish-in-this-run and foreground spawning")
+check("DL-13", True, "NEEDS_DECISION <topic>" in contract and "Finish in this run" in contract and "run_in_background" in contract and "pass up" in contract,
+      "the operating contract has the NEEDS_DECISION hand-back, finish-in-this-run, waiting for children and passing a child's question up")
 agents = glob.glob(os.path.join(REPO, ".claude/agents/core/*.md")) + glob.glob(os.path.join(REPO, ".claude/agents/templates/*.tmpl"))
 missing = [os.path.basename(a) for a in agents if "NEEDS_DECISION <topic>" not in open(a).read()]
 check("DL-14", [], missing, "every agent carries the synced contract (run .claude/agents/_sync-contract.sh)")
@@ -347,6 +350,21 @@ check("DL-15", "2", settings.get("env", {}).get("CLAUDE_CODE_MAX_SUBAGENT_SPAWN_
 orch = read(".claude/commands/develop-orchestrator.md")
 check("DL-16", True, "debate-status.py" in orch.split("### Wave 0c")[1].split("\n```\n")[0] and "NEEDS_DECISION <topic>" in orch,
       "the orchestrator stages debate-status.py and handles NEEDS_DECISION returns")
+SPAWNERS = ["accept", "autonomous", "benchmark", "demo", "deploy", "design", "develop", "develop-orchestrator", "discuss", "docs",
+            "hotfix", "init", "map", "optimize", "plan", "product-workflows", "recon", "reconcile", "review", "rollback", "stitch",
+            "test", "ui-audit", "board-review"]
+spawn_like = [os.path.basename(p)[:-3] for p in glob.glob(os.path.join(REPO, ".claude/commands/*.md"))
+              if re.search(r"subagent_type|\*\*Agent:\*\*|^\s*Spawn `|spawning parallel", open(p).read(), re.M)]
+check("DL-19", [], sorted(set(spawn_like) - set(SPAWNERS)), "every command that spawns agents is in the spawner list (add new ones there)")
+check("DL-20", [], [c for c in SPAWNERS if "skills/core/child-returns.md" not in read(f".claude/commands/{c}.md")],
+      "every spawning command follows child-returns.md (NEEDS_DECISION is handled outside /develop too)")
+check("DL-21", True, all(k in arb for k in ("MODE: promote", "Skip any `docs/DECISIONS.md` entry", "initial_reasoning", "REQUEST_SHA")),
+      "the second opinion can't see the first judgment, the ledger entry waits for it, and the judge doesn't read the requester's reasoning")
+check("DL-22", True, all(k in mod for k in ("MODE: promote", "Fable spawn fails", "Concurrent subagent limit", "NEEDS_INPUT", "EVIDENCE INCOMPLETE")),
+      "the moderator promotes after the second opinion, handles a failed Fable spawn, the spawn limit and every child status")
+routing = read(".claude/skills/core/model-routing.md")
+check("DL-23", True, "second opinion on a close HIGH-impact debate" in routing and "/board-review` verifiers" in routing,
+      "model-routing.md sanctions the debate second opinion and the board verifiers on Fable")
 gate = read(".claude/hooks/verify-gate.sh")
 check("DL-17", True, "debate-status.py" in gate and "(f) no pending debate" in gate, "verify-gate.sh runs the debate check")
 rub = json.loads(read("agent_state/eval/suite/T-007-debate/rubric.json"))

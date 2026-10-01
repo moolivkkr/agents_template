@@ -26,6 +26,8 @@ arguments:
 
 # /product-workflows — Deep Product Workflow Intelligence
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Researches a product's configuration workflows from official documentation, video content, and community sources. Produces screen-by-screen guides, configuration schemas, dependency graphs, and persona-based workflow summaries.
 
 **Use when:** You need to understand HOW a product works — not what it claims to do, but the actual screens, fields, prerequisite chains, and decision branches an administrator encounters when configuring it.

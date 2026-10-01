@@ -93,6 +93,8 @@ ids = [f["id"] for f in inp["findings"]]
 check("BR-12", [], [f["id"] for f in inp["findings"] if "severity" in f], "verifier input carries no severity (blind)")
 check("BR-13", True, {"SEC-01", "SEC-02", "ARCH-01"} <= set(ids), "every CRITICAL and HIGH finding is in the input")
 check("BR-14", True, len([i for i in ids if i.startswith("SEC") and i not in ("SEC-01", "SEC-02")]) >= 3, "at least 3 MEDIUM/LOW findings per hat are sampled")
+check("BR-14b", (True, []), (len(inp["others"]) > 0 and all(o["id"] not in ids for o in inp["others"]), [o["id"] for o in inp["others"] if "severity" in o]),
+      "the input lists the other findings (for cross-verifier duplicates), also without severity")
 rc, out = br("select", "--dir", RUN)
 check("BR-15", ids, [f["id"] for f in json.load(open(f"{RUN}/verify/input-V1.json"))["findings"]], "selection and order are deterministic for a run")
 check("BR-16", False, ids == sorted(ids), "the order is shuffled, not grouped by hat or severity")
@@ -107,6 +109,9 @@ def v(fid, verdict="confirmed", sev="HIGH", **kw):
     d.update(kw)
     return d
 
+verdicts([v(i, note="") for i in ids])
+rc, out = br("validate", f"{RUN}/verify/V1.json")
+check("BR-16b", (2, True), (rc, "no note" in out), "every verdict needs a note (it explains any severity change)")
 verdicts([v("SEC-01", sev="CRITICAL")])
 rc, out = br("validate", f"{RUN}/verify/V1.json")
 check("BR-17", (2, True), (rc, "has no verdict" in out), "a verification missing an input id fails validation")
@@ -134,6 +139,9 @@ check("BR-22", (False, [other[0]]), (other[0] in F, F["SEC-01"].get("duplicates"
 check("BR-23", 1, m["scores"]["a1"]["security"], "an agent's score under a hat is its worst verified finding (CRITICAL = 1)")
 check("BR-24", 3, m["scores"]["a1"]["architect"], "…a narrowed HIGH→MEDIUM scores 3")
 check("BR-25", 5, m["scores"]["a2"]["architect"], "a covered agent with no findings scores 5")
+unsampled = [f["id"] for f in sec if f["id"] not in ids]
+check("BR-25b", ("verified", True), (m["score_basis"]["a1"]["security"], "*" in open(f"{RUN}/scorecard.md").read() or not unsampled),
+      "the score basis says whether the worst finding was verified; unsampled ones are starred")
 check("BR-26", True, any(c["id"] == "ARCH-01" and c["direction"] == "down" for c in m["severity_changes"]), "severity changes are recorded with direction")
 sc = open(f"{RUN}/scorecard.md").read()
 check("BR-27", True, "| a1 |" in sc and "| V1 | fable |" in sc and "## Refuted" in sc, "scorecard.md has the table, verifier stats and refuted list")

@@ -18,6 +18,8 @@ arguments:
 
 # /ui-audit — Design standards + Stitch baseline audit for every page
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 **Why this exists.** The design gate (`design_quality_reviewer`) checks wireframes before code.
 Nothing checked the **built** pages against the standards afterwards, and nothing kept Stitch
 holding the design for **every** page. Pages built outside `/design`, or touched by shared-component

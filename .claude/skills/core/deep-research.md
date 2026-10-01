@@ -350,7 +350,7 @@ Any dimension below 70% coverage = INCOMPLETE. User must see this before `/init`
 
 - **Every claim cited** — vendor name, URL, or document
 - **Quantitative where possible** — revenue numbers, customer counts, response times
-- **Recency bias** — prefer 2025-2026 sources over older data
+- **Recency bias** — prefer sources from the last year or two (take the current year from `date +%Y`), and note the version each one describes
 - **Multiple sources** — cross-reference claims across 2+ sources
 - **Primary sources** — competitor product pages, Gartner/Forrester/IDC, GitHub/docs, job postings
 - **Document behavior, not just features** — "what happens when X" is more valuable than "supports X"

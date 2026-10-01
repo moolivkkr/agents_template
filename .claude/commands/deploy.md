@@ -21,6 +21,8 @@ arguments:
 
 # /deploy — Application Deployment
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Deploys the application to the specified target using the infrastructure configuration from `docs/IMPLEMENTATION_GUIDELINES.md`.
 
 **⚠ Production deployments always require explicit confirmation.**

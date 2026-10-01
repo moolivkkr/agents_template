@@ -43,7 +43,7 @@ Search the web for best practices given the project's specific tech stack and do
 
 ```text
 Question: "What email provider for transactional emails?"
-Search: "best transactional email provider 2026 [project tech stack]"
+Search: "best transactional email provider <current year> [project tech stack]"   (year from `date +%Y`)
 Findings: Resend (modern, developer-friendly), SendGrid (established), AWS SES (cheapest)
 Context: IMPL_GUIDELINES shows TypeScript + Next.js → Resend has best DX for this stack
 → Answer: Resend (MEDIUM confidence, source: web research + tech stack fit)

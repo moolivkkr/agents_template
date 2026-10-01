@@ -2,18 +2,76 @@
   "task": "T-007-debate",
   "mode": "TRAJECTORY",
   "expected_trajectory": [
-    { "step": "debate-status.py --phase N (lists 3 pending)", "must": true, "desc": "the parent finds pending debates through the one reader, not a glob" },
-    { "step": "debate_moderator x3 (run_in_background: false)", "must": true, "desc": "one moderator per request, spawned by the parent in the foreground" },
-    { "step": "debate_researcher x2 per debate (one message, foreground)", "must": true, "desc": "one researcher per option, in parallel" },
-    { "step": "debate_advocate x2 per debate (HIGH impact)", "must": true, "desc": "one advocate per option, reading all research" },
-    { "step": "debate_arbitrator MODE primary per debate", "must": true, "desc": "sole writer of <topic>.verdict.json + D-NNN via remember.sh decide" },
-    { "step": "debate_arbitrator MODE second-opinion (model: fable)", "must": false, "desc": "only when HIGH impact and confidence below HIGH; reverse presentation order" },
-    { "step": "debate-status.py --check exits 0", "must": true, "desc": "the gate's check (f) would pass" }
+    {
+      "step": "debate-status.py --phase N in each fixture copy (lists the pending request)",
+      "must": true,
+      "desc": "the parent finds pending debates through the one reader, not a glob"
+    },
+    {
+      "step": "debate_moderator x5, waited for (run_in_background:false where offered)",
+      "must": true,
+      "desc": "one moderator per request, spawned by the parent"
+    },
+    {
+      "step": "debate_researcher per option per debate (one message)",
+      "must": true,
+      "desc": "one researcher per option, in parallel"
+    },
+    {
+      "step": "debate_advocate per option (HIGH impact)",
+      "must": true,
+      "desc": "one advocate per option, reading all research"
+    },
+    {
+      "step": "debate_arbitrator MODE primary per debate",
+      "must": true,
+      "desc": "sole verdict writer; neutral request view, briefs + arguments, REQUEST_SHA"
+    },
+    {
+      "step": "debate_arbitrator MODE second-opinion (model: fable) for search_debounce",
+      "must": true,
+      "desc": "close HIGH call: reverse order, never sees the first judgment"
+    },
+    {
+      "step": "debate_arbitrator MODE promote for search_debounce",
+      "must": true,
+      "desc": "the D-NNN is recorded only after the second opinion"
+    },
+    {
+      "step": "order_retention moderator returns NEEDS_INPUT; parent records a needs_input default",
+      "must": true,
+      "desc": "missing data goes to the human, not a debate"
+    },
+    {
+      "step": "debate-status.py --check exits 0 in the scored workspace",
+      "must": true,
+      "desc": "the gate's check (f) would pass"
+    }
   ],
   "forbidden": [
-    { "pattern": "debate_moderator writing or editing <topic>.verdict.json", "desc": "the arbitrator is the only verdict writer" },
-    { "pattern": "a debate child spawned without run_in_background: false", "desc": "background children let the moderator return before the verdict exists" },
-    { "pattern": "a debate raised from inside a debate", "desc": "no nested debates: an undecidable arbitration is LOW/INCOMPLETE" },
-    { "pattern": "verdict chosen as 'the first option' by default", "desc": "fallbacks use the stronger BRD case or the hardened option, never position" }
+    {
+      "pattern": "debate_moderator writing or editing <topic>.verdict.json",
+      "desc": "the arbitrator is the only verdict writer"
+    },
+    {
+      "pattern": "a debate child spawned without run_in_background: false",
+      "desc": "background children let the moderator return before the verdict exists"
+    },
+    {
+      "pattern": "a debate raised from inside a debate",
+      "desc": "no nested debates: an undecidable arbitration is LOW/INCOMPLETE"
+    },
+    {
+      "pattern": "verdict chosen as 'the first option' by default",
+      "desc": "fallbacks use the stronger BRD case or the hardened option, never position"
+    },
+    {
+      "pattern": "two debates sharing one docs/DECISIONS.md",
+      "desc": "the second would read the first's decision and the position check would be confounded"
+    },
+    {
+      "pattern": "a verdict written for order_retention",
+      "desc": "missing data can't be debated into a fact"
+    }
   ]
 }

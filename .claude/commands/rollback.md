@@ -17,6 +17,8 @@ arguments:
 
 # /rollback — Deployment Rollback
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Rolls back a deployment to the previous known-good state: identifies the last HEALTHY deploy from the
 recorded deploy history, **redeploys that build first**, and validates health. The schema is not
 reversed. Migrations are expand/contract and N-1 compatible (`migration_agent`), so the previous

@@ -16,12 +16,14 @@ tags:
 
 Every agent runs on Claude Opus 5.5 (`model: opus` in its frontmatter) at the `effort` its frontmatter sets: `high` for reviewers, verifiers, security and implementation agents, `medium` for writers and planners, `low` for mechanical runners. One model family means one prompt-cache namespace across the pipeline, and on current models the strongest model at a lower effort matches or beats a smaller model at a higher one, at a similar cost per completed task.
 
-**When spawning an agent, don't pass a `model` parameter.** A per-launch `model` overrides the agent's frontmatter, so passing one silently undoes the policy above. The two exceptions are the only times to pass it:
+**When spawning an agent, don't pass a `model` parameter.** A per-launch `model` overrides the agent's frontmatter, so passing one silently undoes the policy above. The exceptions below are the only times to pass it:
 
 | Situation | Pass | Why |
 |---|---|---|
 | Retry after the agent's first attempt failed on an external signal (failing tests, a reviewer's blocking finding, a gate miss) | `model: fable` | The most capable model on the second attempt; the failure is the evidence the task needs it. Log it (below). |
 | Layer 3 adversarial verification in `gate-verification.md` | `model: fable` | Work is produced on Opus; verifying on a different model avoids sharing its blind spots. |
+| The second opinion on a close HIGH-impact debate (`debate-protocol.md`, moderator step 7) | `model: fable` | The primary arbitrator runs on Opus; a judge on the same model shares its blind spots and order effects. If Fable can't run, the debate returns PARTIAL rather than substituting a same-model judge. |
+| `/board-review` verifiers | `model: fable` | They try to refute findings the Opus hats produced, for the same reason. |
 
 Don't escalate pre-emptively on a high score - high complexity is handled by workflow depth (`scale-adaptive-depth.md`) and by candidate selection (`candidate-selection.md`), which pay for more attempts only where they help.
 

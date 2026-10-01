@@ -23,6 +23,8 @@ arguments:
 
 # /reconcile — Full-Chain Docs↔Code Reconciliation + Completion Planning
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 > **Alias of `/recon --fix=docs`** (as-built-wins). `/recon` is the canonical two-way entry point;
 > this command remains as a direct alias and carries the full-chain, estate `--all`/`--product`
 > fan-out and the detailed as-built doc-update procedure below.

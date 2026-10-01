@@ -141,10 +141,10 @@ Cycle 2: Re-run failed tests
 Cycle 3: Final attempt
   → All pass? → proceed
   → Still failing? → raise a debate (debate-protocol.md v2):
-    write agent_state/debates/e2e_<test-slug>.request.json
+    write agent_state/debates/e2e_<test-slug>.request.json   (domain "feature": it weighs BRD alignment, which the testing rubric doesn't)
       { "schema": "sdlc.debate-request/v1", "topic": "e2e_<test-slug>", "phase": N,
         "decision": "E2E <name> still fails after 3 fix attempts", "impact": "HIGH",
-        "domain": "testing", "blocking": true,
+        "domain": "feature", "blocking": true,
         "context": "Test: <name>, Error: <error>, Attempts: 3",
         "options": [ {"id":"A","label":"Architectural change to fix the root cause"},
                      {"id":"B","label":"Simplify the feature so it meets the spec testably"},

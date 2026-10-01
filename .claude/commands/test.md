@@ -54,6 +54,8 @@ arguments:
 
 # /test — Standalone Test Runner
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Runs tests outside of `/develop`. Useful after a hotfix, for running e2e on demand, or for regression
 testing before a release.
 

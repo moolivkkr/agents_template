@@ -142,8 +142,11 @@ reviewers' blind spots (`model-routing.md`, review B3). They write `verify/<veri
 | `refuted` | the citation doesn't say that, or the reproduction shows the claim is false |
 | `unverifiable` | it can't be checked here (needs a cluster, a vendor account…). Say what would check it |
 
-`severity` is **your own rating**, made from the evidence before you know the hat's. `duplicate_of`
-names another finding's id when two hats found the same thing.
+`severity` is **your own rating**, made from the evidence before you know the hat's. Every verdict
+needs a `note`: it is the only explanation the merge can show when your rating differs from the
+hat's. `duplicate_of` names another finding's id when two hats found the same thing. Your input's
+`others` list holds the findings other verifiers check, so you can mark a duplicate across verifiers
+too.
 
 ## Merge and scores
 
@@ -157,7 +160,8 @@ names another finding's id when two hats found the same thing.
 - **The merge fails** if any CRITICAL or HIGH finding has no verdict.
 - **Score per agent per hat:** the agent's worst final finding under that hat, using the scale below.
   It's derived, not judged, so two runs are comparable and a hat can't anchor its own scores. An
-  agent missing from a hat's coverage has no score.
+  agent missing from a hat's coverage has no score. When that worst finding is a MEDIUM or LOW nobody
+  sampled for verification, it counts at the hat's severity and the scorecard marks the cell `*`.
 
   | Worst final finding | Score |
   |---|---|

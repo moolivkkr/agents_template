@@ -81,12 +81,13 @@ Preserves all code changes. Agents will build on existing implementation during 
    ```bash
    # Archive, don't delete — debates contain valuable decision context. The D-NNN entries stay in
    # docs/DECISIONS.md (append-only); if the redo decides differently, record it with --reverses.
-   for T in $(python3 .claude/hooks/debate-status.py --phase "${PHASE}" --json | jq -r '.topics[] | select(.phase != null) | .topic'); do
-     mkdir -p "agent_state/debates/archived-${TIMESTAMP}"
-     for f in agent_state/debates/"$T".* agent_state/debates/"$T"-*; do
+   # Move exactly the files debate-status attributes to this phase's topics (a name glob also caught
+   # another phase's topic that shared a prefix: board review 2026-09-30-debate, ARCH-17).
+   python3 .claude/hooks/debate-status.py --phase "${PHASE}" --json \
+     | jq -r '.topics[] | select(.phase != null) | .files[]' | while read -r f; do
+       mkdir -p "agent_state/debates/archived-${TIMESTAMP}"
        [ -e "$f" ] && mv "$f" "agent_state/debates/archived-${TIMESTAMP}/"
      done
-   done
    ```
 
 ### After soft reset

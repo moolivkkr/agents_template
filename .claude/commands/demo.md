@@ -13,6 +13,8 @@ arguments:
 
 # /demo — Stakeholder Demo Preparation
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Wires the three demo agents into one run. Each agent consumes the previous one's output, so they
 run in sequence. A demo that fails in rehearsal is reported here, not discovered in front of
 stakeholders.

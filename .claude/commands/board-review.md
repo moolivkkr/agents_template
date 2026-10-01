@@ -16,6 +16,8 @@ arguments:
 
 # /board-review — review a group of agents through several lenses, then try to refute the findings
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 The 2026-09-30 board review found real problems in the coding and testing agents, but it couldn't be
 re-run: its checklists, prompts and formats weren't saved, every agent ran on one model, and the
 verifiers saw each finding's severity before judging it (`docs/DEBATE_AND_BOARD_REVIEW_2026-09-30.md`,
@@ -154,9 +156,12 @@ verdict for an input id is a validation problem, and gets re-spawned with the va
 python3 "$BR" merge --dir "$RUN"     # merged.json + scorecard.md; exits 2 if a CRITICAL/HIGH has no verdict
 ```
 
-The scores come from the verified findings, not from the hats' opinions: an agent's score under a
-hat is its worst verified finding there. That makes two runs comparable, and it means a refuted
-finding stops counting. Read the warnings. A verifier that changed nothing across ten or more
+The scores are derived, not taken from the hats' opinions. An agent's score under a hat is its worst
+finding there after verification:
+- verified findings count at the verifier's severity, and refuted ones drop out
+- MEDIUM and LOW findings nobody sampled count at the hat's severity, marked `*`
+
+That makes two runs comparable. Read the warnings. A verifier that changed nothing across ten or more
 findings may not have tried to refute anything.
 
 ## Step 6 — Root causes and the plan

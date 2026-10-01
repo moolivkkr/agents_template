@@ -11,8 +11,10 @@ skills/review/board-review/; this script does everything that shouldn't be left 
                             citation must name a file that exists and a line inside it   (exit 2 on problems)
   select --dir RUN          build each verifier's input: all CRITICAL/HIGH plus a deterministic sample of
                             MEDIUM/LOW, severity REMOVED, order shuffled (blind verification, B4)
-  merge --dir RUN           join hat findings and verdicts -> RUN/merged.json + RUN/scorecard.md; scores
-                            are derived from verified findings (worst finding: CRITICAL 1 .. none 5)
+  merge --dir RUN           join hat findings and verdicts -> RUN/merged.json + RUN/scorecard.md. A score is
+                            the agent's worst finding after verification (CRITICAL 1 .. none 5): verified
+                            findings count at the verifier's severity, MEDIUM/LOW findings that weren't
+                            sampled at the hat's (marked * in the scorecard); refuted ones don't count
                             (exit 2 if a CRITICAL/HIGH finding has no verdict)
   compare BEFORE AFTER      score movement between two merged.json files
 
@@ -196,8 +198,8 @@ def validate_verification(doc, expected_ids=None):
             probs.append(f"{vid}: a {v.get('verdict')} finding needs the verifier's own severity")
         if not str(v.get("reproduction") or "").strip():
             probs.append(f"{vid}: no reproduction (what was opened or run)")
-        if v.get("verdict") in ("narrowed", "refuted") and not str(v.get("note") or "").strip():
-            probs.append(f"{vid}: a {v.get('verdict')} verdict needs a note saying why")
+        if not str(v.get("note") or "").strip():
+            probs.append(f"{vid}: no note (say why: it's the only explanation of a severity the merge changes)")
     if expected_ids is not None:
         for m in sorted(set(expected_ids) - ids):
             probs.append(f"{m}: in the verifier's input but has no verdict")
@@ -245,9 +247,15 @@ def select(run, sample=0.25, min_sample=3):
             picked += serious + rng.sample(rest, k)
         blind = [{k: f[k] for k in ("id", "type", "agents", "file", "line", "evidence", "problem", "fix") if k in f}
                  for f in picked]
+        mine = {f["id"] for f in picked}
+        # every other finding, briefly and without severity, so duplicates across verifiers can be marked
+        others = [{"id": f["id"], "hat": h, "agents": f.get("agents"), "file": f.get("file"), "line": f.get("line"),
+                   "problem": str(f.get("problem") or "")[:200]}
+                  for h, d in sorted(docs.items()) for f in d.get("findings") or [] if f["id"] not in mine]
         random.Random(int(hashlib.sha256((os.path.basename(run.rstrip("/")) + v).encode()).hexdigest(), 16)).shuffle(blind)
-        doc = {"schema": "sdlc.board-verify-input/v1", "verifier": v, "hats": hats, "findings": blind,
-               "note": "severity removed on purpose: rate each finding yourself from the evidence"}
+        doc = {"schema": "sdlc.board-verify-input/v1", "verifier": v, "hats": hats, "findings": blind, "others": others,
+               "note": "severity removed on purpose: rate each finding yourself from the evidence. 'others' are the "
+                       "remaining findings (not yours to verify): use their ids in duplicate_of when one of yours is the same problem"}
         with open(os.path.join(run, "verify", f"input-{v}.json"), "w") as fh:
             json.dump(doc, fh, indent=2)
         out[v] = {"hats": hats, "count": len(blind)}
@@ -307,15 +315,17 @@ def merge(run):
                 tgt["severity"] = final[fid]["severity"]
             del final[fid]
     hats = sorted(coverage)
-    scores = {}
+    scores, basis = {}, {}
     for a in sorted(targets):
-        scores[a] = {}
+        scores[a], basis[a] = {}, {}
         for h in hats:
             if a not in coverage[h]:
-                scores[a][h] = None
+                scores[a][h] = basis[a][h] = None
                 continue
-            sev = [f["severity"] for f in final.values() if f["hat"] == h and a in (f.get("agents") or [])]
-            scores[a][h] = min((SCORE[s] for s in sev), default=5)
+            fs = [f for f in final.values() if f["hat"] == h and a in (f.get("agents") or [])]
+            scores[a][h] = min((SCORE[f["severity"]] for f in fs), default=5)
+            worst = [f for f in fs if SCORE[f["severity"]] == scores[a][h]]
+            basis[a][h] = "none" if not fs else ("verified" if any(f.get("verified") for f in worst) else "unverified")
     avgs = {a: (round(sum(v for v in s.values() if v) / len([v for v in s.values() if v]), 2)
                 if any(s.values()) else None) for a, s in scores.items()}
     warnings = []
@@ -325,7 +335,7 @@ def merge(run):
     counts = {sv: sum(1 for f in final.values() if f["severity"] == sv) for sv in SEVERITIES}
     out = {"schema": "sdlc.board-merged/v1", "run": os.path.basename(os.path.abspath(run)), "hats": hats,
            "targets": sorted(targets), "counts": counts, "findings": sorted(final.values(), key=lambda f: (SEVERITIES.index(f["severity"]), f["id"])),
-           "refuted": refuted, "severity_changes": changes, "scores": scores, "averages": avgs,
+           "refuted": refuted, "severity_changes": changes, "scores": scores, "score_basis": basis, "averages": avgs,
            "verifier_stats": stats, "warnings": warnings, "errors": errors}
     with open(os.path.join(run, "merged.json"), "w") as fh:
         json.dump(out, fh, indent=2)
@@ -338,14 +348,18 @@ def render_scorecard(m):
     short = {"architect": "Arch", "senior_dev": "Dev", "tester": "Test", "sre": "SRE", "devops": "Ops",
              "security": "Sec", "ai_engineer": "AI"}
     L = [f"# Scorecard: {m['run']}", "",
-         "Generated by `board-review.py merge`. Score = the worst verified finding naming the agent under that hat "
-         "(CRITICAL 1, HIGH 2, MEDIUM 3, LOW 4, none 5); `-` = the hat didn't cover it.", "",
+         "Generated by `board-review.py merge`. Score = the agent's worst finding under that hat after verification "
+         "(CRITICAL 1, HIGH 2, MEDIUM 3, LOW 4, none 5): verified findings at the verifier's severity, refuted ones dropped. "
+         "`*` = that worst finding is a MEDIUM/LOW the verifiers didn't sample, so it's at the hat's severity. "
+         "`-` = the hat didn't cover the agent.", "",
          f"Findings after verification: " + ", ".join(f"{k} {v}" for k, v in m["counts"].items())
          + f"; refuted {len(m['refuted'])}; severity changed {len(m['severity_changes'])}.", ""]
     L.append("| Agent | " + " | ".join(short.get(h) or h for h in m["hats"]) + " | Avg |")
     L.append("|---|" + "---|" * (len(m["hats"]) + 1))
     for a in sorted(m["scores"], key=lambda a: (m["averages"][a] is None, m["averages"][a] or 0, a)):
-        cells = ["-" if m["scores"][a][h] is None else str(m["scores"][a][h]) for h in m["hats"]]
+        b = m.get("score_basis", {}).get(a, {})
+        cells = ["-" if m["scores"][a][h] is None else str(m["scores"][a][h]) + ("*" if b.get(h) == "unverified" else "")
+                 for h in m["hats"]]
         L.append(f"| {a} | " + " | ".join(cells) + f" | {m['averages'][a] if m['averages'][a] is not None else '-'} |")
     L += ["", "## Verifiers", "", "| Verifier | Model | Total | Confirmed | Narrowed | Refuted | Unverifiable | Severity up | Severity down |",
           "|---|---|---|---|---|---|---|---|---|"]

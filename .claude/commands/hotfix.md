@@ -23,6 +23,8 @@ arguments:
 
 # /hotfix — Fast-Track Bug Fix
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Bypasses the full `/develop` pipeline for targeted, scoped bug fixes. Produces a hotfix branch, applies a fix to a single component, runs scoped tests and a single-layer review, then merges back.
 
 **When to use:** Production bugs, regressions caught after gate, or critical fixes that affect a single component and don't require cross-component changes.

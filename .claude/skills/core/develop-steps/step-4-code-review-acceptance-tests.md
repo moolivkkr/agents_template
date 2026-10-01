@@ -165,7 +165,7 @@ Cycle 2: Re-run failed tests
   → Still failing? → deeper analysis
     → If same test keeps failing: likely category D (architectural)
     → raise a debate (debate-protocol.md v2):
-      write agent_state/debates/acc_<fr>_<persona>.request.json
+      write agent_state/debates/acc_<fr>_<persona>.request.json   (lower-case slug: acc_fr-012_tenant-admin)
         { "schema": "sdlc.debate-request/v1", "topic": "acc_<fr>_<persona>", "phase": N,
           "decision": "Acceptance <TC-ACC id> for <FR-*> (<persona>) can't pass", "impact": "HIGH",
           "domain": "architecture", "blocking": true,

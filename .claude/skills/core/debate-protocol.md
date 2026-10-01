@@ -99,8 +99,11 @@ checkpoint all use it; none of them glob file names.
   rubric below, so set it honestly: auth, tokens, crypto, PII, CORS/CSRF, rate limits and tenant
   isolation are `security`.
 - `kind`: `decision` (default) or `assumption` (a working default for missing data or ambiguity).
-- `blocking`: `true` when the work can't continue correctly without the answer. A non-blocking
-  request lets the agent continue on its stated default; the debate still runs before the gate.
+- `blocking`: `true` when the work can't continue correctly without the answer.
+  - A non-blocking request (`false`) lets the agent continue on its default. It names that default as
+    `default_taken`.
+  - The debate still runs, right after the wave that raised it. The gate blocks until it has and,
+    if the verdict differs, until the agent was relaunched with it and `default_taken` updated.
 - To drop a request that no longer applies, set `"status": "withdrawn"` and a `"withdrawn_reason"`
   (at least a sentence). Don't delete it.
 
@@ -118,6 +121,7 @@ checkpoint all use it; none of them glob file names.
   "verdict_label": "httpOnly SameSite=strict cookie",
   "confidence": "HIGH",
   "rubric": "security",
+  "request_sha": "<python3 .claude/hooks/debate-status.py --request-sha token_storage>",
   "presentation_order": ["B", "A"],
   "scores": {
     "A": { "total": 8.1, "security_posture": 9, "brd_alignment": 8, "feasibility": 7, "constraint_fit": 8, "operability": 7 },
@@ -126,7 +130,8 @@ checkpoint all use it; none of them glob file names.
   "gap": 2.9,
   "decisive_factor": "security_posture: B exposes the token to any XSS (OWASP ASVS V3)",
   "claims_checked": [
-    { "claim": "SameSite=strict blocks the CSRF vector in FR-012's flow", "source": "https://…", "result": "confirmed" }
+    { "claim": "SameSite=strict blocks the CSRF vector in FR-012's flow", "source": "https://…",
+      "quote": "the exact sentences", "as_of": "2026-05 / RFC 6265bis-15", "result": "confirmed" }
   ],
   "hardened_default": "A",
   "rationale": "2-3 sentences",
@@ -140,17 +145,41 @@ checkpoint all use it; none of them glob file names.
 
 - `status`: `RESOLVED`, or `INCOMPLETE` with a `reason` when the arbitrator decided on evidence it
   knows is incomplete. `INCOMPLETE` always has `confidence: LOW`.
-- `hardened_default`: required for `domain: security`. It names the more restrictive option, the one
-  that fails closed.
-- `decision_id`: the `D-NNN` that `remember.sh decide` returned. The gate blocks a v1 verdict that
-  never reached `docs/DECISIONS.md`.
+- `request_sha`: ties the verdict to the request it answered. If the request changes afterwards, the
+  verdict is stale and the gate blocks until the debate runs again.
+- **What the gate recomputes, rather than trusting the verdict's own claims** (`debate-status.py
+  --check`):
+  - every option's total, from its per-criterion `scores` and the domain's weights
+  - the gap, and the confidence band it allows: a verdict may claim less confidence, never more
+  - that the winner is the highest total
+  - that `claims_checked` has a sourced entry
+  - that the research, arguments and transcript behind the verdict exist
+- **Exceptions to "the winner is the highest total"** must be written down:
+  - `hardened_default` for a security call below HIGH confidence
+  - `tie_break` for totals equal at one decimal place
+- `hardened_default`: required for `domain: security` unless the status is `INCOMPLETE`. It names
+  the more restrictive option, the one that fails closed. A security call below HIGH confidence that
+  isn't the hardened default needs `must_override`, naming the MUST requirement that rules it out.
+- `decision_id`: the `D-NNN` that `remember.sh decide` returned. Its ledger block must link to this
+  verdict.
 - `kind: "assumption"` and `none_ideal: true` are carried when they apply.
 
 ### Second opinion (`sdlc.debate-second-opinion/v1`)
 
-`{"schema":"sdlc.debate-second-opinion/v1","topic":"…","model":"fable","verdict":"A","gap":0.6,"presentation_order":["A","B"],"scores":{…},"decisive_factor":"…"}`.
-It's required for HIGH impact when the verdict's confidence isn't HIGH. `debate-status.py` compares it
-with the verdict, and a disagreement goes to the checkpoint.
+`{"schema":"sdlc.debate-second-opinion/v1","topic":"…","model":"<exact model id>","verdict":"A","gap":0.6,"presentation_order":["A","B"],"scores":{…},"decisive_factor":"…"}`.
+
+**When it's required:** for HIGH impact whenever the recomputed gap, or the verdict's own
+confidence, is below HIGH.
+
+**How it stays independent:**
+- It reads the options in the reverse presentation order.
+- It never sees the first judgment. The primary leaves the ledger alone in this case, and a short
+  `MODE: promote` step records the `D-NNN` after the second opinion returns.
+- It runs on Fable. A non-Fable model goes to review.
+- `debate-status.py` validates it, so an empty or same-order file doesn't count.
+
+**When it disagrees:** on a non-security topic, the disagreement goes to the review list. On a
+security topic, a person decides (`<topic>.override.json`) before the gate passes.
 
 ## Who runs a debate (hand-back, not a watcher)
 
@@ -164,7 +193,9 @@ for it, so "write a request and wait" doesn't work (D4).
    - **Non-blocking:** it continues on its recommended default, says so in its final message, and
      returns normally.
 2. **Parent session** (the orchestrator or command that spawned the subagent) spawns
-   `debate_moderator` with the request path, **in the foreground** (`run_in_background: false`).
+   `debate_moderator` with the request path, and waits for it (`~/.claude/skills/core/child-returns.md`).
+   Every command that spawns agents follows that skill, so this works from `/plan` and `/discuss` as
+   well as `/develop`.
    - The moderator runs at depth 1 and its researchers, advocates and arbitrators at depth 2. A
      subagent never spawns the moderator itself: that would put the researchers at depth 3 and hide
      the decision from the parent's checkpoint.
@@ -172,15 +203,16 @@ for it, so "write a request and wait" doesn't work (D4).
    written the verdict.
 4. **Parent relaunches** the requesting agent with its original prompt plus `DECISION <topic>:
    <verdict_label> — agent_state/debates/<topic>.verdict.json. Continue from where you stopped.`
-5. **Before the gate**, `debate-status.py --phase N --check` must pass. A non-blocking request that
-   was never debated is listed there too. Run its debate, then relaunch the agent if the verdict
-   differs from the default it took.
+5. **Before the gate**, `debate-status.py --phase N --check` must pass. Every request needs a
+   verdict, a recorded default, a withdrawal or a person's override, non-blocking ones included.
 
 **Limits** you can count:
 - **Per step:** at most 3 requests; per phase at most 10. Beyond that, record recommended defaults
   in `unresolved.json` and, under `/autonomous`, exit auto mode at the phase limit.
 - **Per debate:** 2–4 options, at most 10 web searches per researcher, one advocacy round, one
-  arbitration, plus one second opinion when required.
+  arbitration, plus one second opinion and one promote step when required.
+- **Concurrent debates:** at most four moderators at a time. Each holds itself plus up to four
+  children, against the default limit of 20 subagents.
 - **No nested debates:** an arbitrator that can't decide writes a `LOW`/`INCOMPLETE` verdict. It
   never raises another debate.
 
@@ -270,22 +302,25 @@ The confidence comes from the gap between the top two weighted totals:
 | 0.3–1.0 | MEDIUM | the verdict and the one decisive factor |
 | < 0.3 | LOW | the verdict and both options explained, flagged for the checkpoint |
 
-- **Ties.** Break a tie on the domain's heaviest criterion, then its second heaviest. If they still
-  tie, pick the option with lower implementation risk, mark the verdict `LOW`, and explain both
-  options.
+- **Ties** (totals equal at one decimal place): break them on the domain's heaviest criterion, then
+  its second heaviest, then (security) the hardened default, then lower implementation risk. Record
+  how in `tie_break`. If they're still tied, the verdict is `INCOMPLETE` and `LOW`, with both options
+  explained.
   - **Interactive runs:** the parent shows the choice to the user.
-  - **`/autonomous` runs:** the verdict stands and goes to the checkpoint. Nobody is there to ask
-    mid-run, so "always surface to the user" means "surface at the checkpoint".
+  - **`/autonomous` runs:** a non-security verdict stands and goes on the review list. A security one
+    stops the run for the user.
 - **Security.** For `domain: security`, when the confidence isn't HIGH, the verdict is the
-  `hardened_default` unless a cited MUST requirement rules it out. If you can't name a hardened
-  option, the verdict is `LOW` with `status: INCOMPLETE`, and under `/autonomous` the parent stops
-  for the user.
+  `hardened_default` unless `must_override` names the MUST requirement that rules it out.
+  - **No hardened option:** if you can't name one, the verdict is `LOW` with `status: INCOMPLETE`.
+  - **That case, and a second opinion that disagrees:** both block the gate until a person's choice
+    is in `<topic>.override.json`. The gate counts them as security findings, so a forced gate needs
+    an acknowledgement for each.
 - **None ideal.** If every option scores below 5 on the heaviest criterion, the verdict is the least
   bad option with `"none_ideal": true`, flagged for the checkpoint.
 - **Second opinion.** HIGH impact and confidence below HIGH means the moderator runs a second
-  arbitration on `model: fable` with the presentation order reversed (D8.5). Order sensitivity and
-  same-model blind spots show up as disagreement. Disagreement doesn't change the verdict: it goes
-  to the checkpoint.
+  arbitration on `model: fable`, with the presentation order reversed (D8.5). Order sensitivity and
+  same-model blind spots then show up as disagreement. Disagreement doesn't change the verdict. It
+  goes to the review list, or to a person for security.
 
 ## Decided without a debate: `unresolved.json`
 
@@ -296,12 +331,15 @@ gate:
 ```json
 { "decisions": [
   { "topic": "cache_strategy", "phase": 3, "from_agent": "backend_developer", "domain": "architecture",
-    "auto_resolved_with": "A", "confidence": "LOW", "reason": "escalation_limit_exceeded", "needs_review": true }
+    "auto_resolved_with": "A", "confidence": "LOW", "reason": "escalation_limit_exceeded", "needs_review": true },
+  { "topic": "token_ttl", "phase": 3, "domain": "security", "auto_resolved_with": "B", "hardened": true,
+    "confidence": "LOW", "reason": "needs_input under --auto: no session-length requirement in the BRD", "needs_review": true }
 ] }
 ```
 
 The default is the option with the stronger BRD-alignment case in the request, and for security the
-hardened option. It's never simply "the first option".
+hardened option, marked `"hardened": true`. The gate rejects a security default without that marker,
+and any default that isn't one of the request's options. It's never simply "the first option".
 
 ## The human checkpoint
 
@@ -315,9 +353,13 @@ Show the user:
 - **HIGH-impact verdicts** with their score table.
 - **MEDIUM-impact verdicts** with verdict and confidence.
 
-The user can override any verdict. The parent writes `<topic>.override.json`
-(`{topic, original_verdict, user_override, user_rationale, overridden_at, phase}`), appends it to
-`overrides.jsonl`, and records the reversal with `remember.sh decide --reverses D-NNN`.
+Under `/autonomous` nobody is at a checkpoint mid-run. After each phase, the run appends each topic
+with review reasons to `agent_state/autonomous/auto-resolved.jsonl`, so its final report carries
+them. Security topics that need a person block the gate themselves.
+
+The user can override any verdict. The override needs a `user_rationale`, and its `user_override`
+must be one of the options. Writing it, reversing the ledger entry and relaunching whoever built on
+the old verdict are in `child-returns.md` § "When the user overrides a verdict".
 
 ## Anti-patterns
 

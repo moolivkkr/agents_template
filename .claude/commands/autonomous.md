@@ -21,6 +21,8 @@ arguments:
 
 # /autonomous — Full SDLC Pipeline (Minimal Human Interaction)
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Runs `/init` → `/plan` → `/develop` for all phases with auto-research for decisions and ONE human checkpoint before implementation begins.
 
 ```
@@ -320,6 +322,14 @@ Fully autonomous — no more human prompts.
 
 ### Auto-mode behaviors:
 - **Escalations:** `continueWithDefault: true` for architecture/feature decisions — proceed with recommendation, log for review
+- **Debates (`NEEDS_DECISION <topic>`):** run them as `~/.claude/skills/core/child-returns.md` says. A debate's review reasons have no one to read them mid-run, so the Post-Phase review below carries them to the report.
+  - **Security debates that need a person** stop the run with `awaiting_human`, `reason: "security_debate"`:
+    - INCOMPLETE (no clearly hardened option)
+    - the Fable second opinion disagrees
+    - a pending security debate at the gate
+
+    `debate-status.py --check` blocks the gate on these and counts them as security findings, so the
+    3-cycle force-gate can't pass them. The person's choice goes in `<topic>.override.json`.
 - **Security escalations:** never auto-resolve with permissive defaults. Use the **hardened default** (most restrictive option). If no clear hardened default exists → PAUSE and surface to user even in auto mode. Security domains: auth patterns, token storage/caching, IDOR mitigation, encryption, PII handling, CORS/CSRF, rate limiting.
 - **Gate failures:** Auto-fix loop (max 3 cycles per failing item)
   - Cycle 1: The owning role agent fixes → re-test the specific failure
@@ -445,8 +455,13 @@ next in the same turn.
 
 After each phase completes in autonomous mode, before proceeding to next phase:
 
-1. Read `agent_state/autonomous/auto-resolved.jsonl`
-2. Filter entries for the just-completed phase
+1. Carry the phase's debate review reasons into the log: for each topic that
+   `python3 .claude/hooks/debate-status.py --phase ${PHASE} --json` lists with review reasons (LOW
+   confidence, INCOMPLETE, a second opinion that disagrees, a non-hardened security choice, an
+   assumption, auto-resolved), append
+   `{"ts":…,"phase":N,"step":"debate","topic":…,"auto_selected":<verdict>,"auto_rationale":<the reasons>,"confidence":…,"category":"debate"}`
+   to `agent_state/autonomous/auto-resolved.jsonl`, unless that topic and phase are already there.
+2. Read `agent_state/autonomous/auto-resolved.jsonl` and filter entries for the just-completed phase
 3. Count by category
 4. Generate summary:
 
@@ -459,6 +474,7 @@ Total auto-resolved: ${N}
   performance: ${N}
   security: ${N} ${N > 0 ? "⚠ REVIEW RECOMMENDED" : ""}
   ux: ${N}
+  debate: ${N}   (verdicts with review reasons, from debate-status.py)
   other: ${N}
 
 Security-flagged decisions:

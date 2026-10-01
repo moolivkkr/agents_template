@@ -1,6 +1,6 @@
 # Skill Index
 
-> Machine- and human-readable index of every skill in `~/.claude/skills/` (256 files). Agents
+> Machine- and human-readable index of every skill in `~/.claude/skills/` (257 files). Agents
 > should consult this index and load only the skill files they need (by path) rather than
 > pulling whole large files blindly. Columns: **File** (path relative to `~/.claude/skills/`),
 > **Description** (one line), **Tags**. Redirect stubs are marked `↪` and point to their canonical target.
@@ -14,7 +14,7 @@
 | `api/response-envelope.md` | THE API response envelope — success {data, meta{request_id, pagination}}, error {error{code, message, details[], request_id, retryable}}, status/code table, what contract tests assert | api, envelope, pagination, errors, contract |
 | `security/secure-coding.md` | Secure-coding rules for every coding agent — access control, injection/SSRF/paths, tokens and sessions, XSS/headers/CORS, errors/logging/secrets/dependency vetting, timeouts — each with its abuse-matrix proof row | security, owasp, asvs, secure-coding |
 
-## Core (32)
+## Core (33)
 
 | File | Description | Tags |
 |------|-------------|------|
@@ -25,6 +25,7 @@
 | `core/auto-research.md` | Self-answering protocol — resolve open questions via research (web + code) instead of pausing for human input, with a confidence threshold | research, autonomy, decisions, web, core |
 | `core/change-impact-analysis.md` | Git-diff-based test selection — map changed files to the minimal set of tests/phases to re-run for per-phase regression | regression, test-selection, git, impact-analysis, core |
 | `core/commands-and-versions.md` | The project's single commands-and-versions table (build, test per tier, lint, migrate, seed; runtime and DB versions) that agents, test_runner and CI read | commands, versions, ci, core |
+| `core/child-returns.md` | How a command or orchestrating agent spawns subagents and acts on each return — wait for every child, NEEDS_INPUT, NEEDS_DECISION (run the debate, relaunch), progress notes, overrides, concurrency | orchestration, subagents, decisions, core |
 | `core/code-quality.md` | Code quality enforcement — self-review, function size, naming, KISS, DRY, incremental development, early returns, nesting limits | quality, clean-code, naming, refactoring, best-practices |
 | `core/context-budget-protocol.md` | Context budget discipline — selective loading, summarization, and INDEX/frontmatter-driven skill retrieval to stay within the window | context, tokens, selective-loading, efficiency, core |
 | `core/debate-protocol.md` | Multi-specialist debate — research, debate, collaborate, decide; produces a durable verdict promoted to the decisions ledger | debate, decisions, multi-agent, consensus, core |

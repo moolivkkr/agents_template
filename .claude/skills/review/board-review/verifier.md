@@ -43,9 +43,12 @@ rating. You also get the run's targets and the repo, read-only.
    Record what you ran and what happened in `reproduction`.
 4. **Rate severity yourself** from what you established, using the protocol's scale. Write it in
    `severity`.
-5. **Duplicates.** If another finding in your input is the same problem, set `duplicate_of` on the
-   later one.
-6. **Can't check it here** (needs a cluster, an account, a paid API): `unverifiable`, and say exactly
+5. **Duplicates.** If another finding is the same problem, set `duplicate_of` on yours. That includes
+   one in your input, or one in its `others` list (the findings other verifiers check, listed briefly
+   without severity).
+6. **Note.** Every verdict needs a `note` with your reasoning, including the confirmed ones. When your
+   rating differs from the hat's, the merge shows your note as the reason.
+7. **Can't check it here** (needs a cluster, an account, a paid API): `unverifiable`, and say exactly
    what would check it.
 
 ## Output

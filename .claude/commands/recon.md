@@ -29,6 +29,8 @@ arguments:
 
 # /recon — Two-Way Reconciliation (the single entry point)
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 > **Read Tier 0 first.** Load `docs/PROJECT_FACTS.md` (ground truth) and `docs/DECISIONS.md` before
 > assessing. A retired/renamed fact means a spec item that references it is *retired*, not *missing* —
 > do not raise it as drift or generate catch-up work for it.

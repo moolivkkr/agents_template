@@ -21,6 +21,8 @@ arguments:
 
 # /review — Code Review
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 Runs the four-layer review pipeline: style/idioms → architecture compliance → tenant isolation → security.
 
 ---

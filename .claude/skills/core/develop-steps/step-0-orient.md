@@ -483,7 +483,8 @@ contract is `~/.claude/skills/core/debate-protocol.md` (v2).
   "impact": "HIGH | MEDIUM",
   "domain": "architecture | security | data_model | feature | testing | operations",
   "kind": "decision",
-  "blocking": true
+  "blocking": true,
+  "default_taken": "<option id: only when blocking is false, the default you built>"
 }
 ```
 
@@ -491,8 +492,9 @@ Then:
 - **Blocking:** end your turn with the first line `NEEDS_DECISION <topic>`. Nothing watches the
   debates directory, and a subagent can't wait for a verdict. The parent session spawns
   `debate_moderator` in the foreground and relaunches you with the verdict.
-- **Non-blocking:** continue with your recommended default and say so in your final message. The
-  parent runs the debate before the gate and relaunches you only if the verdict differs.
+- **Non-blocking:** continue with your recommended default, record it as `default_taken`, and say so
+  in your final message. The parent runs the debate after your wave and relaunches you only if the
+  verdict differs. The gate blocks until it has.
 
 The debate runs researchers (parallel), then advocates (HIGH only, parallel), then the arbitrator,
 then a Fable second opinion for close HIGH calls. The verdict lands in
@@ -543,21 +545,18 @@ Prevent runaway escalation loops that consume context and time:
 
 ### Universal Agent Return Protocol
 
-Every agent spawned during this command MUST end by returning this exact format — nothing more — to the parent conversation:
+Every agent ends with the operating contract's final message, which is in every agent file under "How
+you work as a subagent". Its first line is one of `COMPLETE`, `PARTIAL`, `BLOCKED`, `NEEDS_INPUT` or
+`NEEDS_DECISION <topic>`, with one sentence on the outcome. The rest of the message gives the files
+written, the counts the gate uses (`BLOCKING:N WARNING:N INFO:N`, tests passed and failed), and
+blockers, assumptions and follow-ups.
 
-```text
-✅ <agent-name> — <status: complete | blocked | partial | needs_decision <topic>>
-   Wrote: <output file path>
-   Done:  <what was implemented in one line>
-   Issues: none | <N blocking / N warning>
-```
+The parent acts on that first line (`~/.claude/skills/core/child-returns.md`) and reads the output
+files for the details. It doesn't ask the agent to reproduce or summarise them. An older "✅
+<agent-name> — <status>" format used to live here. It contradicted the first-line statuses the
+parent acts on, so it's gone.
 
-If the agent encountered blockers, append:
-```text
-   Blocker: <one-line description> → see <file path> for details
-```
-
-**The parent reads the output file to get details. It does NOT ask the agent to reproduce or summarize the file contents.**
+---
 
 ### Analysis Paralysis Guard (applies to ALL agents spawned by this command)
 

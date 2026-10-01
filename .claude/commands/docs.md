@@ -18,6 +18,8 @@ arguments:
 
 # /docs — Optional documents: policy and on-demand snapshots
 
+> **Spawning agents:** follow `~/.claude/skills/core/child-returns.md`. Wait for every agent you spawn before using its result, and act on its first line: `NEEDS_INPUT` (ask the user, or record a default under `--auto`), `NEEDS_DECISION <topic>` (run `debate_moderator`, then relaunch the agent with the decision), or a progress note (re-spawn it, at most twice).
+
 > **Read Tier 0 first.** `docs/PROJECT_FACTS.md` and `docs/DECISIONS.md`.
 
 The pipeline maintains only the documents a gate or an agent reads: `PROJECT_FACTS`, `DECISIONS`,
