@@ -11,6 +11,8 @@ tags:
 
 # Spring Boot Framework Patterns
 
+> Java samples compile-checked 2026-09-30: JDK 25.0.4.1, Spring Boot 4.1.1, Maven 3.9.16 (`tests/archetype-compile/java/run.sh`).
+
 ## Project Structure
 
 ```
@@ -129,8 +131,9 @@ public class GlobalExceptionHandler {
         return write(new InternalException(ex));
     }
 
-    // write(): logs the cause with requestId, sets Retry-After / WWW-Authenticate, returns
-    // {"error": {"code", "message", "details"?, "request_id", "retryable"}} — see error-handling-java.md
+    // Logs the cause with request_id, sets Retry-After / WWW-Authenticate, and returns
+    // {"error": {"code", "message", "details"?, "request_id", "retryable"}} — body in error-handling-java.md
+    private ResponseEntity<ErrorBody> write(DomainException ex) { ... }
 }
 ```
 
@@ -153,9 +156,9 @@ public record CreateWidgetRequest(
     @NotNull WidgetStatus status
 ) {}
 
-// In controller:
+// In controller — the response is the envelope (ApiResponse, crud-handler-java.md):
 @PostMapping
-public ResponseEntity<WidgetResponse> create(@Valid @RequestBody CreateWidgetRequest request) { ... }
+public ResponseEntity<ApiResponse<WidgetResponse>> create(@Valid @RequestBody CreateWidgetRequest request) { ... }
 ```
 
 - Use `@Valid` on `@RequestBody` — Spring auto-validates and throws `MethodArgumentNotValidException`.
@@ -208,17 +211,18 @@ class WidgetServiceTest {
 @Testcontainers
 class WidgetIntegrationTest {
     @Container
-    static PostgreSQLContainer<?> pg = new PostgreSQLContainer<>("postgres:16-alpine");
+    @ServiceConnection // Testcontainers 2: org.testcontainers.postgresql.PostgreSQLContainer, no type parameter
+    static PostgreSQLContainer pg = new PostgreSQLContainer("postgres:16-alpine");
 }
 
-// Controller test — web layer only
+// Controller test — web layer only (Spring Boot 4: org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest)
 @WebMvcTest(WidgetController.class)
 class WidgetControllerTest {
     @Autowired MockMvc mockMvc;
-    @MockBean WidgetService widgetService;
+    @MockitoBean WidgetService widgetService; // @MockBean was removed in Spring Boot 4
 }
 
-// Repository test — JPA layer only
+// Repository test — JPA layer only (org.springframework.boot.data.jpa.test.autoconfigure.DataJpaTest)
 @DataJpaTest
 class WidgetRepositoryTest {
     @Autowired TestEntityManager entityManager;

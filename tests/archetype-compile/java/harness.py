@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Archetype Java compile harness — extraction, layout and reporting.
+"""Java compile harness for the skill packs (the backend archetypes and every other ```java block under
+.claude/skills) — extraction, layout and reporting.
 
   harness.py inventory                  check units.py covers every ```java block (no JDK needed)
   harness.py layout <dir>               write the Maven reactor (+ Gradle snippet projects) into <dir>
@@ -20,7 +21,8 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
-ARCH = ROOT / ".claude" / "skills" / "backend" / "archetypes"
+SKILLS = ROOT / ".claude" / "skills"
+ARCH = SKILLS / "backend" / "archetypes"
 sys.path.insert(0, str(HERE))
 sys.dont_write_bytecode = True  # no __pycache__ in the repo
 import units as U  # noqa: E402
@@ -45,9 +47,24 @@ class Block:
         return self.first_line + i
 
 
+def md_path(md_name):
+    """An archetype is named by its file name ("crud-handler-java.md"); any other skill pack by its path under
+    .claude/skills ("languages/java.md"; a file directly under .claude/skills has no directory part)."""
+    if "/" not in md_name and (ARCH / md_name).exists():
+        return ARCH / md_name
+    return SKILLS / md_name
+
+
+def skill_markdown():
+    """Every markdown file whose ```java blocks are inventoried: the archetypes, then every other skill pack."""
+    names = sorted(p.name for p in ARCH.glob("*.md"))
+    names += sorted(str(p.relative_to(SKILLS)) for p in SKILLS.rglob("*.md") if ARCH not in p.parents)
+    return names
+
+
 def read_blocks(md_name):
     """All fenced blocks of a markdown file, by language, in order."""
-    text = (ARCH / md_name).read_text(encoding="utf-8").split("\n")
+    text = md_path(md_name).read_text(encoding="utf-8").split("\n")
     out, counters, i = [], {}, 0
     while i < len(text):
         m = FENCE.match(text[i])
@@ -81,13 +98,15 @@ def block(block_id):
 # ─────────────────────────────── inventory ───────────────────────────────
 
 def inventory():
-    """Every ```java block in every archetype is compiled by exactly one unit or skipped with a reason."""
+    """Every ```java block in every skill pack is compiled by exactly one unit or skipped with a reason; so is
+    every Kotlin/Groovy/XML/Scala/HOCON block of the Java archetypes and of the Java packs (U.JVM_PACKS)."""
     errors = []
     found = {}
-    for md in sorted(p.name for p in ARCH.glob("*.md")):
+    for md in skill_markdown():
         blocks = read_blocks(md)
         n = sum(1 for b in blocks if b.lang == "java")
-        jvm = [b for b in blocks if b.lang in JVM_LANGS - {"java"}] if md.endswith("-java.md") else []
+        jvm_file = md.endswith("-java.md") or md in U.JVM_PACKS
+        jvm = [b for b in blocks if b.lang in JVM_LANGS - {"java"}] if jvm_file else []
         if n or md in U.JAVA_BLOCKS:
             found[md] = n
             want = U.JAVA_BLOCKS.get(md)
@@ -120,7 +139,7 @@ def inventory():
                 errors.append(f"{bid}: owned by several units {own} — own it once, list it as a dep elsewhere")
     for bid in list(owners) + list(U.SKIP) + [dep_id(d) for u in U.UNITS for d in u.deps]:
         md = bid.partition("#")[0]
-        if not (ARCH / md).exists():
+        if not md_path(md).exists():
             errors.append(f"{bid}: {md} does not exist")
         else:
             block(bid)  # raises if the index is gone
@@ -301,7 +320,8 @@ def transformed(blk, spec):
         if t == "elide":          # `{ ... }` placeholder bodies → empty bodies
             text = re.sub(r"\{\s*\.\.\.\s*\}", "{ }", text)
         elif t == "stub_bodies":  # method bodies holding only comments → throw (keeps annotations/signatures checked)
-            text = re.sub(r"(\)\s*(?:throws\s+[\w.,\s]+)?\{)((?:\s*//[^\n]*)*\s*)(\})",
+            # `{ }` or a comment-only body; never `{}`, which is a record's (or an empty void method's) real body
+            text = re.sub(r"(\)\s*(?:throws\s+[\w.,\s]+)?\{)((?:\s*//[^\n]*)*\s+)(\})",
                           r"\1\2throw new UnsupportedOperationException(); \3", text)
         else:
             raise SystemExit(f"unknown transform {t}")
@@ -398,7 +418,8 @@ def layout_unit(unit, dest):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text("\n".join(o.lines) + "\n", encoding="utf-8")
         maps[str(p)] = {"map": o.map, "stub": getattr(o, "stub", None)}
-    (mod / "pom.xml").write_text(module_pom(unit), encoding="utf-8")
+    pom = unit.pom.replace("@NAME@", unit.name) if unit.pom else module_pom(unit)
+    (mod / "pom.xml").write_text(pom, encoding="utf-8")
     return maps
 
 
@@ -516,6 +537,9 @@ def snippet_modules(dest):
         mod = dest / chk.name
         (mod / "src/main/java/snippet").mkdir(parents=True, exist_ok=True)
         (mod / "src/main/java/snippet" / "Probe.java").write_text(chk.probe_java or "package snippet;\nclass Probe {}\n")
+        if chk.probe_test:
+            (mod / "src/test/java/snippet").mkdir(parents=True, exist_ok=True)
+            (mod / "src/test/java/snippet" / "ProbeTest.java").write_text(chk.probe_test)
         (mod / "pom.xml").write_text(chk.pom.replace("@SNIPPET@", "\n".join(b.lines)))
         out.append({"name": chk.name, "block": bid, "dir": str(mod), "goal": chk.goal, "verify": chk.verify})
     return out
@@ -556,6 +580,10 @@ def gradle_projects(dest):
                 p = proj / "src/main/proto" / path
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(t)
+        for fid, path in chk.files:      # other doc blocks the build reads (a version catalog, ...)
+            p = proj / path
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text("\n".join(block(fid).lines) + "\n")
         out.append({"name": chk.name, "block": bid, "dir": str(proj), "tasks": list(chk.tasks),
                     "verify": chk.verify})
     return out

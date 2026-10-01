@@ -153,8 +153,9 @@ describe("Widget API Consumer", () => {
 
 ### Java (pact-jvm)
 ```java
+// Compile-checked 2026-09-30: Pact JVM 4.7.5 (au.com.dius.pact.consumer:junit5), JDK 25 (tests/archetype-compile/java/run.sh)
 @ExtendWith(PactConsumerTestExt.class)
-@PactTestFor(providerName = "widget-service", port = "8080")
+@PactTestFor(providerName = "widget-service") // a random port: mockServer.getUrl() below has it
 class WidgetConsumerTest {
 
     @Pact(consumer = "widget-dashboard")

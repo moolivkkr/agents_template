@@ -243,6 +243,7 @@ async def test_create_payment(mock_stripe, payment_service):
 ### Java (WireMock)
 
 ```java
+// Compile-checked 2026-09-30: WireMock 3.13.2, JDK 25 (tests/archetype-compile/java/run.sh)
 import static com.github.tomakehurst.wiremock.client.WireMock.*;
 
 @WireMockTest
