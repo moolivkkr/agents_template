@@ -42,6 +42,23 @@ export interface ConnectedClient {
 }
 ```
 
+## Room Authorization (shared by both servers)
+
+```typescript
+// src/ws/rooms.ts
+
+/**
+ * Deny by default. A room is `tenant:<tenantId>` or `tenant:<tenantId>:<topic>`, and only connections of
+ * that tenant may join it or post to it. The tenant comes from the redeemed ticket / verified token, never
+ * from the client. Add finer rules here (project membership, roles) as new room kinds appear.
+ */
+export function canJoinRoom(tenantId: string, room: unknown): room is string {
+  if (typeof room !== 'string' || !tenantId) return false;
+  const [kind, roomTenant] = room.split(':');
+  return kind === 'tenant' && roomTenant === tenantId;
+}
+```
+
 ## Connection Manager (Raw `ws`)
 
 ```typescript
@@ -178,6 +195,7 @@ import { Logger } from 'pino';
 import { URL } from 'url';
 
 import { ConnectionManager } from './manager';
+import { canJoinRoom } from './rooms';
 import type { ConnectedClient, WsMessage } from './types';
 
 const MAX_MESSAGE_SIZE = 65536; // 64KB
@@ -198,7 +216,7 @@ export function createWebSocketServer(
   server: import('http').Server,
   manager: ConnectionManager,
   tickets: TicketStore,
-  allowedOrigins: ReadonlySet<string>,
+  allowedOrigins: ReadonlySet<string>, // from config, e.g. new Set(env.ALLOWED_ORIGINS.split(',')) — never '*'
   logger: Logger,
 ): WebSocketServer {
   const wss = new WebSocketServer({
@@ -293,7 +311,7 @@ function handleMessage(
         sendError(ws, msg.ref, 'INVALID_PAYLOAD', 'room is required');
         return;
       }
-      if (!canJoinRoom(client, room)) {
+      if (!canJoinRoom(client.tenantId, room)) {
         sendError(ws, msg.ref, 'FORBIDDEN', 'Not authorized for this room');
         return;
       }
@@ -312,7 +330,12 @@ function handleMessage(
     case 'message': {
       const payload = msg.payload as any;
       const room = payload?.room;
-      if (!room || !client.rooms.has(room)) {
+      // Authorize the post itself too — membership alone isn't the rule
+      if (!canJoinRoom(client.tenantId, room)) {
+        sendError(ws, msg.ref, 'FORBIDDEN', 'Not authorized for this room');
+        return;
+      }
+      if (!client.rooms.has(room)) {
         sendError(ws, msg.ref, 'NOT_IN_ROOM', 'Not subscribed to this room');
         return;
       }
@@ -333,11 +356,6 @@ function handleMessage(
     default:
       sendError(ws, msg.ref, 'UNKNOWN_TYPE', `Unknown message type: ${msg.type}`);
   }
-}
-
-function canJoinRoom(client: ConnectedClient, room: string): boolean {
-  // Implement room authorization
-  return true;
 }
 
 function sendAck(ws: WebSocket, ref?: string): void {
@@ -362,14 +380,22 @@ import { Server, Socket } from 'socket.io';
 import { Logger } from 'pino';
 import http from 'http';
 import { validateJwt } from '../auth/jwt';
+import { canJoinRoom } from './rooms';
 
 export function createSocketIOServer(
   httpServer: http.Server,
+  allowedOrigins: ReadonlySet<string>, // from config — never '*'
   logger: Logger,
 ): Server {
   const io = new Server(httpServer, {
     path: '/socket.io',
-    cors: { origin: '*' },
+    // `cors` only sets CORS headers on the HTTP (polling) transport; a WebSocket handshake from any origin
+    // would still be accepted. allowRequest refuses a foreign Origin for every transport (403).
+    cors: { origin: [...allowedOrigins] },
+    allowRequest: (req, callback) => {
+      const origin = req.headers.origin;
+      callback(null, origin === undefined || allowedOrigins.has(origin)); // no Origin = not a browser
+    },
     pingInterval: 30_000,
     pingTimeout: 10_000,
     maxHttpBufferSize: 65536,
@@ -404,8 +430,8 @@ export function createSocketIOServer(
 
     // Subscribe to a room
     socket.on('subscribe', (data: { room: string }, ack?: (resp: any) => void) => {
-      // Authorization check
-      if (!canJoinRoom(socket.data, data.room)) {
+      // Authorization check: deny by default, own tenant's rooms only
+      if (!canJoinRoom(tenantId, data?.room)) {
         ack?.({ error: 'FORBIDDEN' });
         return;
       }
@@ -422,6 +448,10 @@ export function createSocketIOServer(
 
     // Send message to room
     socket.on('message', (data: { room: string; payload: unknown }, ack?: (resp: any) => void) => {
+      if (!canJoinRoom(tenantId, data?.room)) {
+        ack?.({ error: 'FORBIDDEN' }); // also keeps clients from posting into user:<id> or socket-id rooms
+        return;
+      }
       if (!socket.rooms.has(data.room)) {
         ack?.({ error: 'NOT_IN_ROOM' });
         return;
@@ -444,13 +474,8 @@ export function createSocketIOServer(
   return io;
 }
 
-function canJoinRoom(data: any, room: string): boolean {
-  // Implement room authorization
-  return true;
-}
-
 // Broadcasting from service layer:
-// io.to('room-123').emit('update', { ... });
+// io.to(`tenant:${tenantId}:orders`).emit('update', { ... });
 // io.to(`user:${userId}`).emit('notification', { ... });
 ```
 
@@ -483,6 +508,8 @@ export async function shutdownSocketIO(io: SocketIOServer): Promise<void> {
 ## Critical Rules
 
 - Use `verifyClient` callback on `WebSocketServer` for auth — reject before upgrade completes
+- Rooms are tenant-scoped and denied by default: `canJoinRoom(tenantId, room)` allows only `tenant:<own tenant>[:topic]`, checked on subscribe AND on every post
+- Allowlist `Origin` from config on both servers (`verifyClient` / Socket.IO `allowRequest`); Socket.IO's `cors` option alone doesn't refuse a cross-origin WebSocket
 - Use `ws.ping()` / `ws.on('pong')` for heartbeat — the `ws` library handles protocol-level frames
 - Set `maxPayload` on `WebSocketServer` — prevents memory exhaustion from oversized messages
 - Check `ws.readyState === WebSocket.OPEN` before sending — prevents errors on closing connections

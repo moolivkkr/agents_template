@@ -29,7 +29,7 @@ FILES = {
     "backend/archetypes/migration-pattern-typescript.md": 7,
     "backend/archetypes/observability-typescript.md": 33,
     "backend/archetypes/performance-typescript.md": 32,
-    "backend/archetypes/websocket-pattern-typescript.md": 5,
+    "backend/archetypes/websocket-pattern-typescript.md": 6,
     "backend/archetypes/worker-pattern-typescript.md": 7,
     "ui/archetypes/component-test.md": 10,
     "ui/archetypes/dashboard-page.md": 1,
@@ -118,8 +118,10 @@ UNITS = [
     },
     {
         "name": "websocket",
-        "blocks": refs("websocket-pattern-typescript", 1, 2, 3, 4, 5),
-        "shims": ["project-auth"],
+        "blocks": refs("websocket-pattern-typescript", 1, 2, 3, 4, 5, 6),
+        "shims": ["project-auth", "ws-test"],
+        # both servers over real sockets: Origin allowlist, single-use tickets, tenant rooms (shims/ws-test)
+        "vitest": ["src/ws/ws-authz.test.ts"],
     },
     {
         "name": "worker-bullmq",
