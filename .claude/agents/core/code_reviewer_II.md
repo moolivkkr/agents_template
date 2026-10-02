@@ -37,7 +37,8 @@ Second pass in the review pipeline. Validates that the implementation respects t
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §Architecture Overview, §Component Inventory, §Design Constraints
 2. `agent_state/phases/{{PHASE}}/reports/code_review_I.md` — skip anything already flagged
-3. `docs/design/phases/{{PHASE}}/specs/` — interface contracts defined in TRDs
+3. What changed and the contracts that govern it: `python3 .claude/hooks/sdlc-graph.py diff-context --phase {{PHASE}}` — the changed symbols with their spans (`file:start-end`), the endpoints and tables they touch, and the spec sections that govern them. Review those spans and read those sections instead of the whole `specs/` directory. If it fails or prints `GRAPH UNAVAILABLE`, say so in your report and use `git diff $(cat agent_state/phases/{{PHASE}}/base_sha)..HEAD` plus the phase specs instead.
+   For who depends on a changed interface: `python3 .claude/hooks/sdlc-graph.py consumers <symbol | "METHOD /path" | table:NAME>`.
 
 ---
 

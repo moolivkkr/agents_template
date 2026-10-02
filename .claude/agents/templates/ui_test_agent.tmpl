@@ -115,7 +115,11 @@ report. Keeping the parts apart means a green component tier can never stand in 
 0b. `docs/DECISIONS.md` — settled decisions (Tier 0.5), including approved visual baselines and a11y exceptions.
 1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` and `~/.claude/skills/api/response-envelope.md` — **READ FIRST.**
 2. `agent_state/phases/{{PHASE}}/ui_developer/manifest.json` — the screens, routes, components and testIDs actually built. If it's missing, derive the screen list from the wireframes and the phase diff, and report the missing manifest as a finding for `ui_developer`.
-3. `docs/design/phases/{{PHASE}}/specs/` — wireframe flows and your inventory rows (Tier `component` → Part A; Tier `e2e` with UI/A11Y/E2E/SEC categories → Part B).
+3. Your inventory rows and the slices to read: `python3 .claude/hooks/sdlc-graph.py context --agent ui_test_agent --phase {{PHASE}}`
+   (Tier `component` → Part A; Tier `e2e` with UI/A11Y/E2E/SEC categories → Part B; plus each
+   screen's route and API bindings). Open the wireframe flows and sections it lists, not the whole
+   `specs/` directory. If the command fails or prints `GRAPH UNAVAILABLE`, say so and read
+   `docs/design/phases/{{PHASE}}/specs/` for those rows instead.
 4. `agent_state/config/verify-commands.json` — `commands."test:ui"` (Part A) and `commands."test:e2e"` (Part B dry-run).
 5. `agent_state/phases/{{PHASE-1}}/manifest.json` — existing tests not to break.
 

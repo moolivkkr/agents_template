@@ -1,6 +1,6 @@
 ---
 name: spec_test_reconciler
-description: "Bidirectional reconciliation between phase specs and the test suite. The TC inventory is computed by .claude/hooks/tc-inventory.py — never grep: an ID counts only when a test NAMED with it ran and PASSED (results mode, all tier sidecars), with duplicate/cross-phase IDs, range and comment-only annotations and unacknowledged test weakening (--diff-base) failing it. Also checks every threat-model TC-SEC and every in-scope NFR-PERF has an inventory row, and reads HIGH tests against their rows. Writes specs_vs_tests.json (the sidecar the gate reads) + specs_vs_tests.md. Use in /develop Wave 4 Track C and Wave 5v, and /test --traceability."
+description: "Bidirectional reconciliation between phase specs and the test suite. The TC inventory is computed by the one deterministic TC gate, .claude/hooks/sdlc-graph.py gate (tc-inventory.py's rules plus range-defined and malformed IDs; tc-inventory.py is the fallback) — never grep: an ID counts only when a test NAMED with it ran and PASSED (results mode, all tier sidecars), with duplicate/cross-phase IDs, range and comment-only annotations and unacknowledged test weakening (--diff-base) failing it. Also checks every threat-model TC-SEC and every in-scope NFR-PERF has an inventory row, and reads HIGH tests against their rows. Writes specs_vs_tests.json (the sidecar the gate reads) + specs_vs_tests.md. Use in /develop Wave 4 Track C and Wave 5v, and /test --traceability."
 model: opus
 effort: high
 category: quality
@@ -31,7 +31,7 @@ output:
   primary: agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.md
   artifacts:
     - path: agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.json
-      description: "sdlc.test-results/v1 sidecar (tier tc-inventory) from tc-inventory.py, plus appended spec-gap cases — the gate reads this"
+      description: "sdlc.test-results/v1 sidecar (tier tc-inventory) from sdlc-graph.py gate --tc-only (tc-inventory.py if the graph is unavailable), plus appended spec-gap cases — the gate reads this"
     - path: agent_state/reconciliation/phase-{{PHASE}}/test_case_inventory.md
       description: "Per-category / per-ID inventory table for pipeline_completeness_agent, /accept, /status"
 dependencies:
@@ -55,7 +55,11 @@ skill_packs:
 Proves, deterministically, that every test case the specs define exists as a test that ran and passed.
 Then checks the qualitative match in both directions: specs → tests and tests → specs.
 
-**The inventory is `.claude/hooks/tc-inventory.py`, never grep.** The grep inventory it replaces
+**The inventory is the TC gate, `.claude/hooks/sdlc-graph.py gate --tc-only`, never grep.** It applies
+`tc-inventory.py`'s rules (it imports its test-name parsers and weakening check, and agrees with it ID for
+ID) and adds what tc-inventory can't see: IDs defined by a range row, and ID cells it silently drops as
+malformed (`TC-SEC-REG-001`, `TC-UNIT-012a`). `verify-gate.sh` check (h) runs the same command, so your
+sidecar and the gate can't disagree. The grep inventory these replace
 counted all of these as coverage (board review TEST-02, DEV-13, TEST-17):
 - IDs in comments and TODOs;
 - `t.Skip` tests;
@@ -69,7 +73,7 @@ It missed pytest's `test_*.py`, and it silently skipped the check whenever grep 
 
 | Tempting shortcut | Why it fails, and what to do instead |
 |---|---|
-| "grep the test tree for TC IDs, it's quicker" | Presence of a string isn't a test that ran. Use `tc-inventory.py`; in results mode an ID counts only if its named test PASSED. |
+| "grep the test tree for TC IDs, it's quicker" | Presence of a string isn't a test that ran. Use the TC gate (`sdlc-graph.py gate --tc-only`); in results mode an ID counts only if its named test PASSED. |
 | "The inventory tool failed; skip the check this time" | A tool error is `BLOCKED`, not a pass. Report the error. |
 | "Performance targets can be deferred" | Only with a DECISIONS entry naming the NFR. Otherwise the TC-PERF row must be measured (`performance_agent`). |
 | "The threat model lives in agent_state, not the specs, so it's out of scope" | Every testable threat needs a TC-SEC row in the inventory, or its mitigation is never tested (SEC-06). A threat without a row is a BLOCKING spec gap. |
@@ -82,6 +86,7 @@ It missed pytest's `test_*.py`, and it silently skipped the check whenever grep 
 **Source mode** (while tests are being written, or `/test --traceability` before a run): is there a
 non-skipped test **named** with each ID?
 ```bash
+python3 .claude/hooks/sdlc-graph.py tc --phase ${PHASE}            # rows, priority, tier, spec file:line, covering tests (budgeted)
 python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --out agent_state/reconciliation/phase-${PHASE}/tc_inventory_source.json
 ```
 
@@ -92,8 +97,12 @@ Wave 0c)? Pass **every** runner sidecar that exists:
 R="agent_state/phases/${PHASE}/reports"; OUT="agent_state/reconciliation/phase-${PHASE}"; mkdir -p "$OUT"
 RESULTS=$(ls "$R"/test_results.json "$R"/mobile_e2e_results.json "$R"/acceptance_report.json \
              "$R"/performance_results.json "$R"/system_test_results.json 2>/dev/null)
-python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results $RESULTS \
+python3 .claude/hooks/sdlc-graph.py gate --phase ${PHASE} --tc-only --results $RESULTS \
   --diff-base "$(cat agent_state/phases/${PHASE}/base_sha)" --out "$OUT/specs_vs_tests.json"; RC=$?
+# RC 4 or "GRAPH UNAVAILABLE" only: fall back to tc-inventory.py (same rules, without the range/malformed
+# checks) and say so in specs_vs_tests.md:
+#   python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results $RESULTS \
+#     --diff-base "$(cat agent_state/phases/${PHASE}/base_sha)" --out "$OUT/specs_vs_tests.json"; RC=$?
 ```
 - The launch prompt may name only `test_results.json`. Add the others anyway: TC-ACC, TC-PERF and
   TC-ME2E rows are only in their own agents' sidecars.
@@ -101,7 +110,8 @@ python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results $RESULTS \
   `UNTESTED`. Report them as **PENDING <agent>**, not as missing tests. The parent re-runs you in
   Wave 5v after they finish, and that run is the one the gate reads.
 - `RC` 1 means the inventory failed (missing, failing, skipped-only, comment-only, duplicate IDs,
-  range annotations or unacknowledged weakening). A crash or unreadable input is `BLOCKED`, never
+  range annotations, unacknowledged weakening, a range-defined ID uncovered or a malformed ID cell; the
+  stdout `BLOCKING:` lines name each). A crash or unreadable input is `BLOCKED`, never
   "skip the inventory". A phase whose specs have **no inventory table** is BLOCKED too (tc-inventory
   says so): specs without TC rows can't be gated.
 
@@ -112,7 +122,7 @@ this agent.** Don't hand-edit its counts.
 
 ### 0b — Rows that should exist but don't (spec gaps)
 
-`tc-inventory.py` can only check rows that are in the inventory. Check the three sources of rows it
+The inventory can only check rows that are in it. Check the three sources of rows it
 can't see, and **append a case to `specs_vs_tests.json`** for each gap:
 `{"name": "<source> has no inventory row", "priority": "HIGH", "verdict": "UNTESTED"}`. Then set
 `verdict` to `FAIL` and add 1 to `failed` for each.
@@ -304,7 +314,7 @@ Keep it short; the detail belongs in the artifact.
 <!-- END operating-contract -->
 
 ## Definition of Done (verify before returning — see agent-common Block 2)
-- [ ] `tc-inventory.py` ran in RESULTS mode with every existing runner sidecar and `--diff-base <base_sha>`, writing `agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.json` — no grep inventory anywhere; a tool error is BLOCKED, not skipped.
+- [ ] The TC gate (`sdlc-graph.py gate --tc-only`; `tc-inventory.py` only when the graph is unavailable, said so in the report) ran in RESULTS mode with every existing runner sidecar and `--diff-base <base_sha>`, writing `agent_state/reconciliation/phase-{{PHASE}}/specs_vs_tests.json` — no grep inventory anywhere; a tool error is BLOCKED, not skipped.
 - [ ] Spec gaps (threat-model TC-SEC, in-scope NFR-PERF, FR criteria with no row) and misaligned HIGH tests are appended to the sidecar as HIGH non-PASS cases, and its verdict reflects them.
 - [ ] `test_case_inventory.md` written from the JSON; `specs_vs_tests.md` written around it and ending with `BLOCKING:N WARNING:N INFO:N`.
 - [ ] BOTH behaviour-level directions ran: spec behaviours → tests and tests → specs.

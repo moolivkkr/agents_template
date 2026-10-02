@@ -81,7 +81,13 @@ new behaviour, the unfixed code for a bug (TEST-06).
 
 0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read FIRST, before any other file.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
 0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
-1. `docs/design/phases/{{PHASE}}/phase_context.md`, then every spec's inventory rows with **Tier: unit**, their EARS clauses and edge-case tables. **Read these before any source file.**
+1. Your work list, from the project graph (not the whole `specs/` directory):
+   `python3 .claude/hooks/sdlc-graph.py context --agent unit_test_agent --phase {{PHASE}}`.
+   It returns `phase_context.md` to read first, every **Tier: unit** row still to do (ID, priority,
+   spec `file:line`) and the exact spec sections (`file:start-end`) that define them — EARS clauses,
+   edge cases, the inventory. Read those slices, not whole specs. **Before any source file.**
+   If the command fails or prints `GRAPH UNAVAILABLE`, say so in your report and fall back to
+   `phase_context.md` plus every spec's inventory rows with Tier: unit, their EARS clauses and edge-case tables.
 2. `agent_state/config/verify-commands.json` — `commands."test:unit"` is the only unit command you run.
 3. The source written this phase (`git diff $(cat agent_state/phases/{{PHASE}}/base_sha)..HEAD --stat`), to find where each row's behaviour lives. Only after step 1.
 4. `agent_state/phases/{{PHASE-1}}/manifest.json` — tests that already exist; don't duplicate them, and don't break them.

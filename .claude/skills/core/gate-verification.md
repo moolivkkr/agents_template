@@ -49,6 +49,8 @@ BASE="$(cat "agent_state/phases/${PHASE}/base_sha" 2>/dev/null)"
 [ -n "$BASE" ] || { echo "⛔ no base_sha for phase ${PHASE}"; exit 1; }
 python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results "agent_state/phases/${PHASE}/reports/test_results.json" \
   --diff-base "$BASE" --out /tmp/gate_tc.json
+# The phase gate's own TC check is stricter (range-defined + malformed IDs): verify-gate.sh (h) runs
+# python3 .claude/hooks/sdlc-graph.py gate --phase "${PHASE}" --tc-only — a Layer-1 PASS here never overrides it.
 # No suppression added to force a pass (tc-inventory's weakening list covers skip/only/removed asserts)
 git diff -U0 "$BASE"..HEAD | grep -E '^\+.*(//[[:space:]]*nolint|@ts-ignore|eslint-disable)' && echo "⚠ suppression added"
 ```
