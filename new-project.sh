@@ -21,6 +21,9 @@ PROJECT_NAME="${ARGS[0]:?Usage: $0 <project-name> [/path/to/parent] [--rule-boar
 PARENT_DIR="${ARGS[1]:-$(pwd)}"
 PROJECT_DIR="$PARENT_DIR/$PROJECT_NAME"
 
+# Preflight before anything is created: the hooks and the sdlc-graph store need python3 >= 3.9 with sqlite3.
+bash "$REPO_DIR/scripts/graph-preflight.sh" || { echo "new-project.sh: fix python3 (above) and re-run — nothing was created" >&2; exit 3; }
+
 if [ -d "$PROJECT_DIR" ]; then
   echo "Note: $PROJECT_DIR already exists — continuing with scaffold"
 else
@@ -34,20 +37,8 @@ mkdir -p "$PROJECT_DIR/docs"
 mkdir -p "$PROJECT_DIR/agent_state/phases"
 mkdir -p "$PROJECT_DIR/agent_state/reconciliation"
 mkdir -p "$PROJECT_DIR/.claude/agents/generated"
-# Hooks + project settings: ground-truth injection (SessionStart), gate verification and
-# /autonomous continuation (Stop). Paths in settings.json resolve via $CLAUDE_PROJECT_DIR.
-mkdir -p "$PROJECT_DIR/.claude/hooks"
-cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$REPO_DIR/.claude/hooks/"*.mjs "$PROJECT_DIR/.claude/hooks/" && chmod +x "$PROJECT_DIR/.claude/hooks/"*.sh "$PROJECT_DIR/.claude/hooks/"*.py
-if [ -f "$PROJECT_DIR/.claude/settings.json" ]; then
-  # Existing settings: add the spawn-depth cap if missing (keeps everything else as it is). The debate
-  # protocol relies on it: this session -> debate_moderator -> its children, and no deeper.
-  if command -v jq >/dev/null 2>&1 && ! jq -e '.env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH' "$PROJECT_DIR/.claude/settings.json" >/dev/null 2>&1; then
-    tmp="$(mktemp)" && jq '.env = ((.env // {}) + {"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "2"})' "$PROJECT_DIR/.claude/settings.json" > "$tmp" \
-      && mv "$tmp" "$PROJECT_DIR/.claude/settings.json" && echo "  added env.CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2 to existing .claude/settings.json"
-  fi
-else
-  cp "$REPO_DIR/.claude/settings.json" "$PROJECT_DIR/.claude/settings.json"
-fi
+# Hooks + project settings (.claude/hooks, .claude/settings.json) are installed at the end by
+# scripts/startup-project-update.sh — the same updater existing projects use.
 
 # Rule board specialists (vertix security-rule boards) — only when asked for with --rule-board;
 # the /rules-board* commands read these project-relative
@@ -120,6 +111,19 @@ if [ -f ".gitignore" ]; then
 else
   echo "$GITIGNORE_ENTRY" > .gitignore
 fi
+
+# Framework hooks + manifest, settings.json (created, or merged into an existing one: the SessionStart facts
+# injection, Stop verify-gate/autonomous-continue, PostToolUse, and env CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2, the
+# spawn-depth cap the debate protocol relies on; a value the project set is kept), agent_state/graph/ in
+# .gitignore, and the initial sdlc-graph build. Paths in settings.json resolve via $CLAUDE_PROJECT_DIR.
+UPD_RC=0
+bash "$REPO_DIR/scripts/startup-project-update.sh" --project "$PWD" --source "$REPO_DIR/.claude/hooks" \
+  --settings "$REPO_DIR/.claude/settings.json" || UPD_RC=$?
+if [ "$UPD_RC" -ne 0 ] && [ "$UPD_RC" -ne 4 ]; then
+  echo "new-project.sh: the project updater failed (exit $UPD_RC, see above)" >&2
+  exit "$UPD_RC"
+fi
+echo
 
 echo "✅ Project created: $PROJECT_DIR"
 echo

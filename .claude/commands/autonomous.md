@@ -142,11 +142,21 @@ if [ ! -d "requirements/" ] || [ -z "$(ls requirements/)" ]; then
   exit 1
 fi
 
-# 5. Framework hooks present in THIS project (Stop hook keeps the run going; SessionStart injects facts)
-if [ ! -x ".claude/hooks/autonomous-continue.sh" ] && [ -d "$HOME/.claude/hooks/startup" ]; then
+# 5. Framework hooks present AND current in THIS project (Stop hook keeps the run going; SessionStart injects
+#    facts; sdlc-graph needs a tc-inventory.py of the same version). The updater adds missing hooks, refreshes
+#    stale ones, keeps (and diffs) hooks edited in the project, merges settings.json, ignores agent_state/graph/.
+#    The graph itself is built in /develop Wave 0c. Exit 1 = a locally edited hook was kept; 3 = python3 unusable.
+UPD="$HOME/.claude/scripts/startup/startup-project-update.sh"
+if [ -x "$UPD" ]; then
+  "$UPD" --project "$PWD" --no-build --quiet; URC=$?
+  [ "$URC" -eq 1 ] && echo "⚠ a framework hook was edited in this project and kept (diff above); /startup:autonomous continues with it"
+  [ "$URC" -eq 3 ] && echo "⚠ python3/sqlite preflight failed: sdlc-graph is unavailable, agents use the pre-graph procedure"
+  [ "$URC" -eq 0 ] && echo "✅ Framework hooks current in .claude/hooks (changes take effect for Stop checks from the next turn)"
+elif [ ! -x ".claude/hooks/autonomous-continue.sh" ] && [ -d "$HOME/.claude/hooks/startup" ]; then
+  # older install without the updater: copy what is missing only
   mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/"*.sh "$HOME/.claude/hooks/startup/"*.py "$HOME/.claude/hooks/startup/"*.mjs .claude/hooks/ && chmod +x .claude/hooks/*.sh .claude/hooks/*.py
   [ -f .claude/settings.json ] || cp "$HOME/.claude/hooks/startup/project-settings.json" .claude/settings.json
-  echo "✅ Installed framework hooks into .claude/ (takes effect for Stop checks from the next turn)"
+  echo "✅ Installed framework hooks into .claude/ (re-run ./install.sh to get the updater that refreshes stale hooks)"
 fi
 [ -x ".claude/hooks/autonomous-continue.sh" ] || echo "⚠ autonomous-continue hook missing — run ./install.sh in the framework repo; continuing without it"
 

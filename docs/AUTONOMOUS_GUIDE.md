@@ -13,11 +13,16 @@ Command file: `.claude/commands/autonomous.md`.
 - `requirements/` exists and is non-empty (Step 0 stops otherwise).
 - Docker is running; `git`, `node`, `npm` on PATH; common dev ports (3000, 5432, 8080) free. Step 0
   checks these and stops early with fix instructions rather than spending tokens on a doomed run.
-- **Framework hooks are in the project.** `new-project.sh` copies `.claude/hooks/` and
-  `.claude/settings.json` into new projects. For an existing project, Step 0 copies them from
-  `~/.claude/hooks/startup/` (staged there by `install.sh`). If the hook is still missing, the run
-  continues with a warning, but nothing will stop it from ending between steps. Hooks registered
-  mid-session take effect for Stop checks from the next turn.
+- **Framework hooks are in the project and current.** `new-project.sh` installs `.claude/hooks/` and
+  `.claude/settings.json` into new projects. For an existing project, Step 0 runs
+  `~/.claude/scripts/startup/startup-project-update.sh --no-build` (installed by `install.sh`): it adds
+  missing hooks, refreshes stale ones, keeps any hook edited in the project (printing its diff), merges
+  `settings.json` and ignores `agent_state/graph/`. Run it yourself beforehand with `--dry-run` to preview
+  ([docs/SDLC_GRAPH.md](SDLC_GRAPH.md)). If the hook is still missing, the run continues with a warning,
+  but nothing will stop it from ending between steps. Hooks registered mid-session take effect for Stop
+  checks from the next turn.
+- **python3 ≥ 3.9 with sqlite3** for the hooks and the project graph (`scripts/graph-preflight.sh`; FTS5
+  recommended). Without it the graph is unavailable and phase gates block on the TC check.
 
 ## 2. The flow
 

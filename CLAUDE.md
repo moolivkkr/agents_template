@@ -32,6 +32,7 @@ Full details: [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES
 | Implementation Guidelines | [docs/IMPLEMENTATION_GUIDELINES.md](docs/IMPLEMENTATION_GUIDELINES.md) | Tech stack, components, constraints |
 | Phase specs | [docs/design/phases/](docs/design/phases/) | TRDs and wireframes per phase |
 | Agent registry | [agent_state/agent_registry.json](agent_state/agent_registry.json) | Generated agents and skill packs |
+| Project graph | [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md) | sdlc-graph (SQLite + FTS5): agents' work lists, the TC gate, install/update of existing projects |
 
 ---
 

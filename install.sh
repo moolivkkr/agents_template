@@ -33,6 +33,15 @@ if [ "${1:-}" = "--guard" ]; then
     || echo "   ⚠ no policy yet: cluster commands are denied until you run sdlc-guard-make-policy.py (see docs/PERMISSIONS_GUIDE.md)"
   exit 0
 fi
+# ./install.sh --project <dir> [updater flags] : the normal install below, then bring <dir> up to date from the
+# freshly staged copy (hooks, settings merge, .gitignore, sdlc-graph build). Same as running
+# ~/.claude/scripts/startup/startup-project-update.sh --project <dir> after an install. See docs/SDLC_GRAPH.md.
+UPDATE_PROJECT=""; UPDATE_ARGS=()
+if [ "${1:-}" = "--project" ]; then
+  UPDATE_PROJECT="${2:?Usage: $0 --project <project-dir> [--dry-run] [--force] [--no-build] [--graph-interactive on|off]}"
+  [ -d "$UPDATE_PROJECT" ] || { echo "No such project directory: $UPDATE_PROJECT" >&2; exit 1; }
+  shift 2; UPDATE_ARGS=("$@")
+fi
 CLAUDE_DIR="$HOME/.claude"
 DEST_COMMANDS="$CLAUDE_DIR/commands/startup"
 DEST_AGENTS_CORE="$CLAUDE_DIR/agents"
@@ -44,6 +53,23 @@ echo "startup-agents installer"
 echo "========================"
 echo "Source: $REPO_DIR"
 echo "Target: $CLAUDE_DIR"
+echo
+
+# ── Preflight: python3 + sqlite3 (+ FTS5) for the hooks and the sdlc-graph store ──
+# Warn, don't stop: nothing install.sh copies needs python3, and a half-finished install is worse than a complete
+# one with a loud warning. Without a usable python3 the graph commands report GRAPH UNAVAILABLE (agents fall back)
+# and verify-gate.sh check (h) blocks phase gates, which says what to fix. Project setup (new-project.sh,
+# startup-project-update.sh) stops on a FAIL instead.
+PREFLIGHT_ERR="$(mktemp)"; GRAPH_OK=0
+GRAPH_LINE="$(bash "$REPO_DIR/scripts/graph-preflight.sh" 2>"$PREFLIGHT_ERR")" || GRAPH_OK=$?
+echo "$GRAPH_LINE"
+if [ "$GRAPH_OK" -ne 0 ]; then
+  cat "$PREFLIGHT_ERR" >&2
+  echo "  ⚠⚠ WARNING: sdlc-graph is UNAVAILABLE and /develop phase gates will BLOCK until python3 is fixed (installing anyway)" >&2
+elif grep -q '^graph preflight: WARN' <<<"$GRAPH_LINE"; then
+  cat "$PREFLIGHT_ERR" >&2
+fi
+rm -f "$PREFLIGHT_ERR"
 echo
 
 # ── Commands ─────────────────────────────────────────────────────────────────
@@ -81,11 +107,23 @@ mkdir -p "$CLAUDE_DIR/hooks/startup"
 cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$REPO_DIR/.claude/hooks/"*.mjs "$CLAUDE_DIR/hooks/startup/" && chmod +x "$CLAUDE_DIR/hooks/startup/"*.sh "$CLAUDE_DIR/hooks/startup/"*.py
 install -m 755 "$REPO_DIR/.claude/guard/vet-package.py" "$CLAUDE_DIR/hooks/vet-package.py"   # agents call ~/.claude/hooks/vet-package.py
 cp "$REPO_DIR/.claude/settings.json" "$CLAUDE_DIR/hooks/startup/project-settings.json"
-echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by new-project.sh / /autonomous)"
+# The manifest of framework-owned hooks (sha256 now + every version git history shipped) lets the project updater
+# refresh a stale copy and refuse to overwrite one that was edited in the project.
+rm -f "$CLAUDE_DIR/hooks/startup/.framework-manifest.json"
+if [ "$GRAPH_OK" -eq 0 ]; then
+  python3 "$REPO_DIR/scripts/startup-project-update.py" manifest --hooks-dir "$REPO_DIR/.claude/hooks" --repo "$REPO_DIR" \
+    --out "$CLAUDE_DIR/hooks/startup/.framework-manifest.json" | sed 's/^/  ✅ hooks /' \
+    || echo "  ⚠ hook manifest not written: the project updater will treat only the current hooks as known versions"
+fi
+echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by new-project.sh / /autonomous / startup-project-update.sh)"
 # ── Scripts run from a project directory (one shared copy; they act on $PWD or --project) ──
 mkdir -p "$CLAUDE_DIR/scripts/startup"
 install -m 755 "$REPO_DIR/scripts/startup-autonomous-run.sh" "$CLAUDE_DIR/scripts/startup/startup-autonomous-run.sh"
 echo "  ✅ unattended /autonomous supervisor → $CLAUDE_DIR/scripts/startup/startup-autonomous-run.sh (docs/AUTONOMOUS_GUIDE.md §10)"
+for f in startup-project-update.sh startup-project-update.py graph-preflight.sh; do
+  install -m 755 "$REPO_DIR/scripts/$f" "$CLAUDE_DIR/scripts/startup/$f"
+done
+echo "  ✅ project updater → $CLAUDE_DIR/scripts/startup/startup-project-update.sh --project <dir> [--dry-run] (docs/SDLC_GRAPH.md)"
 
 # ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"
@@ -192,6 +230,12 @@ echo "════════════════════════�
 echo "✅ Installation complete"
 echo
 echo "  $CMD_COUNT commands | $AGENT_COUNT agents | $TMPL_COUNT templates | $SKILL_COUNT skill packs"
+if [ "$GRAPH_OK" -eq 0 ]; then
+  echo "  sdlc-graph: enabled (${GRAPH_LINE#graph preflight: })"
+else
+  echo "  sdlc-graph: ⚠ UNAVAILABLE (${GRAPH_LINE#graph preflight: }) — see docs/SDLC_GRAPH.md § Troubleshooting"
+fi
+echo "  Existing projects: ~/.claude/scripts/startup/startup-project-update.sh --project <dir>   (add --dry-run to preview)"
 echo
 echo "════════════════════════════════════════════════════════════"
 echo
@@ -244,3 +288,9 @@ echo "  │ health           │ Pipeline state diagnosis + auto-repair         
 echo "  │ forensics        │ Post-mortem for failed pipeline runs           │"
 echo "  └─────────────────┴────────────────────────────────────────────────┘"
 echo
+
+if [ -n "$UPDATE_PROJECT" ]; then
+  echo "Updating project $UPDATE_PROJECT"
+  RC=0; bash "$CLAUDE_DIR/scripts/startup/startup-project-update.sh" --project "$UPDATE_PROJECT" ${UPDATE_ARGS[@]+"${UPDATE_ARGS[@]}"} || RC=$?
+  exit "$RC"
+fi

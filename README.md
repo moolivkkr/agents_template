@@ -66,6 +66,7 @@ Pipeline diagnostics:
 
 | Area | Change | Guide |
 |------|--------|-------|
+| **sdlc-graph set up by the installer (2026-10)** | `install.sh` checks python3 ≥ 3.9 + sqlite3 + FTS5 (`scripts/graph-preflight.sh`) and stages a hook manifest; `new-project.sh` and the new `~/.claude/scripts/startup/startup-project-update.sh --project <dir> [--dry-run]` install/refresh framework hooks in new **and existing** projects (stale copies refreshed, locally edited ones kept unless `--force`), merge `settings.json`, ignore `agent_state/graph/` and build the graph; `/autonomous` Step 0 and `/develop` Wave 0c refresh stale hooks instead of only copying missing ones. Interactive `find`/`status` stay off by default | [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md) |
 | **Board review fixes (14 root causes)** | The gate reads runner-written evidence only (`sdlc.test-results/v1`) and blocks stale, failing, flaky or untested work; TC coverage counts tests that ran and passed; one API envelope; security and runtime contracts given to the coders; tests run against qa; per-finding security decisions; guard gaps closed; optimizers `/optimize`-only. 794 checks across 14 suites | [docs/AGENT_BOARD_REVIEW_2026-09-30.md](docs/AGENT_BOARD_REVIEW_2026-09-30.md) |
 | **Kubernetes dev/qa on a Lima lab cluster** | `/startup:deploy --target=dev\|qa`: per-app namespaces `<app>-dev`/`<app>-qa` on k3s in Lima (one or two Macs), images promoted to qa **by digest**, migrate/seed Jobs, `env-reset.sh`, `--rollback`, evidence for the phase gate and `/accept`; one-command cluster bootstrap (`cluster-up.sh`); live e2e `tests/k8s-e2e.sh` | [lima-k8s-lab skill](.claude/skills/infrastructure/lima-k8s-lab.md) |
 | **Unattended permissions, prod out of reach** | `sdlc-guard` PreToolUse hook + PATH shims (pinned cluster/credential, writable namespaces by pattern, secrets never read, CLAUDE.md ask-list), RBAC-bounded agent identity, auto-mode settings you apply with one reviewed script, optional root-owned managed layer | [docs/PERMISSIONS_GUIDE.md](docs/PERMISSIONS_GUIDE.md) |
@@ -150,6 +151,20 @@ bash install.sh
 ```
 
 This installs commands, agents, and skill packs into `~/.claude/` so they're available globally in every project.
+It first checks that `python3` (3.9+) has `sqlite3` with FTS5 for the hooks and the project graph
+([sdlc-graph](docs/SDLC_GRAPH.md)) and prints an `sdlc-graph:` line; on a failure it warns with the fix and installs
+anyway (phase gates block until python3 is fixed).
+
+**Existing projects** (created before this install, or with older hooks) are brought up to date with:
+
+```bash
+~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app --dry-run   # preview
+~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app             # apply
+```
+
+It refreshes the framework hooks in `.claude/hooks/` (never project-added ones; a hook edited in the project is kept
+and diffed unless `--force`), merges missing hook entries into `.claude/settings.json`, adds `agent_state/graph/` to
+`.gitignore` and builds the graph. Details: [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md#install-and-update).
 
 The rule board specialists (`.claude/agents/rule_board/`, used by the `/rules-board*` commands for vertix security-rule reviews) are project-specific, so they are never installed globally. Add them to the project that needs them:
 
@@ -1097,7 +1112,15 @@ git pull
 bash install.sh
 ```
 
-`install.sh` also stages the framework hooks in `~/.claude/hooks/startup/` (with a `project-settings.json`). Projects created with `new-project.sh` get `.claude/hooks/` and `.claude/settings.json` copied in; `/startup:autonomous` Step 0 copies them into an existing project that lacks them. Hook paths use `$CLAUDE_PROJECT_DIR`, so they resolve inside each project. To refresh hooks in an older project after an update, copy `~/.claude/hooks/startup/*.sh` into its `.claude/hooks/`.
+`install.sh` also stages the framework hooks in `~/.claude/hooks/startup/` (with a `project-settings.json` and a `.framework-manifest.json` of every hook version the framework shipped). Projects created with `new-project.sh` get `.claude/hooks/` and `.claude/settings.json` through the project updater; `/startup:autonomous` Step 0 and `/develop` Wave 0c run the updater too, so stale hooks are refreshed, not only missing ones. Hook paths use `$CLAUDE_PROJECT_DIR`, so they resolve inside each project. To refresh an existing project after an update:
+
+```bash
+~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app [--dry-run]
+# or, from the framework checkout, install + update in one step:
+bash install.sh --project ~/development/my-app
+```
+
+See [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md) for what it touches, the locally-modified-hook guard and exit codes.
 
 ---
 
@@ -1190,6 +1213,7 @@ To add skill packs to an agent: `python3 .claude/agents/_add-packs.py <agent-fil
 | `agent-registry.test.sh` | Base-roster names that have no agent file; INVENTORY.md core-agent count drift |
 | `autonomous-chain.test.sh` | The `/autonomous` chain: every referenced sub-command/flag exists, Skill-tool invocation, `/design` after `/plan`, auto-mode contracts in sub-commands, force-gate policy, Stop hook registered and installed into projects |
 | `autonomous-continue.test.sh` | The Stop hook blocks mid-run stops, allows `awaiting_human`/`paused`/`failed`/`complete`, and marks a no-progress run `stalled` |
+| `install-graph.test.sh` | `install.sh` + `graph-preflight.sh` + `startup-project-update.sh` in a sandbox HOME: manifest staging, hooks added/refreshed/kept-when-edited (`--force`), settings merge, `--dry-run`, `.gitignore`, graph build, uncommitted work untouched, preflight FAIL/WARN via a fake python3 |
 | `dependency-graph.test.sh` | `tests/lib/depgraph.py` finding classes (below) plus derived-deps sync, the skill-resolution table, TC-ID regex, generated-agent identity, mobile wiring and the Stitch tool surface |
 | `remember.test.sh` | Deterministic bi-temporal fact supersession in `remember.sh` |
 | `verify-gate.test.sh` | The phase-gate hook (roster completeness, stub reports, forged `gate.passed`) |

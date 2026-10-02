@@ -226,7 +226,12 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 ### Wave 0c — Commands, base commit, evidence directories
 
 ```bash
-# 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
+# 0. Framework hooks the gate and the evidence steps need — present AND current. A stale copy is worse than a
+#    missing one: an old tc-inventory.py beside a new sdlc-graph.py breaks the parser import (GRAPH UNAVAILABLE).
+#    The updater refreshes stale framework hooks, keeps (and diffs) any edited in this project; exit 1 = kept.
+UPD="$HOME/.claude/scripts/startup/startup-project-update.sh"
+[ -x "$UPD" ] && { "$UPD" --project "$PWD" --hooks-only --quiet \
+  || echo "⚠ project updater exit $? (1 = a hook edited in this project was kept, see diff; 3 = python3 preflight failed)"; }
 for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py sdlc-graph.py commands-table.py acceptance-map.py docs-policy.py debate-status.py remember.sh stitch-state.py stitch-capture.mjs stitch-fidelity.py; do
   [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
