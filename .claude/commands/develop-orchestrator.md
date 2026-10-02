@@ -901,7 +901,8 @@ Each spawn prompt (prepend the GROUND TRUTH line):
 Agent prompt (subagent_type: <agent_name>): "[GROUND TRUTH] You are <agent_name> running Wave 4 Track A for Phase ${PHASE}.
 Review ALL source changed/added in this phase against IMPLEMENTATION_GUIDELINES and the phase specs.
 Map it first: python3 .claude/hooks/sdlc-graph.py diff-context --phase ${PHASE} (changed symbols with spans,
-endpoints/tables touched, governing spec sections); breaking_change_reviewer also runs
+endpoints/tables touched, governing spec sections) and read the spec sections it lists, not the whole specs/
+directory (unless it is unavailable — then say so). breaking_change_reviewer also runs
 python3 .claude/hooks/sdlc-graph.py consumers --changed-since <previous phase's gate commit>.
 Use the Unified Severity Model (~/.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
 Every finding MUST cite file:line. Produce your named report at the exact path above.
