@@ -566,6 +566,10 @@ SDLC_GRAPH="${HOOK_DIR:-.claude/hooks}/sdlc-graph.py"
 [ -f "$SDLC_GRAPH" ] || SDLC_GRAPH=".claude/hooks/sdlc-graph.py"
 if [ ! -d "docs/design/phases/$PHASE" ]; then
   ok "no docs/design/phases/$PHASE — the TC inventory gate does not apply"
+elif [ "$AUTODETECT" = "true" ]; then
+  # Explicit gates only (Wave 6 and the manifest-write hook pass the phase), like evidence freshness: the
+  # turn-end sweep must not start blocking phases that passed before this check existed.
+  ok "turn-end sweep: TC inventory is checked on an explicit gate (verify-gate.sh $PHASE)"
 elif [ ! -f "$SDLC_GRAPH" ] || ! command -v python3 >/dev/null 2>&1; then
   fail "docs/design/phases/$PHASE exists but sdlc-graph.py (or python3) is unavailable — can't compute the TC inventory (copy sdlc-graph.py + tc-inventory.py from ~/.claude/hooks/startup/)."
 else
