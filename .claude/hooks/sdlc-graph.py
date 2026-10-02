@@ -2618,7 +2618,9 @@ def cmd_warnings(g, a):
     """D-002 alignment tracker: per phase, the warn-mode findings that would block under strict, and whether the
     phase is ready for `policy --strict`. Reads the same inputs the gate does (reports/ sidecars, base_sha)."""
     pol = load_gate_policy(g.root)
-    phases = [int(a.phase)] if a.phase else g.phases()
+    # every phase the TC gate applies to (verify-gate (h) skips a phase with no docs/design/phases/N/)
+    phases = [int(a.phase)] if a.phase else \
+        [p for p in g.phases() if os.path.isdir(os.path.join(g.root, "docs", "design", "phases", str(p)))]
     rows, total = [], 0
     for p in phases:
         inv = tc_inventory(g, p, results=discover_results(g, p), gate_mode=True, policy=pol)
