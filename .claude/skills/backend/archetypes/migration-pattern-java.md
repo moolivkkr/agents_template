@@ -493,14 +493,22 @@ CREATE TABLE IF NOT EXISTS tenants (
 CREATE INDEX idx_tenants_slug ON tenants (slug);
 CREATE INDEX idx_tenants_active ON tenants (id) WHERE is_active = TRUE;
 
--- Row-Level Security (optional — alternative to explicit tenant_id in queries)
--- Enable per-table as needed:
+-- Row-Level Security (optional — defense in depth on top of explicit tenant_id in queries)
+-- Enable per-table as needed. With FORCE, also give the table the migrator's own policy (decision
+-- D-001), or Flyway, the afterMigrate seed and Java migrations, running as the migration role with no
+-- BYPASSRLS (RDS/Aurora), can't see or write other tenants' rows:
 --
 -- ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;
 -- ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 -- CREATE POLICY tenant_isolation ON widgets
 --     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
 --     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+-- SELECT app_grant_migrator('widgets');   -- widgets_migrator_all: PERMISSIVE, TO the owner only
+--
+-- app_grant_migrator(regclass) is created once, in the first migration that enables RLS: copy it from
+-- databases/postgres.md ("The migrator policy"). It reads the target role from the table owner, so no
+-- ${placeholder} is needed. Never write an unconditional (USING (true)) policy TO PUBLIC or to the
+-- application's role.
 ```
 
 ## Testing Migrations
@@ -665,3 +673,4 @@ CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_widgets_search
 - Test migrations with `@DataJpaTest` + Testcontainers — verify schema correctness against real Postgres.
 - `afterMigrate` callbacks for dev seed data — runs after all migrations complete.
 - Foreign keys MUST specify `ON DELETE` behavior: `CASCADE`, `SET NULL`, or `RESTRICT`.
+- A table with `FORCE ROW LEVEL SECURITY` MUST also get `SELECT app_grant_migrator('<table>');` in the same migration (decision D-001, `databases/postgres.md`): the migration role reaches every tenant through that owner-only policy, with or without `BYPASSRLS`. No unconditional policy may name `PUBLIC` or the application's role.

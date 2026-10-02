@@ -224,6 +224,32 @@ export async function checkMigrationStatus(): Promise<boolean> {
 -- Create with: npx prisma migrate dev --create-only --name add_rls_policies
 -- Then edit the generated migration.sql file before applying.
 
+-- The migrator-policy helper (decision D-001), created ONCE: in the first migration that enables RLS.
+-- app_grant_migrator(t) gives t a PERMISSIVE policy TO t's owner (the migration role) only, USING (true)
+-- WITH CHECK (true), so seeds and backfills reach every tenant under FORCE ROW LEVEL SECURITY without
+-- BYPASSRLS (RDS/Aurora can't grant it). The target comes from the catalog: no role name in the SQL,
+-- which Prisma/Drizzle SQL files could not template anyway. Rules: databases/postgres.md.
+CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+    owner_role name;
+    pol        name;
+BEGIN
+    SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+      INTO owner_role, pol
+      FROM pg_class c WHERE c.oid = tbl;
+    IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+        EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);
+    ELSE
+        EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+                       pol, tbl, owner_role);
+    END IF;
+END
+$fn$;
+REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;
+
 -- Row-Level Security
 ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
@@ -231,6 +257,10 @@ ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON widgets
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+-- The migrator's own policy (widgets_migrator_all, TO the owner only): the seed below and every later
+-- data migration reach all tenants; the application's role (owns nothing) keeps only tenant_isolation
+SELECT app_grant_migrator('widgets');
 
 -- Partial unique index (soft delete aware)
 DROP INDEX IF EXISTS widgets_tenant_name_unique;
@@ -589,6 +619,32 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 -- Custom SQL that Drizzle Kit cannot auto-generate.
 -- Create this file manually and it will be included in the migration chain.
 
+-- The migrator-policy helper (decision D-001), created ONCE: in the first migration that enables RLS.
+-- app_grant_migrator(t) gives t a PERMISSIVE policy TO t's owner (the migration role) only, USING (true)
+-- WITH CHECK (true), so seeds and backfills reach every tenant under FORCE ROW LEVEL SECURITY without
+-- BYPASSRLS (RDS/Aurora can't grant it). The target comes from the catalog: no role name in the SQL,
+-- which Prisma/Drizzle SQL files could not template anyway. Rules: databases/postgres.md.
+CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+    owner_role name;
+    pol        name;
+BEGIN
+    SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+      INTO owner_role, pol
+      FROM pg_class c WHERE c.oid = tbl;
+    IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+        EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);
+    ELSE
+        EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+                       pol, tbl, owner_role);
+    END IF;
+END
+$fn$;
+REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;
+
 -- Row-Level Security
 ALTER TABLE widgets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
@@ -596,6 +652,10 @@ ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON widgets
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+-- The migrator's own policy (widgets_migrator_all, TO the owner only): the seed below and every later
+-- data migration reach all tenants; the application's role (owns nothing) keeps only tenant_isolation
+SELECT app_grant_migrator('widgets');
 
 -- Auto-update trigger
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -732,6 +792,8 @@ seed().catch((err) => {
 - Unique indexes MUST be scoped to tenant: `(tenant_id, column)` not just `(column)`
 - Use `onConflictDoNothing()` (Drizzle) or `upsert()` (Prisma) in seeds for idempotency
 - Custom SQL (RLS, triggers, partial indexes) MUST be added as manual migration files
+- Migrations and seeds run as the migration role, which owns the tables and is not a superuser; the application connects as a role that owns nothing and has no `BYPASSRLS` (`infrastructure/saas-tenancy-models.md`)
+- Every table with `FORCE ROW LEVEL SECURITY` also gets `SELECT app_grant_migrator('<table>');` in the migration that enables RLS (decision D-001); the first such migration creates the helper. Without it a migration role with no `BYPASSRLS` (RDS/Aurora) can't seed or backfill. Never write an unconditional (`USING (true)`) policy `TO PUBLIC` or to the application's role (BLOCKING in review; the deploy's `db-rls-check` fails on it)
 - Never use `prisma migrate dev` or `drizzle-kit push` in production
 - Seed data MUST be separate from schema migrations
 - Migration files MUST be committed to version control
