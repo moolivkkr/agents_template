@@ -13,12 +13,19 @@ Usage: sdlc-graph.py [--root DIR] [--graph-dir DIR] [--json] [--max-tokens N] [-
   build [--incremental]                  full rebuild (default) or re-index only changed files (per-file
                                          sha256, candidates from git diff + status + stat changes)
   stats                                  node / edge counts by kind
-  tc --phase N [--tier T] [--status S] [--priority HIGH,MEDIUM] [--results F ...]
+  tc --phase N [--tier T] [--status S] [--priority HIGH,MEDIUM] [--results F ...] [--source]
+     [--diff-base SHA] [--out F] [--spec-only]
                                          the phase's TC inventory: ID, priority, tier, spec file:line,
-                                         section, covering tests, result. S = todo|done|missing|failing|all
+                                         section, covering tests, result. S = todo|done|missing|failing|all.
+                                         --out F writes the whole inventory (tc-inventory.py's JSON shape plus
+                                         the graph checks; exit 1 unless PASS); --spec-only --out F writes
+                                         {id: priority} incl. range-defined IDs (the results converters' input)
   context --agent ROLE --phase N         an agent's work list: its TC rows (todo/done), the ONLY spec
                                          sections to read (file:start-end), endpoints, tables, screens,
                                          code targets with spans. Use instead of reading specs/ whole.
+                                         Test roles get their tier's rows; developers, verifiers, auditors and
+                                         spec_impl_reconciler get a role profile (PROFILE_ROLES): the spec
+                                         sections their job needs + every skipped span, and role inventories
   diff-context [--base SHA] [--phase N]  changed symbols (spans) since SHA (default: the phase's base_sha),
                                          and the endpoints, tables, TCs, FRs and spec sections they touch
   impact <file|symbol>                   reverse closure: callers/importers → endpoints → screens →
@@ -107,6 +114,13 @@ INVENTORY_SEC_RE = re.compile(r"test (case|coverage)|inventory|\btc\b", re.I)
 DEFERRED_SEC_RE = re.compile(r"deferred|out[- ]of[- ]scope|future phase", re.I)
 SKIP_BRD_SEC_RE = re.compile(r"traceab|out[- ]of[- ]scope|open question|change ?log|amendment|revision|history", re.I)
 MOSCOW = {"must": "HIGH", "should": "MEDIUM", "could": "LOW", "wont": None}
+MOBILE_RE = re.compile(r"(?i)(?<![a-z])(mobile|rn|react[ -]native|expo|ios|android)(?![a-z])")
+CONTRACT_RE = re.compile(r"(data|api)-contracts?\.md$")
+SIG_RES = {   # a section's own lines → what it talks about (role profiles: schema, ownership, accessibility)
+    "sql": re.compile(r"(?i)\bCREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX)\b|\bALTER\s+TABLE\b|\b(?:primary|foreign)\s+key\b|\bNOT\s+NULL\b|\bcolumns?\b|\bmigrations?\b"),
+    "owner": re.compile(r"(?i)created_by|owner_id|\bowner(?:ship)?\b|assignee|\btheir own\b|only the (?:author|owner|creator)|\btenant"),
+    "a11y": re.compile(r"(?i)aria-|\bwcag\b|contrast|\bfocus|keyboard|screen ?reader|\balt=|accessib|\ba11y\b|tab order"),
+}
 
 # The walk prunes exactly what tc-inventory.py's test walk prunes (so both see the same test files), except
 # docs/ and agent_state/, which hold the artifacts; .maestro is always walked.
@@ -351,11 +365,10 @@ def ex_phasedoc(o, text, phase):
     is_contract = bool(re.search(r"(data|api)-contracts?\.md$", base))
     dkind = "screen_spec" if is_screen else ("spec" if "/specs/" in rel else "phasedoc")
     doc = f"doc:{rel}"
-    o.node(doc, dkind, base, phase=phase, line=1, end_line=len(lines), tokens=len(text) // 4)
     secs = sections_of(lines)
-    for (s, e, lv, t) in secs:
-        o.node(f"sec:{rel}#L{s}", "section", t[:120], phase=phase, line=s, end_line=e, level=lv,
-               tokens=sum(len(x) + 1 for x in lines[s - 1:e]) // 4)
+    title1 = next((t for (s, e, lv, t) in secs), "")
+    platform = ("mobile" if MOBILE_RE.search(base) or MOBILE_RE.search(title1) else "web") if is_screen else None
+    o.node(doc, dkind, base, phase=phase, line=1, end_line=len(lines), tokens=len(text) // 4, platform=platform)
 
     innermost = [None] * (len(lines) + 2)       # line → innermost section (s, e, lv, t)
     deferred = [False] * (len(lines) + 2)
@@ -365,6 +378,18 @@ def ex_phasedoc(o, text, phase):
             innermost[k] = sec
             if DEFERRED_SEC_RE.search(t0):
                 deferred[k] = True
+    # content signals per section, from its OWN lines (children carry their own): what role profiles key on
+    sigs = {}
+    for i, l in enumerate(lines, 1):
+        b = innermost[i]
+        if b is None:
+            continue
+        for name, rx in SIG_RES.items():
+            if rx.search(l):
+                sigs.setdefault(b[0], set()).add(name)
+    for (s, e, lv, t) in secs:
+        o.node(f"sec:{rel}#L{s}", "section", t[:120], phase=phase, line=s, end_line=e, level=lv,
+               tokens=sum(len(x) + 1 for x in lines[s - 1:e]) // 4, sig=sorted(sigs.get(s, ())))
 
     def sec_id(i):
         b = innermost[i]
@@ -1454,8 +1479,23 @@ def results_for(g, tid, phase=None):
 
 def cmd_tc(g, a):
     phase = int(a.phase)
-    results = a.results if a.results else discover_results(g, phase)
-    inv = tc_inventory(g, phase, results=results or None)
+    if a.spec_only:                 # {id: priority} for the results converters — range-defined IDs included
+        spec, _, expanded = spec_inventory(g, phase)
+        dest = a.out or os.path.join(g.dir, f"tc-priorities-phase-{phase}.json")
+        os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
+        with open(dest, "w") as f:
+            json.dump({k: v["priority"] for k, v in sorted(spec.items())}, f, indent=1)
+        return {"_line": f"phase {phase}: {len(spec)} spec TC IDs ({len(expanded)} from definition ranges) -> {dest}"}
+    results = None if a.source else (a.results if a.results else discover_results(g, phase))
+    inv = tc_inventory(g, phase, results=results or None, diff_base=a.diff_base or None)
+    if a.out:                       # the whole inventory, tc-inventory.py's JSON shape + the graph's extra checks
+        os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
+        with open(a.out, "w") as f:
+            json.dump(inv, f, indent=1)
+        return {"_line": f"sdlc-graph tc phase {phase}: {inv['verdict']} {inv['passed']}/{inv['total']} HIGH+MEDIUM "
+                         f"({inv['mode']} mode, {len(inv['results'])} sidecar(s)); missing {len(inv['missing'])}, failing "
+                         f"{len(inv['failing'])}, range-expanded IDs {len(inv['graph']['range_expanded_ids'])}, malformed "
+                         f"{len(inv['graph']['malformed_ids'])}; detail {a.out}", "_rc": 0 if inv["verdict"] == "PASS" else 1}
     tiers = [t.strip().lower() for t in (a.tier or "").split(",") if t.strip()]
     prios = [p.strip().upper() for p in (a.priority or "").split(",") if p.strip()]
     rows = []
@@ -1549,8 +1589,336 @@ def phase_endpoints(g, phase):
     return sorted({r[0] for r in g.q("SELECT DISTINCT id FROM nodes WHERE kind='endpoint' AND phase=?", phase)})
 
 
+# ─── role profiles: which spec sections a non-test role reads ─────────────────────────────────────
+# A spec is split into READING UNITS: its preamble (title + intro) and each section at the first heading level
+# that repeats (## in a "# Title / ## …" spec). A unit's category comes from its title; content signals
+# (SIG_RES) and endpoint mentions refine it. A profile keeps whole units, keeps only the child sections that
+# carry a signal ("refine"), or skips the unit — and every skipped unit is listed with its span, so the agent
+# can open it when its work touches it. Nothing is hidden; the list is the floor, not the ceiling.
+UNIT_CATS = [
+    ("test", re.compile(r"test (case|coverage|plan|matrix|scenario)|tests? required|\binventory\b|\btc[- ]?(ids?|rows?)\b|verification matrix")),
+    ("trace", re.compile(r"traceab|requirements? map")),
+    ("perf", re.compile(r"performance|latency|throughput|\bslos?\b|capacity")),
+    ("ui", re.compile(r"\bdom\b|\bcss\b|component tree|layout|wireframe|\bscreens?\b|\b(4|four) states\b|^(the )?states\b|"
+                      r"interaction|bindings?|accessib|a11y|responsive|visual|design tokens?|archetype|offline|error boundary|"
+                      r"\bpages?\b|\bux\b")),
+    ("data", re.compile(r"data model|schema|database|\btables?\b|migrations?|entit|\bindex(es)?\b|persistence|storage|backfill|\bddl\b|\berd\b|columns?")),
+    ("api", re.compile(r"contracts?|\bapis?\b|endpoints?|routes?|requests?|responses?|envelope|\bwire\b|grpc|graphql|\bevents?\b|"
+                       r"webhooks?|interfaces?|payloads?|error codes?")),
+    ("edge", re.compile(r"edge cases?|failure modes?|error (cases|handling)|abuse")),
+    ("flow", re.compile(r"flows?\b|behaviou?r|algorithms?|pseudocode|state machine|lifecycle|sequence|processing")),
+]
+CROSS_CUT_RE = re.compile(r"(?i)envelope|error|convention|common|shared|auth|pagination|canonical|overview|general")
+BACKEND_ROLES = {"backend_developer", "api_developer", "backend_audit_agent"}
+DB_ROLES = {"database_agent", "migration_agent"}
+UI_ROLES = {"ui_developer": "web", "mobile_developer": "mobile", "ui_audit_agent": None}
+PROFILE_ROLES = BACKEND_ROLES | DB_ROLES | set(UI_ROLES) | {
+    "code_quality_verifier", "tenant_isolation_verifier", "migration_safety_reviewer", "accessibility_auditor",
+    "ui_standards_auditor", "spec_impl_reconciler"}
+PROFILE_DESC = {
+    "backend": "backend/API developer: every component-spec and contract section except test inventories, BRD "
+               "traceability and UI-only sections; screen specs belong to the UI roles",
+    "db": "schema roles: data-model sections, sections with schema content (CREATE/ALTER, columns, keys), "
+          "acceptance criteria and edge cases",
+    "ui": "UI developer: your platform's screen specs (minus test inventories), the contract sections for the endpoints "
+          "your screens bind, acceptance criteria",
+    "code_quality_verifier": "stub check needs the declared endpoints and their handlers only — no spec prose",
+    "tenant_isolation_verifier": "data-model sections + sections that define ownership/tenancy (created_by, owner, "
+                                 "'their own', tenant)",
+    "migration_safety_reviewer": "data-model / schema sections the migrations must satisfy",
+    "accessibility_auditor": "web screen specs' accessibility, states, tokens and interaction sections",
+    "ui_standards_auditor": "every screen spec section except test inventories (bindings come from the graph)",
+    "spec_impl_reconciler": "every spec section except test inventories (spec_test_reconciler's): read each on demand "
+                            "while you verify it, using the inventory below",
+}
+
+
+def unit_cat(title):
+    t = title.lower()
+    for cat, rx in UNIT_CATS:
+        if rx.search(t):
+            return cat
+    return "general"
+
+
+def doc_lines(g, rel):
+    c = g.cache.setdefault("doclines", {})
+    if rel not in c:
+        c[rel] = read_text(os.path.join(g.root, rel)).split("\n")
+    return c[rel]
+
+
+def span_tokens(g, rel, s, e):
+    return sum(len(x) + 1 for x in doc_lines(g, rel)[s - 1:e]) // 4
+
+
+def doc_units(g, d):
+    """[unit] for one spec file: {start, end, title, cat, tokens, sig, eps, children:[same, no children]}."""
+    f = d["file"]
+    secs = g.nodes("kind='section' AND file=? ORDER BY line", f)
+    end = d.get("end_line") or len(doc_lines(g, f))
+    eps = [(e["line"], e["dst"]) for e in g.edges("rel='mentions_ep' AND file=?", f)]
+
+    def mk(s, e, title, cat):
+        inside = [x for x in secs if s <= x["line"] <= e]
+        return {"start": s, "end": e, "title": title, "cat": cat, "tokens": span_tokens(g, f, s, e),
+                "sig": set().union(*[set(x.get("sig") or ()) for x in inside]) if inside else set(),
+                "eps": {dst for (ln, dst) in eps if ln is not None and s <= ln <= e}}
+    counts = {}
+    for x in secs:
+        counts[x["level"]] = counts.get(x["level"], 0) + 1
+    lv = min((k for k, c in counts.items() if c > 1), default=None)
+    tops = [x for x in secs if x["level"] == lv] if lv is not None else []
+    units = []
+    first = tops[0]["line"] if tops else end + 1
+    if first > 1:
+        units.append(dict(mk(1, first - 1, "(preamble) " + (secs[0]["name"] if secs and secs[0]["line"] < first else ""), "preamble"),
+                          children=[]))
+    for x in tops:
+        u = mk(x["line"], x["end_line"], x["name"], unit_cat(x["name"]))
+        kids = [k for k in secs if k["level"] == lv + 1 and x["line"] < k["line"] <= x["end_line"]]
+        u["children"] = [mk(k["line"], k["end_line"], k["name"], unit_cat(k["name"])) for k in kids]
+        u["intro_end"] = (kids[0]["line"] - 1) if kids else x["end_line"]
+        units.append(u)
+    return units
+
+
+def refine(g, f, u, pred):
+    """The unit's own intro + the child sections pred keeps; the whole unit when it has no children and pred(u)."""
+    if not u.get("children"):
+        return [(u["start"], u["end"], u["title"])] if pred(u) else []
+    kids = [c for c in u["children"] if pred(c)]
+    if not kids:
+        return []
+    return [(u["start"], u["intro_end"], u["title"] + " (intro)")] + [(c["start"], c["end"], c["title"]) for c in kids]
+
+
+def profile_choice(role, kind, u, bound, want, g, f):
+    """[(start, end, title)] to read from unit u, or a skip reason (str)."""
+    cat, sig = u["cat"], u["sig"]
+    whole = [(u["start"], u["end"], u["title"])]
+    if cat == "test":
+        return "test inventory (Wave 3 test agents' work list)"
+    if role in BACKEND_ROLES:
+        if kind == "screen":
+            return "screen spec (UI roles)"
+        if kind == "spec" and cat in ("trace", "ui"):
+            return "BRD traceability" if cat == "trace" else "UI-only section"
+        return whole
+    if role in DB_ROLES:
+        if kind == "screen":
+            return "screen spec (UI roles)"
+        if cat in ("data", "preamble") or (kind == "spec" and cat in ("general", "edge")):
+            return whole
+        got = refine(g, f, u, lambda x: "sql" in x["sig"] or x["cat"] == "data")
+        return got or "no schema content"
+    if role in UI_ROLES:
+        if kind == "screen":
+            return whole if want is None or u["platform"] == want else f"{u['platform']} screen (the other UI role)"
+        if cat == "preamble" or (kind == "spec" and cat == "general"):
+            return whole
+        if kind == "contract" and (not bound or CROSS_CUT_RE.search(u["title"])):
+            return whole
+        if kind == "contract" or cat == "api":
+            got = refine(g, f, u, lambda x: bool(x["eps"] & bound))
+            return got or "no endpoint your screens bind"
+        return "backend-only section"
+    if role == "code_quality_verifier":
+        return "not needed for the quality checks"
+    if role == "tenant_isolation_verifier":
+        if kind == "screen":
+            return "screen spec"
+        if cat == "data":
+            return whole
+        got = refine(g, f, u, lambda x: "owner" in x["sig"])
+        return got or "no ownership/tenancy content"
+    if role == "migration_safety_reviewer":
+        if kind == "screen":
+            return "screen spec"
+        if cat == "data":
+            return whole
+        got = refine(g, f, u, lambda x: "sql" in x["sig"] or x["cat"] == "data")
+        return got or "no schema content"
+    if role == "accessibility_auditor":
+        if kind != "screen" or u["platform"] == "mobile":
+            return "not a web screen spec" if kind != "screen" else "mobile screen (mobile_platform_auditor)"
+        if cat == "preamble" or "a11y" in sig or re.search(r"(?i)accessib|a11y|states?\b|tokens?|css|interaction|focus|keyboard", u["title"]):
+            return whole
+        return "no accessibility-relevant content"
+    if role == "ui_standards_auditor":
+        return whole if kind == "screen" else "bindings come from the graph (screens below)"
+    if role == "spec_impl_reconciler":
+        return whole
+    return whole
+
+
+def profile_sections(g, phase, role):
+    """(read rows, skipped rows, read tokens, whole-dir tokens) for a profile role."""
+    docs = g.nodes("kind IN ('spec','screen_spec') AND phase=? ORDER BY file", phase)
+    want = UI_ROLES.get(role)
+    if role in UI_ROLES and want and not any(d.get("platform") == want for d in docs if d["kind"] == "screen_spec"):
+        want = None                                   # no screen is marked for this platform: can't tell, read them all
+    bound = set()
+    if role in UI_ROLES:
+        for s in g.nodes("kind='screen' AND phase=?", phase):
+            d = next((x for x in docs if x["file"] == s["file"]), None)
+            if want is None or (d and d.get("platform") == want):
+                bound |= {e["dst"] for e in g.edges("src=? AND rel='binds'", s["id"])}
+        for d in docs:
+            if d["kind"] == "screen_spec" and (want is None or d.get("platform") == want):
+                bound |= {e["dst"] for e in g.edges("rel='mentions_ep' AND file=?", d["file"])}
+    read, skipped, read_tok, whole_tok = [], [], 0, 0
+    for d in docs:
+        f, base = d["file"], os.path.basename(d["file"])
+        kind = "screen" if d["kind"] == "screen_spec" else "contract" if CONTRACT_RE.search(base) else "spec"
+        whole_tok += d.get("tokens") or 0
+        spans, skips = [], []
+        units = doc_units(g, d)
+        for u in units:
+            u["platform"] = d.get("platform")
+            ch = profile_choice(role, kind, u, bound, want, g, f)
+            if isinstance(ch, str):
+                skips.append((u, ch))
+            else:
+                spans += ch
+                if len(ch) > 1:            # refined: the unit's other children are skipped
+                    kept = {(s_, e_) for (s_, e_, _) in ch}
+                    skips += [(c, "not in your scope") for c in u.get("children", []) if (c["start"], c["end"]) not in kept]
+        if spans and not any(s_ == 1 for (s_, _, _) in spans):
+            pre = [u for u in units if u["cat"] == "preamble"]
+            if pre:
+                spans.insert(0, (1, pre[0]["end"], pre[0]["title"]))
+                skips = [(u, r) for (u, r) in skips if u["cat"] != "preamble"]
+        spans.sort()
+        merged = []
+        for (s_, e_, t_) in spans:
+            if merged and s_ <= merged[-1][1] + 2:
+                merged[-1][1] = max(merged[-1][1], e_)
+                merged[-1][2].append(t_)
+            else:
+                merged.append([s_, e_, [t_]])
+        if merged:
+            tok = sum(span_tokens(g, f, s_, e_) for (s_, e_, _) in merged)
+            read_tok += tok
+            titles = [re.sub(r"\s+", " ", t)[:34] for m in merged for t in m[2] if not t.startswith("(preamble)")]
+            read.append(f"{f}: " + ", ".join(f"{s_}-{e_}" for (s_, e_, _) in merged) + f" (~{tok:,} tok)"
+                        + (" — " + "; ".join(titles[:6]) + (f"; +{len(titles) - 6}" if len(titles) > 6 else "") if titles else ""))
+        if skips:
+            stok = sum(u["tokens"] for (u, _) in skips)
+            if not merged:
+                skipped.append(f"{f} (whole file, ~{d.get('tokens') or stok:,} tok): {skips[0][1]}")
+            else:
+                why = {}
+                for (u, r) in skips:
+                    why.setdefault(r, []).append(f"{u['start']}-{u['end']}")
+                skipped.append(f"{f}: ~{stok:,} tok — " + "; ".join(f"{r} {', '.join(v[:4])}{' …' if len(v) > 4 else ''}" for r, v in why.items()))
+    return read, skipped, read_tok, whole_tok
+
+
+def context_profile(g, phase, role):
+    read, skipped, read_tok, whole_tok = profile_sections(g, phase, role)
+    key = ("backend" if role in BACKEND_ROLES else "db" if role in DB_ROLES else "ui" if role in UI_ROLES else role)
+    results = discover_results(g, phase)
+    inv = tc_inventory(g, phase, results=results or None)
+    tiers = {}
+    for c in inv["cases"]:
+        tiers[c["tier"] or "?"] = tiers.get(c["tier"] or "?", 0) + 1
+    out = {"agent": role, "phase": phase, "profile": PROFILE_DESC[key]}
+    rf = [p for p in (os.path.join("docs", "design", "phases", str(phase), "phase_context.md"),
+                      os.path.join("docs", "design", "phases", str(phase), "threat_model.md"))
+          if os.path.exists(os.path.join(g.root, p))]
+    out["read_first"] = rf
+    out["spec_sections_to_read (file: line spans)"] = read
+    out["spec_sections_tokens"] = read_tok
+    out["whole_specs_dir_tokens"] = whole_tok
+    out["skipped (open on demand: file: start-end)"] = skipped
+    spec_tc = {r["name"]: r for r in g.nodes("kind='tc' AND phase=?", phase)}
+    eps = phase_endpoints(g, phase)
+    if role in BACKEND_ROLES or role in DB_ROLES:
+        out["tc_rows_by_tier (tests are Wave 3's; `tc --phase N` lists them)"] = tiers
+    if role in BACKEND_ROLES:
+        out["security_rows (TC-SEC: implement the mitigation)"] = [
+            f"{c['name']} {c['priority']} {c['spec']} {(spec_tc.get(c['name']) or {}).get('desc', '')[:90]}"
+            for c in inv["cases"] if c["name"].startswith("TC-SEC-")]
+        out["endpoints"] = [{"endpoint": e[3:], "handlers": [h["span"] or h["handler"] for h in handlers_for(g, e)[:2]]} for e in eps]
+    if role in DB_ROLES:
+        out["tables (existing)"] = sorted({r[0][6:] for r in g.q("SELECT DISTINCT id FROM nodes WHERE kind='table'")})
+    if role in UI_ROLES:
+        want = UI_ROLES[role]
+        docs = {d["file"]: d for d in g.nodes("kind='screen_spec' AND phase=?", phase)}
+        if want and not any(d.get("platform") == want for d in docs.values()):
+            want = None
+        scr = [s for s in g.nodes("kind='screen' AND phase=? ORDER BY name", phase)
+               if want is None or (docs.get(s["file"]) or {}).get("platform") == want]
+        out["screens"] = [{"screen": s["name"], "route": s.get("route"), "spec": s["file"],
+                           "binds": [e["dst"][3:] for e in g.edges("src=? AND rel='binds'", s["id"])]} for s in scr]
+        bound = sorted({e["dst"] for s in scr for e in g.edges("src=? AND rel='binds'", s["id"])})
+        out["bound_endpoints (declared in a contract?)"] = [
+            f"{e[3:]} → " + (", ".join(f"{x['file']}:{x['line']}" for x in g.edges("rel='declares' AND dst=?", e)[:2]) or "NOT DECLARED")
+            for e in bound]
+    if role == "code_quality_verifier":
+        rows = [{"endpoint": e[3:], "handlers": [h["span"] or h["handler"] for h in handlers_for(g, e)[:2]]} for e in eps]
+        out["endpoints (Check 2: verify each handler is substantive)"] = rows
+        out["endpoints_without_handler"] = [r["endpoint"] for r in rows if not r["handlers"]]
+    if role == "tenant_isolation_verifier":
+        files, _ = changed_since(g, default_base(g, phase))
+        id_routes = []
+        for e in g.edges("rel='route'"):
+            if "{}" in e["dst"] and (files is None or e["file"] in files):
+                hs = handlers_for(g, e["dst"])
+                id_routes.append(f"{e['dst'][3:]} @{e['file']}:{e['line']} handler "
+                                 + (", ".join(h["span"] or h["handler"] for h in hs[:2] if h["route_at"] == f"{e['file']}:{e['line']}") or e.get("handler") or "?"))
+        out["id_routes (changed this phase; Step 1 seed — grep for what regex routes miss)"] = sorted(set(id_routes))
+    if role == "migration_safety_reviewer":
+        files, _ = changed_since(g, default_base(g, phase))
+        migs = sorted(f for f in (files or {}) if g.q("SELECT 1 FROM files WHERE path=? AND kind IN ('migration','prisma')", f))
+        out["migrations_changed (UP/DOWN to review)"] = [
+            {"file": f, "creates": sorted({e["dst"][6:] for e in g.edges("file=? AND rel='creates'", f)}),
+             "alters": sorted({e["dst"][6:] for e in g.edges("file=? AND rel='alters'", f)})} for f in migs]
+    if role == "accessibility_auditor":
+        out["a11y_rows (results: e2e_results.json)"] = [
+            f"{c['name']} {c['priority']} {c['tier'] or '?'} {c['spec']} {c['verdict']}" for c in inv["cases"]
+            if c["name"].startswith("TC-A11Y-") or SIG_RES["a11y"].search((spec_tc.get(c["name"]) or {}).get("desc", ""))]
+        out["screens (web)"] = [{"screen": s["name"], "route": s.get("route"), "spec": s["file"]}
+                                for s in g.nodes("kind='screen' AND phase=? ORDER BY name", phase)
+                                if (g.nodes("id=?", f"doc:{s['file']}") or [{}])[0].get("platform") != "mobile"]
+    if role == "ui_standards_auditor":
+        pages = g.nodes("kind='page'")
+        base = {norm_path(p["route"]): p["name"] for p in pages if p.get("route")}
+        out["screens (all phases)"] = [
+            f"{s['name']} p{s['phase']} {s.get('route') or 'no route'} stitch={base.get(norm_path(s['route'])) if s.get('route') else None} "
+            f"binds={','.join(sorted({(x.get('shape') or 'OBJECT')[0] + ':' + x['dst'][3:] for x in g.edges('src=? AND rel=?', s['id'], 'binds')}))}"
+            for s in g.nodes("kind='screen' ORDER BY phase, name")]
+    if role == "spec_impl_reconciler":
+        rows = [(e[3:], handlers_for(g, e)) for e in eps]
+        out["endpoints declared → handler (Level 1)"] = [f"{e} → {(hs[0]['span'] or hs[0]['handler']) if hs else 'MISSING'}" for e, hs in rows]
+        files, _ = changed_since(g, default_base(g, phase))
+        declared_all = {r[0] for r in g.q("SELECT DISTINCT id FROM nodes WHERE kind='endpoint'")}
+        out["routes changed this phase with no contract (impl → spec)"] = sorted({
+            f"{e['dst'][3:]} @{e['file']}:{e['line']}" for e in g.edges("rel='route'")
+            if (files is None or e["file"] in files) and e["dst"] not in declared_all})
+        types = g.nodes("kind='type' AND phase=? ORDER BY name", phase)
+        tdefs = {}
+        for t in types:
+            hit = [s for s in g.nodes("kind='symbol' AND name=?", t["name"]) if not s.get("test")]
+            tdefs[t["name"]] = f"{hit[0]['file']}:{hit[0]['line']}" if hit else "NOT FOUND (by name)"
+        out["contract types → code"] = [f"{k} ({next(t['file'] for t in types if t['name'] == k)}) → {v}" for k, v in sorted(tdefs.items())]
+        in_scope = sorted({e["src"][4:] for e in g.edges("rel='assigned_to' AND dst=?", f"phase:{phase}")})
+        mentioned = {e["dst"][4:] for e in g.edges("rel='mentions_req' AND file LIKE ?", f"docs/design/phases/{phase}/specs/%")}
+        out["FRs in scope with no spec section"] = [r for r in in_scope if r not in mentioned]
+    out["note"] = ("Read the listed spans (file: start-end) instead of the whole specs/ directory; open a skipped span when "
+                   "your work touches it. Lists ending '… +N more' were capped: re-run with --full. Code links are rung-1 "
+                   "regex (by name): confirm before you act on one.")
+    return out
+
+
+PROTECTED_KEYS = ("spec_sections_to_read (file: line spans)", "read_first")
+
+
 def cmd_context(g, a):
     phase, role = int(a.phase), a.agent
+    if role in PROFILE_ROLES:
+        return context_profile(g, phase, role)
     tiers = ROLE_TIERS.get(role)
     results = discover_results(g, phase)
     inv = tc_inventory(g, phase, results=results or None)
@@ -2148,26 +2516,31 @@ def cmd_stats(g, a):
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 # Budgeted output
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
-def cap_lists(obj, limit):
+def cap_lists(obj, limit, top=True):
+    """--limit rows per list; a role's reading list (PROTECTED_KEYS) is never cut by --limit."""
     if isinstance(obj, dict):
-        return {k: cap_lists(v, limit) for k, v in obj.items()}
+        return {k: (v if top and k in PROTECTED_KEYS else cap_lists(v, limit, False)) for k, v in obj.items()}
     if isinstance(obj, list):
         if limit and len(obj) > limit:
-            return [cap_lists(x, limit) for x in obj[:limit]] + [f"… +{len(obj) - limit} more (raise --limit)"]
-        return [cap_lists(x, limit) for x in obj]
+            return [cap_lists(x, limit, False) for x in obj[:limit]] + [f"… +{len(obj) - limit} more (raise --limit)"]
+        return [cap_lists(x, limit, False) for x in obj]
     return obj
 
 
 def fit(obj, max_chars, fmt):
-    """Halve the longest list until the rendering fits; deterministic, keeps the head of each list."""
+    """Halve the longest list until the rendering fits; deterministic, keeps the head of each list. Lists under a
+    top-level PROTECTED_KEYS key (a role's reading list) are cut only when nothing else is left to cut."""
     s = fmt(obj)
     guard = 0
+    protect = True
     while len(s) > max_chars and guard < 200:
         guard += 1
         best, best_len, best_path = None, 0, None
 
         def walk(o, path):
             nonlocal best, best_len, best_path
+            if protect and len(path) == 1 and path[0] in PROTECTED_KEYS:
+                return
             if isinstance(o, list) and len(o) > 1:
                 ln = len(json.dumps(o))
                 if ln > best_len:
@@ -2179,6 +2552,9 @@ def fit(obj, max_chars, fmt):
                 for i, v in enumerate(o):
                     walk(v, path + [i])
         walk(obj, [])
+        if best is None and protect:
+            protect = False
+            continue
         if best is None:
             break
         real = [x for x in best if not (isinstance(x, str) and x.startswith("… +"))]
@@ -2246,6 +2622,10 @@ def main(argv=None):
     sub("stats")
     t = sub("tc"); t.add_argument("--phase", required=True); t.add_argument("--tier"); t.add_argument("--priority")
     t.add_argument("--status", choices=["todo", "done", "missing", "failing", "all"]); t.add_argument("--results", nargs="*")
+    t.add_argument("--source", action="store_true", help="source mode: ignore runner sidecars (a non-skipped test NAMED with the ID)")
+    t.add_argument("--diff-base", help="also run the test-weakening check since SHA")
+    t.add_argument("--spec-only", action="store_true", help="write {id: priority} (incl. range-defined IDs) to --out")
+    t.add_argument("--out", help="write the full inventory JSON (tc-inventory.py's shape) here; exit 1 unless PASS")
     c = sub("context"); c.add_argument("--agent", required=True); c.add_argument("--phase", required=True)
     d = sub("diff-context"); d.add_argument("--base"); d.add_argument("--phase")
     i = sub("impact"); i.add_argument("target")
@@ -2280,7 +2660,14 @@ def main(argv=None):
     fn = {"stats": cmd_stats, "tc": cmd_tc, "context": cmd_context, "diff-context": cmd_diff_context, "impact": cmd_impact,
           "consumers": cmd_consumers, "trace": cmd_trace, "orphans": cmd_orphans, "unlocked": cmd_unlocked,
           "gate": cmd_gate, "repomap": cmd_repomap}[a.cmd]
+    if a.cmd == "tc" and a.diff_base is not None and not a.diff_base.strip():
+        print("sdlc-graph: --diff-base is empty (agent_state/phases/N/base_sha missing?) — the weakening check needs "
+              "the commit the phase started from; leave the flag out only for a source-mode inventory", file=sys.stderr)
+        return 2
     res = fn(g, a)
+    if isinstance(res, dict) and "_line" in res:
+        print(res["_line"])
+        return res.get("_rc", 0)
     if a.cmd == "gate":
         if a.summary or a.tc_only:
             tc = res["tc"]

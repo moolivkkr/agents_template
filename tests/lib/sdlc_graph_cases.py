@@ -405,6 +405,196 @@ if os.path.exists("/usr/bin/python3"):
         rc, out, err = sg(B, "--graph-dir", os.path.join(W, "py39"), "gate", "--phase", "1", "--tc-only", py="/usr/bin/python3")
         check("V01", 0, rc, "runs on /usr/bin/python3 (system python): clean gate PASSes")
 
+# ═══ tc: --spec-only / --out / --source / --diff-base (the call sites that used tc-inventory.py) ═══════
+PRI = os.path.join(W, "prio-a2.json")
+rc, out, _ = sg(A, "tc", "--phase", "2", "--spec-only", "--out", PRI)
+gp = json.load(open(PRI))
+_, tp = tci(A, 2, "--spec-only")
+check("T01", (0, True, {k: tp[k] for k in tp}), (rc, "TC-VAL-002" in gp and "TC-RNG-001" in gp, {k: gp.get(k) for k in tp}),
+      "tc --spec-only: tc-inventory's {id: priority} exactly, plus range-defined IDs")
+OUTJ = os.path.join(W, "tc-a2.json")
+rc, out, _ = sg(A, "tc", "--phase", "2", "--source", "--out", OUTJ)
+tj = json.load(open(OUTJ))
+_, ts = tci(A, 2)
+check("T02", (1, "source", True), (rc, tj["mode"], {c["name"]: c["verdict"] for c in ts["cases"]} ==
+                                   {c["name"]: c["verdict"] for c in tj["cases"] if c["name"] in {x["name"] for x in ts["cases"]}}),
+      "tc --source --out: tc-inventory's source-mode JSON shape and verdicts; exit 1 unless PASS")
+check("T03", True, all(k in tj for k in ("missing", "failing", "skipped_only", "comment_only", "duplicate_ids", "weakening_unacknowledged", "cases")),
+      "tc --out keeps every key the jq summaries in test.md/accept.md read")
+rc, out, err = sg(A, "tc", "--phase", "2", "--diff-base", "", "--out", OUTJ)
+check("T04", (2, True), (rc, "--diff-base is empty" in err), "tc --diff-base '' is an error, like tc-inventory (the weakening check would silently not run)")
+
+# ═══ fixture D: role profiles (developers, verifiers, auditors, spec_impl_reconciler) ═════════════════
+D = new_repo("d")
+write(D, "docs/design/phases/1/PHASE_PLAN.md", "# Phase 1 — Orders\n## Scope\n- FR-001, FR-009\n")
+write(D, "docs/design/phases/1/specs/orders.md", """# Orders (FR-001)
+Intro: orders belong to a tenant.
+
+## Acceptance Criteria
+- WHEN a user lists orders THE SYSTEM SHALL return only their own orders (FR-001)
+
+## Interface Contracts
+### GET /api/orders/{id}
+Returns one order.
+### POST /api/admin/purge
+Admin purge.
+
+## Data Model
+```sql
+CREATE TABLE orders (id uuid primary key, owner_id uuid NOT NULL, tenant_id uuid NOT NULL);
+```
+
+## Edge Cases
+- empty list returns []
+
+## BRD Traceability
+| FR | criteria |
+|---|---|
+| FR-001 | list |
+
+## Test Coverage Required
+| TC ID | Category | Description | Priority | Tier |
+|---|---|---|---|---|
+| TC-API-001 | API | GET /api/orders/{id} returns the order | HIGH | integration |
+| TC-SEC-001 | SEC | a user can't read another user's order | HIGH | integration |
+""")
+write(D, "docs/design/phases/1/specs/data-contracts.md", """# Data Contracts
+## 0. Error envelope
+{ "error": { "code": "..." } }
+## 1. Orders
+### GET /api/orders/{id}
+interface Order { id: string }
+## 2. Admin
+### POST /api/admin/purge
+interface PurgeResult { n: number }
+""")
+write(D, "docs/design/phases/1/specs/orders-list.wireframe.md", """# Screen: Orders list
+route: /orders
+## Layout
+A table.
+## Data Bindings
+| Component | Endpoint | Field | Shape |
+|---|---|---|---|
+| ordersTable | GET /api/orders/{id} | data | OBJECT |
+## Accessibility
+Every row is keyboard reachable; aria-label on the table; focus visible.
+## UI Test Case Inventory
+| TC ID | Category | Description | Priority | Tier |
+|---|---|---|---|---|
+| TC-UI-001 | UI | renders the table | HIGH | component |
+| TC-A11Y-001 | A11Y | table is keyboard reachable | HIGH | e2e |
+""")
+write(D, "docs/design/phases/1/specs/orders-mobile.ui-spec.md", """# Screen: Orders (RN + Expo)
+## RN Component Tree
+FlatList of orders.
+## Data Bindings
+| ordersList | GET /api/orders/{id} | data | OBJECT |
+""")
+write(D, "api/orders.go", '''package api
+
+type Handler struct{}
+
+func (h *Handler) GetOrder() { query("SELECT id FROM orders WHERE tenant_id = $1") }
+func Routes(r Router) {
+	r.GET("/api/orders/:id", h.GetOrder)
+}
+''')
+write(D, "migrations/001_init.sql", "CREATE TABLE users (id uuid primary key);\n")
+git(D, "add", "-A")
+git(D, "commit", "-qm", "base")
+os.makedirs(os.path.join(D, "agent_state", "phases", "1"))
+open(os.path.join(D, "agent_state", "phases", "1", "base_sha"), "w").write(git(D, "rev-parse", "HEAD").strip() + "\n")
+write(D, "migrations/002_orders.sql", "CREATE TABLE orders (id uuid primary key);\nALTER TABLE users ADD COLUMN tenant_id uuid;\n")
+write(D, "api/orders.go", open(os.path.join(D, "api/orders.go")).read() + "\nfunc Extra() {}\n")
+git(D, "add", "-A")
+git(D, "commit", "-qm", "phase 1 work")
+sg(D, "build")
+OM, DC, WF, MB = ("docs/design/phases/1/specs/orders.md", "docs/design/phases/1/specs/data-contracts.md",
+                  "docs/design/phases/1/specs/orders-list.wireframe.md", "docs/design/phases/1/specs/orders-mobile.ui-spec.md")
+RK, SK = "spec_sections_to_read (file: line spans)", "skipped (open on demand: file: start-end)"
+LN = {f: open(os.path.join(D, f)).read().split("\n") for f in (OM, DC, WF, MB)}
+
+
+def ctxd(role, *extra):
+    rc, j = sgj(D, "context", "--agent", role, "--phase", "1", *extra)
+    return j
+
+
+def read_titles(j, f):
+    """Headings inside the spans the profile tells the role to read in file f."""
+    row = next((r for r in j.get(RK, []) if r.startswith(f + ":")), None)
+    if not row:
+        return set()
+    out = set()
+    for a_, b_ in (x.split("-") for x in row.split(": ", 1)[1].split(" (~")[0].split(", ")):
+        out |= {l.lstrip("# ").strip() for l in LN[f][int(a_) - 1:int(b_)] if l.startswith("#")}
+    return out
+
+
+bk = ctxd("backend_developer")
+check("PR01", ({"Acceptance Criteria", "Interface Contracts", "Data Model", "Edge Cases"}, set()),
+      (read_titles(bk, OM) & {"Acceptance Criteria", "Interface Contracts", "Data Model", "Edge Cases"},
+       read_titles(bk, OM) & {"Test Coverage Required", "BRD Traceability"}),
+      "backend_developer: reads behaviour/contract/data/edge sections; skips the TC inventory and BRD traceability")
+check("PR02", (True, False, False), (DC + ":" in " ".join(bk[RK]), any(r.startswith(WF) for r in bk[RK]), any(r.startswith(MB) for r in bk[RK])),
+      "backend_developer: reads the contract file, not the screen specs")
+check("PR03", True, all(any(r.startswith(f) for r in bk[SK]) for f in (OM, WF, MB)), "every skipped span is listed with its file (open on demand)")
+check("PR04", True, any(r.startswith("TC-SEC-001 HIGH") for r in bk["security_rows (TC-SEC: implement the mitigation)"]),
+      "backend_developer: TC-SEC rows to implement, though their inventory section is skipped")
+check("PR05", True, 0 < bk["spec_sections_tokens"] < bk["whole_specs_dir_tokens"], "backend_developer reads less than the whole specs/ dir")
+ui = ctxd("ui_developer")
+check("PR06", ({"Layout", "Data Bindings", "Accessibility"}, set()),
+      (read_titles(ui, WF) & {"Layout", "Data Bindings", "Accessibility"}, read_titles(ui, WF) & {"UI Test Case Inventory"}),
+      "ui_developer: its web screen spec minus the UI test inventory")
+check("PR07", (False, {"0. Error envelope", "1. Orders", "GET /api/orders/{id}"}, set()),
+      (any(r.startswith(MB) for r in ui[RK]), read_titles(ui, DC) & {"0. Error envelope", "1. Orders", "GET /api/orders/{id}"},
+       read_titles(ui, DC) & {"2. Admin", "POST /api/admin/purge"}),
+      "ui_developer: no mobile screen; contract sections for the endpoints it binds + the cross-cutting envelope, not the rest")
+check("PR08", ({"Acceptance Criteria", "GET /api/orders/{id}"}, set()),
+      (read_titles(ui, OM) & {"Acceptance Criteria", "GET /api/orders/{id}"}, read_titles(ui, OM) & {"POST /api/admin/purge", "Data Model", "Edge Cases"}),
+      "ui_developer: acceptance criteria + only the bound endpoint's contract subsection of a component spec")
+check("PR09", (True, True), (any("NOT DECLARED" not in x and "GET /api/orders/{}" in x for x in ui["bound_endpoints (declared in a contract?)"]),
+                              [s["screen"] for s in ui["screens"]] == ["orders-list"]),
+      "ui_developer: bound endpoints checked against the contracts (STOP condition) + its screens only")
+mb = ctxd("mobile_developer")
+check("PR10", (True, False), (any(r.startswith(MB) for r in mb[RK]), any(r.startswith(WF) for r in mb[RK])), "mobile_developer: the RN screen, not the web one")
+db = ctxd("database_agent")
+check("PR11", (True, False, False), ("Data Model" in read_titles(db, OM), "POST /api/admin/purge" in read_titles(db, OM), any(r.startswith(WF) for r in db[RK])),
+      "database_agent: data-model sections, not API subsections or screens")
+ti = ctxd("tenant_isolation_verifier")
+check("PR12", ({"Acceptance Criteria", "Data Model"}, set()),
+      (read_titles(ti, OM) & {"Acceptance Criteria", "Data Model"}, read_titles(ti, OM) & {"Edge Cases", "Test Coverage Required"}),
+      "tenant_isolation_verifier: sections that define ownership/tenancy + the data model only")
+check("PR13", True, any(r.startswith("GET /api/orders/{}") and "api/orders.go" in r
+                        for r in ti["id_routes (changed this phase; Step 1 seed — grep for what regex routes miss)"]),
+      "tenant_isolation_verifier: ID routes changed this phase with their handler")
+ms = ctxd("migration_safety_reviewer")
+check("PR14", ([{"file": "migrations/002_orders.sql", "creates": ["orders"], "alters": ["users"]}], True),
+      (ms["migrations_changed (UP/DOWN to review)"], "Data Model" in read_titles(ms, OM)),
+      "migration_safety_reviewer: migrations changed since base_sha (creates/alters) + the data-model section")
+cq = ctxd("code_quality_verifier")
+check("PR15", ([], ["POST /api/admin/purge"]), (cq[RK], cq["endpoints_without_handler"]),
+      "code_quality_verifier: no spec prose; declared endpoints with handlers, and the ones with none")
+ax = ctxd("accessibility_auditor")
+check("PR16", (True, False, ["TC-A11Y-001"]), ("Accessibility" in read_titles(ax, WF), any(r.startswith(MB) for r in ax[RK]),
+                                              [r.split()[0] for r in ax["a11y_rows (results: e2e_results.json)"]]),
+      "accessibility_auditor: web screen accessibility sections, no mobile screen, the A11Y rows")
+us = ctxd("ui_standards_auditor")
+check("PR17", (True, True, False), (any(r.startswith(WF) for r in us[RK]), any(r.startswith(MB) for r in us[RK]), any(r.startswith(OM) for r in us[RK])),
+      "ui_standards_auditor: every screen spec, no component spec")
+sr = ctxd("spec_impl_reconciler")
+check("PR18", (True, set()), ({"Acceptance Criteria", "BRD Traceability", "Edge Cases"} <= read_titles(sr, OM), read_titles(sr, OM) & {"Test Coverage Required"}),
+      "spec_impl_reconciler: every spec section except the TC inventory (whole-spec coverage, read on demand)")
+check("PR19", (True, True, ["FR-009"]),
+      (any(r.startswith("POST /api/admin/purge → MISSING") for r in sr["endpoints declared → handler (Level 1)"]),
+       any(r.startswith("Order ") and "NOT FOUND" in r for r in sr["contract types → code"]), sr["FRs in scope with no spec section"]),
+      "spec_impl_reconciler: inventory — endpoint with no handler, contract type not in code, FR in scope with no spec")
+rc, out, _ = sg(D, "context", "--agent", "backend_developer", "--phase", "1", "--max-tokens", "250")
+check("PR20", True, OM + ":" in out and DC + ":" in out, "a tight --max-tokens cuts the other lists before the reading list")
+if os.path.exists("/usr/bin/python3"):
+    rc, out, err = sg(D, "--graph-dir", os.path.join(W, "py39d"), "context", "--agent", "ui_developer", "--phase", "1", py="/usr/bin/python3")
+    check("V02", (0, True), (rc, WF in out), "role profiles run on /usr/bin/python3 too")
+
 # ═══ verify-gate.sh check (h) ══════════════════════════════════════════════════════════════════════
 AG = "backend_developer code_reviewer_I code_reviewer_II security_reviewer code_quality_verifier unit_test_agent test_runner spec_test_reconciler acceptance_test_agent".split()
 R = os.path.join(P1, "reports")
