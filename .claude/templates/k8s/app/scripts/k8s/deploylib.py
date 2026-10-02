@@ -23,6 +23,11 @@
   db-access   < kubectl create --dry-run=client -o json -f rendered.yaml   (or any JSON List of objects)
                                                                refuse a render in which a workload can read
                                                                a database role it must not have (POLICY)
+  eks-policy  --registry R [--allow-placeholders] < rendered JSON
+                                                               refuse a staging/prod (EKS) render that breaks
+                                                               EKS_POLICY: secrets only from ExternalSecret,
+                                                               every image digest-pinned from ECR, no in-cluster
+                                                               Postgres, PDB + zone spread per Deployment, ...
 Evidence is written by code, never by an agent's prose:
   agent_state/deploy/<env>/history.jsonl         one line per deploy (promotion and rollback read it)
   agent_state/deploy/last-deploy-status.json     marker /accept and /status read (status HEALTHY|DEGRADED|FAILED)
@@ -186,6 +191,95 @@ def db_access():
         sys.exit(1)
 
 
+# ── EKS (staging, prod) ───────────────────────────────────────────────────────────────────────────────
+DIGEST_REF = re.compile(r"^(?P<repo>[^@\s]+)@sha256:[0-9a-f]{64}$")
+PUBLIC_TOOL_IMAGES = ("public.ecr.aws/docker/library/postgres",)   # psql/pg_isready for the db-* Jobs
+PLACEHOLDER = re.compile(r"000000000000|example\.com|placeholder|from-eks-config")
+
+
+def eks_policy_problems(objs, registry, allow_placeholders=False):
+    """EKS_POLICY for a rendered staging/prod overlay (kubectl create --dry-run=client -o json):
+      secrets      no Secret object in the render: db-credentials comes from an ExternalSecret (AWS Secrets
+                   Manager); nothing secret is ever in git
+      images       every container image is <registry>/...@sha256:<64 hex> (ECR, by digest), or an
+                   allowlisted public tool image by digest — never a tag, never another registry
+      database     no in-cluster Postgres (StatefulSet/Service postgres): staging/prod use RDS/Aurora
+      exposure     no Service of type LoadBalancer or NodePort; every Ingress names an ingressClassName
+      pods         runAsNonRoot on every pod; no privileged container, hostNetwork/hostPID or hostPath volume
+      availability every Deployment has a PodDisruptionBudget selecting it and a zone topology spread;
+                   a Deployment an HPA scales sets no spec.replicas (apply would reset the HPA's count)
+      coordinates  no placeholder left in a ConfigMap, Ingress or ExternalSecret (unless allowed: tests)"""
+    out = []
+    kinds = {}
+    for o in objs:
+        kinds.setdefault(o.get("kind"), []).append(o)
+    name = lambda o: (o.get("metadata") or {}).get("name", "")
+    for o in kinds.get("Secret", []):
+        out.append(f"Secret/{name(o)} is in the render: staging/prod secrets come only from an ExternalSecret (AWS Secrets Manager)")
+    es = [o for o in kinds.get("ExternalSecret", []) if ((o.get("spec") or {}).get("target") or {}).get("name") == "db-credentials"]
+    if not es:
+        out.append("no ExternalSecret with target db-credentials: the database roles' credentials have no source")
+    for kind in ("StatefulSet", "Service"):
+        for o in kinds.get(kind, []):
+            if name(o) == "postgres":
+                out.append(f"{kind}/postgres is in the render: staging/prod use the managed database (RDS/Aurora), not an in-cluster one")
+    for o in kinds.get("Service", []):
+        t = (o.get("spec") or {}).get("type", "ClusterIP")
+        if t in ("LoadBalancer", "NodePort"):
+            out.append(f"Service/{name(o)} is type {t}: traffic enters through the ALB Ingress only")
+    for o in kinds.get("Ingress", []):
+        if not (o.get("spec") or {}).get("ingressClassName"):
+            out.append(f"Ingress/{name(o)} has no ingressClassName (expected the app's EKS Auto Mode ALB class)")
+    hpa_targets = {((h.get("spec") or {}).get("scaleTargetRef") or {}).get("name") for h in kinds.get("HorizontalPodAutoscaler", [])}
+    pdb_selectors = [((p.get("spec") or {}).get("selector") or {}).get("matchLabels") or {} for p in kinds.get("PodDisruptionBudget", [])]
+    for o in objs:
+        ps = pod_spec(o)
+        if ps is None:
+            continue
+        who = f"{o.get('kind')}/{name(o)}"
+        if not (ps.get("securityContext") or {}).get("runAsNonRoot"):
+            out.append(f"{who}: pod securityContext.runAsNonRoot is not true")
+        if ps.get("hostNetwork") or ps.get("hostPID") or ps.get("hostIPC"):
+            out.append(f"{who}: uses the host network/PID/IPC namespace")
+        for v in ps.get("volumes") or []:
+            if "hostPath" in v:
+                out.append(f"{who}: hostPath volume {v.get('name')}")
+        for c in (ps.get("initContainers") or []) + (ps.get("containers") or []):
+            img = c.get("image", "")
+            m = DIGEST_REF.match(img)
+            if not m:
+                out.append(f"{who} container {c.get('name')}: image {img} is not pinned by digest")
+            elif not (m.group("repo").startswith(registry.rstrip("/") + "/") or m.group("repo") in PUBLIC_TOOL_IMAGES):
+                out.append(f"{who} container {c.get('name')}: image {m.group('repo')} is not in {registry} (or an allowlisted public tool image)")
+            if (c.get("securityContext") or {}).get("privileged"):
+                out.append(f"{who} container {c.get('name')}: privileged")
+        if o.get("kind") == "Deployment":
+            labels = ((((o.get("spec") or {}).get("template") or {}).get("metadata") or {}).get("labels")) or {}
+            if not any(sel and all(labels.get(k) == v for k, v in sel.items()) for sel in pdb_selectors):
+                out.append(f"{who}: no PodDisruptionBudget selects its pods")
+            if not any(t.get("topologyKey") == "topology.kubernetes.io/zone" for t in ps.get("topologySpreadConstraints") or []):
+                out.append(f"{who}: no topologySpreadConstraints over topology.kubernetes.io/zone (spread across AZs)")
+            if name(o) in hpa_targets and "replicas" in (o.get("spec") or {}):
+                out.append(f"{who}: sets spec.replicas while an HPA scales it")
+    if not allow_placeholders:
+        for o in kinds.get("ConfigMap", []) + kinds.get("Ingress", []) + kinds.get("ExternalSecret", []) + kinds.get("SecretStore", []):
+            body = json.dumps({k: v for k, v in o.items() if k in ("data", "spec")})
+            if PLACEHOLDER.search(body):
+                out.append(f"{o.get('kind')}/{name(o)} still has a placeholder value (fill deploy/k8s/overlays/<env>/eks.env from Terraform)")
+    return out
+
+
+def eks_policy(registry, allow_placeholders):
+    objs = json_stream(sys.stdin.read())
+    if not objs:
+        sys.exit("eks-policy: no objects on stdin (expected the rendered manifests as JSON)")
+    problems = eks_policy_problems(objs, registry, allow_placeholders)
+    for p in problems:
+        print(f"eks-policy: {p}", file=sys.stderr)
+    if problems:
+        sys.exit(1)
+
+
 def pairs(items):
     out = {}
     for it in items or []:
@@ -313,6 +407,7 @@ def main():
     p.add_argument("--code-sha", default=""); p.add_argument("--dirty", default="false")
     p = sub.add_parser("db-secrets"); p.add_argument("path"); p.add_argument("--recover")
     sub.add_parser("db-access")
+    p = sub.add_parser("eks-policy"); p.add_argument("--registry", required=True); p.add_argument("--allow-placeholders", action="store_true")
     a = ap.parse_args()
     if a.cmd == "set-images": set_images(a.path, a.images)
     elif a.cmd == "get-images": get_images(a.path)
@@ -321,6 +416,7 @@ def main():
     elif a.cmd == "stuck": stuck(a.digests)
     elif a.cmd == "db-secrets": db_secrets(a.path, a.recover)
     elif a.cmd == "db-access": db_access()
+    elif a.cmd == "eks-policy": eks_policy(a.registry, a.allow_placeholders)
     else: record(a)
 
 

@@ -1,0 +1,7 @@
+# Copy to terraform.tfvars (no secrets belong here; it may be committed).
+region              = "us-east-1"
+admin_role_arns     = ["arn:aws:iam::000000000000:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_AdministratorAccess_0000000000000000"]
+app_host            = "__APP__.example.com"
+acm_certificate_arn = "arn:aws:acm:us-east-1:000000000000:certificate/00000000-0000-0000-0000-000000000000"
+github_repository   = "your-org/__APP__"
+# github_ids        = { owner_id = "0000000", repo_id = "000000000" }

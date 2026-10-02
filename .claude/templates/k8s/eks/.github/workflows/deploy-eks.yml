@@ -1,0 +1,84 @@
+# Deploy __APP__ to Amazon EKS. Nothing is built here: a merged commit that changes an overlay's
+# pinned digests (written by scripts/k8s/promote-eks.sh) is deployed exactly as pinned.
+#   staging  on push to main touching deploy/k8s/overlays/staging/, or by hand
+#   prod     by hand only (workflow_dispatch), in the protected GitHub Environment "prod": a required
+#            reviewer must approve each run before the job — and its OIDC token — exists. That approval
+#            is prod's human confirmation in CI (deploy-eks.sh refuses prod otherwise).
+# AWS access: GitHub OIDC -> the environment's deploy role (infra/terraform modules/github-oidc); no
+# stored keys. Per-environment settings are GitHub Environment VARIABLES (not secrets — none are needed):
+#   AWS_DEPLOY_ROLE_ARN   terraform output deploy_role_arn
+# Versions checked 2026-10-01 (GitHub releases): checkout v7, upload-artifact v7, configure-aws-credentials
+# v6, amazon-ecr-login v2, crane v0.22.1, kubectl v1.36.5 (= the EKS 1.36 control plane).
+name: deploy-eks
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/k8s/overlays/staging/**"]
+  workflow_dispatch:
+    inputs:
+      env:
+        description: "Environment"
+        type: choice
+        options: [staging, prod]
+        required: true
+permissions:
+  contents: read
+env:
+  KUBECTL_VERSION: v1.36.5
+  CRANE_VERSION: v0.22.1
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event_name == 'push' && 'staging' || inputs.env }}
+    concurrency:
+      group: deploy-eks-${{ github.event_name == 'push' && 'staging' || inputs.env }}
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write   # OIDC token for configure-aws-credentials
+    env:
+      TARGET: ${{ github.event_name == 'push' && 'staging' || inputs.env }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read eks.env
+        run: |
+          set -euo pipefail
+          f="deploy/k8s/overlays/$TARGET/eks.env"
+          grep -E '^(AWS_REGION|EKS_CLUSTER_NAME)=' "$f" >> "$GITHUB_ENV"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-${{ env.TARGET }}-${{ github.run_id }}
+      - uses: aws-actions/amazon-ecr-login@v2   # docker login to ECR: crane reads the same credentials
+      - name: Install kubectl and crane (pinned, checksum-verified)
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          curl -sfLO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          echo "$(curl -sfL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl.sha256")  kubectl" | sha256sum -c -
+          curl -sfLo crane.tgz "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/go-containerregistry_Linux_x86_64.tar.gz"
+          curl -sfLo checksums.txt "https://github.com/google/go-containerregistry/releases/download/${CRANE_VERSION}/checksums.txt"
+          grep ' go-containerregistry_Linux_x86_64.tar.gz$' checksums.txt | sed 's/go-containerregistry_Linux_x86_64.tar.gz$/crane.tgz/' | sha256sum -c -
+          tar xzf crane.tgz crane
+          install -m 0755 kubectl crane /usr/local/bin/
+      - name: Kubeconfig for this environment's cluster
+        run: aws eks update-kubeconfig --name "$EKS_CLUSTER_NAME" --region "$AWS_REGION" --kubeconfig "$RUNNER_TEMP/kubeconfig"
+      - name: Deploy
+        env:
+          EKS_KUBECONFIG: ${{ runner.temp }}/kubeconfig
+        run: |
+          set -euo pipefail
+          if [ "$TARGET" = prod ]; then
+            # the run was approved in the protected "prod" environment; pass the exact release it approved
+            SDLC_PROD_CONFIRM="__APP__-prod@$(python3 -c 'import json; print(json.load(open("deploy/k8s/overlays/prod/promoted-from.json"))["git_sha"])')"
+            export SDLC_PROD_CONFIRM
+          fi
+          scripts/k8s/deploy.sh "$TARGET"
+      - name: Deploy record
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-${{ env.TARGET }}-${{ github.run_id }}
+          path: agent_state/deploy/
+          if-no-files-found: ignore

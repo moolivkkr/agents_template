@@ -1,0 +1,29 @@
+# EKS component: what staging and prod (Amazon EKS Auto Mode + RDS/Aurora PostgreSQL) change in the SAME
+# base the lab's dev/qa overlays use. Nothing here forks the base: it removes the in-cluster Postgres,
+# points every database client at the managed endpoint over TLS, takes db-credentials from AWS Secrets
+# Manager (External Secrets Operator) instead of a gitignored secrets.env, and adds what a production
+# Deployment needs (requests, PodDisruptionBudget, HPA, spread across AZs, NetworkPolicy, ALB ingress).
+# The overlay supplies eks.env (non-secret coordinates from `terraform output`) and the replacements.
+# Skill: ~/.claude/skills/infrastructure/eks.md
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+- serviceaccount.yaml
+- external-secret.yaml
+- pdb.yaml
+- hpa.yaml
+- networkpolicy.yaml
+images:
+# psql for db-roles and pg_isready for wait-for-db: the same postgres:17-alpine the lab runs, from the
+# ECR Public mirror of the Docker official image (no Docker Hub rate limit), pinned by digest
+# (`crane digest public.ecr.aws/docker/library/postgres:17-alpine`, 2026-10-01: identical to docker.io).
+# Keep its major = the RDS engine major (infra/terraform var.postgres_major_version).
+- {name: postgres, newName: public.ecr.aws/docker/library/postgres, digest: "sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24"}
+patches:
+- path: managed-database.yaml
+- path: production-pods.yaml
+- path: alb-ingress.yaml
+# The HPA owns the replica count: a Deployment that also sets spec.replicas would be reset on every apply.
+- target: {kind: Deployment, name: api}
+  patch: |-
+    - {op: remove, path: /spec/replicas}

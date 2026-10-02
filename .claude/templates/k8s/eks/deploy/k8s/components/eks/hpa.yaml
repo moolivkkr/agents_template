@@ -1,0 +1,14 @@
+# CPU-based autoscaling (needs metrics-server: the EKS community add-on, installed by Terraform).
+# minReplicas >= 2 so a PodDisruptionBudget of maxUnavailable 1 never leaves zero pods; prod raises it.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata: {name: api}
+spec:
+  scaleTargetRef: {apiVersion: apps/v1, kind: Deployment, name: api}
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+  - type: Resource
+    resource: {name: cpu, target: {type: Utilization, averageUtilization: 70}}
+  behavior:
+    scaleDown: {stabilizationWindowSeconds: 300}

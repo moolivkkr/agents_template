@@ -1,9 +1,10 @@
 #!/bin/bash
-# seed.sh <dev|qa> — (re)load static/reference data into <app>-<env> by running the digest-pinned
+# seed.sh <dev|qa|staging|prod> — (re)load static/reference data into <app>-<env> by running the digest-pinned
 # db-seed Job template. Idempotent by contract (the app's seed command must upsert), so it is safe to
 # run at any time; deploy.sh runs it on every deploy and env-reset.sh after a wipe.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
+case "$ENV_NAME" in staging|prod) eks_kube_check ;; esac   # EKS: human or CI only, explicit EKS_KUBECONFIG
 JOB="seed-$(date +%s)"
 kc create job "$JOB" --from=cronjob/db-seed >/dev/null
 if kc wait --for=condition=complete "job/$JOB" --timeout=240s >/dev/null 2>&1; then
