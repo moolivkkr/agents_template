@@ -92,6 +92,18 @@ file assertion) — never trust a report's claim.
 }
 ```
 
+### Real token accounting (A/B of a context or guidance change)
+
+`cost_proxy` is a proxy. When the change is about what a session READS (CLAUDE.md guidance, a retrieval tool,
+a skill), measure real tokens instead with `scripts/eval-question-tokens.py`: it runs a question set through
+`claude -p --output-format stream-json --verbose` in two arm directories (read-only tools, `dontAsk`, no session
+persistence, `--max-budget-usd` per run, a hard total cap), records per run input / output / cache-read /
+cache-creation tokens (from the result message's `modelUsage`, so helper and subagent calls count),
+`total_cost_usd`, turns, API steps, tool calls, wall time and the answer text; `sheet` writes an arm-blind
+grading sheet against the answer key, and `report` prints per-question and aggregate tables and the keep/disable
+verdict against a bar fixed before measuring. First use: the `sdlc-graph find`/`status` A/B in
+`docs/evals/graph-find/`.
+
 ---
 
 ## Step 3 — Persist the run
