@@ -209,8 +209,11 @@ One ID per row; never a range.
 3. More than 99 IDs in one category: continue in the next spare index the same way.
 4. After writing: `python3 .claude/hooks/sdlc-graph.py tc --phase {{PHASE}} --spec-only --out /tmp/check.json`
    must list every row you wrote (this proves the table parses), with the priorities you meant, and
-   `python3 .claude/hooks/sdlc-graph.py tc --phase {{PHASE}}` must show no `malformed_ids` and no
-   `duplicate_ids` (the gate blocks on both). If the graph is unavailable (exit 4), use
+   `python3 .claude/hooks/sdlc-graph.py tc --phase {{PHASE}}` must show no `malformed_ids`, no
+   `duplicate_ids` and no `warnings` naming a row you wrote. Duplicates always block. Malformed and
+   range-defined IDs are gate WARNINGS in projects that haven't enforced them yet (D-002), but that
+   rollout grades existing specs only: a row you write that shows up there is your error to fix now,
+   never something to leave as a warning. If the graph is unavailable (exit 4), use
    `tc-inventory.py --phase {{PHASE}} --spec-only` and say so.
 
 **Rows to generate (test-case-generation.md matrices):**

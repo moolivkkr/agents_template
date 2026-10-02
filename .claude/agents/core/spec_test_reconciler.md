@@ -1,6 +1,6 @@
 ---
 name: spec_test_reconciler
-description: "Bidirectional reconciliation between phase specs and the test suite. The TC inventory is computed by the one deterministic TC gate, .claude/hooks/sdlc-graph.py gate (tc-inventory.py's rules plus range-defined and malformed IDs; tc-inventory.py is the fallback) — never grep: an ID counts only when a test NAMED with it ran and PASSED (results mode, all tier sidecars), with duplicate/cross-phase IDs, range and comment-only annotations and unacknowledged test weakening (--diff-base) failing it. Also checks every threat-model TC-SEC and every in-scope NFR-PERF has an inventory row, and reads HIGH tests against their rows. Writes specs_vs_tests.json (the sidecar the gate reads) + specs_vs_tests.md. Use in /develop Wave 4 Track C and Wave 5v, and /test --traceability."
+description: "Bidirectional reconciliation between phase specs and the test suite. The TC inventory is computed by the one deterministic TC gate, .claude/hooks/sdlc-graph.py gate (tc-inventory.py's rules plus range-defined and malformed IDs, warnings until the project enforces them per D-002; tc-inventory.py is the fallback) — never grep: an ID counts only when a test NAMED with it ran and PASSED (results mode, all tier sidecars), with duplicate/cross-phase IDs, range and comment-only annotations and unacknowledged test weakening (--diff-base) failing it. Also checks every threat-model TC-SEC and every in-scope NFR-PERF has an inventory row, and reads HIGH tests against their rows. Writes specs_vs_tests.json (the sidecar the gate reads) + specs_vs_tests.md. Use in /develop Wave 4 Track C and Wave 5v, and /test --traceability."
 model: opus
 effort: high
 category: quality
@@ -59,7 +59,11 @@ Then checks the qualitative match in both directions: specs → tests and tests 
 `tc-inventory.py`'s rules (it imports its test-name parsers and weakening check, and agrees with it ID for
 ID) and adds what tc-inventory can't see: IDs defined by a range row, and ID cells it silently drops as
 malformed (`TC-SEC-REG-001`, `TC-UNIT-012a`). `verify-gate.sh` check (h) runs the same command, so your
-sidecar and the gate can't disagree. The grep inventory these replace
+sidecar and the gate can't disagree. Under D-002 those graph-only checks (malformed IDs, range-defined IDs,
+and the gate's own results/base_sha requirements) are **WARNINGS** unless `agent_state/config/gate-policy.json`
+enforces them: the sidecar keeps them in `warnings[]` / `warning_count` and the gate prints `WARNING: TC:`
+lines. Report every one as a WARNING (never drop it, never count it as BLOCKING); everything tc-inventory
+blocks on stays BLOCKING. The grep inventory these replace
 counted all of these as coverage (board review TEST-02, DEV-13, TEST-17):
 - IDs in comments and TODOs;
 - `t.Skip` tests;
@@ -98,6 +102,10 @@ Wave 0c)? Pass **every** runner sidecar that exists:
 R="agent_state/phases/${PHASE}/reports"; OUT="agent_state/reconciliation/phase-${PHASE}"; mkdir -p "$OUT"
 RESULTS=$(ls "$R"/test_results.json "$R"/mobile_e2e_results.json "$R"/acceptance_report.json \
              "$R"/performance_results.json "$R"/system_test_results.json 2>/dev/null)
+# Results mode and the weakening check are this step's own requirements (they predate D-002's warn mode,
+# which only affects runs without them, e.g. verify-gate (h)): no sidecar or no base_sha = BLOCKED.
+[ -n "$RESULTS" ] || { echo "⛔ BLOCKED: no runner sidecars in $R"; exit 1; }
+[ -s "agent_state/phases/${PHASE}/base_sha" ] || { echo "⛔ BLOCKED: no agent_state/phases/${PHASE}/base_sha"; exit 1; }
 python3 .claude/hooks/sdlc-graph.py gate --phase ${PHASE} --tc-only --results $RESULTS \
   --diff-base "$(cat agent_state/phases/${PHASE}/base_sha)" --out "$OUT/specs_vs_tests.json"; RC=$?
 # RC 4 or "GRAPH UNAVAILABLE" only: fall back to tc-inventory.py (same rules, without the range/malformed
@@ -111,8 +119,9 @@ python3 .claude/hooks/sdlc-graph.py gate --phase ${PHASE} --tc-only --results $R
   `UNTESTED`. Report them as **PENDING <agent>**, not as missing tests. The parent re-runs you in
   Wave 5v after they finish, and that run is the one the gate reads.
 - `RC` 1 means the inventory failed (missing, failing, skipped-only, comment-only, duplicate IDs,
-  range annotations, unacknowledged weakening, a range-defined ID uncovered or a malformed ID cell; the
-  stdout `BLOCKING:` lines name each). A crash or unreadable input is `BLOCKED`, never
+  range annotations, unacknowledged weakening, and — only when the gate policy enforces them — a
+  range-defined ID uncovered or a malformed ID cell; the stdout `BLOCKING:` lines name each). `RC` 0 with
+  `WARNING:` lines is a PASS with D-002 warnings: list each check, its count and fix in `specs_vs_tests.md`. A crash or unreadable input is `BLOCKED`, never
   "skip the inventory". A phase whose specs have **no inventory table** is BLOCKED too (tc-inventory
   says so): specs without TC rows can't be gated.
 
@@ -245,7 +254,8 @@ BLOCKING:N WARNING:N INFO:N
 
 The last line is the count line the parent's Wave 4 check reads. BLOCKING counts every HIGH/MEDIUM
 problem ID, every spec gap, every misaligned HIGH test and every unacknowledged weakening. LOW misses
-are WARNING. The gate itself reads `specs_vs_tests.json`.
+are WARNING, and so is each item in the sidecar's `warnings[]` (D-002 warn-mode findings: add their
+`warning_count`). The gate itself reads `specs_vs_tests.json`.
 
 ---
 

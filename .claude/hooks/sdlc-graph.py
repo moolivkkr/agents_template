@@ -44,6 +44,11 @@ Usage: sdlc-graph.py [--root DIR] [--graph-dir DIR] [--json] [--max-tokens N] [-
                                          the deterministic TC gate (a superset of tc-inventory.py, see
                                          below) + roster/execution/evidence summary. Exit 0 = PASS, 1 = FAIL.
   repomap [--focus PATH,...]             deterministic personalized PageRank over import/call edges
+  warnings [--phase N]                   D-002 alignment tracker: per phase, the warn-mode findings (by check)
+                                         that would block under strict, and ready_for_strict
+  policy [--strict | --warn] [--strict-check C] [--warn-check C]
+                                         show / set agent_state/config/gate-policy.json (which of the four
+                                         stricter checks below block; the rest warn)
 
 Output is capped (--max-tokens, default 2000 ≈ 8 KB; --limit rows per list); --full lifts the caps.
 Every query first refreshes the graph incrementally (seconds) unless --no-refresh.
@@ -61,6 +66,15 @@ parsers and test-weakening check, so a test counts the same way in both — and 
   4. It always runs the test-weakening check (base: --diff-base, else agent_state/phases/N/base_sha) and
      BLOCKs when there is no base to diff against.
 Cross-phase duplicate detection also covers expanded range IDs. Everything else is tc-inventory.py's rule.
+
+WARNING-FIRST (D-002). Those four stricter checks — malformed_ids (2), range_ids (1, incl. range-only
+cross-phase duplicates), results_required (3), base_sha_required (4) — are WARNINGS until the project enforces
+them in agent_state/config/gate-policy.json ({"tc_gate": {"strict": true}} or "strict_checks": [...]; set with
+`policy`; env SDLC_TC_GATE=strict|warn|<checks> for one run). A warning is reported (sidecar warnings[] +
+warning_count, a WARNING: line per check with the count, first examples and the fix) and never fails the gate.
+In warn mode the gate runs in source mode when there are no sidecars and skips the weakening check when there is
+no base. What tc-inventory.py blocks on ALWAYS blocks, and so does a range-defined ID whose test RAN and FAILED,
+a phase whose only rows are ranges (BLOCKED), and an unreadable policy file or unknown check name.
 
 Code layer = rung 1 (regex per stack: Go, TS/JS, Python, Java/Kotlin, Rust; routes for gin/echo/chi/
 net-http/express/Nest/Next/FastAPI/Flask/Django/Spring/axum/actix). Symbols are qualified by receiver/class
@@ -151,7 +165,7 @@ DEV_ROLES = {"backend_developer", "api_developer", "ui_developer", "mobile_devel
 GATE_POLICY_FILE = os.path.join("agent_state", "config", "gate-policy.json")
 TC_GATE_CHECKS = {   # check: (what it finds, the one fix)
     "malformed_ids": ("malformed TC ID cell(s) in an inventory table (the row is invisible to the inventory)",
-                      "rename each cell to TC-<CAT>-<NNN> (one uppercase category, digits only: TC-SEC-012a → TC-SEC-0121, "
+                      "renumber each cell to an unused TC-<CAT>-<digits> ID (TC-SEC-012a → the next free TC-SEC-NNN, "
                       "TC-E2E-ING-001 → TC-E2EING-001) and rename the tests that carry it; list them with "
                       "`sdlc-graph.py warnings --phase N --full`"),
     "range_ids": ("range-defined TC ID(s) uncovered (or defined by another phase too)",
@@ -2869,7 +2883,7 @@ def main(argv=None):
     fn = {"stats": cmd_stats, "tc": cmd_tc, "context": cmd_context, "diff-context": cmd_diff_context, "impact": cmd_impact,
           "consumers": cmd_consumers, "trace": cmd_trace, "orphans": cmd_orphans, "unlocked": cmd_unlocked,
           "gate": cmd_gate, "repomap": cmd_repomap, "warnings": cmd_warnings}[a.cmd]
-    if a.cmd == "tc" and a.diff_base is not None and not a.diff_base.strip():
+    if a.cmd in ("tc", "gate") and a.diff_base is not None and not a.diff_base.strip():
         print("sdlc-graph: --diff-base is empty (agent_state/phases/N/base_sha missing?) — the weakening check needs "
               "the commit the phase started from; leave the flag out only for a source-mode inventory", file=sys.stderr)
         return 2

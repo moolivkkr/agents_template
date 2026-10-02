@@ -256,7 +256,12 @@ python3 .claude/hooks/sdlc-graph.py gate --phase "$P" --tc-only \
   --out "agent_state/reconciliation/phase-$P/specs_vs_tests.json"
 # Exit 4 (GRAPH UNAVAILABLE) only: the same flags on tc-inventory.py — same rules without the two graph-only
 # checks below — and say so in the report.
+# Exit 0 can come with WARNING: lines (D-002, below): copy each into the report as a WARNING, never drop it.
 ```
+
+The two `⛔` guards above are the procedure's own and stay: the in-pipeline TC gate (spec_test_reconciler,
+develop Step 3d, Wave 5v) has always required runner sidecars and `base_sha`. D-002 changes only what the
+graph gate itself reports when it runs without them (verify-gate (h), ad-hoc `gate` and `warnings` runs).
 
 **This is the one TC gate:** `sdlc-graph.py gate --phase P --tc-only` (`verify-gate.sh` check (h);
 `spec_test_reconciler` writes `specs_vs_tests.json` with it; `/test --traceability`, `/accept` and Wave 0c
@@ -266,13 +271,47 @@ also BLOCKs on what tc-inventory can't see: an ID defined only by a range row (`
 or a line starting with a range and a priority), and an ID cell that is malformed (`TC-SEC-REG-001`,
 `TC-UNIT-012a`), which tc-inventory silently drops. It always runs in results mode and needs `base_sha`.
 `sdlc-graph.py tc --phase P [--tier T] [--status todo]` lists the same rows, budgeted, for agents.
+Those four stricter checks are **warnings until the project enforces them** (D-002, next section).
 
-The output is an `sdlc.test-results/v1` sidecar (`tier: tc-inventory`). It FAILs on any of:
+### Warning-first rollout of the stricter checks (D-002)
+
+Projects that predate the graph gate (rera had 275 malformed ID rows, brand-intelligence 87, ai-security 10)
+would all block at once, so the four checks tc-inventory never had start as WARNINGS, per project:
+
+| Check | Finding | Fix |
+|---|---|---|
+| `malformed_ids` | an ID-shaped cell that isn't `TC-<CAT>-<digits>` (`TC-SEC-012a`, `TC-E2E-ING-001`) | renumber to an unused well-formed ID (`TC-SEC-012a` → the next free `TC-SEC-NNN`; `TC-E2E-ING-001` → `TC-E2EING-001`) and rename the tests that carry it |
+| `range_ids` | an uncovered ID defined only by a range row/line, or a cross-phase duplicate that exists only through a range | one row per ID, or name a test with every ID |
+| `results_required` | the gate found no runner sidecar, so it counted named tests (source mode) | run the tiers through `test_runner` so sidecars land in `reports/` |
+| `base_sha_required` | no `agent_state/phases/N/base_sha`, so the weakening check didn't run | write the phase's start commit there (Wave 0c does) |
+
+- **Warn (the default, no policy file):** each finding is in the sidecar's `warnings[]` (check, count, first
+  examples, all `items`, fix) and `warning_count`, and printed as one `WARNING: TC: [check] …` line by
+  `gate --summary` / `gate --tc-only` / `verify-gate.sh` (h). Warnings never count in `failed` and never fail
+  the gate. With no sidecar the gate runs in source mode; with no base it skips the weakening check.
+- **Always blocks, in every mode:** everything `tc-inventory.py` blocks on (uncovered or failing HIGH/MEDIUM
+  IDs, skipped-only and comment-only coverage, cross-phase and in-phase duplicates, range annotations in
+  tests, unacknowledged weakening, an unreadable sidecar, a phase with no TC rows), plus a range-defined ID
+  whose test RAN and FAILED, and a phase whose only rows are ranges.
+- **Enforce:** `python3 .claude/hooks/sdlc-graph.py policy --strict` (all four), or one at a time with
+  `policy --strict-check malformed_ids` (`--warn-check C` relaxes one, `--warn` relaxes all, bare `policy`
+  shows what is in force). It writes `agent_state/config/gate-policy.json`:
+  `{"tc_gate": {"strict": false, "strict_checks": ["malformed_ids"]}}`. A policy file that can't be read, or
+  names an unknown check, BLOCKS (someone meant to tighten). `SDLC_TC_GATE=strict|warn|<check,…>` overrides
+  the file for one run (tests, a dry run of strict).
+- **Track alignment:** `python3 .claude/hooks/sdlc-graph.py warnings [--phase N] [--full]` lists every
+  phase's remaining warnings by check, with `ready_for_strict`. When every phase is ready, run `policy --strict`.
+- **Writing new specs doesn't change:** `spec_writer` still writes one well-formed row per ID and no ranges.
+  Warn mode grades existing work; it doesn't lower what agents produce.
+
+The output is an `sdlc.test-results/v1` sidecar (`tier: tc-inventory`, plus `warnings[]`, `warning_count`
+and the `policy` in force). It FAILs on any of:
 - a HIGH/MEDIUM ID that is missing, failing, skipped-only or comment-only;
 - an ID that another phase also defines;
 - a range annotation in a test file;
 - unacknowledged **test weakening** since the phase's base commit: a removed assertion line, a new
-  skip or `.only`, or a deleted test file.
+  skip or `.only`, or a deleted test file;
+- under an enforcing policy only: the four D-002 checks above (otherwise they are warnings).
 
 ### Changing an existing test: TEST-CHANGE comments (why and when)
 

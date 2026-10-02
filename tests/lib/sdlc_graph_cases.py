@@ -279,6 +279,14 @@ write(A, "api/orders_test.go", open(os.path.join(A, "api/orders_test.go")).read(
 t2w, g2w = agreement("A4", A, 2, diff_base=BASE_A, expect_extra=["TC-VAL-001", "TC-VAL-002", "TC-VAL-003", "TC-RNG-001", "TC-RNG-002"])
 check("A4g", True, len(g2w["weakening_unacknowledged"]) >= 2, "added skip + .only since the base are unacknowledged weakening")
 git(A, "checkout", "--", "web/orders.test.ts", "api/orders_test.go")
+# the agreement runs above use the default policy (warn); the same inputs under strict only add blockers
+_ga = sgm.Graph(A)
+_ga.build(incremental=True)
+_wv = sgm.tc_inventory(_ga, 2, results=[SC], policy={"strict": set(), "source": "t", "error": None})
+_sv = sgm.tc_inventory(_ga, 2, results=[SC], policy={"strict": set(sgm.TC_GATE_CHECKS), "source": "t", "error": None})
+check("A5", (True, True, True), (set(_wv["missing"]) <= set(_sv["missing"]), _sv["failed"] > _wv["failed"],
+                                 {c["name"]: c["verdict"] for c in _wv["cases"]} == {c["name"]: c["verdict"] for c in _sv["cases"]}),
+      "strict ⊇ warn: same verdict per ID, strict only adds blockers (missing range IDs, malformed)")
 
 # ─── the gate: strict superset (policy strict: the four D-002 checks enforced) ────────────────────────
 rc, gj, so = gate(A, 2, env=STRICT)
@@ -593,6 +601,8 @@ check("T03", True, all(k in tj for k in ("missing", "failing", "skipped_only", "
       "tc --out keeps every key the jq summaries in test.md/accept.md read")
 rc, out, err = sg(A, "tc", "--phase", "2", "--diff-base", "", "--out", OUTJ)
 check("T04", (2, True), (rc, "--diff-base is empty" in err), "tc --diff-base '' is an error, like tc-inventory (the weakening check would silently not run)")
+rc, out, err = sg(A, "gate", "--phase", "2", "--tc-only", "--diff-base", "")
+check("T05", (2, True), (rc, "--diff-base is empty" in err), "gate --diff-base '' is an error too, in any policy: a caller passing $(cat base_sha) still blocks")
 
 # ═══ fixture D: role profiles (developers, verifiers, auditors, spec_impl_reconciler) ═════════════════
 D = new_repo("d")

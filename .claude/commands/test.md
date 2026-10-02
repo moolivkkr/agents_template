@@ -262,6 +262,8 @@ RESULTS=$(ls "$R"/test_results.json "$R"/mobile_e2e_results.json "$R"/acceptance
 BASE="$(cat agent_state/phases/${PHASE}/base_sha 2>/dev/null)"
 # The gate's own inventory (tc-inventory.py's rules + range-defined and malformed IDs). Exit 4 = graph unavailable:
 # fall back to tc-inventory.py (same rules without those two checks) and say so in the report.
+# D-002: range-defined and malformed IDs are WARNINGS (.warnings[], not in .failed) until the project enforces
+# them in agent_state/config/gate-policy.json; everything tc-inventory.py blocks on still fails.
 python3 .claude/hooks/sdlc-graph.py tc --phase "${PHASE}" ${RESULTS:+--results $RESULTS} $([ -z "$RESULTS" ] && echo --source) \
   ${BASE:+--diff-base "$BASE"} --out "$OUT"; RC=$?
 [ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" ${RESULTS:+--results $RESULTS} ${BASE:+--diff-base "$BASE"} --out "$OUT"
@@ -273,13 +275,29 @@ jq -r --arg p "${PHASE}" '"TC-* Inventory — Phase \($p) (\(.mode) mode): \(.pa
        "  duplicate IDs:  \(.duplicate_ids | keys | join(", "))",
        "  malformed IDs:  \((.graph.malformed_ids // []) | join("; "))   (rows tc-inventory.py cannot see)",
        "  range-defined:  \((.graph.range_expanded_ids // []) | length) IDs required by range rows",
-       "  weakening:      \(.weakening_unacknowledged | map("\(.file) \(.kind)") | join("; "))"' "$OUT"
+       "  weakening:      \(.weakening_unacknowledged | map("\(.file) \(.kind)") | join("; "))",
+       "  policy:         enforced [\((.policy.strict_checks // []) | join(", "))], warn [\((.policy.warn_checks // []) | join(", "))] (\(.policy.source // "n/a"))",
+       "  WARNINGS (D-002, not blocking): \(.warning_count // 0)",
+       ((.warnings // [])[] | "    [\(.check)] \(.count) — e.g. \(.examples[0]) — fix: \(.fix)")' "$OUT"
 jq -r '.cases | group_by(.name | capture("TC-(?<c>[A-Z0-9]+)-").c) | .[] |
        "    \(.[0].name | capture("TC-(?<c>[A-Z0-9]+)-").c): \(map(select(.verdict=="PASS")) | length)/\(length)"' "$OUT"
 ```
 
 Output: `agent_state/reconciliation/phase-${PHASE}/test_case_inventory.md`, written by
-`spec_test_reconciler` from the JSON.
+`spec_test_reconciler` from the JSON. Print the WARNINGS block even when the inventory PASSes: a warning
+hidden in the JSON is the same as no warning.
+
+**Stricter checks: warning first, then enforce (D-002).** The four checks tc-inventory.py never had
+(malformed ID cells, range-defined IDs, and the gate's own runner-results and `base_sha` requirements) warn
+until the project opts in. Track and flip:
+```bash
+python3 .claude/hooks/sdlc-graph.py warnings              # every phase: remaining warnings by check, ready_for_strict
+python3 .claude/hooks/sdlc-graph.py warnings --phase 3 --full   # every item, to fix
+python3 .claude/hooks/sdlc-graph.py policy                # what is enforced now
+python3 .claude/hooks/sdlc-graph.py policy --strict-check malformed_ids   # enforce one check
+python3 .claude/hooks/sdlc-graph.py policy --strict       # enforce all four (writes agent_state/config/gate-policy.json)
+```
+Details: `skills/testing/test-case-traceability.md` §Warning-first rollout.
 
 ---
 

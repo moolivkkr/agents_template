@@ -96,8 +96,9 @@ sys.exit(1 if bad else 0)
 PY
 
 # 2. TC-* coverage — HIGH+MEDIUM must be 100%. Read the TC-gate sidecar Step 3d wrote with
-#    `sdlc-graph.py gate --tc-only` (verdict PASS = every HIGH/MEDIUM ID, range-defined ones included, has a
-#    test that ran and passed; no malformed IDs), not prose. verify-gate.sh check (h) re-runs that same gate
+#    `sdlc-graph.py gate --tc-only` (verdict PASS = every HIGH/MEDIUM ID has a test that ran and passed; range-
+#    defined and malformed IDs too once agent_state/config/gate-policy.json enforces them — until then they are
+#    .warnings[] in the sidecar, listed in the gate summary, not blockers: D-002), not prose. verify-gate.sh check (h) re-runs that same gate
 #    on the current tree at the gate, so a stale or fallback (tc-inventory.py) sidecar can't pass the phase.
 #    No sidecar blocks too, unless the specs define no TC-* IDs at all (the table's "skip if no TC-* IDs in specs").
 #    (This used grep -P, which macOS grep rejects: the check silently never ran there.)
@@ -106,6 +107,10 @@ if [ -f "$TC_JSON" ]; then
   if ! jq -e '.verdict == "PASS"' "$TC_JSON" >/dev/null 2>&1; then
     echo "⛔ GATE BLOCKED: TC-* inventory verdict is $(jq -r '.verdict // "missing"' "$TC_JSON" 2>/dev/null || echo unreadable) ($TC_JSON)"
     GATE_BLOCKED=true
+  fi
+  TC_WARN="$(jq -r '.warning_count // 0' "$TC_JSON" 2>/dev/null || echo 0)"
+  if [ "${TC_WARN:-0}" -gt 0 ]; then   # D-002: shown in the gate summary, never blocking
+    echo "⚠ TC inventory: $TC_WARN D-002 warning(s), not blocking: $(jq -r '[.warnings[] | "\(.check) \(.count)"] | join(", ")' "$TC_JSON") — list: python3 .claude/hooks/sdlc-graph.py warnings --phase ${PHASE}"
   fi
 elif grep -rqE 'TC-[A-Z0-9]+-[0-9]+' "docs/design/phases/${PHASE}/specs" 2>/dev/null; then
   echo "⛔ GATE BLOCKED: the specs define TC-* IDs but $TC_JSON is missing (run Step 3d)"; GATE_BLOCKED=true

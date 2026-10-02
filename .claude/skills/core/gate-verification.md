@@ -51,8 +51,11 @@ R="agent_state/phases/${PHASE}/reports"; RESULTS=()
 for s in test_results e2e_results mobile_e2e_results acceptance_report performance_results system_test_results; do
   if [ -f "$R/$s.json" ]; then RESULTS+=("$R/$s.json"); fi
 done
+[ ${#RESULTS[@]} -gt 0 ] || { echo "⛔ no runner sidecars in $R (results mode is required here)"; exit 1; }
 python3 .claude/hooks/sdlc-graph.py gate --phase "${PHASE}" --tc-only --results ${RESULTS[@]+"${RESULTS[@]}"} --diff-base "$BASE" \
   --out /tmp/gate_tc.json; RC=$?
+# Exit 0 may carry WARNING: lines (D-002: malformed / range-defined IDs not yet enforced by
+# agent_state/config/gate-policy.json): Confirmed, with the warnings listed — never dropped, never blocking.
 # Exit 4 = graph unavailable only: tc-inventory.py has the same rules minus the range/malformed checks, so its
 # PASS is not a gate PASS — record "graph unavailable" and let verify-gate.sh (h) decide.
 [ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results ${RESULTS[@]+"${RESULTS[@]}"} \

@@ -483,6 +483,8 @@ still hold>"` (human decision; it is kept in the baseline).
 RES="agent_state/accept/test_results.json"   # written by the Step 0b regression (test_runner, all phases)
 mkdir -p agent_state/accept/tc
 # The graph's inventory (tc-inventory.py's rules + range-defined and malformed IDs); built once, then queried.
+# D-002: range-defined and malformed IDs are WARNINGS (warnings[], not in missing/failed) unless
+# agent_state/config/gate-policy.json enforces them; they go in the acceptance report as warnings.
 # --source when there is no regression sidecar, so another run's stale sidecars in reports/ aren't picked up.
 python3 .claude/hooks/sdlc-graph.py build >/dev/null; GRC=$?
 for PD in docs/design/phases/*/; do
@@ -504,6 +506,14 @@ dups = sorted({d for i in inv for d in i["duplicate_ids"]})
 print(f"Global TC-* Inventory: {covered}/{total} HIGH+MEDIUM covered ({100 * covered // max(total, 1)}%)")
 if missing: print(f"MISSING/FAILING: {len(missing)} — " + ", ".join(missing[:40]))
 if dups: print(f"IDs defined by more than one phase (ambiguous coverage): {', '.join(dups)}")
+warn = {}
+for i in inv:
+    for w in i.get("warnings", []):
+        warn[w["check"]] = warn.get(w["check"], 0) + w["count"]
+if warn:   # not blocking (D-002), never silent: list them in the acceptance report with the policy in force
+    pol = next((i["policy"] for i in inv if i.get("policy")), {})
+    print("WARNINGS (D-002, not blocking): " + ", ".join(f"{k} {v}" for k, v in sorted(warn.items()))
+          + f" — policy: {pol.get('source', 'n/a')}; list: sdlc-graph.py warnings; enforce: sdlc-graph.py policy --strict")
 json.dump({"covered": [c["name"] for i in inv for c in i["cases"] if c["verdict"] == "PASS"]},
           open("agent_state/accept/tc/covered.json", "w"))
 PY

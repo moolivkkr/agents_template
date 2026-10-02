@@ -58,17 +58,22 @@ R="agent_state/phases/${PHASE}/reports"; RESULTS=()
 for s in test_results e2e_results mobile_e2e_results acceptance_report performance_results system_test_results; do
   if [ -f "$R/$s.json" ]; then RESULTS+=("$R/$s.json"); fi
 done
+# No runner sidecar = BLOCKED here, as it always was (this step's tc-inventory call needed test_results.json);
+# the gate's own D-002 warn mode would otherwise fall back to source mode.
+[ ${#RESULTS[@]} -gt 0 ] || { echo "⛔ BLOCKED: no runner sidecars in $R (test_runner writes them in Wave 3v)"; exit 1; }
 # The one TC gate (verify-gate.sh (h) runs the same command): tc-inventory.py's rules + range-defined and
-# malformed IDs, always results mode.
+# malformed IDs, results mode.
 python3 .claude/hooks/sdlc-graph.py gate --phase "${PHASE}" --tc-only --results ${RESULTS[@]+"${RESULTS[@]}"} --diff-base "$BASE" \
   --out "agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"; RC=$?
 # RC 4 = graph unavailable only: fall back to tc-inventory.py (same rules, without the range/malformed checks)
 # and say so in specs_vs_tests.md.
 [ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results ${RESULTS[@]+"${RESULTS[@]}"} --diff-base "$BASE" \
   --out "agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"
-# exit 1 = a HIGH/MEDIUM ID is missing/failing, an ID is defined by two phases, a range annotation, an uncovered
-# range-defined ID, a malformed ID cell, or unacknowledged test weakening — each a BLOCKING: line and in the
-# JSON. The gate reads this file.
+# exit 1 = a HIGH/MEDIUM ID is missing/failing, an ID is defined by two phases, a range annotation, or
+# unacknowledged test weakening — each a BLOCKING: line and in the JSON. The gate reads this file.
+# An uncovered range-defined ID and a malformed ID cell BLOCK only when agent_state/config/gate-policy.json
+# enforces them (D-002); otherwise exit 0 with WARNING: lines and .warnings[] in the JSON — carry every one
+# into specs_vs_tests.md as a WARNING (skills/testing/test-case-traceability.md §Warning-first rollout).
 ```
 
 Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md` + `agent_state/reconciliation/phase-N/test_case_inventory.md`
