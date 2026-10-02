@@ -73,6 +73,8 @@ tci = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tci)
 
 SCHEMA_VERSION = "1"
+# A graph built by different extractor code is rebuilt in full, so an upgrade never leaves stale rows behind.
+EXTRACTOR_SIG = hashlib.sha256(open(os.path.abspath(__file__), "rb").read() + open(_tci_path, "rb").read()).hexdigest()[:16]
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS nodes(id TEXT NOT NULL, kind TEXT NOT NULL, name TEXT, phase INTEGER, file TEXT NOT NULL,
                                  line INTEGER, end_line INTEGER, attrs TEXT);
@@ -386,7 +388,7 @@ def ex_phasedoc(o, text, phase):
         o.node(f"phase:{phase}", "phase", title[:120], phase=phase, line=1)
 
     header, last_header, in_code = None, None, False
-    plan_sec = None
+    plan_sec, wf_blocks = None, []
     for i, line in enumerate(lines, 1):
         s = line.strip()
         if s.startswith("```"):
@@ -404,16 +406,10 @@ def ex_phasedoc(o, text, phase):
                 for r in set(REQ_RE.findall(s)):
                     o.edge(f"req:{r}", "assigned_to", f"phase:{phase}", line=i)
             elif plan_sec == "workflows":
-                m = (re.match(r"^[-*+]\s*\**`?([A-Za-z0-9][\w.-]*)`?\**\s*[:—–-]\s*(.*)", s) or
-                     re.match(r"^\|\s*`?([A-Za-z0-9][\w.-]*)`?\s*\|(.*)\|\s*$", s))
-                if m and not re.fullmatch(r"[\s|:-]+", s) and m.group(1).lower() not in ("id", "workflow", "name"):
-                    wid = f"wf:{phase}/{m.group(1)}"
-                    o.node(wid, "workflow", m.group(1), phase=phase, line=i, text=m.group(2).strip(" |")[:200])
-                    o.edge(wid, "unlocked_in", f"phase:{phase}", line=i)
-                    for r in set(REQ_RE.findall(s)):
-                        o.edge(wid, "exercises", f"req:{r}", line=i)
-                    for a, n in set(TC_ID_RE.findall(s)):
-                        o.edge(wid, "has_tc", f"tcid:TC-{a}-{n}", line=i)
+                if re.match(r"^\s{0,1}[-*+]\s+\S", line) or (s.startswith("|") and not re.fullmatch(r"[\s|:-]+", s)):
+                    wf_blocks.append([i, [s]])          # a top-level bullet (or table row) starts an entry
+                elif wf_blocks and s and not s.startswith("|"):
+                    wf_blocks[-1][1].append(s)
         # requirement mentions, per section
         for r in set(REQ_RE.findall(s)):
             o.edge(sid, "mentions_req", f"req:{r}", line=i)
@@ -507,6 +503,42 @@ def ex_phasedoc(o, text, phase):
             o.edge(f"tc:{phase}/{idc}", "exercises_ep", ep_id(m.group(1), m.group(2)), line=i)
         for tid in mention_ids - {idc}:
             o.edge(sid, "mentions_tc", f"tcid:{tid}", line=i)
+    if wf_blocks:
+        emit_workflows(o, phase, wf_blocks)
+
+
+def emit_workflows(o, phase, blocks):
+    """PHASE_PLAN §E2E Workflows Unlocked entries: project_planner's `- name: "slug"` + description/triggers
+    form, `- **"Title"** — text`, `- slug: text`, or a table row. FRs and TC IDs come from the whole entry."""
+    seen = set()
+    for (line, parts) in blocks:
+        text = " ".join(parts)
+        first = parts[0]
+        if first.startswith("|"):
+            cells = [strip_md(c) for c in first.strip("|").split("|")]
+            if not cells or cells[0].lower() in ("id", "name", "workflow", "slug", ""):
+                continue
+            name, desc = cells[0], " ".join(cells[1:])
+        else:
+            body = re.sub(r"^[-*+]\s+", "", first)
+            m = re.search(r"\bname:\s*[\"']?([^\"'\n]+?)[\"']?\s*$", body) or re.search(r"\bname:\s*[\"']([^\"']+)[\"']", body)
+            d = re.search(r"\bdescription:\s*\"([^\"]+)\"", text) or re.search(r"\bdescription:\s*(.+?)(?:\s+\w+:|$)", text)
+            if m:
+                name, desc = m.group(1).strip(), d.group(1) if d else text
+            else:
+                m = re.match(r"^\**[\"“]?([^\"”*]+?)[\"”]?\**\s*(?:[:—–]|\s-\s)\s*(.*)$", body)
+                name, desc = (m.group(1), " ".join([m.group(2)] + parts[1:])) if m else (body[:60], text)
+        slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:60]
+        if not slug or slug in seen or slug in ("none", "n-a"):
+            continue
+        seen.add(slug)
+        wid = f"wf:{phase}/{slug}"
+        o.node(wid, "workflow", slug, phase=phase, line=line, text=desc.strip()[:240])
+        o.edge(wid, "unlocked_in", f"phase:{phase}", line=line)
+        for r in sorted(set(REQ_RE.findall(text))):
+            o.edge(wid, "exercises", f"req:{r}", line=line)
+        for a, n in sorted(set(TC_ID_RE.findall(text))):
+            o.edge(wid, "has_tc", f"tcid:TC-{a}-{n}", line=line)
 
 
 def expand_range(o, m, phase, line, sid, section, text, is_def, prio, tier, reason):
@@ -1027,6 +1059,7 @@ class Graph:
         if self.meta("schema_version") not in (None, SCHEMA_VERSION):
             self.wipe()
         self.stats = {}
+        self.cache = {}
 
     # ── meta / lock ──
     def meta(self, k):
@@ -1097,7 +1130,8 @@ class Graph:
             cur = self.walk()
             known = {r[0]: r[1:] for r in self.q("SELECT path, kind, sha, size, mtime FROM files")}
             head = (git(self.root, "rev-parse", "HEAD") or "").strip() or None
-            mode = "incremental" if incremental and known and self.meta("built_at") else "full"
+            mode = ("incremental" if incremental and known and self.meta("built_at")
+                    and self.meta("extractor") == EXTRACTOR_SIG else "full")
             changed = removed = 0
             if mode == "full":
                 self.wipe()
@@ -1131,6 +1165,7 @@ class Graph:
                     self.forget(rel)
                     removed += 1
             self.set_meta("schema_version", SCHEMA_VERSION)
+            self.set_meta("extractor", EXTRACTOR_SIG)
             self.set_meta("head", head or "")
             self.set_meta("built_at", now_iso())
             self.set_meta("root", self.root)
@@ -1613,12 +1648,33 @@ def default_base(g, phase):
 
 def callers_of(g, sym):
     simple = sym.get("simple") or sym["name"].split(".")[-1]
-    return [c for c in g.nodes("kind='symbol' AND id IN (SELECT src FROM edges WHERE rel='calls' AND dst=?) ORDER BY file, line", f"name:{simple}")
-            if c["id"] != sym["id"]]
+    c = g.cache.setdefault("callers", {})
+    if simple not in c:
+        c[simple] = g.nodes("kind='symbol' AND id IN (SELECT src FROM edges WHERE rel='calls' AND dst=?) ORDER BY file, line", f"name:{simple}")
+    return [x for x in c[simple] if x["id"] != sym["id"]]
 
 
 def importers_of(g, file):
     """Files whose import strings resolve to `file`'s package/module (Go package dir, relative TS/JS, Python dotted)."""
+    c = g.cache.setdefault("importers", {})
+    if file not in c:
+        c[file] = _importers_of(g, file)
+    return c[file]
+
+
+def _rel_imports(g, lang):
+    """[(importing file, resolved target stem)] for relative TS/JS imports — computed once per query."""
+    key = f"relimp:{lang}"
+    if key not in g.cache:
+        out = []
+        for e in g.edges("rel='imports' AND dst LIKE ?", f"imp:{lang}:.%"):
+            spec_ = e["dst"].split(":", 2)[2]
+            out.append((e["file"], os.path.normpath(os.path.join(os.path.dirname(e["file"]), spec_)).replace(os.sep, "/")))
+        g.cache[key] = out
+    return g.cache[key]
+
+
+def _importers_of(g, file):
     lang = CODE_EXT.get(os.path.splitext(file)[1])
     d = os.path.dirname(file)
     keys = set()
@@ -1640,11 +1696,9 @@ def importers_of(g, file):
                 out.add(e["file"])
     if lang in ("ts", "js"):
         stem = os.path.splitext(file)[0]
-        for e in g.edges("rel='imports' AND dst LIKE ?", f"imp:{lang}:.%"):
-            spec_ = e["dst"].split(":", 2)[2]
-            tgt = os.path.normpath(os.path.join(os.path.dirname(e["file"]), spec_)).replace(os.sep, "/")
-            if tgt in (stem, stem.rsplit("/index", 1)[0]) and e["file"] != file:
-                out.add(e["file"])
+        for src, tgt in _rel_imports(g, lang):
+            if tgt in (stem, stem.rsplit("/index", 1)[0]) and src != file:
+                out.add(src)
     if lang == "go":   # same-package files see each other without imports
         for f in g.q("SELECT path FROM files WHERE path LIKE ? AND kind IN ('code','test')", (d + "/%") if d else "%"):
             if os.path.dirname(f[0]) == d and f[0] != file and f[0].endswith(".go"):
@@ -1653,10 +1707,23 @@ def importers_of(g, file):
 
 
 def endpoints_of_symbol(g, sym):
+    """Routes whose handler name is this symbol's: in its own file, or in a route file that defines no
+    symbol of that name (then the handler must live elsewhere — name-resolved, rung 1)."""
+    if "routes" not in g.cache:
+        by_handler = {}
+        for e in g.edges("rel='route'"):
+            by_handler.setdefault(e.get("handler"), []).append((e["file"], e["dst"]))
+        g.cache["routes"] = by_handler
+        fs = set()
+        for f, attrs in g.q("SELECT file, attrs FROM nodes WHERE kind='symbol'"):
+            fs.add((f, json.loads(attrs or "{}").get("simple")))
+        g.cache["file_simple"] = fs
     simple = sym.get("simple") or sym["name"].split(".")[-1]
-    return sorted({e["dst"] for e in g.edges("rel='route' AND file=?", sym["file"]) if e.get("handler") == simple} |
-                  {e["dst"] for e in g.edges("rel='route'") if e.get("handler") == simple and e["file"] != sym["file"]
-                   and not g.nodes("kind='symbol' AND file=? AND id LIKE ?", e["file"], f"%#%{simple}")})
+    out = set()
+    for f, ep in g.cache["routes"].get(simple, ()):
+        if f == sym["file"] or (f, simple) not in g.cache["file_simple"]:
+            out.add(ep)
+    return sorted(out)
 
 
 def tc_of_tests(g, test_files):
@@ -1778,14 +1845,39 @@ def consumers_one(g, target):
 
 def phase_introduced(g, file):
     """Earliest phase-N-complete tag that already contains the file (None = not in any gated phase)."""
-    tags = (git(g.root, "tag", "--list", "phase-*-complete") or "").split()
-    best = None
-    for t in tags:
-        m = re.match(r"phase-(\d+)-complete", t)
-        if m and git(g.root, "cat-file", "-e", f"{t}:{file}") is not None:
-            n = int(m.group(1))
-            best = n if best is None or n < best else best
-    return best
+    if "tagfiles" not in g.cache:
+        tf = {}
+        for t in (git(g.root, "tag", "--list", "phase-*-complete") or "").split():
+            m = re.match(r"phase-(\d+)-complete$", t)
+            if m:
+                tf[int(m.group(1))] = set((git(g.root, "ls-tree", "-r", "--name-only", t) or "").splitlines())
+        g.cache["tagfiles"] = tf
+    hits = [n for n, files in g.cache["tagfiles"].items() if file in files]
+    return min(hits) if hits else None
+
+
+def git_show_many(root, rev, files):
+    """{file: text or None} for `rev:file` of many files in one `git cat-file --batch` process."""
+    out = {}
+    if not files:
+        return out
+    try:
+        p = subprocess.Popen(["git", "-C", root, "cat-file", "--batch"], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        data, _ = p.communicate("".join(f"{rev}:{f}\n" for f in files).encode())
+    except OSError:
+        return {f: None for f in files}
+    pos = 0
+    for f in files:
+        nl = data.find(b"\n", pos)
+        head = data[pos:nl].decode(errors="replace").split()
+        pos = nl + 1
+        if len(head) == 3 and head[1] == "blob":
+            size = int(head[2])
+            out[f] = data[pos:pos + size].decode("utf-8", errors="replace")
+            pos += size + 1
+        else:
+            out[f] = None
+    return out
 
 
 def cmd_consumers(g, a):
@@ -1799,12 +1891,13 @@ def cmd_consumers(g, a):
     syms = changed_symbols(g, {f: r for f, r in files.items() if not g.q("SELECT 1 FROM files WHERE path=? AND kind='test'", f)})
     changed_files = set(files)
     old_defs = {}
-    for f in {s["file"] for s in syms}:
-        old = git(g.root, "show", f"{a.changed_since}:{f}")
+    for f, old in git_show_many(g.root, a.changed_since, sorted({s["file"] for s in syms})).items():
         lang = CODE_EXT.get(os.path.splitext(f)[1])
         old_defs[f] = {d_[1] for d_ in DEFS.get(lang, lambda _l: [])(old.split("\n"))} if old is not None else set()
     rows = []
     for s in syms:
+        if re.fullmatch(r"__\w+__", s.get("simple") or ""):
+            continue                                  # dunders resolve by name to every class: noise at rung 1
         ext = [c for c in callers_of(g, s) if c["file"] not in changed_files]
         imps = [f for f in importers_of(g, s["file"]) if f not in changed_files]
         eps = endpoints_of_symbol(g, s)
@@ -1822,6 +1915,7 @@ def cmd_consumers(g, a):
         if re.search(r"docs/design/phases/\d+/.*(contracts?|\.wireframe|\.ui-spec)", f):
             contracts.append(f)
     tables = sorted({e["dst"][6:] for f in files for e in g.edges("file=? AND rel IN ('creates','alters')", f)})
+    rows.sort(key=lambda r: (not r["existed_at_base"], -(len(r["external_callers"]) + len(r["endpoints"]) + len(r["frontend_callers"]))))
     return {"since": a.changed_since, "changed_files": len(files), "deleted_files": deleted, "changed_symbols": len(syms),
             "with_consumers": rows, "migrations_touch_tables": [consumers_one(g, f"table:{t}") for t in tables][:10],
             "note": "callers resolve by NAME (rung 1): confirm each with the language server before calling it breaking."}

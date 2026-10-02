@@ -98,7 +98,11 @@ write(A, "docs/design/phases/2/PHASE_PLAN.md", """# Phase 2 — Orders
 ## Scope
 - FR-002, FR-003
 ## E2E Workflows Unlocked
-- checkout: buyer checks out (FR-002)
+- name: "checkout"
+  description: "buyer checks out"
+  triggers: [FR-002]
+  steps:
+    1. add to cart → cart shows the item
 """)
 write(A, "docs/design/phases/2/specs/orders.md", """# Orders (FR-002)
 TC-API-101 to TC-API-103 — order endpoint tests (a range line in prose: grouping, not IDs)
@@ -362,6 +366,8 @@ rc, un = sgj(A, "unlocked", "--phase", "2")
 check("Q04", (["checkout"], ["list-users"]), ([w["id"] for w in un["this_phase"]], [w["id"] for w in un["regression"]]),
       "unlocked: this phase's E2E workflows + earlier phases' as regression (C3 producer)")
 check("Q05", ["TC-E2E-101"], [r["tc"] for r in un["e2e_tc_rows"]], "unlocked: the phase's TC-E2E rows")
+check("Q05b", (["FR-002"], "buyer checks out"), (un["this_phase"][0]["frs"], un["this_phase"][0]["text"]),
+      "unlocked: project_planner's `- name:` / description / triggers entry is parsed")
 rc, tr = sgj(A, "trace", "FR-002")
 check("Q06", True, tr["phases"] == ["2"] and any(t["tc"] == "TC-API-101" for t in tr["tc"]), "trace FR: phase + TC rows via the spec section")
 rc, tr = sgj(A, "trace", "TC-API-102")
