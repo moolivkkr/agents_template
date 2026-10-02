@@ -16,3 +16,8 @@ configMapGenerator:
 - name: db-roles
   files: [db-roles.sh]
   options: {disableNameSuffixHash: true}
+# db-rls-check.sh: the db-rls-check Job (as the app role) after every migrate + seed. Its own ConfigMap,
+# never db-roles: Postgres would run every *.sh in that one at initdb.
+- name: db-rls-check
+  files: [db-rls-check.sh]
+  options: {disableNameSuffixHash: true}

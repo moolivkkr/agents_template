@@ -100,7 +100,7 @@ esac
 [ "${#IMAGES[@]}" -gt 0 ] || die "no images to deploy (deploy/k8s/images.txt empty?)"
 python3 "$DL" set-images "$OVERLAY/kustomization.yaml" "${IMAGES[@]}"
 
-# ── apply → migrate → seed → rollout ─────────────────────────────────────────────────────────────
+# ── apply → migrate → seed → rls check → rollout ─────────────────────────────────────────────────
 VERDICT=HEALTHY
 DIGESTS=(); for pair in "${IMAGES[@]}"; do DIGESTS+=("${pair##*@}"); done
 # db-access: refuse a render in which a workload can read a database role it must not have (a service
@@ -116,6 +116,7 @@ fi
 [ "$VERDICT" = HEALTHY ] && { run_job db-roles roles || VERDICT=FAILED; }   # before migrate: it needs the migrator
 [ "$VERDICT" = HEALTHY ] && { run_job db-migrate migrate || VERDICT=FAILED; }
 [ "$VERDICT" = HEALTHY ] && { run_job db-seed seed || VERDICT=FAILED; }
+[ "$VERDICT" = HEALTHY ] && { run_job db-rls-check rls || VERDICT=FAILED; }   # as the app role: RLS still binds it (D-001)
 if [ "$VERDICT" = HEALTHY ]; then
   ok=ok; for d in $(kc get deploy -o name); do wait_rollout "$d" || ok=fail; done
   step rollout "$ok"; [ "$ok" = ok ] || VERDICT=FAILED

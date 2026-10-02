@@ -87,10 +87,37 @@ SELECT u.id, count(o.id) FROM active_users u LEFT JOIN orders o ON o.user_id = u
 
 ## Row-Level Security (Multi-Tenancy)
 ```sql
+-- ONCE, in the project's first migration (before any tenant table): the migrator-policy helper (D-001).
+-- It gives a table a PERMISSIVE policy TO the table's owner only, USING (true) WITH CHECK (true). The
+-- owner is the migrator (it owns every object: db-roles.sh), so cross-tenant migrations, backfills and
+-- seeds see and write every tenant's rows under FORCE, with or without BYPASSRLS.
+CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+    owner_role name;
+    pol        name;
+BEGIN
+    SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+      INTO owner_role, pol
+      FROM pg_class c WHERE c.oid = tbl;
+    IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+        EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);   -- idempotent re-run
+    ELSE
+        EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+                       pol, tbl, owner_role);
+    END IF;
+END
+$fn$;
+REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;
+
+-- EVERY tenant table, in the migration that creates it:
 ALTER TABLE certificates ENABLE ROW LEVEL SECURITY;
 ALTER TABLE certificates FORCE ROW LEVEL SECURITY;  -- without FORCE the table owner bypasses the policy
 CREATE POLICY tenant_isolation ON certificates
   USING (tenant_id = current_setting('app.current_tenant_id')::uuid);
+SELECT app_grant_migrator('certificates');           -- policy certificates_migrator_all TO the owner only
 ```
 ```go
 // Set RLS context before every query, inside the transaction. SET LOCAL cannot take a bind parameter
@@ -101,6 +128,41 @@ if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)"
 ```
 - RLS is defense-in-depth — always ALSO use explicit `WHERE tenant_id = $1`
 - `SET LOCAL` scopes to current transaction only
+
+### The migrator policy (decision D-001, both deploy paths)
+Two roles touch a tenant table (`infrastructure/saas-tenancy-models.md`): the **migrator** owns it and runs
+migrations and seeds; the **runtime** role the services use owns nothing and has no `BYPASSRLS`, so
+`FORCE ROW LEVEL SECURITY` binds it. The migrator must still reach every tenant's rows (backfills, seeds,
+data fixes, foreign-key validation). How:
+- **Lab / self-hosted Postgres:** the migrator is `BYPASSRLS` (db-roles.sh, run as a superuser).
+- **Amazon RDS / Aurora:** the master user is not a superuser and cannot grant `BYPASSRLS`, so the
+  migrator is `NOBYPASSRLS`, and FORCE applies to it as the owner (`infrastructure/eks.md`).
+- **Both:** every FORCE-RLS table gets the migrator policy above, in the migration that creates it. On
+  the lab it is redundant with `BYPASSRLS` and harmless; on RDS it is what makes migrations work.
+  Permissive policies are OR'ed, so the migrator sees every row while the runtime role, which is neither
+  the owner nor a member of it, gets only the tenant policy. Data migrations never lift `FORCE`
+  (`ALTER TABLE ... NO FORCE` takes an `ACCESS EXCLUSIVE` lock that blocks the application).
+
+Rules:
+- **Who it targets.** The helper reads the target from the catalog, the table owner. No role name in
+  the SQL and no templating, so the same SQL runs unchanged under golang-migrate, sqlx, Flyway, Liquibase,
+  Alembic, Django, Prisma, Drizzle and TypeORM. The name's single source of truth stays
+  `DB_MIGRATOR_USER` (db-credentials secret → db-roles.sh, which makes that role the owner of the
+  database and every object, and re-points `*_migrator_all` policies to it if ownership changed).
+- **Helper not wanted?** The inline form is the same policy:
+  `DO $$ BEGIN EXECUTE format('CREATE POLICY widgets_migrator_all ON widgets TO %I USING (true) WITH CHECK (true)', (SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'widgets'::regclass)); END $$;`
+- **Never** `TO PUBLIC`, `TO <runtime role>`, or a role name typed into a policy: an unconditional policy
+  that reaches the runtime role hands it every tenant's rows. A review finds that BLOCKING
+  (`migration_safety_reviewer`), and the deploy's `db-rls-check` Job (run as the runtime role after every
+  migrate) fails on it, on a FORCE-RLS table with no migrator policy, and on a runtime role that reads
+  any row with no tenant set.
+- **Existing schema (adopting D-001):** one new migration creates the helper and calls it for every
+  FORCE-RLS table that lacks the policy. Never edit an applied migration.
+- **Restrictive tenant policies** (`AS RESTRICTIVE`) are AND'ed and would bind the migrator too; keep the
+  tenant policy permissive, or exempt the owner in its expression.
+- **Proof:** `tests/eks-db-roles.sh` (stock PostgreSQL 17 set up like RDS: master NOSUPERUSER, migrator
+  NOBYPASSRLS) and `tests/k8s-db-roles.sh` (lab: migrator BYPASSRLS) create a table with this block,
+  backfill two tenants as the migrator, and show the runtime role reads and writes only its own tenant.
 
 ## Transactions
 ```sql

@@ -2,8 +2,10 @@
 # secretGenerator db-credentials (secrets.env, gitignored, created by scripts/k8s/deploy.sh on first deploy):
 # three user/password pairs, one per role (scripts/k8s/deploylib.py DB_ROLES):
 #   DB_SUPERUSER_*  bootstrap superuser: used only by Postgres itself and by db-roles.sh
-#   DB_MIGRATOR_*   owns the schema and every table, NOSUPERUSER BYPASSRLS: db-migrate, db-seed
-#   DB_APP_*        the services: NOSUPERUSER NOBYPASSRLS, owns nothing, so FORCE row-level security applies
+#   DB_MIGRATOR_*   owns the schema and every table, NOSUPERUSER BYPASSRLS: db-migrate, db-seed (every
+#                   FORCE-RLS table also has its migrator-only policy, D-001, so the same migrations run on RDS)
+#   DB_APP_*        the services and db-rls-check: NOSUPERUSER NOBYPASSRLS, owns nothing, so FORCE row-level
+#                   security applies
 # On an EMPTY data directory the entrypoint runs db-roles.sh (ConfigMap db-roles), which creates both roles
 # with their passwords; on every deploy the db-roles Job runs the same script to converge an existing volume.
 apiVersion: apps/v1

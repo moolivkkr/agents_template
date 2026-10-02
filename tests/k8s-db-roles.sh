@@ -14,6 +14,10 @@
 #   D old volume      one superuser 'app' and objects it made (the old layout) -> the Job converges
 #                     it: roles, ownership of every object kind, grants; the new fixture migrates,
 #                     seeds and serves on top; a second run changes nothing
+#   C2 D-001       on the lab (migrator BYPASSRLS) the archetype block (databases/postgres.md) adds its
+#                  migrator-only policy harmlessly: the migrator backfills both tenants, the app role
+#                  stays confined; the db-rls-check Job (as the app role) passes, and fails on a policy
+#                  TO PUBLIC; on the converted old volume (D) it passes too
 #   E secrets         no password in any server log (log_statement=all), Job or fixture output, even
 #                     when ALTER ROLE ... PASSWORD fails; a wrong superuser password fails fast
 # "Changes nothing" = a catalog snapshot (roles incl. password verifiers, memberships, owners and ACLs
@@ -38,7 +42,8 @@ cleanup() {
   rm -rf "$T"
 }
 trap cleanup EXIT
-mkdir "$T/cm" && cp "$TPL/deploy/k8s/base/db-roles.sh" "$T/cm/" && chmod 555 "$T/cm/db-roles.sh" && chmod 755 "$T" "$T/cm"   # = ConfigMap defaultMode 0555
+mkdir "$T/cm" "$T/rls" && cp "$TPL/deploy/k8s/base/db-roles.sh" "$T/cm/" && cp "$TPL/deploy/k8s/base/db-rls-check.sh" "$T/rls/" \
+  && chmod 555 "$T/cm/db-roles.sh" "$T/rls/db-rls-check.sh" && chmod 755 "$T" "$T/cm" "$T/rls"   # = ConfigMap defaultMode 0555
 
 ip()   { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"; }
 up()   { local _; for _ in $(seq 1 90); do docker exec "$1" pg_isready -q -h 127.0.0.1 -d app 2>/dev/null && return 0; sleep 1; done; return 1; }
@@ -50,6 +55,9 @@ asu()  { docker exec -i "$1" psql -X -q -tA -v ON_ERROR_STOP=1 -U "$2" -d app 2>
 job()  { docker run --rm --user 70 --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
            --env-file "$2" -e PGHOST="$(ip "$1")" -e PGDATABASE=app -v "$T/cm:/db-roles:ro" \
            postgres:17-alpine bash /db-roles/db-roles.sh 2>&1; }
+rls()  { docker run --rm --user 70 --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+           --env-file "$2" -e PGHOST="$(ip "$1")" -e PGDATABASE=app -v "$T/rls:/db-rls-check:ro" \
+           postgres:17-alpine bash /db-rls-check/db-rls-check.sh 2>&1; }   # the db-rls-check Job, as the app role
 fx()   { docker run --rm --read-only --cap-drop ALL --security-opt no-new-privileges --env-file "$1" "$IMG" "${@:2}" 2>&1; }
 url()  { printf 'DATABASE_URL=postgres://%s:%s@%s:5432/app?sslmode=disable\nAPP_ENV=local\n' "$2" "$3" "$(ip "$1")"; }
 snapshot() {  # everything db-roles.sh could touch, password verifiers hashed
@@ -118,9 +126,9 @@ out="$(fx "$APPU" migrate | keep)"; rc=$?
 out="$(fx "$SUU" migrate | keep)"; rc=$?
 [ $rc -ne 0 ] && grep -q 'must run as the migration role' <<<"$out" && ok "migrate refuses the superuser" || bad "migrate as superuser: rc=$rc $out"
 out="$(fx "$MIG" migrate | keep)"
-grep -q 'applied migration 1' <<<"$out" && grep -q 'applied migration 2' <<<"$out" && ok "migrator ran migrations 1 and 2" || bad "migrate as migrator: $out"
+grep -q 'applied migration 1' <<<"$out" && grep -q 'applied migration 2' <<<"$out" && grep -q 'applied migration 3' <<<"$out" && ok "migrator ran migrations 1, 2 and 3 (3 = the D-001 helper + notes' migrator policy)" || bad "migrate as migrator: $out"
 out="$(fx "$MIG" migrate | keep)"
-grep -q 'migrated to schema version 2' <<<"$out" && ! grep -q 'applied migration' <<<"$out" && ok "migrate re-run applies nothing" || bad "migrate re-run: $out"
+grep -q 'migrated to schema version 3' <<<"$out" && ! grep -q 'applied migration' <<<"$out" && ok "migrate re-run applies nothing" || bad "migrate re-run: $out"
 out2=""; out="$(fx "$MIG" seed | keep)" && out2="$(fx "$MIG" seed | keep)" && ok "migrator seeds (twice, idempotent)" || bad "seed as migrator: $out $out2"
 counts="$(q "$P-a" "$A_M" "$A_M_PW" <<<"SELECT (SELECT count(*) FROM items) || '/' || (SELECT count(*) FROM notes)" | keep)"
 [ "$counts" = "3/2" ] && ok "after two seeds: 3 items, 2 notes (migrator, BYPASSRLS, sees both tenants)" || bad "counts as migrator: $counts"
@@ -136,7 +144,7 @@ DELETE FROM items WHERE name = 'rights-check-2';
 SELECT 'dml-ok';
 SQL
 )"
-[ "$(printf '%s\n' "$out" | paste -sd' ' -)" = "2 dml-ok" ] && ok "app role reads the schema version (2) and can SELECT, INSERT (sequence), UPDATE, DELETE" || bad "app role DML: $out"
+[ "$(printf '%s\n' "$out" | paste -sd' ' -)" = "3 dml-ok" ] && ok "app role reads the schema version (3) and can SELECT, INSERT (sequence), UPDATE, DELETE" || bad "app role DML: $out"
 for stmt in "CREATE TABLE intruder (x int)" "CREATE SCHEMA intruder" "CREATE TEMP TABLE intruder (x int)" "ALTER TABLE items ADD COLUMN intruder int" \
             "DROP TABLE items" "TRUNCATE items" "ALTER TABLE notes NO FORCE ROW LEVEL SECURITY" "CREATE INDEX intruder ON items (name)" "SET ROLE app_migrator"; do
   out="$(q "$P-a" "$A_APP" "$A_APP_PW" <<<"$stmt;" | keep)"; rc=$?
@@ -182,6 +190,28 @@ docker rm -f "$P-api" >/dev/null
 s1="$(snapshot "$P-a" "$A_SU")"; out="$(job "$P-a" "$JOBA" | keep)"; s2="$(snapshot "$P-a" "$A_SU")"
 grep -q 'db-roles: no changes' <<<"$out" && [ "$s1" = "$s2" ] && ok "db-roles Job after migrate+seed: 'no changes', snapshot identical (it leaves the migrator's tables alone)" || bad "Job after migrate: $out"
 
+echo "== C2 D-001 on the lab: the migrator-only policy is harmless next to BYPASSRLS"
+pol="$(asu "$P-a" "$A_SU" <<<"SELECT string_agg(polname || ' TO ' || array_to_string(polroles::regrole[], ','), '; ' ORDER BY polname) FROM pg_policy WHERE polrelid = 'notes'::regclass")"
+[ "$pol" = "notes_migrator_all TO app_migrator; tenant_isolation TO -" ] && ok "fixture migration 3 gave notes its migrator-only policy (TO app_migrator, from the owner): $pol" || bad "notes policies: $pol"
+python3 "$REPO/tests/lib/rls_pattern.py" > "$T/rls.sql" || bad "could not extract the RLS block from databases/postgres.md"
+ua=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa; ub=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb
+out="$( { echo "CREATE TABLE certificates (id bigserial PRIMARY KEY, tenant_id uuid NOT NULL, serial text NOT NULL);"
+          cat "$T/rls.sql"
+          echo "INSERT INTO certificates (tenant_id, serial) VALUES ('$ua', 'a-1'), ('$ub', 'b-1');"
+          echo "UPDATE certificates SET serial = upper(serial);"
+          echo "SELECT string_agg(serial, ',' ORDER BY serial) FROM certificates;"; } | q "$P-a" "$A_M" "$A_M_PW" | keep | grep -v '^$')"
+[ "$out" = "A-1,B-1" ] && ok "migrator (BYPASSRLS) runs the archetype block (helper + FORCE + tenant + migrator policy) and backfills both tenants" || bad "archetype block as migrator: $out"
+out="$(q "$P-a" "$A_APP" "$A_APP_PW" <<<"BEGIN; SELECT set_config('app.current_tenant_id', '$ua', true) \g /dev/null
+SELECT string_agg(serial, ',') FROM certificates;
+INSERT INTO certificates (tenant_id, serial) VALUES ('$ub', 'planted'); COMMIT;" | keep)"
+grep -qx 'A-1' <<<"$out" && grep -q 'row-level security' <<<"$out" && ok "app role as tenant a: sees only A-1, can't write b's row" || bad "app role on certificates: $out"
+out="$(rls "$P-a" "$(printf 'PGUSER=%s\nPGPASSWORD=%s\n' "$A_APP" "$A_APP_PW" | envf a.rls.env)" | keep)"; rc=$?
+[ $rc -eq 0 ] && grep -q 'db-rls-check: ok: 2 FORCE-RLS table(s)' <<<"$out" && ok "db-rls-check Job (app role) passes on the lab: $(tail -1 <<<"$out" | cut -c1-100)" || bad "db-rls-check on A: rc=$rc $out"
+q "$P-a" "$A_M" "$A_M_PW" <<<"CREATE POLICY leak ON notes TO PUBLIC USING (true);" >/dev/null
+out="$(rls "$P-a" "$T/a.rls.env" | keep)"; rc=$?
+[ $rc -ne 0 ] && grep -q 'FAIL policy leak on notes grants every row TO PUBLIC' <<<"$out" && ok "db-rls-check fails the deploy on a policy TO PUBLIC USING (true)" || bad "db-rls-check leak: rc=$rc $out"
+q "$P-a" "$A_M" "$A_M_PW" <<<"DROP POLICY leak ON notes; DROP TABLE certificates;" >/dev/null
+
 echo "== D old volume (one superuser 'app', objects it made) converges without a reset"
 printf 'DB_USER=app\nDB_PASSWORD=%s\n' "$(openssl rand -hex 24)" | (umask 077; cat > "$T/b.secrets.env")   # the old secrets.env
 # shellcheck source=/dev/null
@@ -217,6 +247,11 @@ CREATE AGGREGATE total(int) (sfunc = int4pl, stype = int);
 CREATE STATISTICS items_stats ON id, name FROM items;
 CREATE SCHEMA reporting;
 CREATE TABLE reporting.daily (day date PRIMARY KEY, n int);
+CREATE TABLE reporting.tenant_stats (tenant_id text NOT NULL, n int);
+ALTER TABLE reporting.tenant_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE reporting.tenant_stats FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON reporting.tenant_stats USING (tenant_id = current_setting('app.current_tenant_id'));
+CREATE POLICY tenant_stats_migrator_all ON reporting.tenant_stats TO app USING (true) WITH CHECK (true);   -- D-001 shape, old owner
 CREATE EXTENSION pg_trgm;
 SQL
 LEG="$(asu "$P-b" app <<<"SELECT count(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 'reporting') AND c.relowner = 'app'::regrole")"
@@ -255,6 +290,9 @@ SELECT string_agg(x, ', ') FROM (
 SQL
 )"
 [ -z "$left" ] && ok "every object of the old volume (tables, partitions, identity/serial/standalone sequences, views, matview, enum, domain, composite, range, function, procedure, aggregate, statistics, schema reporting, the database) is owned by app_migrator" || bad "still not owned by app_migrator: $left"
+pol="$(asu "$P-b" app <<<"SELECT array_to_string(polroles::regrole[], ',') FROM pg_policy WHERE polname = 'tenant_stats_migrator_all'")"
+[ "$pol" = app_migrator ] && grep -q 'policy tenant_stats_migrator_all on reporting.tenant_stats now applies to app_migrator only' <<<"$out" \
+  && ok "a migrator policy that named the old owner now names app_migrator (db-roles step 7, D-001)" || bad "migrator policy after takeover: TO $pol"
 ext="$(asu "$P-b" app <<<"SELECT count(*) FROM pg_proc p JOIN pg_depend d ON d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e' WHERE d.refobjid = (SELECT oid FROM pg_extension WHERE extname = 'pg_trgm') AND p.proowner = 'app'::regrole")"
 [ "${ext:-0}" -gt 0 ] && ok "pg_trgm's $ext functions stay with the extension (owner app), not taken over" || bad "extension members were altered ($ext)"
 out="$(q "$P-b" app_runtime "$B_APP_PW" <<'SQL' | keep
@@ -271,7 +309,7 @@ out="$(q "$P-b" app_runtime "$B_APP_PW" <<<"ALTER TABLE items ADD COLUMN intrude
 [ $rc -ne 0 ] && grep -q 42501 <<<"$out" && ok "app role can't ALTER the old tables (42501)" || bad "app role altered an old table: $out"
 MIGB="$(url "$P-b" app_migrator "$B_M_PW" | envf b.migrator.url)"; APPB="$(url "$P-b" app_runtime "$B_APP_PW" | envf b.app.url)"
 out="$(fx "$MIGB" migrate | keep)"
-grep -q 'applied migration 2' <<<"$out" && ! grep -q 'applied migration 1' <<<"$out" && ok "new fixture migrate as the migrator on the old volume: applies only migration 2" || bad "migrate on old volume: $out"
+grep -q 'applied migration 2' <<<"$out" && grep -q 'applied migration 3' <<<"$out" && ! grep -q 'applied migration 1' <<<"$out" && ok "new fixture migrate as the migrator on the old volume: applies only migrations 2 and 3" || bad "migrate on old volume: $out"
 fx "$MIGB" seed | keep >/dev/null && ok "new fixture seed as the migrator on the old volume" || bad "seed on old volume"
 docker run -d --name "$P-api" --read-only --cap-drop ALL -p 127.0.0.1::8080 --env-file "$APPB" "$IMG" serve >/dev/null
 PORT="$(docker port "$P-api" 8080/tcp | head -1 | sed 's/.*://')"; API="http://127.0.0.1:$PORT"
@@ -279,6 +317,8 @@ for _ in $(seq 1 30); do curl -sf -m 2 "$API/healthz" >/dev/null && break; sleep
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 5 "$API/readyz")" = 200 ] && [ "$(get /api/tenants/globex/notes notes)" = "globex payroll" ] \
   && ok "API as the app role on the converted volume: /readyz 200, globex sees only its note" || bad "API on old volume: readyz/notes"
 docker rm -f "$P-api" >/dev/null
+out="$(rls "$P-b" "$(printf 'PGUSER=app_runtime\nPGPASSWORD=%s\n' "$B_APP_PW" | envf b.rls.env)" | keep)"; rc=$?
+[ $rc -eq 0 ] && grep -q 'db-rls-check: ok: 2 FORCE-RLS table(s)' <<<"$out" && ok "db-rls-check Job passes on the converted volume (notes, reporting.tenant_stats)" || bad "db-rls-check on B: rc=$rc $out"
 s1="$(snapshot "$P-b" app)"; out="$(job "$P-b" "$JOBB" | keep)"; s2="$(snapshot "$P-b" app)"
 grep -q 'db-roles: no changes' <<<"$out" && [ "$s1" = "$s2" ] && ok "second db-roles Job on the converted volume: 'no changes', snapshot identical" || bad "second Job on old volume: $out"
 [ "$(q "$P-b" app "$OLD_PW" <<<"SELECT rolsuper FROM pg_roles WHERE rolname = current_user;")" = t ] && ok "the old superuser still logs in with its password (volume not locked out)" || bad "old superuser login"

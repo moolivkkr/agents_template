@@ -20,8 +20,12 @@
 # which PostgreSQL does not allow to grant BYPASSRLS ("only superuser roles or roles with BYPASSRLS can
 # specify BYPASSRLS", postgresql.org/docs/17/sql-createrole.html; the RDS master role has no BYPASSRLS,
 # docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.PostgreSQL.CommonDBATasks.Roles.rds_superuser.html).
-# So there the migrator is NOBYPASSRLS (a WARNING says so) and a FORCE-RLS table needs a policy
-# `TO <migrator> USING (true) WITH CHECK (true)` for cross-tenant migrations and seeds (skill eks.md).
+# So there the migrator is NOBYPASSRLS (a WARNING says so). Decision D-001: every migration that creates a
+# FORCE-RLS tenant table also gives it a permissive policy TO the migrator alone, USING (true) WITH CHECK
+# (true), through the helper app_grant_migrator(<table>) its first migration creates (skill
+# databases/postgres.md "The migrator policy"), so cross-tenant migrations, backfills and seeds work on
+# both paths; on the lab the policy is redundant with BYPASSRLS and harmless. The db-rls-check Job proves
+# after every migrate that each FORCE-RLS table has it and that no unconditional policy reaches the app role.
 # The app role is NOBYPASSRLS either way: that is the property that matters, and it holds on both.
 # The master user also makes itself a member of the migrator (it must SET ROLE to it to hand it the
 # database, and be a member to set its default privileges), and statement logging is turned off for
@@ -81,7 +85,7 @@ BEGIN
     RAISE EXCEPTION 'db-roles: must run as a superuser, or on managed Postgres as the master user (CREATEROLE CREATEDB) (connected as %)', current_user;
   END IF;
   IF NOT bypass THEN
-    RAISE WARNING 'db-roles: % is not a superuser and has no BYPASSRLS (managed Postgres), so the migrator % is NOBYPASSRLS: FORCE-RLS tables need a policy TO % for cross-tenant migrations and seeds', current_user, m, m;
+    RAISE WARNING 'db-roles: % is not a superuser and has no BYPASSRLS (managed Postgres), so the migrator % is NOBYPASSRLS: every FORCE-RLS table needs its migrator-only policy (SELECT app_grant_migrator(<table>) in the migration that creates it, D-001) for cross-tenant migrations and seeds', current_user, m;
   END IF;
   IF m = a OR m IN ('', current_user) OR a IN ('', current_user) THEN
     RAISE EXCEPTION 'db-roles: the migrator (%), app (%) and superuser (%) must be three different roles', m, a, current_user;
@@ -216,6 +220,20 @@ BEGIN
       END LOOP;
     END IF;
     RAISE NOTICE 'db-roles: % % now owned by %', r.type, r.identity, m; n := n + 1;
+  END LOOP;
+
+  -- 7. migrator policies (D-001) follow the migrator: a table taken over in step 6 keeps a policy that
+  --    names its old owner. Only the exact migrator shape is touched (named <table>_migrator_all,
+  --    PERMISSIVE FOR ALL USING (true) WITH CHECK (true)), and only on tables the migrator owns.
+  FOR r IN SELECT pol.polname, c.oid::regclass AS tbl
+           FROM pg_policy pol JOIN pg_class c ON c.oid = pol.polrelid
+           WHERE c.relowner = m_oid AND pol.polname LIKE '%\_migrator\_all' AND pol.polpermissive AND pol.polcmd = '*'
+             AND pg_get_expr(pol.polqual, pol.polrelid) = 'true' AND pg_get_expr(pol.polwithcheck, pol.polrelid) = 'true'
+             AND pol.polroles <> ARRAY[m_oid]
+           ORDER BY 2::text, 1
+  LOOP
+    EXECUTE format('ALTER POLICY %I ON %s TO %I', r.polname, r.tbl, m);
+    RAISE NOTICE 'db-roles: policy % on % now applies to % only', r.polname, r.tbl, m; n := n + 1;
   END LOOP;
 
   PERFORM set_config('db_roles.changes', n::text, false);

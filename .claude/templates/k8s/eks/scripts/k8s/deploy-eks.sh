@@ -84,7 +84,7 @@ confirm_prod
 [ "$MODE" = rollback ] && python3 "$DL" set-images "$OVERLAY/kustomization.yaml" "${IMAGES[@]}" \
   && log "overlay now pins the rollback digests: commit deploy/k8s/overlays/$ENV_NAME/kustomization.yaml"
 
-# ── render → policy → apply → secrets → roles → migrate → seed → rollout ────────────────────────
+# ── render → policy → apply → secrets → roles → migrate → seed → rls check → rollout ────────────
 VERDICT=HEALTHY
 if kubectl kustomize "$OVERLAY" > "$TMP/rendered.yaml" \
   && kc create --dry-run=client -o json -f "$TMP/rendered.yaml" > "$TMP/rendered.json" \
@@ -100,6 +100,7 @@ fi
 [ "$VERDICT" = HEALTHY ] && { run_job db-roles roles || VERDICT=FAILED; }
 [ "$VERDICT" = HEALTHY ] && { run_job db-migrate migrate || VERDICT=FAILED; }
 [ "$VERDICT" = HEALTHY ] && { run_job db-seed seed || VERDICT=FAILED; }
+[ "$VERDICT" = HEALTHY ] && { run_job db-rls-check rls || VERDICT=FAILED; }   # as the app role: RLS still binds it (D-001)
 if [ "$VERDICT" = HEALTHY ]; then
   ok=ok; for d in $(kc get deploy -o name); do wait_rollout "$d" || ok=fail; done
   step rollout "$ok"; [ "$ok" = ok ] || VERDICT=FAILED

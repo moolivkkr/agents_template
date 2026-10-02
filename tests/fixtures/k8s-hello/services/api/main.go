@@ -1,9 +1,11 @@
 // hello-api: a throwaway fixture that exercises the framework's k8s deploy flow end to end
 // (build -> push -> roles -> migrate -> seed -> rollout -> smoke -> promote -> reset). Not a product.
 //
-// It runs under the lab's two database roles: migrate and seed as the MIGRATOR (owns the tables,
-// NOSUPERUSER BYPASSRLS), serve as the APP role (owns nothing, NOBYPASSRLS), so the notes table's
-// FORCE ROW LEVEL SECURITY really applies to the API: /api/tenants/{tenant}/notes has no WHERE clause.
+// It runs under the lab's two database roles: migrate and seed as the MIGRATOR (owns the database and
+// the tables, NOSUPERUSER; BYPASSRLS on the lab, NOBYPASSRLS on RDS), serve as the APP role (owns nothing,
+// NOBYPASSRLS), so the notes table's FORCE ROW LEVEL SECURITY really applies to the API:
+// /api/tenants/{tenant}/notes has no WHERE clause. Migration 3 adopts decision D-001 on the existing
+// notes table: the app_grant_migrator() helper (skill databases/postgres.md) and its migrator-only policy.
 package main
 
 import (
@@ -20,7 +22,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const schemaVersion = 2
+const schemaVersion = 3
 
 // migrations are forward-only: each runs once, in order, in the transaction that records its version.
 var migrations = []struct {
@@ -34,6 +36,30 @@ var migrations = []struct {
 	     CREATE POLICY tenant_isolation ON notes
 	         USING (tenant_id = current_setting('app.current_tenant_id'))
 	         WITH CHECK (tenant_id = current_setting('app.current_tenant_id'))`},
+	// D-001 on an existing schema: a NEW migration creates the helper and gives every FORCE-RLS table its
+	// migrator-only policy (applied migrations are never edited). A new project creates the helper in its
+	// first migration and calls it in each migration that creates a tenant table.
+	{3, `CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+	     LANGUAGE plpgsql
+	     SET search_path = pg_catalog, pg_temp
+	     AS $fn$
+	     DECLARE
+	         owner_role name;
+	         pol        name;
+	     BEGIN
+	         SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+	           INTO owner_role, pol
+	           FROM pg_class c WHERE c.oid = tbl;
+	         IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+	             EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);
+	         ELSE
+	             EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+	                            pol, tbl, owner_role);
+	         END IF;
+	     END
+	     $fn$;
+	     REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;
+	     SELECT app_grant_migrator('notes');`},
 }
 
 func main() {
@@ -81,17 +107,20 @@ func run(fn func(context.Context, *pgxpool.Pool) error, pool *pgxpool.Pool) {
 	}
 }
 
-// migrate is forward-only and idempotent. It refuses the app role (row-level security applies to it,
-// and it can't create or alter anything anyway) and a superuser (tables it created would belong to the
-// superuser, out of the app role's default privileges): only the migrator migrates.
+// migrate is forward-only and idempotent. It refuses the app role (it owns nothing, so it can't create or
+// alter anything) and a superuser (tables it created would belong to the superuser, out of the app role's
+// default privileges): only the migrator, which db-roles.sh makes the owner of the database, migrates.
+// BYPASSRLS is not required: on RDS/Aurora the migrator has none, and each FORCE-RLS table's
+// migrator-only policy (D-001) lets it reach every tenant.
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	var who string
-	var super, bypass bool
-	if err := pool.QueryRow(ctx, `SELECT rolname, rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`).Scan(&who, &super, &bypass); err != nil {
+	var super, owner bool
+	if err := pool.QueryRow(ctx, `SELECT r.rolname, r.rolsuper, d.datdba = r.oid FROM pg_roles r, pg_database d
+		WHERE r.rolname = current_user AND d.datname = current_database()`).Scan(&who, &super, &owner); err != nil {
 		return err
 	}
-	if super || !bypass {
-		return fmt.Errorf("migrate must run as the migration role (NOSUPERUSER BYPASSRLS, owner of the tables), not %q: DATABASE_URL has the wrong credentials", who)
+	if super || !owner {
+		return fmt.Errorf("migrate must run as the migration role (NOSUPERUSER, owner of the database), not %q: DATABASE_URL has the wrong credentials", who)
 	}
 	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7140001)`); err != nil { // one migrate at a time
@@ -121,8 +150,9 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	})
 }
 
-// seed loads static reference data; safe to run on every deploy. As the migrator (BYPASSRLS) it writes
-// every tenant's rows without a tenant context; as the app role the notes insert would be refused.
+// seed loads static reference data; safe to run on every deploy. As the migrator (BYPASSRLS on the lab, the
+// notes_migrator_all policy on RDS) it writes every tenant's rows without a tenant context; as the app
+// role the notes insert would be refused.
 func seed(ctx context.Context, pool *pgxpool.Pool) error {
 	_, err := pool.Exec(ctx, `
 		INSERT INTO items (name) VALUES ('alpha'), ('beta'), ('gamma') ON CONFLICT (name) DO NOTHING;

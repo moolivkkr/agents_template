@@ -93,14 +93,38 @@ only db-roles holds the master user.
 **The difference.** RDS has no superuser. The script runs as the master user (`NOSUPERUSER CREATEROLE
 CREATEDB`, member of `rds_superuser`). PostgreSQL lets only a superuser or a BYPASSRLS role create a
 BYPASSRLS role, and AWS's documented master role has no BYPASSRLS. So on RDS/Aurora:
-- **The migrator is `NOBYPASSRLS`.** The Job prints a WARNING saying so.
-  - Owning the tables does not exempt it from `FORCE ROW LEVEL SECURITY`.
-  - A FORCE-RLS table therefore needs a permissive policy for the migrator, created in the same
-    migration as the table: `CREATE POLICY <table>_migrator ON <table> TO <migrator role> USING (true)
-    WITH CHECK (true)`. The migrator role is `current_user` inside the migration, so use dynamic SQL.
-  - Without that policy, cross-tenant data migrations and seeds see no rows, or fail the WITH CHECK.
-  - The runtime role is not a member of the migrator, so this policy never applies to it.
-  - Proven on a stock PostgreSQL 17 set up like RDS by `tests/eks-db-roles.sh`.
+- **The migrator is `NOBYPASSRLS`.** The Job prints a WARNING saying so. Owning the tables does not
+  exempt it from `FORCE ROW LEVEL SECURITY`.
+- **Settled by decision D-001 (docs/DECISIONS.md, 2026-10-01): the per-table migrator policy.** Every
+  migration that creates a FORCE-RLS tenant table also gives it a permissive policy for the migrator
+  alone, `USING (true) WITH CHECK (true)`. The pattern is the same on the lab and on RDS (on the lab it
+  sits next to the migrator's BYPASSRLS, harmlessly), so a migration written for dev works unchanged on
+  staging and prod.
+  - **How.** The project's first migration creates the helper `app_grant_migrator(tbl regclass)`;
+    every tenant-table migration ends with `SELECT app_grant_migrator('<table>');`, which creates
+    `<table>_migrator_all ... TO <table owner>`. The SQL and the rules are in `databases/postgres.md`
+    ("The migrator policy").
+  - **Why the owner, not a configured name.** The migrator owns every object, because db-roles.sh
+    converges ownership to `DB_MIGRATOR_USER`. So the helper reads the target from the catalog. No role
+    name sits in the SQL, and nothing needs templating in golang-migrate, sqlx, Prisma or Drizzle, which
+    have no placeholders. `DB_MIGRATOR_USER` stays the single source of the name, and db-roles.sh
+    re-points any `*_migrator_all` policy to it after an ownership takeover.
+  - **The runtime role stays confined.** It is not the owner and not a member of it, so the policy never
+    applies to it; permissive policies are OR'ed, so it gets only the tenant policy. Data migrations never
+    lift `FORCE` (that takes an `ACCESS EXCLUSIVE` lock).
+  - **Proven on every deploy.** The `db-rls-check` Job runs as the app role after migrate and seed, before
+    the rollout. It fails the deploy on any of these:
+    - a FORCE-RLS table without the migrator policy;
+    - any `USING (true)`/`WITH CHECK (true)` policy that names a role other than the table owner
+      (`TO PUBLIC`, `TO app_runtime`, ...);
+    - a runtime role that reads any row with no tenant set.
+
+    `deploylib.py db-access` refuses a render without that Job, or one in which it holds anything but
+    `DB_APP_*`.
+  - **Proven offline.** `tests/eks-db-roles.sh` uses a stock PostgreSQL 17 set up like RDS. It runs the
+    skill's own SQL block, and the NOBYPASSRLS migrator seeds and backfills two tenants. The runtime role
+    reads and writes only its own tenant. Without the policy, the migrator's backfill reaches 0 rows.
+  - **Rejected.** ENABLE without FORCE on RDS: the owner would bypass RLS silently, which is weaker.
 - **Statement logging can't be switched off for the password session**, because that is a superuser
   setting. The Terraform parameter group pins `log_statement = none`. Keep it that way, or
   `ALTER ROLE … PASSWORD` lands in CloudWatch logs.
@@ -159,7 +183,8 @@ BYPASSRLS role, and AWS's documented master role has no BYPASSRLS. So on RDS/Aur
 | `secrets` step fails | `kubectl -n <app>-<env> describe externalsecret db-credentials`. Is ESO installed (`eks-bootstrap.sh`)? Does the Pod Identity association `external-secrets/external-secrets` exist (Terraform)? Do the secret ids in `eks.env` match `terraform output eks_env`? |
 | roles: `superuser login refused` | The RDS master secret rotated and ESO hasn't refreshed yet (15 min). Force it with `kubectl annotate externalsecret db-credentials force-sync=$(date +%s) --overwrite`, then redeploy |
 | roles: `permission denied to create role` | The connecting user isn't the RDS master user (`DB_MASTER_SECRET_ARN`), or the instance runs PostgreSQL < 16 |
-| migrate/seed see no rows of other tenants | Rule above: FORCE-RLS tables need the `TO <migrator>` policy on RDS |
+| migrate/seed see no rows of other tenants | D-001: the table has no migrator policy. Add a migration with `SELECT app_grant_migrator('<table>');` (helper: `databases/postgres.md`) |
+| `rls` step fails (`db-rls-check: FAIL ...`) | Read the Job log (`kubectl -n <app>-<env> logs job/<rls-…>`): a FORCE-RLS table without its migrator policy, an unconditional policy reaching the app role (BLOCKING: drop it in a new migration), or the app role reading rows with no tenant set |
 | ALB never appears / Ingress has no address | Is the IngressClass `<app>-alb` present? Does the namespace label match `IngressClassParams.namespaceSelector`? Are the subnets tagged `kubernetes.io/role/elb`? Is the ACM certificate in the same region? |
 | smoke fails with a TLS or DNS error | Point `APP_HOST` (Route 53 alias/CNAME) at the ALB hostname (`kubectl get ingress web`) after the first deploy |
 | `has no staging-healthy-<sha> tag` | Deploy that exact promotion to staging first. Prod never takes an untested digest |
@@ -170,7 +195,8 @@ BYPASSRLS role, and AWS's documented master role has no BYPASSRLS. So on RDS/Aur
 These are documented but not yet exercised against AWS: the Auto Mode ALB honouring the
 `listen-ports`/`ssl-redirect`/`healthcheck-path` Ingress annotations together with `certificateARNs`
 from IngressClassParams; NetworkPolicy enforcement on Auto Mode (it must be enabled for the cluster);
-ESO picking up Pod Identity credentials with no `auth` block; RDS's actual refusal of BYPASSRLS (proven
-on stock PostgreSQL, not on RDS); `metrics-server` as an add-on name on the chosen Kubernetes version.
+ESO picking up Pod Identity credentials with no `auth` block; RDS's actual refusal of BYPASSRLS and the
+D-001 migrator policy on a real RDS/Aurora instance (both proven on stock PostgreSQL 17 set up like RDS,
+not on RDS); `metrics-server` as an add-on name on the chosen Kubernetes version.
 `tests/eks-templates.test.sh` proves the rest offline: renders, schemas, policies, the prod gates in
 the script, and Terraform validity.

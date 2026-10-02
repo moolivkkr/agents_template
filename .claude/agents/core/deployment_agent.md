@@ -295,16 +295,24 @@ Adapt:
     order. A strategic-merge patch puts its entries first, and `$(VAR)` expands only variables
     defined earlier.
 
-  Keep the db-roles/migrate/seed patches as they are.
+  Keep the db-roles/migrate/seed/rls-check patches as they are.
 - **`infra/terraform/envs/<env>/`**:
   - `images` = the names in `images.txt`;
   - `terraform.tfvars.example` from the guidelines: region, host, the GitHub repo, and its numeric
     ids for the OIDC subject.
 
   Leave the module wiring alone.
-- **Migrations:** on RDS/Aurora the migrator has no BYPASSRLS (`eks.md`, database roles). For every
-  table with `FORCE ROW LEVEL SECURITY`, check that the migration that creates it also creates the
-  `TO <migrator>` permissive policy. If one is missing, report it to the backend owner as a finding.
+- **Migrations (decision D-001):** on RDS/Aurora the migrator has no BYPASSRLS (`eks.md`, database
+  roles).
+  - For every table with `FORCE ROW LEVEL SECURITY`, check that the migration that creates it also
+    calls `SELECT app_grant_migrator('<table>')`. The helper (`databases/postgres.md`, "The migrator
+    policy") creates `<table>_migrator_all`, a permissive policy TO the table owner only, which is the
+    migrator.
+  - If a call is missing, report it to the backend owner as a finding.
+  - If any `USING (true)` policy targets PUBLIC, the runtime role or any role but the owner, report it as
+    BLOCKING.
+  - The `db-rls-check` Job (as the app role, after migrate and seed) fails the deploy on either case.
+    Never edit it, its ConfigMap or its `DB_APP_*`-only credentials to get a deploy through.
 - **Verify offline, all of these:**
   - pin a dummy digest with `python3 scripts/k8s/deploylib.py set-images deploy/k8s/overlays/<env>/kustomization.yaml "api=<ECR_REGISTRY>/<app>/api@sha256:<64 hex>"`
     in a scratch copy (never commit a fake pin);
