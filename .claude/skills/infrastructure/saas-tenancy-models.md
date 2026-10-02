@@ -76,6 +76,12 @@ ALTER TABLE resources FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON resources
     USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
+
+-- The migrator's own policy (decision D-001), in the same migration: PERMISSIVE, TO the table owner only,
+-- USING (true) WITH CHECK (true), so migrations, backfills and seeds reach every tenant even where the
+-- migrator has no BYPASSRLS (RDS/Aurora). The helper is created once, in the first migration
+-- (databases/postgres.md, "The migrator policy").
+SELECT app_grant_migrator('resources');
 ```
 
 **Layer 3 — Tenant context per transaction (on the connection that runs the queries):**
@@ -101,8 +107,18 @@ func (r *Repo) WithTenantTx(ctx context.Context, fn func(tx pgx.Tx) error) error
     })
 }
 ```
-- The application's DB role is not the table owner and has no `BYPASSRLS`. `FORCE ROW LEVEL SECURITY`
+- Two database roles. The **migrator** owns the tables and runs migrations and seeds. The
+  **application's** role is not the table owner and has no `BYPASSRLS`. `FORCE ROW LEVEL SECURITY`
   (above) also covers owners.
+- **The migrator reaches every tenant through its own policy, not by lifting FORCE (decision D-001).**
+  - On the lab it is also `BYPASSRLS`. On RDS/Aurora it can't be: the master user is no superuser
+    (`infrastructure/eks.md`).
+  - `app_grant_migrator('<table>')` gives it a permissive `USING (true)` policy TO the table owner
+    only. The application's role is neither the owner nor a member of it, so it keeps only the tenant
+    policy.
+  - Never write an unconditional policy `TO PUBLIC` or to the application's role: it hands that role
+    every tenant's rows. Reviews treat it as BLOCKING (`migration_safety_reviewer`), and the deploy's
+    `db-rls-check` Job fails on it.
 - `current_setting('app.current_tenant_id')` with no default raises an error when the setting is
   missing, so a query outside `WithTenantTx` fails closed rather than returning every tenant's rows. On
   a pooled connection that already ran a tenant transaction the setting reads `''` instead, and

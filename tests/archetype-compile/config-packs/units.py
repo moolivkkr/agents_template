@@ -278,7 +278,7 @@ BLOCKS = {
     # ── core/shared-backend-patterns.md
     "core/shared-backend-patterns.md#sql1": dict(anchor='-- EVERY query MUST filter by tenant_id', check="mysql", fixture="mysql_orders_tenant", params=True,
                                                  subst=[("re", r"\?$", "?;"), ("re", r"status\)$", "status);")]),  # a list of statements
-    "core/shared-backend-patterns.md#sql2": dict(anchor='-- RLS policy as a safety net (PostgreSQL example)', check="pg", fixture="orders_tenant"),
+    "core/shared-backend-patterns.md#sql2": dict(anchor='-- RLS policy as a safety net (PostgreSQL example)', check="pg", fixture="orders_tenant_d001"),
     "core/shared-backend-patterns.md#sql3": dict(anchor='-- Mark as deleted, never physically remove', check="pg", fixture="orders_full", params=True,
                                                  subst=[("re", r"\$2$", "$2;"), ("re", r"IS NULL$", "IS NULL;")]),  # a list of statements
     "core/shared-backend-patterns.md#sql4": dict(anchor='-- Include version in update WHERE clause', check="pg", fixture="orders_full", params=True),
@@ -629,7 +629,7 @@ BLOCKS = {
     "infrastructure/localstack-aws-local.md#sh10": dict(anchor='# /deploy --target=ha-local', check="sh",
                                                         sc_exclude={"SC1113": "not a shebang: the first line is a comment that starts with '# /'"}),
     # ── infrastructure/saas-tenancy-models.md
-    "infrastructure/saas-tenancy-models.md#sql1": dict(anchor='-- Enable RLS on every tenant-scoped table', check="pg", fixture="resources"),
+    "infrastructure/saas-tenancy-models.md#sql1": dict(anchor='-- Enable RLS on every tenant-scoped table', check="pg", fixture="resources_d001"),
     "infrastructure/saas-tenancy-models.md#sql2": dict(anchor='-- WRONG: global uniqueness', check="pg", fixture="unique_demo",
                                                        subst=[("re", r"^(UNIQUE\(.*\))$", r"ALTER TABLE unique_demo ADD \1;")]),
     "infrastructure/saas-tenancy-models.md#yaml1": dict(anchor='# Kubernetes namespace per premium tenant', check="yaml", k8s=True,
@@ -839,6 +839,18 @@ NGQL_CLAIMS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────── SQL fixtures ──
+def _d001_helper() -> str:
+    """The app_grant_migrator() definition exactly as databases/postgres.md documents it (decision D-001):
+    blocks that only CALL the helper (it is created once, in a project's first migration) run after it."""
+    import pathlib
+    import re as _re
+    doc = (pathlib.Path(__file__).resolve().parents[3] / ".claude/skills/databases/postgres.md").read_text(encoding="utf-8")
+    m = _re.search(r"(CREATE OR REPLACE FUNCTION app_grant_migrator\(tbl regclass\).*?REVOKE ALL ON FUNCTION app_grant_migrator\(regclass\) FROM PUBLIC;)", doc, _re.S)
+    if not m:
+        raise SystemExit("units.py: databases/postgres.md no longer defines app_grant_migrator() (D-001)")
+    return m.group(1)
+
+
 SQL_FIXTURES = {
     # PostgreSQL: the tables the database packs' fragments assume
     "app": """
@@ -866,6 +878,8 @@ CREATE TABLE certs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uui
                       " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
                       " GRANT CREATE ON SCHEMA public TO app_owner;",
     "resources": "CREATE TABLE resources (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, name text);",
+    "resources_d001": "CREATE TABLE resources (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, name text);\n" + _d001_helper(),
+    "orders_tenant_d001": "CREATE TABLE orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, total numeric);\n" + _d001_helper(),
     "unique_demo": "CREATE TABLE unique_demo (tenant_id uuid NOT NULL, serial_number text, name text, slug text);",
     "tenants": "CREATE TABLE tenants (id uuid PRIMARY KEY DEFAULT gen_random_uuid());",
     # MySQL 8.4
@@ -1040,32 +1054,39 @@ CLAIMS += [
          query="WITH u AS (UPDATE certificates SET status = 'checked' RETURNING 1) SELECT count(*) FROM u",
          error=r'unrecognized configuration parameter "app\.current_tenant_id"'),
 ]
-# rust.md's migration run as app_owner, a NOSUPERUSER NOBYPASSRLS role that owns the tables, so FORCE applies to
-# it. Rows go in per tenant with the tenant set (WITH CHECK); {BLOCK} is the block's own SQL.
+# rust.md's migration run as app_owner, a NOSUPERUSER NOBYPASSRLS role that owns the tables (the migrator on
+# RDS/Aurora), so FORCE applies to it and only the migration's own migrator policy (D-001) lets it seed both
+# tenants with no tenant set. rust_rt is the service's role (owns nothing); the isolation claims run as it.
+# {BLOCK} is the block's own SQL.
 _RUST_SETUP = (
     "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_owner') THEN"
-    " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
+    " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF;"
+    " IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rust_rt') THEN"
+    " CREATE ROLE rust_rt NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
     "GRANT CREATE ON SCHEMA public TO app_owner; SET ROLE app_owner;"
     "{BLOCK}"
-    "SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);"
     "INSERT INTO orders (tenant_id, total_cents) SELECT md5('a')::uuid, 100 FROM generate_series(1, 3);"
-    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('a')::uuid, 'sku-1', 1);"
-    "SELECT set_config('app.current_tenant_id', md5('b')::uuid::text, false);"
     "INSERT INTO orders (tenant_id, total_cents) SELECT md5('b')::uuid, 100 FROM generate_series(1, 5);"
-    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('b')::uuid, 'sku-1', 2), (md5('b')::uuid, 'sku-2', 3);"
+    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('a')::uuid, 'sku-1', 1),"
+    " (md5('b')::uuid, 'sku-1', 2), (md5('b')::uuid, 'sku-2', 3);"
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON orders, inventory TO rust_rt;"
+    "RESET ROLE; SET ROLE rust_rt;"
     "SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);")
 CLAIMS += [
-    dict(name="rust migration: tenant A sees only its orders (owner role, FORCE RLS)", block="languages/rust.md#sql1",
+    dict(name="rust migration: the owner (NOBYPASSRLS) seeds both tenants through its migrator policy", block="languages/rust.md#sql1",
+         at="SELECT app_grant_migrator('orders');", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP + "RESET ROLE; SET ROLE app_owner;",
+         query="SELECT count(*) || ' orders, ' || (SELECT count(*) FROM inventory) || ' inventory rows' FROM orders", expect=[r"^8 orders, 3 inventory rows$"]),
+    dict(name="rust migration: tenant A sees only its orders (service role, FORCE RLS)", block="languages/rust.md#sql1",
          at="ALTER TABLE orders FORCE ROW LEVEL SECURITY;", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
          query="SELECT count(*) FROM orders", expect=[r"^3$"]),
-    dict(name="rust migration: tenant A sees only its inventory (owner role, FORCE RLS)", block="languages/rust.md#sql1",
+    dict(name="rust migration: tenant A sees only its inventory (service role, FORCE RLS)", block="languages/rust.md#sql1",
          at="ALTER TABLE inventory FORCE ROW LEVEL SECURITY;", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
          query="SELECT string_agg(sku || '=' || quantity, ',') FROM inventory", expect=[r"^sku-1=1$"]),
     dict(name="rust migration: WITH CHECK refuses another tenant's inventory row", block="languages/rust.md#sql1",
          at="CREATE POLICY tenant_isolation ON inventory", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
          query="INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('b')::uuid, 'sku-9', 1) RETURNING sku",
          error=r'new row violates row-level security policy for table "inventory"'),
-    dict(name="rust migration: a reset tenant setting fails closed (owner role)", block="languages/rust.md#sql1",
+    dict(name="rust migration: a reset tenant setting fails closed (service role)", block="languages/rust.md#sql1",
          at="app.current_tenant_id with set_config(..., true) inside each transaction", block_sql="languages/rust.md#sql1",
          setup=_RUST_SETUP + "RESET app.current_tenant_id;", query="SELECT count(*) FROM orders",
          error=r'invalid input syntax for type uuid: ""|unrecognized configuration parameter'),

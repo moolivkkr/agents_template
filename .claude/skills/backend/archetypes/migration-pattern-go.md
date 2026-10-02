@@ -13,7 +13,7 @@ tags:
 
 # Migration Pattern Archetype
 
-> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-migrate v4.20.1, pgx v5.11.0, testcontainers-go v0.44.0; the SQL migrations below were run with golang-migrate against postgres:16-alpine as a non-superuser owner (up, down, re-up for every version; seed and backfill under FORCE ROW LEVEL SECURITY), and the large-table DO-block alternative was run once (tests/archetype-compile/go/run.sh, ARCHETYPE_DB_TESTS=1). The schema matches migration-pattern-python.md.
+> Go samples compile-checked (go build + go vet) 2026-09-30 with Go 1.27.1, golang-migrate v4.20.1, pgx v5.11.0, testcontainers-go v0.44.0; the SQL migrations below were run with golang-migrate against postgres:16-alpine as a non-superuser owner without BYPASSRLS, the RDS migrator (up, down, re-up for every version; seed, backfill and foreign-key validation under FORCE ROW LEVEL SECURITY through the D-001 migrator policies, re-run 2026-10-01; with one `app_grant_migrator` call removed the backfill migration fails; the app role still sees one tenant), and the large-table DO-block alternative was run once (tests/archetype-compile/go/run.sh, ARCHETYPE_DB_TESTS=1). The schema matches migration-pattern-python.md.
 
 Complete PostgreSQL migration templates. Every generated migration MUST follow this pattern.
 
@@ -42,13 +42,23 @@ Rules:
 - Data migrations (backfills) are SEPARATE from schema changes
 - Each migration is a single, atomic operation — don't combine unrelated changes
 
-**Who runs migrations.** A plain login role that owns the tables: not a superuser, no `BYPASSRLS`. The
-application connects as a different role that owns nothing (`infrastructure/saas-tenancy-models.md`).
-`FORCE ROW LEVEL SECURITY` applies RLS to the owner too, so any migration step that reads or writes rows
-— a data migration, a seed, even adding a foreign key, whose validation query reads both tables — first
-lifts `FORCE` for its own transaction and restores it before commit. The app role never owns the tables,
-so RLS keeps applying to it throughout. Run the migration tests as such a role (Testing Migrations,
-below): a superuser skips RLS and hides every one of these failures.
+**Who runs migrations.** The migrator: a plain login role that owns the tables and is not a superuser.
+The application connects as a different role that owns nothing and has no `BYPASSRLS`
+(`infrastructure/saas-tenancy-models.md`). `FORCE ROW LEVEL SECURITY` applies RLS to the owner too, so
+the migrator reaches every tenant's rows through its own policy (decision D-001):
+- The first migration creates the helper `app_grant_migrator(regclass)`.
+- Every migration that creates a tenant table calls `SELECT app_grant_migrator('<table>')`. That gives
+  the table a permissive policy `TO` its owner only, `USING (true) WITH CHECK (true)`.
+- Data migrations, seeds and foreign-key validation then see every tenant with `FORCE` on, on both deploy
+  paths:
+  - lab: the migrator is also `BYPASSRLS`;
+  - RDS/Aurora: it can't be (`infrastructure/eks.md`), so this policy is what makes migrations work.
+- Never lift `FORCE` in a migration. `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY` takes an
+  `ACCESS EXCLUSIVE` lock that blocks the application until commit.
+- The app role is neither the owner nor a member of it, so the policy never applies to it.
+
+Run the migration tests as a NOBYPASSRLS owner (Testing Migrations, below): that is the RDS migrator, the
+stricter path. A superuser skips RLS and hides every one of these failures.
 
 ## UP Migration — Table Creation
 
@@ -57,6 +67,35 @@ below): a superuser skips RLS and hides every one of these failures.
 -- Purpose: Create the widgets table with standard columns, indexes, and RLS
 
 BEGIN;
+
+-- =============================================================================
+-- The migrator-policy helper (decision D-001) — ONCE, in the first migration
+-- =============================================================================
+
+-- app_grant_migrator(t) gives t a PERMISSIVE policy TO t's owner only, USING (true) WITH CHECK (true).
+-- The owner is the migrator (it owns every object), so data migrations and seeds reach every tenant
+-- under FORCE ROW LEVEL SECURITY without BYPASSRLS (RDS/Aurora can't grant it). The target comes from
+-- the catalog: no role name in the SQL. Rules: databases/postgres.md, "The migrator policy".
+CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+    owner_role name;
+    pol        name;
+BEGIN
+    SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+      INTO owner_role, pol
+      FROM pg_class c WHERE c.oid = tbl;
+    IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+        EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);
+    ELSE
+        EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+                       pol, tbl, owner_role);
+    END IF;
+END
+$fn$;
+REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;
 
 -- =============================================================================
 -- Table: widgets
@@ -138,6 +177,9 @@ CREATE POLICY tenant_isolation ON widgets
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
 
+-- The migrator's policy (widgets_migrator_all, TO the owner only): seeds and backfills see every tenant
+SELECT app_grant_migrator('widgets');
+
 -- =============================================================================
 -- Triggers
 -- =============================================================================
@@ -178,7 +220,8 @@ BEGIN;
 -- Drop trigger first (depends on function)
 DROP TRIGGER IF EXISTS trg_widgets_updated_at ON widgets;
 
--- Drop RLS policy (must drop before table)
+-- Drop RLS policies (must drop before table)
+DROP POLICY IF EXISTS widgets_migrator_all ON widgets;
 DROP POLICY IF EXISTS tenant_isolation ON widgets;
 
 -- Drop indexes explicitly (for clarity, though DROP TABLE handles them)
@@ -194,6 +237,9 @@ DROP TABLE IF EXISTS widgets;
 -- Drop trigger function only if no other tables use it
 -- (In practice, this is shared — only drop in the LAST migration that uses it)
 -- DROP FUNCTION IF EXISTS update_updated_at_column();
+
+-- The migrator-policy helper was created by this (the first) migration
+DROP FUNCTION IF EXISTS app_grant_migrator(regclass);
 
 COMMIT;
 ```
@@ -223,27 +269,26 @@ CREATE UNIQUE INDEX idx_widget_categories_tenant_slug
     WHERE deleted_at IS NULL;
 
 -- Add category_id to widgets with ON DELETE SET NULL (don't cascade delete widgets). Creating a
--- foreign key runs a validation query that reads widgets as the owner, and FORCE ROW LEVEL SECURITY
--- applies RLS to it: with no tenant set, current_setting() raises. Lift FORCE for this transaction
--- only (see "Who runs migrations").
-ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
+-- foreign key runs a validation query that reads widgets as the owner; FORCE ROW LEVEL SECURITY
+-- applies to it, and widgets_migrator_all (first migration) lets it see every row. No FORCE lifting.
 ALTER TABLE widgets ADD COLUMN category_id UUID;
 ALTER TABLE widgets
     ADD CONSTRAINT fk_widgets_category
         FOREIGN KEY (category_id) REFERENCES widget_categories(id) ON DELETE SET NULL;
-ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 
 CREATE INDEX idx_widgets_category
     ON widgets (category_id)
     WHERE deleted_at IS NULL AND category_id IS NOT NULL;
 
--- RLS for categories (after the foreign key, whose validation reads this table too)
+-- RLS for categories: tenant policy + the migrator's policy, in the migration that creates the table
 ALTER TABLE widget_categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
 
 CREATE POLICY tenant_isolation ON widget_categories
     USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID);
+
+SELECT app_grant_migrator('widget_categories');
 
 COMMIT;
 ```
@@ -256,6 +301,7 @@ DROP INDEX IF EXISTS idx_widgets_category;
 ALTER TABLE widgets DROP CONSTRAINT IF EXISTS fk_widgets_category;
 ALTER TABLE widgets DROP COLUMN IF EXISTS category_id;
 
+DROP POLICY IF EXISTS widget_categories_migrator_all ON widget_categories;
 DROP POLICY IF EXISTS tenant_isolation ON widget_categories;
 DROP INDEX IF EXISTS idx_widget_categories_tenant_slug;
 DROP TABLE IF EXISTS widget_categories;
@@ -274,10 +320,8 @@ BEGIN;
 
 -- These samples have no tenants table: the tenants are the ones that have widgets. If your schema
 -- has a tenants table, select the tenants from it instead.
--- The owner runs this, and FORCE ROW LEVEL SECURITY applies to it: lift FORCE for this transaction
--- only. ALTER TABLE holds an ACCESS EXCLUSIVE lock until commit, so keep the transaction short.
-ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
+-- The migrator runs this with FORCE ROW LEVEL SECURITY on; its migrator policies (widgets_migrator_all,
+-- widget_categories_migrator_all) let it read and write every tenant's rows. No tenant is set.
 
 -- Uses ON CONFLICT to make the migration idempotent (safe to re-run)
 INSERT INTO widget_categories (id, tenant_id, name, slug, description, sort_order, created_at, updated_at)
@@ -300,9 +344,6 @@ CROSS JOIN (
 ) AS category(name, slug, description, sort_order)
 ON CONFLICT DO NOTHING;
 
-ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
-ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
-
 COMMIT;
 ```
 
@@ -310,11 +351,9 @@ COMMIT;
 -- Migration: 20260115100200_seed_default_categories.down.sql
 BEGIN;
 
--- Remove only the seeded default categories (by slug), with FORCE lifted for this transaction
-ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
+-- Remove only the seeded default categories (by slug), every tenant's (the migrator policy)
 DELETE FROM widget_categories
 WHERE slug IN ('general', 'internal', 'customer', 'deprecated');
-ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
 
 COMMIT;
 ```
@@ -329,19 +368,13 @@ COMMIT;
 
 BEGIN;
 
--- Small tables (< 100K rows): single UPDATE, with FORCE lifted for this transaction (the owner runs
--- it; see "Who runs migrations")
-ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
-
+-- Small tables (< 100K rows): single UPDATE across every tenant, FORCE left on: the migrator's
+-- policies let it see all rows (see "Who runs migrations")
 UPDATE widgets w
 SET category_id = c.id, updated_at = NOW()
 FROM widget_categories c
 WHERE c.tenant_id = w.tenant_id AND c.slug = 'general' AND c.deleted_at IS NULL
   AND w.category_id IS NULL AND w.deleted_at IS NULL;
-
-ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
-ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 
 COMMIT;
 
@@ -349,8 +382,8 @@ COMMIT;
 -- LARGE TABLE ALTERNATIVE: batches, each its own short transaction, so no lock is held for the
 -- whole run. A DO block may COMMIT between batches (PostgreSQL 11+) when it runs outside a
 -- transaction block: make it the ONLY statement in its migration file (no BEGIN/COMMIT) —
--- golang-migrate sends the file as one statement. FORCE is lifted and restored inside each batch,
--- so no other session ever sees it off.
+-- golang-migrate sends the file as one statement. FORCE stays on: the migrator's policies let each
+-- batch reach every tenant, and no batch takes an ACCESS EXCLUSIVE lock.
 -- ============================================================================
 --
 -- DO $$
@@ -358,8 +391,6 @@ COMMIT;
 --     updated integer;
 -- BEGIN
 --     LOOP
---         ALTER TABLE widgets NO FORCE ROW LEVEL SECURITY;
---         ALTER TABLE widget_categories NO FORCE ROW LEVEL SECURITY;
 --         UPDATE widgets w
 --         SET category_id = c.id, updated_at = NOW()
 --         FROM widget_categories c
@@ -374,8 +405,6 @@ COMMIT;
 --               FOR UPDATE OF w2 SKIP LOCKED
 --           );
 --         GET DIAGNOSTICS updated = ROW_COUNT;
---         ALTER TABLE widget_categories FORCE ROW LEVEL SECURITY;
---         ALTER TABLE widgets FORCE ROW LEVEL SECURITY;
 --         COMMIT;
 --         EXIT WHEN updated = 0;
 --     END LOOP;
@@ -495,10 +524,11 @@ func WithTenantTx(ctx context.Context, pool *pgxpool.Pool, tenantID uuid.UUID, f
 
 ```go
 // cmd/migrate/migrate_test.go — runs the embedded migrations (migrationsFS, above) against a real
-// PostgreSQL as a NON-superuser table owner, the way they run when deployed. A superuser skips
-// row-level security, which hides every migration that breaks under FORCE ROW LEVEL SECURITY.
-// It catches: missing or wrong DOWN migrations, foreign-key ordering, and data migrations that fail,
-// or silently update nothing, under RLS.
+// PostgreSQL as a NON-superuser table owner without BYPASSRLS, the way the migrator runs on RDS/Aurora
+// (the stricter of the two deploy paths). A superuser skips row-level security, which hides every
+// migration that breaks under FORCE ROW LEVEL SECURITY. It catches: missing or wrong DOWN migrations,
+// foreign-key ordering, a tenant table without its migrator policy (decision D-001: data migrations
+// then fail, or silently update nothing), and a migrator policy that leaks to the app role.
 package main
 
 import (
@@ -522,14 +552,17 @@ import (
     "github.com/testcontainers/testcontainers-go/wait"
 )
 
-const owner = "app_owner" // owns the schema and runs the migrations: NOSUPERUSER NOBYPASSRLS
+const (
+    owner   = "app_owner"   // owns the schema and runs the migrations: NOSUPERUSER NOBYPASSRLS (RDS migrator)
+    runtime = "app_runtime" // the application: owns nothing, NOSUPERUSER NOBYPASSRLS
+)
 
 // schemaVersion is the last schema migration, before the seed and the backfill.
 const schemaVersion = 20260115100100
 
-// ownerDSN starts PostgreSQL, creates the owner role and a database it owns, and returns a DSN that
-// connects as the owner.
-func ownerDSN(t *testing.T) string {
+// ownerDSN starts PostgreSQL, creates the owner role, a database it owns and the app role, and returns
+// DSNs that connect as the owner and as the app role.
+func ownerDSN(t *testing.T) (string, string) {
     t.Helper()
     ctx := context.Background()
     pg, err := tcpostgres.Run(ctx, "postgres:16-alpine",
@@ -559,6 +592,7 @@ func ownerDSN(t *testing.T) string {
     password := uuid.NewString() // throwaway, per run (CREATE ROLE takes no bind parameters)
     for _, stmt := range []string{
         fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '%s'", owner, password),
+        fmt.Sprintf("CREATE ROLE %s LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '%s'", runtime, password),
         "CREATE DATABASE migrations_test OWNER " + owner,
     } {
         if _, err := super.ExecContext(ctx, stmt); err != nil {
@@ -573,7 +607,10 @@ func ownerDSN(t *testing.T) string {
     if err != nil {
         t.Fatal(err)
     }
-    return fmt.Sprintf("postgres://%s:%s@%s:%s/migrations_test?sslmode=disable", owner, password, host, port.Port())
+    dsn := func(role string) string {
+        return fmt.Sprintf("postgres://%s:%s@%s:%s/migrations_test?sslmode=disable", role, password, host, port.Port())
+    }
+    return dsn(owner), dsn(runtime)
 }
 
 func openDB(t *testing.T, dsn string) *sql.DB {
@@ -637,7 +674,7 @@ func must(t *testing.T, err error) {
 }
 
 func TestMigrations(t *testing.T) {
-    dsn := ownerDSN(t)
+    dsn, appDSN := ownerDSN(t)
     m := newMigrator(t, dsn)
 
     t.Run("up, down, up again", func(t *testing.T) {
@@ -666,21 +703,32 @@ func TestMigrations(t *testing.T) {
 
         must(t, m.Up())
 
+        // FORCE stayed on throughout; the owner saw every tenant through its migrator policy (D-001).
+        var n int
+        if err := db.QueryRow("SELECT count(*) FROM widgets WHERE category_id IS NOT NULL").Scan(&n); err != nil || n != len(tenants) {
+            t.Fatalf("owner, no tenant set: %d categorized widgets, %v; want %d (its migrator policy)", n, err, len(tenants))
+        }
+
+        // Read the result as the app role (the deployed service), which the migrator policy must not
+        // reach: each tenant sees exactly its own four categories and no uncategorized widget.
+        if _, err := db.Exec("GRANT SELECT ON widgets, widget_categories TO " + runtime); err != nil {
+            t.Fatal(err)
+        }
+        app := openDB(t, appDSN)
         for _, tenant := range tenants {
-            slugs, uncategorized := tenantState(t, db, tenant)
+            slugs, uncategorized := tenantState(t, app, tenant)
             if !slices.Equal(slugs, []string{"customer", "deprecated", "general", "internal"}) || uncategorized != 0 {
                 t.Errorf("tenant %s: categories %v, %d uncategorized widgets", tenant, slugs, uncategorized)
             }
         }
 
-        // FORCE is back on: without a tenant the owner is refused, not shown every row. The error is
-        // 42704 (undefined_object) on a connection that never set the tenant, and 22P02 ('' is not
-        // a UUID) on a pooled one whose earlier transaction-local set_config left the setting empty.
-        var n int
-        err := db.QueryRow("SELECT count(*) FROM widgets").Scan(&n)
+        // Without a tenant the app role is refused, not shown every row. The error is 42704
+        // (undefined_object) on a connection that never set the tenant, and 22P02 ('' is not a UUID)
+        // on a pooled one whose earlier transaction-local set_config left the setting empty.
+        err := app.QueryRow("SELECT count(*) FROM widgets").Scan(&n)
         var pgErr *pgconn.PgError
         if !errors.As(err, &pgErr) || (pgErr.Code != "42704" && pgErr.Code != "22P02") {
-            t.Fatalf("count without a tenant = %d, %v; want it refused (42704 or 22P02)", n, err)
+            t.Fatalf("app role, no tenant: count = %d, %v; want it refused (42704 or 22P02)", n, err)
         }
     })
 }
@@ -780,5 +828,6 @@ Optional but recommended:
 - Foreign keys MUST specify `ON DELETE` behavior explicitly (`CASCADE`, `SET NULL`, `RESTRICT`)
 - JSONB columns MUST have a GIN index if they will be queried (when you add one)
 - Table and column comments MUST be added for documentation
-- Migrations run as a non-superuser owner without `BYPASSRLS`; every step that reads or writes rows of a `FORCE ROW LEVEL SECURITY` table (data migrations, seeds, adding a foreign key) lifts `FORCE` inside its own transaction and restores it before commit — never across a commit
-- Migration tests run as that owner role, not a superuser (a superuser skips RLS and hides these failures), and cover up, down and re-up for every version
+- The first migration creates `app_grant_migrator(regclass)`; every migration that creates a `FORCE ROW LEVEL SECURITY` table calls `SELECT app_grant_migrator('<table>')` (decision D-001), so the migrator, with or without `BYPASSRLS`, reaches every tenant in data migrations, seeds and foreign-key validation
+- Never lift `FORCE` in a migration (`NO FORCE` takes an `ACCESS EXCLUSIVE` lock), and never write an unconditional (`USING (true)`) policy for any role but the table owner: one `TO PUBLIC` or `TO` the app role hands the application every tenant's rows (BLOCKING in review; the deploy's `db-rls-check` fails on it)
+- Migration tests run as a non-superuser owner without `BYPASSRLS` (the RDS migrator; a superuser skips RLS and hides these failures), cover up, down and re-up for every version, and prove the app role still sees only its tenant

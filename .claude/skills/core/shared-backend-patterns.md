@@ -54,13 +54,19 @@ CREATE POLICY tenant_isolation ON orders
 
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE orders FORCE ROW LEVEL SECURITY;  -- otherwise the table's owner bypasses the policy
+
+-- The migrator's policy (D-001): TO the table owner only, so migrations and seeds reach every tenant
+-- without BYPASSRLS (RDS/Aurora) and without lifting FORCE. Helper: databases/postgres.md.
+SELECT app_grant_migrator('orders');
 ```
 - Application-level filtering is the PRIMARY mechanism
 - RLS is the SECONDARY safety net — catches bugs in application code
 - Set the tenant context per transaction, on the connection that runs the queries:
   `SELECT set_config('app.current_tenant_id', $1, true)`. A session-level `SET` stays on the pooled
   connection and applies to the next request that borrows it
-- RLS policies MUST exist on every tenant-scoped table
+- RLS policies MUST exist on every tenant-scoped table, and so must the migrator-only policy
+  (`app_grant_migrator`, decision D-001). No unconditional (`USING (true)`) policy may name any role but the
+  table owner, never `PUBLIC` or the application's role
 
 ### Logging
 ```text
