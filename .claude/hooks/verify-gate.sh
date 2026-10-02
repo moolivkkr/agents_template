@@ -39,6 +39,8 @@
 #                             archived per-version render (<key>/<version>/) still match their sha256; no screen is pending_approval, sync_back_pending or in drift; every
 #                             stitch_deviations[] entry in those manifests was fixed or accepted and synced
 #                             back (stitch-state.py gate; skills/ui/stitch-design.md §6).
+#   (h)  TC inventory        — when docs/design/phases/N/ exists: sdlc-graph.py gate --tc-only (the one TC gate:
+#                             tc-inventory.py's rules in results mode + range-expanded and malformed IDs).
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
 #
@@ -550,6 +552,30 @@ else
   else
     while IFS= read -r b; do [ -n "$b" ] && fail "stitch: ${b#BLOCKING: }"; done < <(printf '%s\n' "$STITCH_OUT" | grep '^BLOCKING: ')
     [ "$STITCH_RC" -ne 2 ] && fail "stitch-state.py gate failed (exit $STITCH_RC)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5a3. Check (h): TC inventory, computed by the ONE deterministic TC gate (sdlc-graph.py gate --tc-only).
+#      Same rules as tc-inventory.py (it imports tc-inventory's test-name parsers and weakening check) plus:
+#      definition ranges expanded, malformed ID cells flagged, results mode required (every runner sidecar in
+#      reports/), base_sha required. Applies when the phase has docs/design/phases/N/. A finding, like (b).
+# ---------------------------------------------------------------------------
+echo "── (h) TC inventory (sdlc-graph gate) ──"
+SDLC_GRAPH="${HOOK_DIR:-.claude/hooks}/sdlc-graph.py"
+[ -f "$SDLC_GRAPH" ] || SDLC_GRAPH=".claude/hooks/sdlc-graph.py"
+if [ ! -d "docs/design/phases/$PHASE" ]; then
+  ok "no docs/design/phases/$PHASE — the TC inventory gate does not apply"
+elif [ ! -f "$SDLC_GRAPH" ] || ! command -v python3 >/dev/null 2>&1; then
+  fail "docs/design/phases/$PHASE exists but sdlc-graph.py (or python3) is unavailable — can't compute the TC inventory (copy sdlc-graph.py + tc-inventory.py from ~/.claude/hooks/startup/)."
+else
+  TC_OUT="$(python3 "$SDLC_GRAPH" --root "$PWD" gate --phase "$PHASE" --tc-only --max-tokens 1500 2>&1)"; TC_RC=$?
+  printf '%s\n' "$TC_OUT" | grep -v '^BLOCKING: ' | sed 's/^/    /'
+  if [ "$TC_RC" -eq 0 ]; then
+    ok "every HIGH/MEDIUM TC ID of phase $PHASE has a test named with it that ran and passed (sdlc-graph gate)"
+  else
+    while IFS= read -r b; do [ -n "$b" ] && fail "tc: ${b#BLOCKING: TC: }"; done < <(printf '%s\n' "$TC_OUT" | grep '^BLOCKING: ')
+    printf '%s\n' "$TC_OUT" | grep -q '^BLOCKING: ' || fail "sdlc-graph.py gate failed (exit $TC_RC) — run it by hand: python3 $SDLC_GRAPH gate --phase $PHASE --tc-only"
   fi
 fi
 
