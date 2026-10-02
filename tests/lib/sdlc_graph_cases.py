@@ -1106,6 +1106,9 @@ write(F, "agent_state/config/graph-policy.json", "{not json")
 rc, out, _ = sg(F, "interactive")
 check("FS10", True, "unreadable" in out, "an unreadable graph-policy.json falls back to the default and says so")
 os.remove(os.path.join(F, "agent_state/config/graph-policy.json"))
+rc, out, _ = sg(F, "find", "FR-001", env={k: v for k, v in WARN.items() if k != "SDLC_GRAPH_INTERACTIVE"})
+check("FS10d", (5, True), (rc, out.startswith("interactive graph disabled (default)")),
+      "shipped default is OFF (the measured A/B missed the 20% saving bar): no file, no env → disabled, exit 5")
 
 # schema change → full rebuild of the find index
 import sqlite3 as _sq

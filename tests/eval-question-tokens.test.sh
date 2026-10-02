@@ -75,7 +75,7 @@ check("E06", (4, False, False), (len(mp), " A " in sheet.replace("\n", " ") and 
 grades = {gid: ("correct" if v["arm"] == "B" or v["qid"] == "q1" else "partial") for gid, v in mp.items()}
 json.dump(grades, open(os.path.join(out, "grades.json"), "w"))
 rp = subprocess.run([sys.executable, S, "report", "--out", out, "--questions", q], capture_output=True, text=True)
-check("E07", (True, True), ("(+20.0% saved; bar 20%)" in rp.stdout, "VERDICT: KEEP enabled" in rp.stdout),
+check("E07", (True, True), ("(saving +20.0%; bar 20%)" in rp.stdout, "VERDICT: KEEP enabled" in rp.stdout),
       "report: median per-question tokens 1000 → 800 is a 20% drop with accuracy not lower → KEEP")
 grades = {gid: ("wrong" if v["arm"] == "B" else "correct") for gid, v in mp.items()}
 json.dump(grades, open(os.path.join(out, "grades.json"), "w"))

@@ -34,7 +34,8 @@
    "kind": "test-coverage",
    "question": "How many HIGH-priority TC IDs does phase 6 define in its specs, and how many of them have a test whose name carries the ID?",
    "key": "133 HIGH TC IDs; 0 are carried by a test name (12 appear only in comments)",
-   "grade": "correct = ~133 (±10%) AND none/0 named by a test; partial = one of the two right"
+   "grade": "correct = ~133 (±10%) AND none/0 named by a test; partial = one of the two right",
+   "note": "133 = the graph's well-formed HIGH inventory; counts of 147-152 include malformed IDs (e.g. TC-SEC-020-001, TC-UI-6001a) and duplicate rows. Graded by the pre-set ±10% rule; under a lenient key all four answers are correct."
   },
   {
    "id": "q06",
@@ -47,8 +48,8 @@
    "id": "q07",
    "kind": "test-coverage",
    "question": "Which TC IDs does tests/unit/test_normative_corpus_phase7.py cover?",
-   "key": "TC-NORM-020..027 and TC-NORM-040..046 (15 IDs)",
-   "grade": "correct = both ranges (>=12 of the 15); partial = some"
+   "key": "TC-NORM-020..027, 030..034 and 040..046 (20 test functions named test_TC_NORM_*). Key corrected while grading: the first key (15 IDs) came from the graph's spec inventory, where 030..034 have no spec row; the test file names all 20.",
+   "grade": "correct = all three ranges; partial = two ranges"
   },
   {
    "id": "q08",

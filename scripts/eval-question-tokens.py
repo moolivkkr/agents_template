@@ -237,7 +237,7 @@ def cmd_report(a):
         acc_ok = summary[A]["acc"] is None or summary[B]["acc"] is None or summary[B]["acc"] >= summary[A]["acc"]
         keep = drop >= a.bar and acc_ok
         verdict = (f"\nmedian total tokens per question: {A} {int(summary[A]['median']):,} → {B} {int(summary[B]['median']):,} "
-                   f"({drop:+.1%} saved; bar {a.bar:.0%}); accuracy {A} {summary[A]['acc']} → {B} {summary[B]['acc']}\n"
+                   f"(saving {drop:+.1%}; bar {a.bar:.0%}); accuracy {A} {summary[A]['acc']} → {B} {summary[B]['acc']}\n"
                    f"VERDICT: {'KEEP enabled' if keep else 'DISABLE by default'}"
                    + (f" (fixed overhead {fixed} tok/step added)" if fixed else ""))
         kinds = {}

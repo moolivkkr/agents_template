@@ -436,8 +436,8 @@ Write `CLAUDE.md` at the project root with:
 
 Also embed the **Ground Truth** block from `~/.claude/templates/CLAUDE.md.template` (the
 `⛔ GROUND TRUTH` section pointing at `docs/PROJECT_FACTS.md`) near the top of CLAUDE.md, and the
-**Asking about this project** block after it verbatim (it tells the main session to try `sdlc-graph.py find` /
-`status` first; the block names the `agent_state/config/graph-policy.json` switch, so keep it as written).
+**Asking about this project** block after it verbatim (it applies only when `agent_state/config/graph-policy.json`
+has `"interactive": true`, which is off by default because the measured A/B did not save tokens; keep it as written).
 
 ### Step 4b — Create the Tier 0 ground-truth file
 

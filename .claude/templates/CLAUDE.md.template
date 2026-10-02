@@ -22,10 +22,10 @@ assumption** in prompts, specs, or model training. If a task references anything
 
 ## Asking about this project
 
-For questions about requirements, specs, tests, decisions or project status, first run
-`python3 .claude/hooks/sdlc-graph.py find "<question>"` (or `status [--phase N]`), then open only the spans it lists.
-If it prints GRAPH UNAVAILABLE or "interactive graph disabled", or `agent_state/config/graph-policy.json` has
-`"interactive": false`, skip it and explore normally.
+Only if `agent_state/config/graph-policy.json` has `"interactive": true` (off by default): for questions about
+requirements, specs, tests, decisions or project status, first run `python3 .claude/hooks/sdlc-graph.py find
+"<question>"` (or `status [--phase N]`), then open only the spans it lists; if it prints GRAPH UNAVAILABLE or
+"interactive graph disabled", explore normally. Otherwise ignore this paragraph and explore normally.
 
 ---
 

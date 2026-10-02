@@ -50,8 +50,9 @@ Usage: sdlc-graph.py [--root DIR] [--graph-dir DIR] [--json] [--max-tokens N] [-
                                          show / set agent_state/config/gate-policy.json (which of the four
                                          stricter checks below block; the rest warn)
 
-INTERACTIVE (the main session's questions; behind agent_state/config/graph-policy.json "interactive", env
-SDLC_GRAPH_INTERACTIVE=0|1; disabled → one line on stdout, exit 5; pipeline commands above are never affected):
+INTERACTIVE (the main session's questions; OFF by default — measured, see docs/evals/graph-find/; turn on with
+agent_state/config/graph-policy.json {"interactive": true} or env SDLC_GRAPH_INTERACTIVE=1; disabled → one line on
+stdout, exit 5; pipeline commands above are never affected):
   find <question...>   (alias ask)       IDs in the question resolved exactly first (FR/NFR/OBJ, TC, D-NNN/D35,
                                          F-NNN, AD/ADR-N, "METHOD /path", file, `symbol`, table, "phase N"), then
                                          FTS5 bm25 hits over spec/BRD/ledger/doc sections, reports, manifests, code
@@ -2961,8 +2962,11 @@ def cmd_stats(g, a):
 # Interactive questions: find / status (the main session), behind graph-policy.json "interactive"
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 GRAPH_POLICY_FILE = os.path.join("agent_state", "config", "graph-policy.json")
-# The shipped default, decided by measurement (scripts/eval-question-tokens.py, docs/evals/graph-find-eval.md):
-INTERACTIVE_DEFAULT = True
+# The shipped default, decided by measurement (scripts/eval-question-tokens.py, docs/evals/graph-find/README.md):
+# on a 21-question A/B (rera, claude-opus-5-5, 2 reps) find/status RAISED the median tokens per question by 32% at
+# equal accuracy, missing the >=20% saving bar, so the capability ships OFF; a project opts in with
+# `sdlc-graph.py interactive on` (or SDLC_GRAPH_INTERACTIVE=1).
+INTERACTIVE_DEFAULT = False
 INTERACTIVE_RC = 5          # distinct exit code: "the capability is switched off, explore normally"
 INTERACTIVE_CMDS = ("find", "ask", "status")
 
