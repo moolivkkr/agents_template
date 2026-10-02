@@ -62,23 +62,33 @@ Pipeline diagnostics:
 
 ---
 
-## What's new (2026-09)
+## What's new (2026-09 to 2026-10)
 
 | Area | Change | Guide |
 |------|--------|-------|
-| **sdlc-graph set up by the installer (2026-10)** | `install.sh` checks python3 ≥ 3.9 + sqlite3 + FTS5 (`scripts/graph-preflight.sh`) and stages a hook manifest; `new-project.sh` and the new `~/.claude/scripts/startup/startup-project-update.sh --project <dir> [--dry-run]` install/refresh framework hooks in new **and existing** projects (stale copies refreshed, locally edited ones kept unless `--force`), merge `settings.json`, ignore `agent_state/graph/` and build the graph; `/autonomous` Step 0 and `/develop` Wave 0c refresh stale hooks instead of only copying missing ones. Interactive `find`/`status` stay off by default | [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md) |
+| **Amazon EKS staging/prod (2026-10)** | `/startup:deploy --target=staging\|prod` runs the same kustomize base on EKS Auto Mode (D-003) with RDS PostgreSQL, External Secrets + Pod Identity, ECR digest promotion from qa (`promote-eks.sh`), GitHub OIDC CI and Terraform with S3-native locking (`.claude/templates/k8s/eks/`). **Humans or CI deploy it; the guard denies agents.** Prod needs a typed or Environment-approved confirmation and only runs digests that were HEALTHY on staging. Validated offline only (`tests/eks-templates.test.sh`); never run against real AWS | [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
+| **D-001 migrator policy (2026-10)** | On RDS the migrator can't be BYPASSRLS, so every FORCE-RLS table gets a migrator-only policy (`app_grant_migrator()`, `databases/postgres.md`), the same on the lab and EKS. A `db-rls-check` Job runs as the app role on every deploy and fails it on a missing policy, an unconditional policy that reaches the app role, or rows readable with no tenant set. Wired into the archetypes, `migration_safety_reviewer` and `tenant_isolation_verifier` | [docs/DEPLOYMENT_GUIDE.md §5](docs/DEPLOYMENT_GUIDE.md#5-database-roles) |
+| **D-002 warning-first TC gate (2026-10)** | `verify-gate.sh` check (h) runs `sdlc-graph.py gate`: everything the old `tc-inventory` gate blocked on still blocks; four stricter checks (malformed ID cells, range-defined IDs, results mode, base_sha) are **warnings** until a project opts in with `sdlc-graph.py policy --strict` (`agent_state/config/gate-policy.json`). One shared TC-table parser in `tc-inventory.py`: a range/malformed/divider row is no longer taken as a header, and `\|` is a literal pipe | [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md#the-tc-gate-and-d-002-warn-first) |
+| **Agents read the graph, not whole spec folders (2026-10)** | Developers, test writers, verifiers, auditors and `spec_impl_reconciler` load their slice with `sdlc-graph.py context --agent <role>`; reviewers use `diff-context`; every TC-inventory call site goes through the graph (`tc-inventory.py` only when the graph is unavailable) | [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md#pipeline-commands-and-who-uses-them) |
+| **sdlc-graph + project updater in the installer (2026-10)** | `install.sh` checks python3 ≥ 3.9 + sqlite3 + FTS5 (`scripts/graph-preflight.sh`) and stages a hook manifest; `new-project.sh` and the new `~/.claude/scripts/startup/startup-project-update.sh --project <dir> [--dry-run]` install/refresh framework hooks in new **and existing** projects (stale copies refreshed, locally edited ones kept unless `--force`), merge `settings.json`, ignore `agent_state/graph/` and build the graph; `/autonomous` Step 0 and `/develop` Wave 0c refresh stale hooks instead of only copying missing ones. Interactive `find`/`status` stay off by default | [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md) |
+| **UI and e2e tests assert the data (2026-10)** | New `TC-DATA` category: one row per bound element (column, field, badge, KPI, prefill, option list) with value / empty / edge cases (`test-case-generation.md`); `ux_designer` writes a Data Element Inventory and `design_quality_reviewer` blocks a bound element without one. `ui_test_agent` asserts exact text in place; browser specs use the `playwright.md` page-health fixture (console errors, uncaught errors, failed requests, unexpected 4xx/5xx fail the test) and a data round trip (list, detail, reload, edit prefill, API read-back). Web tier only so far | [Testing](#what-ui-and-e2e-tests-must-assert) |
+| **Token measurements (2026-10)** | Interactive `sdlc-graph find`/`status` ship **off**: on a real project they raised median tokens per question by 31.6% (`docs/evals/graph-find/`). Slimming that project's CLAUDE.md from 62 KB to 12.7 KB cut median tokens per question by 44% (`docs/evals/claude-md-slim/`). Measure your own with `scripts/eval-question-tokens.py` | [Token and context](#measured-what-a-question-costs) |
+| **Install capability check (2026-10)** | `install.sh` prints which tool each feature needs and whether this machine has it (`scripts/capability-check.sh`; informational, never fails the install) | [Quick start](#1-install-one-time) |
+| **Supervisor signal handling (2026-10)** | `startup-autonomous-run.sh` forwards SIGHUP like SIGTERM (exit 129), and its child gets a clean SIGINT even when the supervisor was started with SIGINT ignored (a background job of a script) | [docs/AUTONOMOUS_GUIDE.md §10](docs/AUTONOMOUS_GUIDE.md) |
 | **Board review fixes (14 root causes)** | The gate reads runner-written evidence only (`sdlc.test-results/v1`) and blocks stale, failing, flaky or untested work; TC coverage counts tests that ran and passed; one API envelope; security and runtime contracts given to the coders; tests run against qa; per-finding security decisions; guard gaps closed; optimizers `/optimize`-only. 794 checks across 14 suites | [docs/AGENT_BOARD_REVIEW_2026-09-30.md](docs/AGENT_BOARD_REVIEW_2026-09-30.md) |
-| **Kubernetes dev/qa on a Lima lab cluster** | `/startup:deploy --target=dev\|qa`: per-app namespaces `<app>-dev`/`<app>-qa` on k3s in Lima (one or two Macs), images promoted to qa **by digest**, migrate/seed Jobs, `env-reset.sh`, `--rollback`, evidence for the phase gate and `/accept`; one-command cluster bootstrap (`cluster-up.sh`); live e2e `tests/k8s-e2e.sh` | [lima-k8s-lab skill](.claude/skills/infrastructure/lima-k8s-lab.md) |
+| **Kubernetes dev/qa on a Lima lab cluster** | `/startup:deploy --target=dev\|qa`: per-app namespaces `<app>-dev`/`<app>-qa` on k3s in Lima (one or two Macs), images promoted to qa **by digest**, two Postgres roles (migrator owns, app role bound by FORCE RLS) converged on every deploy, migrate/seed Jobs, `env-reset.sh`, `--rollback`, evidence for the phase gate and `/accept`; one-command cluster bootstrap (`cluster-up.sh`, human); live e2e `tests/k8s-e2e.sh` | [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
 | **Unattended permissions, prod out of reach** | `sdlc-guard` PreToolUse hook + PATH shims (pinned cluster/credential, writable namespaces by pattern, secrets never read, CLAUDE.md ask-list), RBAC-bounded agent identity, auto-mode settings you apply with one reviewed script, optional root-owned managed layer | [docs/PERMISSIONS_GUIDE.md](docs/PERMISSIONS_GUIDE.md) |
 | **React Native mobile (iOS + Android)** | New generated agents `mobile_developer` and `mobile_test_agent`; new core agents `mobile_e2e_orchestrator` (device matrix runner) and `mobile_platform_auditor`; Maestro (default), Detox and Appium skill packs; TC categories `TC-MCMP/MINT/ME2E/MPLT/MA11Y/MVIS/MPERF`; `/startup:test --mobile [--platform=ios\|android]`; IMPLEMENTATION_GUIDELINES §24 Mobile; `mobile.yml` CI guidance | [docs/MOBILE_GUIDE.md](docs/MOBILE_GUIDE.md) |
-| **Google Stitch design** | `/startup:stitch` workbench; Stitch is the core, two-way designer: every new or changed screen is designed in Stitch and approved before it's built; `/startup:stitch import|adopt` bootstraps an existing app (Playwright capture + fidelity score), `request` and `sync-back` carry changes both ways, and the phase gate checks every changed route has an approved, hash-matching render (`docs/design/stitch.json`, `stitch-state.py`) | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md) |
+| **Google Stitch design** | `/startup:stitch` workbench; Stitch is the core, two-way designer: every new or changed screen is designed in Stitch and approved before it's built; `/startup:stitch import|adopt` bootstraps an existing app (Playwright capture + fidelity score), `request` and `sync-back` carry changes both ways, and the phase gate checks every changed route has an approved, hash-matching render (`docs/design/stitch.json`, `stitch-state.py`). Version labels keep the as-is design next to the improved one: `v0.1` baseline, `v0.2`… iterations, `v1.0` approved (`stitch-state.py versions\|diff\|label`) | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md) |
 | **UI standards audit** | New core agent `ui_standards_auditor` and `/startup:ui-audit`: every built web and React Native page is audited against the design standards and its Stitch baseline | [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md#7-auditing-built-pages--startupui-audit) |
 | **`/startup:autonomous` no longer stalls** | Sub-commands run through the Skill tool; their "▶ Next" hints are ignored under autonomous; `/design` runs after `/plan`; every sub-command honours auto mode; a Stop hook keeps the turn going while `run.json` says `running`; resume by step id | [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
-| **Unattended `/autonomous` supervisor** | `~/.claude/scripts/startup/startup-autonomous-run.sh` runs `claude -p` in auto mode, reads `run.json` on every exit, restarts with backoff, waits out rate limits, stops for a human (exit 10) and enforces `max_cost_usd` / `max_hours` / `max_restarts` with distinct exit codes; one per project | [docs/AUTONOMOUS_GUIDE.md §10](docs/AUTONOMOUS_GUIDE.md) |
+| **Unattended `/autonomous` supervisor** | `~/.claude/scripts/startup/startup-autonomous-run.sh` runs `claude -p` in auto mode, reads `run.json` on every exit, restarts with backoff, waits out rate limits, stops for a human (exit 10) and enforces `max_cost_usd` / `max_hours` / `max_restarts` with distinct exit codes; one per project. Tested against a fake `claude` (`tests/autonomous-supervisor.test.sh`); no end-to-end run against a real `claude -p` session is recorded | [docs/AUTONOMOUS_GUIDE.md §10](docs/AUTONOMOUS_GUIDE.md) |
 | **`/develop` wave execution** | Wave 2A sequenced named spawns (database → migration → backend → api → ui ∥ mobile); Wave 3 per-tier named agents; Wave 3v `test_runner` independently re-runs suites and cross-checks writer counts; Wave 4 conditional reviewers driven by the roster | [Implementation waves](#implementation-waves) |
 | **`/startup:demo`** | New command: `demo_documenter` → `demo_executor` → `demo_validator` | [Commands](#commands) |
 | **Dependency graph** | `downstream:` is now derived by `.claude/agents/_sync-deps.py`; `tests/dependency-graph.test.sh` checks agents ↔ commands ↔ skills in CI | [Contributing](#contributing-to-the-framework) |
 | **Fixes** | TC-ID scanners now match `TC-[A-Z0-9]+` (they missed `TC-E2E-*`/`TC-A11Y-*`) and scan `e2e/`, `apps/`, `mobile/` incl. Maestro YAML; generated agents keep the bare role as `name:`; report names unified (`quality_gate.md`; reconciliation reports in `agent_state/reconciliation/phase-N/`); `product_api_researcher` wired into `/product-workflows` Step 2b; every agent loads at least one skill pack | — |
+
+**Guides:** [Autonomous runs](docs/AUTONOMOUS_GUIDE.md) · [Deployment (local, dev/qa, EKS)](docs/DEPLOYMENT_GUIDE.md) · [Project graph + TC gate + updater](docs/SDLC_GRAPH.md) · [Google Stitch design](docs/STITCH_DESIGN_GUIDE.md) · [React Native mobile](docs/MOBILE_GUIDE.md) · [Permissions and the guard](docs/PERMISSIONS_GUIDE.md)
 
 ---
 
@@ -155,6 +165,23 @@ It first checks that `python3` (3.9+) has `sqlite3` with FTS5 for the hooks and 
 ([sdlc-graph](docs/SDLC_GRAPH.md)) and prints an `sdlc-graph:` line; on a failure it warns with the fix and installs
 anyway (phase gates block until python3 is fixed).
 
+It then prints a capability table (`scripts/capability-check.sh`, also installed as
+`~/.claude/scripts/startup/capability-check.sh`): for each feature, the tool it needs, whether this machine has it,
+and what it is used for. It is informational and never fails the install. A tool that only exists as an
+`sdlc-guard` PATH shim is reported `missing (shim)`.
+
+**Prerequisites by feature** (what the check looks for):
+
+| Needed for | Tools |
+|---|---|
+| Everything: hooks, the phase gate, sdlc-graph | `python3` ≥ 3.9 with `sqlite3` (FTS5 recommended), `jq` (`verify-gate.sh` blocks without it; the `/autonomous` hooks silently do nothing without it), `git`, `bash` |
+| Unattended `/autonomous` supervisor, token evals | the `claude` CLI; `perl` (else `python3`) for the supervisor's signal shim |
+| `/startup:stitch import` | the Google Stitch MCP server connected as `stitch`, `node`, and Playwright resolvable from the project or `$STITCH_PLAYWRIGHT_DIR`, plus system Chrome or Playwright's Chromium ([Stitch guide §1](docs/STITCH_DESIGN_GUIDE.md#1-prerequisites-and-consent)) |
+| `/startup:deploy --target=local` | Docker with Compose |
+| `--target=dev\|qa` (lab cluster) | `kubectl`, `crane`, `docker`; a human creates the cluster with `limactl` ([deployment guide](docs/DEPLOYMENT_GUIDE.md)) |
+| Staging/prod on EKS (human or CI) | `terraform` ≥ 1.11 or `tofu`, `aws`, `kubectl`, `crane`, `helm` |
+| Framework tests (contributors) | `python3` with PyYAML, `jq`; see [Framework tests](#framework-tests) |
+
 **Existing projects** (created before this install, or with older hooks) are brought up to date with:
 
 ```bash
@@ -230,7 +257,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup:autonomous` | Runs the full pipeline end-to-end — `/init` → `/map` → `/discuss` → `/plan` → `/design` → `/develop` for all phases, then `/accept`. One human checkpoint. Auto-researches all decisions. See [docs/AUTONOMOUS_GUIDE.md](docs/AUTONOMOUS_GUIDE.md) |
 | `/startup:accept` | Runs full-product acceptance tests + contract shape assertions after all phases, against the BRD as it is now: Step 1a amends TC-ACC rows for changed/new FRs, the whole committed suite runs, and `acceptance-map.py --all` must show every Must/Should FR COVERED for READY. Supports `--auto` |
 | `/startup:test` | Runs tests standalone (unit / integration / e2e / acceptance / performance / system / traceability / mobile) |
-| `/startup:stitch` | Google Stitch workbench — `init` (project + house-style design system), `generate`, `variants`, `edit`, `theme`, `sync` (into the wireframe contract, behind the design gate), `status` |
+| `/startup:stitch` | Google Stitch, the core designer — `init` (project + house-style design system), `import` (recreate every page of an existing app from a Playwright capture, fidelity-scored) / `adopt` (map screenshots you uploaded in Stitch to routes), `request` (one new or changed screen through the approval loop), `sync-back` (accepted code deviations back to Stitch), `generate`, `variants`, `edit`, `theme`, `sync` (into the wireframe contract, behind the design gate), `status`. See [docs/STITCH_DESIGN_GUIDE.md](docs/STITCH_DESIGN_GUIDE.md) |
 | `/startup:ui-audit` | Audits every page of the running web + React Native UI against the design standards and its Stitch baseline. Report-only by default; `--fix=design\|code\|all`, `--approve=<pages>` |
 | `/startup:demo` | Prepares and dry-runs a stakeholder demo of a completed phase (`demo_documenter` → `demo_executor` → `demo_validator`) |
 | `/startup:recon` | Two-way reconcile requirements ↔ BRD ↔ TRD ↔ code ↔ tests. Bare = report only; `--fix=code` (spec wins, alias `/converge`); `--fix=docs` (as-built wins, alias `/reconcile`). Doc changes flow on to acceptance: changed FRs show CHANGED and backfilled ones NEW in `acceptance-map.py` until their tests match |
@@ -243,7 +270,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup:review` | Standalone code review: spec compliance → style + architecture + security (parallel) |
 | `/startup:board-review` | Board review of a group of agents (`coding-testing`, `debate`, `requirements`, `reconcile`, `planning`, `review`, `ops`, `all`, or a glob): seven hats in parallel, verifiers on Fable try to refute every serious finding blind to its severity, `board-review.py` checks citations and derives scores; `--compare` shows score movement between runs |
 | `/startup:optimize` | Standalone code optimization with before/after comparison — dead code, code reduction, performance |
-| `/startup:deploy` | Builds, migrates, deploys to local / staging / prod, validates health post-deploy |
+| `/startup:deploy` | Builds, migrates, deploys and health-checks: `local` (Compose), `dev`/`qa` (lab Kubernetes cluster, agents run it unattended, qa promoted by digest), `staging`/`prod` (Amazon EKS: prints the human/CI steps and stops). See [docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md) |
 | `/startup:status` | Shows phase progress, BRD coverage, open issues, and next recommended action |
 | `/startup:pause` | **NEW** Saves session state (phase, step, completed items, blockers, decisions) for later resumption. Supports named threads |
 | `/startup:resume` | **NEW** Restores paused session state and routes to the appropriate command to continue. Use `--list` to see all paused sessions |
@@ -251,7 +278,7 @@ The agents work with whatever you have. If something is missing, they'll ask.
 | `/startup:hotfix` | Fast-track bug fix — scoped change → scoped test → scoped review → merge. Bypasses full `/develop` cycle |
 | `/startup:diagnose` | Structured bug investigation — traces symptom to root cause through spec ↔ implementation comparison |
 | `/startup:benchmark` | Performance tracking — captures metrics per phase, saves baselines, flags regressions >10% |
-| `/startup:rollback` | Deployment rollback — reverses migrations, redeploys previous build, validates health |
+| `/startup:rollback` | Redeploys the previous HEALTHY build and validates health. Never reverses the schema (migrations are forward-only); `--reverse_schema` offers DOWN migrations for `local` only, after you confirm |
 | `/startup:health` | **NEW** Diagnoses pipeline state integrity — manifest validity, gate consistency, file references, memory hygiene (stale sessions, stale codebase mappings, oversized logs, orphaned debates). Use `--fix` for auto-repair |
 | `/startup:forensics` | **NEW** Post-mortem investigation for failed pipeline runs — timeline reconstruction, root cause classification, recovery recommendations |
 
@@ -430,8 +457,11 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 **`/startup:deploy`**
 ```
---target=local|staging|prod   (default: local)
---dry_run                     Show plan without deploying
+--target=T        local (default) | ha-local | dev | qa | staging | prod
+                  dev/qa: lab cluster (scripts/k8s/deploy.sh); staging/prod: Amazon EKS, human or CI only
+--phase=N         dev/qa: also write the phase gate's deploy_<env> evidence
+--failover_test   ha-local only: run the failover suite
+--dry_run         Show plan without deploying
 ```
 
 **`/startup:hotfix`**
@@ -461,8 +491,9 @@ The agents work with whatever you have. If something is missing, they'll ask.
 
 **`/startup:rollback`**
 ```
---target=local|staging|prod   Environment to roll back (required)
---confirm                     Required for production rollback
+--target=T        local | dev | qa | staging | prod (required; staging/prod: human or CI only)
+--confirm         Required for production rollback
+--reverse_schema  local only: offer the DOWN migrations newer than the rolled-back build, run only after you confirm
 ```
 
 ---
@@ -515,7 +546,21 @@ Step 6    Report           Summary of what was built, test results, gate status
 ✅ Acceptance tests        all in-scope use cases pass (browser-based for UI phases)
 ```
 
-Before any of these are evaluated, the gate runs `.claude/hooks/verify-gate.sh`: every agent named in `agent_state/phases/N/roster.json` must have a `completed` line in `execution.jsonl`, and each completed agent's report must exist and not be a stub. Conditional agents (mobile, accessibility, UI standards, migration safety, breaking change, tenant isolation) add their reports to the required set when they are in the roster; mobile phases also need device results on **both** iOS and Android.
+Those conditions are the orchestrator's checklist. The deterministic part is `.claude/hooks/verify-gate.sh`, which runs as a Stop hook and on every write to a phase `manifest.json`, and exits 2 to block:
+
+| Check | Blocks when |
+|---|---|
+| (a) roster | an agent named in `agent_state/phases/N/roster.json` has no `completed` line in `execution.jsonl` |
+| (a2) roster floor | a phase that ran implementation agents lacks the review floor (code reviewers I/II, security, code quality) or the verification floor (`test_runner`, `spec_test_reconciler`, acceptance, and `deploy_dev` + `deploy_qa` on projects with `deploy/k8s/app.env`) |
+| (b) evidence | a test agent's `sdlc.test-results/v1` sidecar is missing, failing, flaky, empty, has a HIGH/MEDIUM case not PASS, or (on an explicit gate) was produced at another commit or a dirty tree |
+| (c) dangling failure | a `failed` line has no later `completed` |
+| (d) honesty | `gate.passed` is set while (a)–(c) don't hold |
+| (e) execution (opt-in) | the project's own test/lint/typecheck commands (`verify-commands.json`) fail |
+| (f) debates | a debate request for the phase has no valid verdict |
+| (g) Stitch | when `docs/design/stitch.json` exists: a UI route changed this phase has no approved, hash-matching render, or a deviation is unresolved |
+| (h) TC inventory | on an explicit gate (Wave 6, a manifest write), when `docs/design/phases/N/` exists, `sdlc-graph.py gate --tc-only`: a HIGH/MEDIUM TC ID with no test that ran and passed, and every other rule `tc-inventory.py` enforces. Its four stricter checks (malformed ID cells, range-defined IDs, results mode, base_sha) are **warnings** until the project opts in (decision D-002; `sdlc-graph.py warnings --phase N` lists them, `policy --strict` enforces them) |
+
+Conditional agents (mobile, accessibility, UI standards, migration safety, breaking change, tenant isolation) add their reports to the required set when they are in the roster; mobile phases also need device results on **both** iOS and Android. `--force_gate` turns finding failures into a logged warning but cannot skip agents that never ran, and covers security findings only with one acknowledgement per finding. Details: the header of `verify-gate.sh` and [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md#the-tc-gate-and-d-002-warn-first).
 
 **Bug severity classification:** Gate blockers are classified as critical/high/medium/low. Critical issues cannot be carried forward. High issues auto-escalate to critical after 1 phase. Medium auto-escalates after 3 phases.
 
@@ -585,6 +630,33 @@ Wave 6    Gate — verify-gate.sh: roster.required ⊆ completed entries in exec
 
 **Key dependency:** api_developer reads backend_developer's manifest to know which response helper to use (`RespondList` for list methods, `RespondOne` for single methods), and publishes `api-contracts.md` for the UI and mobile steps. This is why Wave 2A is sequenced, not parallel.
 
+### What UI and e2e tests must assert
+
+A UI test that only checks that a table rendered passes when the table shows the wrong column. Since 2026-10-01
+the web UI tiers test the **data** on screen:
+
+- **`TC-DATA` rows, one per bound element** (`.claude/skills/testing/test-case-generation.md`, "Per-Element
+  Data Matrix"). Every table column, card or detail field, badge, KPI, prefilled input and option list gets a
+  value, an empty/null and an edge case. Edge values depend on the type: money in minor units per currency,
+  dates across midnight with a fixed clock and zone, every enum value plus an unknown one, the longest text,
+  unicode and RTL. Money, dates, status badges and anything the user acts on are HIGH.
+- **Where the rows come from.** `ux_designer` writes a Data Element Inventory per screen (binding → display rule
+  → empty → edge → TC IDs). `design_quality_reviewer` blocks a bound element without a row.
+- **How `ui_test_agent` asserts them** (`.claude/agents/templates/ui_test_agent.tmpl` §A1b):
+  - the exact formatted text, scoped to the element;
+  - swap-detecting fixtures (every field a distinct value), so a column bound to the wrong field fails;
+  - its report includes a data-element coverage table (element → TC IDs → PASS/FAIL/UNTESTED).
+- **Browser specs** (`.claude/skills/testing/playwright.md`):
+  - **page-health fixture:** a console error, an uncaught page error, a failed request or an unexpected
+    4xx/5xx fails the test; expected errors are declared per test;
+  - **data round trip:** a workflow that enters data asserts each value in the list, the detail page, after a
+    reload and in the edit prefill, and reads it back through the API. `e2e_orchestrator` treats a page-health
+    or wrong-value failure as an app bug, not a test to fix.
+
+Both Playwright samples compile and run in `tests/archetype-compile/ui-packs/`. `tests/testing-agents.test.sh`
+guards the wiring. React Native: `mobile_test_agent` does not read `TC-DATA` rows yet; mobile tests cover data
+through the four-state `TC-MCMP`/`TC-MINT` rows ([docs/MOBILE_GUIDE.md](docs/MOBILE_GUIDE.md#4-test-tiers-and-tc--categories)).
+
 ### Auto-checkpoints
 
 After each wave completes, the orchestrator writes a lightweight checkpoint to `agent_state/phases/N/checkpoints/wave-N.json`. If context resets mid-pipeline (no explicit `/pause`), `/resume` detects these checkpoints and routes you to the right wave:
@@ -645,6 +717,9 @@ my-project/
 │   │       ├── specs_vs_tests.md
 │   │       └── test_case_inventory.md
 │   ├── patterns.md                        ← ACCUMULATED cross-phase patterns (what works / what to avoid)
+│   ├── graph/                             ← sdlc-graph (graph.sqlite, graph.jsonl, gate outputs); rebuildable, git-ignored
+│   ├── config/                            ← gate-policy.json (D-002 strict checks), graph-policy.json (interactive find), docs-policy.json
+│   ├── deploy/                            ← <env>/history.jsonl + last-deploy-status.json (written by the deploy scripts)
 │   ├── autonomous/                        ← GENERATED by /autonomous
 │   │   ├── run.json                       ← run state read by the Stop hook (status, phase, step, next_step)
 │   │   ├── checkpoint.json · approved.json · auto-resolved.jsonl
@@ -705,13 +780,16 @@ my-project/
 │
 ├── src/                               ← YOUR APPLICATION CODE (agents write here)
 ├── migrations/                        ← Database migrations
+├── deploy/k8s/                        ← k8s deploy layer (instantiate.sh): base/, overlays/{dev,qa[,staging,prod]}/, app.env
+├── scripts/k8s/                       ← shared deploy scripts: deploy.sh, env-reset.sh, seed.sh, smoke.sh (+ EKS scripts)
+├── infra/terraform/                   ← EKS projects only: modules + envs/{state,staging,prod}
 ├── tests/                             ← Test files
 │
 ├── CLAUDE.md                          ← Project context (written by /init)
 │
 └── .claude/
     ├── settings.json                  ← hooks: SessionStart fact injection; Stop = verify-gate + autonomous-continue
-    ├── hooks/                         ← copied in by new-project.sh or /autonomous Step 0
+    ├── hooks/                         ← framework hooks + .framework-manifest.json (startup-project-update.sh)
     └── agents/
         └── generated/                 ← Project-specific agents (written by /init)
             ├── go_backend_developer_myapp.md
@@ -839,7 +917,7 @@ All Wave 4 reviewers run as separate named agents in parallel; the ones after `s
 
 | Agent | Role | Invoked by |
 |-------|------|-----------|
-| `deployment_agent` | Builds and deploys the application | `/deploy` |
+| `deployment_agent` | Builds and deploys locally and to the lab dev/qa namespaces; instantiates the k8s layer, and for EKS writes and validates the layer offline (never deploys staging/prod) | `/deploy` |
 | `ci_cd_agent` | Creates CI/CD pipeline config (GitHub Actions, etc.) | `/deploy` first time |
 | `observability_agent` | Validates logging, metrics, tracing setup | `/deploy` staging/prod first time |
 | `documentation_agent` | Updates API docs and README after implementation | `/develop` Step 6b (non-blocking) |
@@ -869,9 +947,9 @@ All three run in that order from `/startup:demo`.
 
 Skill packs are static knowledge files that agents load as context before executing. They contain idiomatic patterns, code examples, conventions, and anti-patterns for a specific technology. They're how `code_reviewer_I` knows what "idiomatic Go" means vs "idiomatic Python", and how `code_optimizer` knows to check for nil-slice → JSON null bugs in Go but `undefined` → omitted-field bugs in TypeScript.
 
-### Available skill packs (230+)
+### Available skill packs (250+)
 
-`.claude/skills/` holds 238 skill-pack files (plus `INDEX.md`): backend 88, core 47, ui 23 (incl. 6 archetypes and a README), frameworks 22, testing 22, databases 11, infrastructure 10, requirements 10, languages 5. The Core, Backend, Databases, Requirements and Infrastructure rows below name a selection; see `.claude/skills/INDEX.md` for the full list.
+`.claude/skills/` holds 257 skill-pack files (plus `INDEX.md`): backend 88, core 49, testing 24, ui 24 (incl. 6 archetypes and a README), frameworks 23, infrastructure 12, databases 11, requirements 10, review 9, languages 5, api 1 (`response-envelope.md`), security 1. The Core, Backend, Databases, Requirements and Infrastructure rows below name a selection; see `.claude/skills/INDEX.md` for the full list.
 
 | Category | Skill Packs |
 |----------|-------------|
@@ -884,7 +962,7 @@ Skill packs are static knowledge files that agents load as context before execut
 | **Databases** (9) | `postgres` · `mysql` · `mongodb` · `redis` · `sqlite` · **NEW:** `dynamodb` · **NEW:** `elasticsearch` · **NEW:** `firestore` · `query-optimization` |
 | **Testing** (22) | `testify` · `gomock` · `testcontainers` · `vitest` · `playwright` · `msw` · `junit-mockito` · `pytest` · `rust-test` · `property-based` · `contract-testing` · `load-testing` · `targeted-testing` · `external-service-mocks` · `reproduction-first` · `test-case-generation` · `test-case-traceability` · **Mobile (NEW):** `mobile-testing-strategy` · `react-native-testing-library` · `maestro` · `detox` · `appium-mobile` |
 | **Backend Archetypes** (60+) | CRUD handler/service/repository + tests (all 5 languages) · auth middleware · error handling · migrations · Dockerfiles · observability · performance · **NEW:** workers · **NEW:** WebSocket · **NEW:** gRPC · **NEW:** message queues |
-| **Infrastructure** (10) | `docker` · `github-actions` · `kubernetes` · `terraform` · `localstack-aws-local` · `secrets-management` · `feature-flags` · `caching-strategies` · `auth-session-flows` · `saas-tenancy-models` |
+| **Infrastructure** (12) | `docker` · `github-actions` · `kubernetes` · `terraform` · `localstack-aws-local` · `secrets-management` · `feature-flags` · `caching-strategies` · `auth-session-flows` · `saas-tenancy-models` · **NEW:** `lima-k8s-lab` (dev/qa lab cluster) · `eks` (staging/prod) |
 
 ### Which agents load which skills
 
@@ -1001,6 +1079,43 @@ Escalation: when an agent's first attempt fails on an external signal (tests, a 
 
 A/B testing showed that verbose, complete agent context produces **7.7% better results** on judgment tasks (review, acceptance, debugging). The framework optimizes for output quality, not token efficiency. An agent that makes wrong decisions because it lacked context costs far more to fix than a larger context payload.
 
+That principle is about what an agent **needs for its task**. Context that every step re-sends whether it is needed or not is a different matter, and measurements on a real project show it is where tokens go.
+
+### Measured: what a question costs
+
+Both measurements were taken on rera (a real project built with the framework) on 2026-10-01 with
+`scripts/eval-question-tokens.py`. Each question ran in a fresh, read-only `claude -p` session, the two arms
+interleaved, and the answers were graded blind. The totals include cache reads, which dominate.
+
+| Change tested | Median tokens per question | Accuracy | Decision | Evidence |
+|---|---|---|---|---|
+| Interactive `sdlc-graph find`/`status` on, vs exploring with Grep/Read (21 questions × 2 arms × 2 runs) | 124,589 → 163,994 (**+31.6%**) | 0.96 → 0.99 | shipped **off** (the bar was −20%) | [docs/evals/graph-find/](docs/evals/graph-find/README.md) |
+| CLAUDE.md slimmed from 62 KB to 12.7 KB, runbooks moved verbatim to `docs/ops/*.md` with an index (28 questions, 38 runs per arm) | 120,830 → 67,346 (**−44%**); median cost $0.206 → $0.091 | 0.99 → 0.96 (3 partial answers vs 1, no wrong ones) | kept in that project | [docs/evals/claude-md-slim/](docs/evals/claude-md-slim/README.md) |
+
+Why: every API step re-reads the fixed context (CLAUDE.md, system prompt, tools), mostly as cache reads. The
+total therefore tracks the number of steps times the size of that fixed context, not how much text the model
+reads to answer. A tool that adds a step costs more than it saves. A CLAUDE.md that carries runbooks costs on
+every step of every session and every subagent.
+
+**For your projects:**
+- Keep CLAUDE.md to what every session needs: summary, stack, key documents, active agents, the phase table,
+  and each hard rule as a one- or two-line rule with a pointer.
+- Move runbooks and long procedures to `docs/` (for example `docs/ops/*.md`) and add a "read this when…" index
+  row in CLAUDE.md.
+- `.claude/templates/CLAUDE.md.template` and `/init` Step 4 follow this.
+- One project, one question set: treat the numbers as a direction, not a constant.
+
+**Measure a change yourself:**
+
+```bash
+python3 scripts/eval-question-tokens.py run --questions q.json --arm A=/tmp/arm-a --arm B=/tmp/arm-b --reps 2 --out out --budget-usd 25
+python3 scripts/eval-question-tokens.py sheet --out out     # blind grading sheet; fill out/grades.json
+python3 scripts/eval-question-tokens.py report --out out --questions q.json --bar 0.20
+```
+
+Use two throwaway clones of the project as the arms, identical except for the change. The script stops before a
+run that would cross `--budget-usd`. For changes to the framework's own agents, use `/startup:eval --compare`.
+
 ### Why context windows fill up
 
 `/develop` is a multi-step pipeline running in a single Claude Code conversation. Every file read and every subagent result gets appended to the conversation as a tool output. Without discipline, a 7-step pipeline with 10+ agents easily exceeds a 200K context window before reaching the gate.
@@ -1013,7 +1128,7 @@ During `/plan`, `project_planner` writes `docs/design/phases/N/phase_context.md`
 
 All implementation agents load this instead of the full `docs/BRD.md` (~20-50K) and `docs/IMPLEMENTATION_GUIDELINES.md` (~10-20K).
 
-Estimated savings per `/develop` run (8 parallel agents, Wave 2):
+Estimated savings per `/develop` run (8 parallel agents, Wave 2; arithmetic from typical document sizes, not a measured run):
 ```
 Before:  8 agents × (BRD 30K + IMPL 15K + all specs 10K) = 440K tokens in document reads
 After:   8 agents × (phase_context 7K + own spec 7K)     = 112K tokens in document reads
@@ -1104,7 +1219,10 @@ For named threads (multiple paused sessions):
 
 ## Updating startup-agents
 
-After pulling new changes:
+The framework has two copies to keep current: the global install in `~/.claude/`, and the framework files inside
+each project (`.claude/hooks/`, `.claude/settings.json`).
+
+**1. The global install.** After pulling new changes:
 
 ```bash
 cd ~/development/startup-agents
@@ -1112,15 +1230,49 @@ git pull
 bash install.sh
 ```
 
-`install.sh` also stages the framework hooks in `~/.claude/hooks/startup/` (with a `project-settings.json` and a `.framework-manifest.json` of every hook version the framework shipped). Projects created with `new-project.sh` get `.claude/hooks/` and `.claude/settings.json` through the project updater; `/startup:autonomous` Step 0 and `/develop` Wave 0c run the updater too, so stale hooks are refreshed, not only missing ones. Hook paths use `$CLAUDE_PROJECT_DIR`, so they resolve inside each project. To refresh an existing project after an update:
+`install.sh` does the following:
+- Runs the graph preflight and the capability check.
+- Copies commands, agents, templates (including `~/.claude/templates/k8s/`) and skill packs into `~/.claude/`.
+- Stages the framework hooks in `~/.claude/hooks/startup/`, with a `project-settings.json` and a
+  `.framework-manifest.json` that records every hook version the framework ever shipped.
+- Installs the scripts to `~/.claude/scripts/startup/`: the project updater, `graph-preflight.sh`,
+  `capability-check.sh` and the `/autonomous` supervisor.
+- If `~/.claude/settings.json` already exists, backs it up to `settings.json.bak`, prints the diff and leaves the
+  file unchanged.
+
+`install.sh --guard` and `install.sh --rule-board <dir>` are separate modes: the first installs only the
+permission guard, the second only the rule-board agents.
+
+**2. Each project.** The hooks a project runs are its own copies, so update them per project:
 
 ```bash
-~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app [--dry-run]
-# or, from the framework checkout, install + update in one step:
-bash install.sh --project ~/development/my-app
+~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app --dry-run   # preview, writes nothing
+~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app             # apply
+bash install.sh --project ~/development/my-app [flags]     # from the checkout: install, then the same update
 ```
 
-See [docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md) for what it touches, the locally-modified-hook guard and exit codes.
+| What it touches | How |
+|---|---|
+| `.claude/hooks/<framework file>` | A missing hook is added and a stale one refreshed. Hooks the project added are never touched. A framework hook edited in the project (its content is no version the framework shipped) is **kept**: its diff is printed and the updater exits 1. Re-run with `--force` to overwrite it |
+| `.claude/hooks/.framework-manifest.json` | Records the framework commit and each hook's hash. Commit it with the hooks |
+| `.claude/settings.json` | Created if absent. Otherwise **merged**: missing framework hook entries (SessionStart facts + reorient, Stop verify-gate + autonomous-continue, PostToolUse manifest check, StopFailure) and missing `env` keys are added; your entries are never removed or changed |
+| `.gitignore` | `agent_state/graph/` is appended |
+| `agent_state/graph/` | Built for the first time. `--no-build` skips this |
+
+It runs no git command that changes the worktree, so uncommitted work is safe. It does **not** touch `deploy/`,
+`scripts/k8s/` or `infra/`. To update a project's deploy layer, follow
+[docs/DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md#adopting-d-001-in-an-existing-project).
+
+**`--hooks-only`** refreshes `.claude/hooks/` and its manifest and nothing else: no settings merge, no
+`.gitignore`, no graph build. `/develop` Wave 0c runs it this way, and `/autonomous` Step 0 runs the updater with
+`--no-build`. Use it by hand on a project where you want current hook files but not yet the framework's Stop and
+SessionStart hooks in `settings.json`. A common case is a project where other Claude sessions are working: once those sessions load the new
+settings, a merged Stop hook (`verify-gate.sh`, `autonomous-continue.sh`) runs at the end of every turn in each of
+them. Run the full update later, when the project is ready for that.
+
+Exit codes: 0 ok, 1 a locally modified hook was kept, 2 usage error or unreadable `settings.json`, 3 preflight
+failed (nothing changed), 4 the graph build failed (the files were still updated). Flags and details:
+[docs/SDLC_GRAPH.md](docs/SDLC_GRAPH.md#install-and-update).
 
 ---
 
@@ -1206,17 +1358,52 @@ To add skill packs to an agent: `python3 .claude/agents/_add-packs.py <agent-fil
 
 ### Framework tests
 
-`bash tests/run-all.sh` runs six suites (111 checks at the time of writing; requires `python3` with PyYAML and `jq`):
+`bash tests/run-all.sh` runs every `tests/*.test.sh`: 33 suites, about 1,950 checks, roughly two minutes on a
+laptop. It prints `ALL TESTS PASSED` or `SOME TESTS FAILED` and exits non-zero on any failure. It needs `python3`
+with PyYAML, and `jq`. Suites whose optional tools are missing (kubeconform, kubectl or kustomize,
+terraform/tofu, tflint, actionlint, limactl) skip those checks and say so. `eks-templates.test.sh` downloads
+Terraform providers and kubeconform schemas on its first run.
 
-| Suite | Guards |
-|-------|--------|
-| `agent-registry.test.sh` | Base-roster names that have no agent file; INVENTORY.md core-agent count drift |
-| `autonomous-chain.test.sh` | The `/autonomous` chain: every referenced sub-command/flag exists, Skill-tool invocation, `/design` after `/plan`, auto-mode contracts in sub-commands, force-gate policy, Stop hook registered and installed into projects |
-| `autonomous-continue.test.sh` | The Stop hook blocks mid-run stops, allows `awaiting_human`/`paused`/`failed`/`complete`, and marks a no-progress run `stalled` |
-| `install-graph.test.sh` | `install.sh` + `graph-preflight.sh` + `startup-project-update.sh` in a sandbox HOME: manifest staging, hooks added/refreshed/kept-when-edited (`--force`), settings merge, `--dry-run`, `.gitignore`, graph build, uncommitted work untouched, preflight FAIL/WARN via a fake python3 |
-| `dependency-graph.test.sh` | `tests/lib/depgraph.py` finding classes (below) plus derived-deps sync, the skill-resolution table, TC-ID regex, generated-agent identity, mobile wiring and the Stitch tool surface |
-| `remember.test.sh` | Deterministic bi-temporal fact supersession in `remember.sh` |
-| `verify-gate.test.sh` | The phase-gate hook (roster completeness, stub reports, forged `gate.passed`) |
+| Area | Suites |
+|---|---|
+| Phase gate and evidence | `verify-gate`, `evidence-tools`, `evidence-pipeline`, `sdlc-graph` (the TC gate, D-002 warn/strict), `docs-and-acceptance-map` |
+| Install, update, tooling | `install-graph` (preflight, updater, settings merge, `--hooks-only`, `--dry-run`, sandbox HOME), `capability-check` (fake PATHs), `eval-question-tokens` (token accounting on synthetic transcripts) |
+| Orchestration and wiring | `dependency-graph`, `orchestrator-spawns`, `agent-registry`, `autonomous-chain`, `autonomous-continue`, `autonomous-supervisor` (fake `claude`), `debate`, `board-review` |
+| Agent and skill content | `coding-agents`, `testing-agents` (incl. TC-DATA, page health, round trip), `skills-security`, `stitch-core`, `field-codes`, `remember` |
+| Deploy and guard | `k8s-templates`, `eks-templates`, `sdlc-guard` |
+| Code samples (offline half) | `archetype-compile-{go,python,typescript}-inventory`, `archetype-compile-rust`, `archetype-config-packs-inventory`, `archetype-java-inventory`, `archetype-ui-packs-inventory`, `ui-framework-packs` |
+
+These scripts are **not** in `run-all.sh` because they need a live cluster or Docker: `tests/k8s-e2e.sh` (lab
+cluster), `tests/k8s-db-roles.sh` and `tests/eks-db-roles.sh` (throwaway Postgres 17).
+
+### Checked code samples (when you edit a skill pack)
+
+Agents copy the code blocks in `.claude/skills/` into projects, so those blocks are compiled and, where possible,
+run. Each language family has a harness in `tests/archetype-compile/<family>/run.sh`. The harness extracts the
+blocks from the markdown at run time, assembles them into small projects, and builds and tests them.
+
+`run-all.sh` runs only each harness's offline **inventory** half. That half fails when a block is neither checked
+by a unit nor skipped with a reason, or when a file's block count changed. It doesn't compile anything. After
+editing a code block, run the full harness for that language. These are opt-in and need the toolchain:
+
+| Family | Command | Needs |
+|---|---|---|
+| Go | `bash tests/archetype-compile/go/run.sh [--only UNIT]` | Go, python3; `ARCHETYPE_DB_TESTS=1` adds testcontainers (Docker) |
+| Python | `bash tests/archetype-compile/python/run.sh [--unit NAME] [--live]` | uv, node/npx (pyright); `--live` adds Docker (Postgres, Redis, LocalStack) |
+| TypeScript | `bash tests/archetype-compile/typescript/run.sh [--unit NAME]` | node + npm |
+| Java | `bash tests/archetype-compile/java/run.sh` | JDK 25, Maven 3.9+, Gradle 9+ |
+| Rust | `bash tests/archetype-compile/rust/run.sh`; `run-tests.sh` for cargo test | rustup toolchain; Docker for `run-tests.sh` / `docker-check.sh` |
+| React / Next / React Native / UI packs | `bash tests/archetype-compile/ui-packs/run.sh [--project web\|rn\|device]` | node + npm, system Google Chrome for the Playwright runs |
+| Vue / Svelte / Angular | `bash tests/archetype-compile/ui-frameworks/run.sh [vue] [svelte] [angular]` | node ≥ 22.12, npm |
+| SQL, shell, YAML, JSON, Dockerfile, HCL, nGQL; bash blocks in commands/agents | `bash tests/archetype-compile/config-packs/run.sh [--live]` | python3 + uv, shellcheck, actionlint, hadolint, terraform or tofu, jq, go, docker CLI; `--live` adds a Docker daemon (Postgres 17, MySQL 8.4, NebulaGraph 3.8) |
+
+The first run of each downloads pinned dependencies. Each `run.sh` header lists its flags (`--keep`,
+`--inventory-only`, `--selftest`).
+
+**One set of error codes.** Every lower_snake `details[].code` that a sample or template puts on the wire must be
+in the closed set in `.claude/skills/api/response-envelope.md`, so one client mapping works for every service.
+`tests/field-codes.test.sh` (in `run-all.sh`) checks this with `tests/lib/field_codes.py`. Add a new code to the
+envelope's table first, then use it.
 
 `python3 tests/lib/depgraph.py` reports ten finding classes, all of which must be empty:
 
@@ -1563,7 +1750,7 @@ For new products or unfamiliar markets:
 | Auto-repair state issues | `/startup:health --fix` | Fixes orphaned reports, dead refs, incomplete logs |
 | Bug in the built app | `/startup:diagnose --symptom="..."` | Traces symptom → spec → implementation → root cause |
 | Quick fix needed | `/startup:hotfix --phase=N --component=auth` | Scoped fix → scoped test → scoped review → merge |
-| Need to undo a deploy | `/startup:rollback --target=local` | Reverses migrations, redeploys previous build |
+| Need to undo a deploy | `/startup:rollback --target=local\|dev\|qa` | Redeploys the previous HEALTHY build; the schema stays |
 | Phase needs a redo | `/startup:reset-phase --phase=N` | Archives state, creates safety tag, prepares clean re-run |
 | Flaky test blocking gate | `/startup:develop --force_gate` | Forces gate with full logging (tracked in manifest) |
 
@@ -1586,7 +1773,7 @@ For new products or unfamiliar markets:
 | Run tests without building | `/startup:test --phase=N` |
 | Review code quality | `/startup:review` |
 | Optimize code | `/startup:optimize` |
-| Deploy | `/startup:deploy --target=local` |
+| Deploy | `/startup:deploy --target=local` (or `dev`, `qa`; staging/prod: [deployment guide](docs/DEPLOYMENT_GUIDE.md)) |
 | Validate the full product | `/startup:accept` |
 | Fix a bug fast | `/startup:hotfix --phase=N --component=auth` |
 | Investigate a bug | `/startup:diagnose --symptom="..."` |
@@ -1644,7 +1831,7 @@ If any check fails, the gate blocks and tells you exactly what to fix.
 ### Commands at a glance
 
 ```
-Pipeline (44 command files in total, including the rules-board family and aliases):
+Pipeline (46 command files in total, including the rules-board family and aliases):
 /startup:product-workflows  Product workflow intelligence (docs + videos + APIs).
 /startup:research     Deep market & product research. Vendors, capabilities, moats.
 /startup:init         One-time project setup. Creates BRD + agents from requirements.
@@ -1655,10 +1842,10 @@ Pipeline (44 command files in total, including the rules-board family and aliase
 /startup:develop      Builds a phase end-to-end with parallel review + acceptance.
 /startup:autonomous   Full pipeline: init → map → discuss → plan → design → develop → accept.
 /startup:accept       Full-product validation after all phases complete.
-/startup:deploy       Build and deploy to local, staging, or production.
+/startup:deploy       Deploy: local, dev/qa (lab k8s), staging/prod (EKS, human or CI).
 
 Design & Demo:
-/startup:stitch       Google Stitch workbench (init/generate/variants/edit/theme/sync/status).
+/startup:stitch       Google Stitch (init/import/adopt/request/sync-back/generate/variants/edit/theme/sync/status).
 /startup:ui-audit     Every built page vs design standards + its Stitch baseline.
 /startup:demo         Write, stand up and rehearse a stakeholder demo.
 
@@ -1677,7 +1864,7 @@ Standalone:
 Issue Resolution:
 /startup:hotfix       Fast-track bug fix. Scoped test + scoped review. No full pipeline.
 /startup:diagnose     Trace a symptom to root cause. Optional auto-fix.
-/startup:rollback     Roll back a deployment. Reverse migrations + redeploy previous build.
+/startup:rollback     Roll back a deployment: redeploy the previous HEALTHY build (schema stays).
 /startup:reset-phase  Reset a phase for re-development with state preservation.
 
 Pipeline Diagnostics:

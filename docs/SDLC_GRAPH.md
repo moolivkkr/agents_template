@@ -26,7 +26,7 @@ compute the TC inventory. Full command reference: `python3 .claude/hooks/sdlc-gr
 
 | Situation | What to run | What happens |
 |---|---|---|
-| Framework install / update | `bash install.sh` | Runs the preflight. On a FAIL it warns loudly and installs anyway. Stages the hooks and `.framework-manifest.json` in `~/.claude/hooks/startup/`, installs the project updater to `~/.claude/scripts/startup/`, and prints an `sdlc-graph:` summary line. |
+| Framework install / update | `bash install.sh` | Runs the preflight, then prints the capability table (`scripts/capability-check.sh`: which tool each feature needs; informational). On a preflight FAIL it warns loudly and installs anyway. Stages the hooks and `.framework-manifest.json` in `~/.claude/hooks/startup/`, installs the project updater to `~/.claude/scripts/startup/`, and prints an `sdlc-graph:` summary line. |
 | New project | `bash new-project.sh my-app ~/development` | Runs the preflight first and exits 3 (creating nothing) on a FAIL. Then scaffolds the project and runs the updater, which also builds the graph. |
 | **Existing project** | `~/.claude/scripts/startup/startup-project-update.sh --project ~/development/my-app` | See below. `./install.sh --project <dir> [flags]` does a full install, then the same update. |
 | During a run | nothing | `/autonomous` Step 0 runs the updater with `--no-build`. `/develop` Wave 0c runs it with `--hooks-only`. Stale hooks are refreshed, not only missing ones. |
@@ -109,6 +109,28 @@ python3 .claude/hooks/sdlc-graph.py policy --strict                  # enforce a
 python3 .claude/hooks/sdlc-graph.py policy --strict-check range_ids  # enforce one
 SDLC_TC_GATE=strict python3 .claude/hooks/sdlc-graph.py gate --phase N --summary   # one run
 ```
+
+To move a project to strict mode: run `warnings --phase N` for every phase that has
+`docs/design/phases/N/`, fix the spec rows it lists (or accept them), then `policy --strict`. `spec_writer`
+writes new rows that never produce these warnings. Only existing specs are graded in warn mode.
+
+## TC table format (one shared parser)
+
+`tc-inventory.py` owns the table parser (`table_rows()`, `priority_tier()`, `split_row()`), and `sdlc-graph.py`
+(spec tables and the BRD) and `acceptance-map.py` (the BRD) call it, so the three tools can't read a table
+differently. The rules:
+
+- The header is the row directly above a `|---|` line. Every row below it reads Priority and Tier **by header
+  name**.
+- A range row (`| TC-X-020..030 | … |`), a malformed-ID row or a `| **Section** | | |` divider is not a header,
+  so the rows after it keep their Priority and Tier. Before this fix (2026-10-01) those rows fell back to
+  MEDIUM with no tier.
+- `\|` inside a cell is a literal pipe, code spans included. Write in-cell pipes as `\|`.
+- Pipe lines with no `|---|` line have no header: MEDIUM, no tier. A table with no Priority column is MEDIUM.
+
+When the fix landed, a read-only run over four real projects changed 559 rows in three of them (the fourth had none): 393 moved from MEDIUM to HIGH or
+LOW, and the rest changed tier only. No ID was added or removed. `spec_writer` keeps the `|---|` line and escapes
+in-cell pipes.
 
 ## Interactive `find` / `status`: off by default
 

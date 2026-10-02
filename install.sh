@@ -71,6 +71,9 @@ elif grep -q '^graph preflight: WARN' <<<"$GRAPH_LINE"; then
 fi
 rm -f "$PREFLIGHT_ERR"
 echo
+# ── Capability check: which tool each feature needs (informational; never fails the install) ──
+bash "$REPO_DIR/scripts/capability-check.sh" || true
+echo
 
 # ── Commands ─────────────────────────────────────────────────────────────────
 echo "Installing commands → $DEST_COMMANDS/"
@@ -120,7 +123,7 @@ echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by n
 mkdir -p "$CLAUDE_DIR/scripts/startup"
 install -m 755 "$REPO_DIR/scripts/startup-autonomous-run.sh" "$CLAUDE_DIR/scripts/startup/startup-autonomous-run.sh"
 echo "  ✅ unattended /autonomous supervisor → $CLAUDE_DIR/scripts/startup/startup-autonomous-run.sh (docs/AUTONOMOUS_GUIDE.md §10)"
-for f in startup-project-update.sh startup-project-update.py graph-preflight.sh; do
+for f in startup-project-update.sh startup-project-update.py graph-preflight.sh capability-check.sh; do
   install -m 755 "$REPO_DIR/scripts/$f" "$CLAUDE_DIR/scripts/startup/$f"
 done
 echo "  ✅ project updater → $CLAUDE_DIR/scripts/startup/startup-project-update.sh --project <dir> [--dry-run] (docs/SDLC_GRAPH.md)"
@@ -236,6 +239,7 @@ else
   echo "  sdlc-graph: ⚠ UNAVAILABLE (${GRAPH_LINE#graph preflight: }) — see docs/SDLC_GRAPH.md § Troubleshooting"
 fi
 echo "  Existing projects: ~/.claude/scripts/startup/startup-project-update.sh --project <dir>   (add --dry-run to preview)"
+echo "  Tools per feature: ~/.claude/scripts/startup/capability-check.sh   (printed above; README § Prerequisites)"
 echo
 echo "════════════════════════════════════════════════════════════"
 echo
@@ -256,8 +260,9 @@ echo "  │ init             │ Create BRD + IMPL_GUIDELINES, generate agents  
 echo "  │ map              │ Codebase knowledge base (4 focus areas)        │"
 echo "  │ discuss          │ Surface assumptions + decisions before /plan   │"
 echo "  │ plan             │ Generate phase specs + goal verification       │"
+echo "  │ design           │ UI/mobile design contract + design gate        │"
 echo "  │ develop          │ Implement + test + review + gate               │"
-echo "  │ deploy           │ Build + migrate + deploy + health check        │"
+echo "  │ deploy           │ local | dev/qa (lab k8s) | staging/prod (EKS)  │"
 echo "  │ autonomous       │ Full pipeline end-to-end (one checkpoint)      │"
 echo "  │ accept           │ Global acceptance + release notes              │"
 echo "  ├─────────────────┼────────────────────────────────────────────────┤"
@@ -274,13 +279,20 @@ echo "  │ review           │ Code review on current changes                 
 echo "  │ optimize         │ Dead code removal + performance                │"
 echo "  │ benchmark        │ Performance tracking + regression detection    │"
 echo "  │ status           │ Show phase progress                            │"
+echo "  │ recon            │ Reconcile requirements↔BRD↔specs↔code↔tests    │"
+echo "  ├─────────────────┼────────────────────────────────────────────────┤"
+echo "  │ Design & Demo    │                                                │"
+echo "  ├─────────────────┼────────────────────────────────────────────────┤"
+echo "  │ stitch           │ Google Stitch: import/request/sync-back/...    │"
+echo "  │ ui-audit         │ Built pages vs design standards + Stitch       │"
+echo "  │ demo             │ Write + rehearse a stakeholder demo            │"
 echo "  ├─────────────────┼────────────────────────────────────────────────┤"
 echo "  │ Issue Resolution │                                                │"
 echo "  ├─────────────────┼────────────────────────────────────────────────┤"
 echo "  │ hotfix           │ Fast-track bug fix (scoped test + review)      │"
 echo "  │ diagnose         │ Trace symptom to root cause                    │"
 echo "  │ rollback         │ Roll back deployment to previous state         │"
-echo "  │ reset-phase      │ Reset a phase for re-development              │"
+echo "  │ reset-phase      │ Reset a phase for re-development               │"
 echo "  ├─────────────────┼────────────────────────────────────────────────┤"
 echo "  │ Diagnostics      │                                                │"
 echo "  ├─────────────────┼────────────────────────────────────────────────┤"

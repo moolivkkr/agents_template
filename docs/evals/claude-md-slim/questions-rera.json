@@ -1,0 +1,202 @@
+{
+ "project": "rera @ 3cfbcca (A) vs claude-md-slim 5f6e9e6 (B); q01-q21 from the graph-find eval, o01-o07 ops keys written from the original CLAUDE.md before any run",
+ "questions": [
+  {
+   "id": "q01",
+   "kind": "requirement",
+   "question": "Where is FR-087 (the claimable lane queue) implemented in code? Name the main module and the database table it uses.",
+   "key": "rera_scraper/pipeline/queue.py (enqueue/claim/complete/release); table pipeline_work, created by db_migration/migrations/056_phase7_pipeline_work_queue.sql",
+   "grade": "correct = queue.py AND pipeline_work; partial = one of them"
+  },
+  {
+   "id": "q02",
+   "kind": "endpoint",
+   "question": "Which function handles POST /api/v1/projects/{key}/title-search-report, and which FR does it implement?",
+   "key": "create_title_search_report in ui/premium_api.py (~L367-392); FR-084",
+   "grade": "correct = function+file AND FR-084; partial = one"
+  },
+  {
+   "id": "q03",
+   "kind": "requirement",
+   "question": "Which spec file and section hold the EARS acceptance criteria for FR-087?",
+   "key": "docs/design/phases/7/specs/pipeline-queue.md, section 'Acceptance Criteria (EARS form)' (~L96)",
+   "grade": "correct = pipeline-queue.md + acceptance-criteria section; partial = right spec file without the section or a related spec only"
+  },
+  {
+   "id": "q04",
+   "kind": "requirement",
+   "question": "What does NFR-OBS-007 require, and which code package implements it?",
+   "key": "Stalls detected by heartbeat / write-age / lease expiry, never by status counters (BRD L1497); implemented by rera_scraper/pipeline/health/ (checks_*.py, heartbeat.py, sweep.py); spec health-detector.md; D50",
+   "grade": "correct = the requirement AND rera_scraper/pipeline/health; partial = one"
+  },
+  {
+   "id": "q05",
+   "kind": "test-coverage",
+   "question": "How many HIGH-priority TC IDs does phase 6 define in its specs, and how many of them have a test whose name carries the ID?",
+   "key": "133 HIGH TC IDs; 0 are carried by a test name (12 appear only in comments)",
+   "grade": "correct = ~133 (\u00b110%) AND none/0 named by a test; partial = one of the two right",
+   "note": "133 = the graph's well-formed HIGH inventory; counts of 147-152 include malformed IDs (e.g. TC-SEC-020-001, TC-UI-6001a) and duplicate rows. Graded by the pre-set \u00b110% rule; under a lenient key all four answers are correct."
+  },
+  {
+   "id": "q06",
+   "kind": "test-coverage",
+   "question": "Which test file covers TC-DORM-050?",
+   "key": "tests/integration/test_carpet_vision_disposition.py (~L69)",
+   "grade": "correct = that file; wrong otherwise"
+  },
+  {
+   "id": "q07",
+   "kind": "test-coverage",
+   "question": "Which TC IDs does tests/unit/test_normative_corpus_phase7.py cover?",
+   "key": "TC-NORM-020..027, 030..034 and 040..046 (20 test functions named test_TC_NORM_*). Key corrected while grading: the first key (15 IDs) came from the graph's spec inventory, where 030..034 have no spec row; the test file names all 20.",
+   "grade": "correct = all three ranges; partial = two ranges"
+  },
+  {
+   "id": "q08",
+   "kind": "decision",
+   "question": "Why did we choose a claimable lane queue instead of md5 sharding for the backfill drivers?",
+   "key": "D41 / ADR-026: static md5(project_key)%SHARDS measured a 4/14/6/7 split (~3.5x skew), no work-stealing, no reliable crash recovery; pipeline_work claim query gives work-stealing + lease-expiry recovery; separate lanes target the 119s->710s LLM-lane degradation",
+   "grade": "correct = skew/imbalance or no work-stealing AND crash-recovery/lease; partial = one reason"
+  },
+  {
+   "id": "q09",
+   "kind": "decision",
+   "question": "What happened to doc_vision.py and why?",
+   "key": "D45/ADR-030 deleted it (cannot import the banned AGPL pymupdf; 6,041 run_carpet_vision items closed skipped-by-policy); D-101 (2026-08-24) reversed that: ported to pypdfium2 + pypdf and restored; DECISIONS \u00a7D: measured 2026-09-14 the revival never completed \u2014 rera_scraper/doc_vision.py exists but is DORMANT (zero callers, zero tests), open ruling: connect or delete under FR-101",
+   "grade": "correct = AGPL/pymupdf removal AND the D-101 port/restore (module exists now, dormant or not); partial = only the D45 deletion story or only the port"
+  },
+  {
+   "id": "q10",
+   "kind": "decision",
+   "question": "Is automated CAPTCHA solving allowed in this project? Which connectors are exceptions?",
+   "key": "D56: forbidden by default; ratified exceptions bhubharati_prohibition, bhunaksha, tshc_csis; D57 adds bhubharati_land; open violation: ecourts_http runs unattended",
+   "grade": "correct = default no AND >=3 of the 4 exceptions; partial = default no with fewer"
+  },
+  {
+   "id": "q11",
+   "kind": "decision",
+   "question": "Why is the dormancy register a YAML file in git rather than a database table?",
+   "key": "D44 / ADR-029: reviewed-once, rarely toggled, never hot-path state belongs in a git file like state_config/*.yaml (vs connector_registry toggled at runtime); provenance comes free from git/PR history; schema-validated fail-closed",
+   "grade": "correct = rarely-changed/not-runtime-toggled state AND git provenance or the state_config precedent; partial = one"
+  },
+  {
+   "id": "q12",
+   "kind": "endpoint",
+   "question": "Which function serves GET /api/v1/admin/db/migrations and where is that endpoint specified?",
+   "key": "admin_db_migrations in ui/auth_api.py (~L908); specified in docs/design/phases/1/specs/mysql-migration.md (API Endpoint) and data-contracts.md:~362",
+   "grade": "correct = handler AND a spec file; partial = one"
+  },
+  {
+   "id": "q13",
+   "kind": "endpoint",
+   "question": "What is the full path of the admin pipeline queue-depth endpoint and which function implements it?",
+   "key": "GET /api/v1/admin/pipeline/queue \u2192 queue_depth_view in ui/pipeline_queue_api.py (router prefix /api/v1/admin/pipeline)",
+   "grade": "correct = full path AND function; partial = one"
+  },
+  {
+   "id": "q14",
+   "kind": "status",
+   "question": "Which phases have passed their gate, and what is the current phase?",
+   "key": "Phases 1-6 have gate.passed; phase 7 is IN_FLIGHT / NOT_GATED (current); 8 closed as a workstream, 9 a stub",
+   "grade": "correct = 1-6 passed AND 7 current; partial = one"
+  },
+  {
+   "id": "q15",
+   "kind": "status",
+   "question": "Why isn't phase 7 gated yet \u2014 what is blocking it?",
+   "key": "manifest gate.blocking_for_gate: C11 dormancy register missing (dormancy_register.yaml absent); C15 module-size/coverage gate rescoped (allowlist, not diff); C9 question-bank coverage invalidated (1 of 132 Nalgonda projects); C1/C3/C5/C6/C7 no pilot-corpus evidence; SAFETY P0-6a critical flag does not reach the headline verdict",
+   "grade": "correct = >=3 of these; partial = 1-2"
+  },
+  {
+   "id": "q16",
+   "kind": "cross-cutting",
+   "question": "If we change the schema of the pipeline_work table, which modules and migrations are affected?",
+   "key": "migrations 056_phase7_pipeline_work_queue.sql (+ .down) and 084_pw_claim_drain_idx.sql; rera_scraper/pipeline/{queue.py, queue_claim_order.py, queue_depth.py, queue_lanes.py, worker_chain.py, worker_chunks.py, worker_contention.py, worker_run_close.py, worker_slots.py, batch_lifecycle.py, batch_plan.py, batch_rollup.py, select_resolve.py, health/checks_lane_stall.py}, rera_scraper/scheduler.py, work_items_autorun_close.py, work_items_writeback.py, ui/website_refresh.py, scripts/pipeline_*.py",
+   "grade": "correct = migration 056 AND queue.py AND >=4 other modules; partial = fewer"
+  },
+  {
+   "id": "q17",
+   "kind": "cross-cutting",
+   "question": "What does enqueue_fulfillment check before it enqueues a job, and which API module calls it?",
+   "key": "rera_scraper/ingestion/fulfillment.py:195: dedup by work_items.find_open_by_dedup_key (joins an existing open item), per-user rate limit, per-user concurrency, global build-slot acquire, then reserve wallet + enqueue (slot released on failure); called from ui/premium_api.py (title-search Tier-B async, premium report async)",
+   "grade": "correct = dedup AND rate/concurrency/slot checks AND premium_api caller; partial = some"
+  },
+  {
+   "id": "q18",
+   "kind": "code-open",
+   "question": "What top-level subcommands does cli.py support?",
+   "key": "38: project query stats search batch ingest refresh pipeline(submit/status/suspend/resume/failures/steps) validate dossier runconnectors runslowconnectors seed-registry load batch-load summarize llm-batch personas llm-bench context-artifacts llm-profile bundle title-diff legal-review legal-fetch legal-process legal-batch llm-eval backfill-identifiers kb report chat ui ocr wallet-sweep scheduler-run health-detector-run ask",
+   "grade": "correct = >=30 named; partial = >=10"
+  },
+  {
+   "id": "q19",
+   "kind": "code-open",
+   "question": "Where is the 300-line module size limit enforced, and does that check look at the diff?",
+   "key": "D-108; enforced by tests/unit/test_module_size_phase7.py, which checks a hardcoded file allowlist, not the diff (phase-7 manifest C15 RESCOPED)",
+   "grade": "correct = test file AND allowlist/not diff-based; partial = test file only"
+  },
+  {
+   "id": "q20",
+   "kind": "code-open",
+   "question": "How are /api/v1/admin/* routes protected in the live app?",
+   "key": "AuthMiddleware enforces role=admin on every admin path (is_admin_path()) before the handler; handlers then call rera_scraper/auth.py require_admin_team(request, *teams) for the team scope (super-admin always allowed; 401 no principal, 403 wrong role/team)",
+   "grade": "correct = middleware role check AND require_admin_team team check; partial = one"
+  },
+  {
+   "id": "q21",
+   "kind": "fact",
+   "question": "Which module is the live web app and which port does it listen on?",
+   "key": "ui/app.py (FastAPI, ui.app:app), port 8100",
+   "grade": "correct = both; partial = one"
+  },
+  {
+   "id": "o01",
+   "kind": "ops",
+   "question": "On each Mac, which host ports serve the OCR vision (Apple Vision) service and the OCR VL (Qwen3-VL) model, and why does /v1/models on the OCR vision port return 404?",
+   "key": "11500 = OCR vision (Apple Vision, launchd com.landos.ocr-vision); 11436 = OCR VL Qwen3-VL (com.landos.llama-ocrvl). The vision server is plain /ocr, NOT OpenAI-shaped, so /v1/models 404s and that is healthy. (orig CLAUDE.md L276-281)",
+   "grade": "correct = 11500 vision AND 11436 VL; partial = one port right"
+  },
+  {
+   "id": "o02",
+   "kind": "ops",
+   "question": "What are the steps to add a new Mac to the k3s cluster?",
+   "key": "1) declare the node in infra/fleet.env (NODEn_* incl. a UNIQUE NODEn_VMNET_SUBNET + matching sharedN entry in _config/networks.yaml); 2) on node 1 run infra/scripts/node-join-info.sh (K3S_URL + token); 3) on the new machine infra/scripts/add-node.sh N (dry run) then --apply; 4) re-run on EVERY existing host: sudo infra/scripts/host-tb-routing.sh, then infra/scripts/ssh-mesh.sh --apply and infra/scripts/validate-fleet.sh from node 1 (must be all-green). (orig L649-665)",
+   "grade": "correct = fleet.env AND add-node.sh AND the fleet-wide re-run (>=2 of host-tb-routing.sh / ssh-mesh.sh / validate-fleet.sh); partial = some of these"
+  },
+  {
+   "id": "o03",
+   "kind": "ops",
+   "question": "After a server restart, how do I resume the TG-RERA full-registry import?",
+   "key": "export LIMA_HOME/KUBECONFIG; limactl list (landos-node1 Running); kubectl -n landos get pods (postgres-0/minio-0/pgbouncer Ready); refresh the DONE list from the checkpoints (never by hand; command documented in infra/scripts/run-import-queue.sh); ./infra/scripts/run-import-queue.sh (dry run/review plan) then --lanes 4 --apply; follow kubectl logs -l app=tgrera-import. Runs in-cluster, never from host. (orig L769-786)",
+   "grade": "correct = run-import-queue.sh dry-run then --lanes N --apply AND (refresh DONE list from checkpoints OR check VM/pods first); partial = run-import-queue.sh only"
+  },
+  {
+   "id": "o04",
+   "kind": "ops",
+   "question": "What --page-size should the TG-RERA importer use, and why not 50?",
+   "key": "25. Rows are scraped with PrintPreview q= tokens minted at page-fetch time (~10-15 min window); at ~18 s/project 50 rows needs ~15 min, timeouts push the tail past expiry and rows return [empty]. Page size is also part of the checkpoint identity (_d<ID>_ps<N>.json). (orig L827-835)",
+   "grade": "correct = 25 AND the token-expiry/window reason; partial = one"
+  },
+  {
+   "id": "o05",
+   "kind": "ops",
+   "question": "Which launchd jobs keep the Thunderbolt routing and the Lima VMs self-healing on each Mac, what does each run, and how often?",
+   "key": "io.landos.tbroute runs infra host-tb-routing.sh --if-drift every 120 s; io.landos.lima runs infra/scripts/node-keepalive.sh every 60 s (restarts a stopped VM; logs thermal + validate-fleet to ~/Library/Logs/landos-health.log every 15 min). (orig L604-610)",
+   "grade": "correct = both jobs with their scripts; partial = one job"
+  },
+  {
+   "id": "o06",
+   "kind": "ops",
+   "question": "Docker Desktop is uninstalled. How do I rebuild the landos/worker:dev image after editing scripts/?",
+   "key": "Build inside the landos-node1 VM against k3s's own containerd: limactl shell landos-node1 -- sudo buildkitd --oci-worker=false --containerd-worker=true --containerd-worker-addr=/run/k3s/containerd/containerd.sock --containerd-worker-namespace=k8s.io; then sudo nerdctl --address /run/k3s/containerd/containerd.sock --namespace k8s.io build --build-arg API_IMAGE=landos/api:dev -f /mnt/landos/infra/docker/Dockerfile.worker -t landos/worker:dev /mnt/landos; then pkill buildkitd. scripts/ is the last layer. (orig L846-859)",
+   "grade": "correct = nerdctl build in the landos-node1 VM against k3s containerd (k8s.io namespace / containerd.sock) with Dockerfile.worker; partial = nerdctl/VM without the containerd detail"
+  },
+  {
+   "id": "o07",
+   "kind": "ops",
+   "question": "How are cluster email alerts sent, to whom, and how can I preview one without sending it?",
+   "key": "infra/scripts/alert.sh <failure|action|resolved|info> runs on each Mac's HOST via the app's SES SMTP account (Apple /usr/bin/curl, settings ~/.landos/alert-smtp.env) to kishore@thepropcheck.com; same subject at most once per 30 min; ALERT_DRY_RUN=1 prints one without sending. (orig L166-174)",
+   "grade": "correct = alert.sh AND ALERT_DRY_RUN=1 (recipient optional); partial = one"
+  }
+ ]
+}
