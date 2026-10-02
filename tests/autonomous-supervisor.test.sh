@@ -159,7 +159,7 @@ printf '%s' "$out" | grep -q -- '--permission-prompts none' && printf '%s' "$out
 grep -q 'startup-autonomous-run' "$ROOT/install.sh" && ok "install.sh ships the supervisor" || bad "install.sh does not ship the supervisor"
 grep -q 'startup-autonomous-run.sh' "$ROOT/docs/AUTONOMOUS_GUIDE.md" && grep -q 'startup-autonomous-run.sh' "$ROOT/.claude/commands/autonomous.md" && ok "guide + command document the supervisor" || bad "supervisor not documented"
 grep -qE '^  - name: one_step' "$ROOT/.claude/commands/autonomous.md" && ok "/autonomous defines --one_step" || bad "/autonomous lacks one_step"
-for code in 0 10 11 12 20 21 22 30 31 32 130 143; do
+for code in 0 10 11 12 20 21 22 30 31 32 129 130 143; do
   grep -qE "^\| *\`?$code\`? *\|" "$ROOT/docs/AUTONOMOUS_GUIDE.md" || { bad "exit code $code missing from the guide's table"; continue; }
 done
 ok "exit-code table checked"

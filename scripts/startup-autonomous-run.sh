@@ -38,7 +38,7 @@
 #   12 permanent API error (billing, auth…)  30 another supervisor holds the lock
 #                                            31 usage error / missing prerequisite (claude, jq)
 #                                            32 no run state after launch (Step 0 pre-flight failed)
-#  130 SIGINT, 143 SIGTERM (child was sent SIGINT, then SIGTERM after a grace period)
+#  129 SIGHUP, 130 SIGINT, 143 SIGTERM (child is sent SIGINT, then SIGTERM after a grace period)
 #
 # Portable to macOS bash 3.2 and Linux: no associative arrays, no ${x,,}, no grep -P, no mapfile.
 # Test hooks (env): AUTONOMOUS_SUPERVISOR_CLOCK_FILE (epoch seconds read from this file instead of
@@ -215,7 +215,7 @@ finish() {   # $1 exit code, $2 state, $3 reason; budget breaches also pause the
 # ── signals: forward to the child (SIGINT ends its turn cleanly; SIGTERM after a grace period) ───────
 on_signal() {
   local sig="$1" code="$2" i=0
-  trap '' INT TERM
+  trap '' INT TERM HUP
   log "received SIG$sig"
   if [ -n "$CHILD" ] && kill -0 "$CHILD" 2>/dev/null; then
     kill -INT "$CHILD" 2>/dev/null
@@ -231,6 +231,7 @@ on_signal() {
 }
 trap 'on_signal INT 130' INT
 trap 'on_signal TERM 143' TERM
+trap 'on_signal HUP 129' HUP   # closed terminal: the child is in its own process group and would not see it
 
 isleep() { [ "$1" -gt 0 ] 2>/dev/null || return 0; sleep "$1" & wait $!; }   # interruptible by traps
 

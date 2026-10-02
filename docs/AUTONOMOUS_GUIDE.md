@@ -282,10 +282,11 @@ reset them; `--reset-budgets` does. A breach pauses `run.json` with the reason.
 | 30 | Another supervisor holds this project's lock |
 | 31 | Usage error or missing prerequisite (`jq`, bad flag or budget value) |
 | 32 | No `run.json` after a launch (pre-flight failed) |
+| 129 | SIGHUP (terminal closed) |
 | 130 | SIGINT |
 | 143 | SIGTERM |
 
-On SIGINT or SIGTERM the supervisor sends the child SIGINT, which ends its turn cleanly (a SIGTERM'd
+On SIGINT, SIGTERM or SIGHUP the supervisor sends the child SIGINT, which ends its turn cleanly (a SIGTERM'd
 `claude -p` leaves the turn unfinished), then SIGTERM after `AUTONOMOUS_SUPERVISOR_KILL_GRACE`
 seconds (default 30). It records `interrupted` and releases the lock. Run it from a terminal, tmux or
 a launchd job rather than `cmd &` from a script: a background job of a non-interactive shell starts
