@@ -105,7 +105,11 @@ emulators. Hand those flows over complete and runnable, not as sketches.
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** In particular the device-tier tool choice (Maestro / Detox / Appium) and its reason. Do not re-litigate an active decision without new evidence.
 1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` + `~/.claude/skills/api/response-envelope.md` — **READ FIRST.** Payload types and the one envelope every mock is built from.
-2. `docs/design/phases/{{PHASE}}/specs/` — screen specs, testIDs, and the mobile TC-M* inventory assigned to you.
+2. Your inventory rows and the slices to read: `python3 .claude/hooks/sdlc-graph.py context --agent mobile_test_agent --phase {{PHASE}}`
+   (the Tier `mobile` / `device` rows still to do with their spec `file:line`, the spec sections that define
+   them, and each screen's route and API bindings). Open the screen specs and sections it lists, not the whole
+   `specs/` directory. If the command fails or prints `GRAPH UNAVAILABLE`, say so and read
+   `docs/design/phases/{{PHASE}}/specs/` (screen specs, testIDs, the mobile TC-M* inventory) instead.
 3. `docs/IMPLEMENTATION_GUIDELINES.md` §Mobile — device matrix, min OS versions, local backend URL per platform, build commands.
 4. `{{MOBILE_APP_DIR}}/package.json` — confirm the actual RN, RNTL, Jest and MSW versions before writing. RNTL v14 needs `await render(...)`; see `react-native-testing-library.md`.
 5. `agent_state/phases/{{PHASE}}/mobile_developer/manifest.json` — the screens, testIDs, deep links and permissions actually built. Cross-check against the specs; a spec'd testID missing from the build is reported, not worked around.

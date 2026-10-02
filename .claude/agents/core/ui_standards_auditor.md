@@ -102,7 +102,13 @@ cites their reports rather than duplicating their checks.
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** In particular whether *Stitch holds the design baseline for every page*, accepted UI exceptions, and the owner's Stitch approvals.
 1. `~/.claude/skills/ui/stitch-design.md` §7–§8: page inventory, baseline statuses, and the comparison method.
 2. `~/.claude/skills/ui/README.md` for standards precedence, then the project design system (from IMPLEMENTATION_GUIDELINES) and `professional-ui-standards.md`.
-3. `docs/design/stitch.json`, all wireframes, and `data-contracts.md`.
+3. `docs/design/stitch.json`, and the wireframes from the project graph:
+   `python3 .claude/hooks/sdlc-graph.py context --agent ui_standards_auditor --phase {{PHASE}}` — every screen of
+   every phase with its route, Stitch screen key (when a baseline's route matches) and bound endpoints with
+   their shape (`A:` array, `O:` object — what the four states render, instead of reading `data-contracts.md`),
+   plus this phase's screen-spec sections (minus test inventories) as `file:start-end` spans. Read those spans;
+   open an earlier phase's screen spec when you audit that page. If the command fails or prints
+   `GRAPH UNAVAILABLE`, say so in your report and read all wireframes and `data-contracts.md` instead.
 4. `accessibility_audit.md` / `mobile_platform_audit.md` for this phase, if present (cite, don't redo).
 
 ## Prerequisites

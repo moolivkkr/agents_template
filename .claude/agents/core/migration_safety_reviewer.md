@@ -55,7 +55,13 @@ Each row is a shortcut that has caused missed defects in this pipeline, with the
 1. `~/.claude/skills/databases/{{DB_TECH}}.md` — engine-specific locking, DDL, and migration semantics
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Data / §Migrations — project migration tool, deploy model (rolling vs. maintenance-window)
 3. Every migration file produced or modified this phase (UP and DOWN), plus any backfill scripts
-4. The data contracts / schema spec the migration must satisfy
+4. The data contracts / schema spec the migration must satisfy.
+   Both come from the project graph: `python3 .claude/hooks/sdlc-graph.py context --agent migration_safety_reviewer --phase {{PHASE}}`
+   lists the migration files changed since `base_sha` with the tables each creates and alters, and the
+   data-model / schema sections of the phase specs as `file:start-end` spans. Read those spans, not the whole
+   `specs/` directory. Backfill scripts aren't migrations to the graph: find them in the phase diff. If the
+   command fails or prints `GRAPH UNAVAILABLE`, say so in your report and use `git diff --name-only
+   $(cat agent_state/phases/{{PHASE}}/base_sha)..HEAD` and the specs' data-model sections instead.
 
 ---
 

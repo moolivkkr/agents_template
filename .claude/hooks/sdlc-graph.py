@@ -1836,10 +1836,11 @@ def context_profile(g, phase, role):
     eps = phase_endpoints(g, phase)
     if role in BACKEND_ROLES or role in DB_ROLES:
         out["tc_rows_by_tier (tests are Wave 3's; `tc --phase N` lists them)"] = tiers
-    if role in BACKEND_ROLES:
+    if role in BACKEND_ROLES or role in UI_ROLES:
         out["security_rows (TC-SEC: implement the mitigation)"] = [
             f"{c['name']} {c['priority']} {c['spec']} {(spec_tc.get(c['name']) or {}).get('desc', '')[:90]}"
             for c in inv["cases"] if c["name"].startswith("TC-SEC-")]
+    if role in BACKEND_ROLES:
         out["endpoints"] = [{"endpoint": e[3:], "handlers": [h["span"] or h["handler"] for h in handlers_for(g, e)[:2]]} for e in eps]
     if role in DB_ROLES:
         out["tables (existing)"] = sorted({r[0][6:] for r in g.q("SELECT DISTINCT id FROM nodes WHERE kind='table'")})

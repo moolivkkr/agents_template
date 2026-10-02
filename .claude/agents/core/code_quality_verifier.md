@@ -16,7 +16,7 @@ input:
   optional:
     - type: phase_spec
       path: docs/design/phases/{{PHASE}}/specs/
-      description: Spec-declared endpoints to verify against
+      description: Spec-declared endpoints to verify against (listed with handler spans by sdlc-graph.py context; the directory only as a fallback)
     - type: brd
       path: docs/BRD.md
       description: NFR-* coverage thresholds
@@ -139,6 +139,11 @@ Output: list of every match with file, line number, surrounding context, and sev
 ## Check 2 — Stub/Hollow Implementation Detection
 
 For each endpoint declared in the phase manifest (`manifest.json` api_routes) or specs:
+The project graph lists the spec-declared endpoints with their handler spans, so you don't read the specs for
+them: `python3 .claude/hooks/sdlc-graph.py context --agent code_quality_verifier --phase {{PHASE}}`
+(`endpoints_without_handler` are Level-1 misses: BLOCKING unless the manifest shows the route under another
+path). Handlers resolve by name (rung 1): open each span before you judge it. If the command fails or prints
+`GRAPH UNAVAILABLE`, say so in your report and take the endpoint list from `docs/design/phases/{{PHASE}}/specs/`.
 
 1. Find the handler function
 2. Verify the handler has substantive logic (not just `return nil`, `res.json({})`, `return Response()`)

@@ -113,6 +113,11 @@ file's `## Requests for other owners`; the orchestrator respawns you to address 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `docs/design/phases/{{PHASE}}/phase_context.md` and the Data Model sections of this phase's specs — the in-scope entities and access patterns.
+   Get them from the project graph: `python3 .claude/hooks/sdlc-graph.py context --agent database_agent --phase {{PHASE}}`
+   lists the data-model sections, every section with schema content (CREATE/ALTER, columns, keys), the acceptance
+   criteria and edge cases as `file:start-end` spans, and the tables that already exist. Read those spans, not
+   whole specs; open a listed skipped span when your work touches it. If the command fails or prints
+   `GRAPH UNAVAILABLE`, say so in your manifest and find the Data Model sections in `docs/design/phases/{{PHASE}}/specs/` yourself.
 2. `docs/design/database.md`, `migrations/`, the previous database manifest and the audit report — see "Existing schema first".
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — §3 database, §15 tenancy, **§Runtime contract**, **§Commands and versions** (the DB version), and the replica counts the deploy targets run.
 

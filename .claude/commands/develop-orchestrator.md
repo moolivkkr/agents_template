@@ -245,12 +245,14 @@ python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out 
   || echo "⛔ BLOCKED: IMPLEMENTATION_GUIDELINES has no usable '## Commands and versions' table (skills/core/commands-and-versions.md) — add it before Wave 2"
 # 2. The commit this phase starts from: test-weakening diff (tc-inventory.py --diff-base) and scope for reviewers.
 [ -f "$P/base_sha" ] || git rev-parse HEAD > "$P/base_sha"
-# 3. Spec TC priorities for the results converters.
-python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"
-# 4. The project graph (agent_state/graph/): agents' work lists (`context`), reviewers' `diff-context`, the TC gate.
+# 3. The project graph (agent_state/graph/): agents' work lists (`context`), reviewers' `diff-context`, the TC gate.
 #    Queries refresh it incrementally; the gate rebuilds it in full. If it can't build, agents fall back and say so.
 python3 .claude/hooks/sdlc-graph.py build >/dev/null \
   || echo "⚠ sdlc-graph build failed: agents fall back to reading specs/ whole (they must say so in their reports)"
+# 4. Spec TC priorities for the results converters, from the same inventory the gate checks (range-defined IDs
+#    included, so a sidecar never gives one a default priority). tc-inventory.py only when the graph is unavailable.
+python3 .claude/hooks/sdlc-graph.py --no-refresh tc --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"; RC=$?
+[ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"
 ```
 
 Evidence rules for every test tier are in `~/.claude/skills/testing/test-results-sidecar.md`: JUnit XML
@@ -376,7 +378,11 @@ Each spawn prompt (prepend the GROUND TRUTH line):
 Agent prompt (subagent_type: <role>): "[GROUND TRUTH] You are <role> running Wave 2 step 2A.<n> for Phase ${PHASE}.
 Read FIRST: agent_state/phases/${PHASE}/audit_report.md (+ audit_report_ui.md for ui_developer/mobile_developer)
 (what already exists: extend it, don't rebuild it)
-and agent_state/codebase/ (conventions). Then the phase specs in docs/design/phases/${PHASE}/specs/,
+and agent_state/codebase/ (conventions). Then your slice of the phase specs:
+python3 .claude/hooks/sdlc-graph.py context --agent <role> --phase ${PHASE} (the spec sections your layer needs
+as file:start-end spans, every skipped span, and your role's inventory — endpoints, bound endpoints, TC-SEC rows,
+tables); read those spans, not the whole docs/design/phases/${PHASE}/specs/ directory, and open a skipped span
+when your work touches it (if it is unavailable, read the specs whole and say so in your progress file). Then
 IMPLEMENTATION_GUIDELINES.md (incl. §Runtime contract and §Commands and versions), and the outputs of
 the earlier 2A steps listed above.
 RULES (each one is checked later by a named reviewer or the gate):
@@ -465,7 +471,8 @@ write its own tests. Prepend the GROUND TRUTH line to each:
 Agent prompt (subagent_type: general-purpose — deliberately generic; the adopt pass in step 5b brings the role artifacts back): "[GROUND TRUTH] You are candidate implementer c${i} for Phase ${PHASE}.
 WORKING DIRECTORY: ${PROJECT_DIR}/agent_state/phases/${PHASE}/candidates/c${i}  (your OWN git worktree — commit ONLY here)
 STARTING STRATEGY: ${STRATEGY}  (interface-first | test-first | data-model-first)
-Read the SAME specs as Wave 2A: docs/design/phases/${PHASE}/specs/ + IMPLEMENTATION_GUIDELINES.md.
+Read the phase specs whole: docs/design/phases/${PHASE}/specs/ + IMPLEMENTATION_GUIDELINES.md (a candidate builds
+every layer and its own tests, so no role slice from sdlc-graph.py context applies).
 Implement ALL in-scope components AND write your own tests (unit + this surface's TC-* IDs).
 The Wave 2A RULES and BUILD GATE apply (read them above). Do NOT read/merge from sibling candidate worktrees. Commit in THIS worktree only.
 Return: files created + one line on how your strategy shaped the design."
@@ -753,7 +760,8 @@ Write screenshots/traces for failures. [EVIDENCE block] report: e2e_results"
 **CLI tool, library, or non-web backend — pipeline E2E:**
 ```
 Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave 3c-pipeline for Phase ${PHASE}.
-Read phase_context.md and the specs' TC-* IDs with tier: e2e. Write and run process-level tests of the
+Scope: python3 .claude/hooks/sdlc-graph.py unlocked --phase ${PHASE} (the TC-E2E rows with spec file:line + the
+workflows PHASE_PLAN unlocks); read phase_context.md and only the rows it names. Write and run process-level tests of the
 full product flow: real inputs → processing → output verification; multi-step pipelines; malformed
 input → graceful error; WASM parity where applicable. Not browser tests.
 [EVIDENCE block] report: e2e_results"
@@ -765,7 +773,9 @@ Full strategy: `~/.claude/skills/testing/mobile-testing-strategy.md`.
 
 ```
 Agent prompt (subagent_type: mobile_test_agent): "[GROUND TRUTH] You are mobile_test_agent running Wave 3d for Phase ${PHASE}.
-Read api-contracts.md FIRST, then the mobile TC-M* inventory and IMPLEMENTATION_GUIDELINES §Mobile.
+Read api-contracts.md FIRST, then your work list: python3 .claude/hooks/sdlc-graph.py context --agent mobile_test_agent
+--phase ${PHASE} (the mobile/device TC-M* rows still to do, the spec sections to read, screens with bindings), and
+IMPLEMENTATION_GUIDELINES §Mobile.
 Write Jest + RNTL component tests (4 states per screen), MSW-mocked integration tests (handlers typed
 from the envelope), and device flows for every unlocked FR-* workflow and applicable platform
 behaviour. Flow file names start with their TC ID. Every flow runs on BOTH iOS and Android. Run the
@@ -904,6 +914,11 @@ Map it first: python3 .claude/hooks/sdlc-graph.py diff-context --phase ${PHASE} 
 endpoints/tables touched, governing spec sections) and read the spec sections it lists, not the whole specs/
 directory (unless it is unavailable — then say so). breaking_change_reviewer also runs
 python3 .claude/hooks/sdlc-graph.py consumers --changed-since <previous phase's gate commit>.
+code_quality_verifier, tenant_isolation_verifier, migration_safety_reviewer, accessibility_auditor and
+ui_standards_auditor take their spec sections and inventories from
+python3 .claude/hooks/sdlc-graph.py context --agent <agent_name> --phase ${PHASE} instead of diff-context
+(endpoints with handler spans / ID routes and ownership sections / changed migrations and data-model sections /
+web screens and a11y rows / all-phase screens and Stitch keys) and read only the spans it lists.
 Use the Unified Severity Model (~/.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
 Every finding MUST cite file:line. Produce your named report at the exact path above.
 Definition of Done: report written, every BLOCKING finding has file:line + a fix recommendation,
@@ -944,6 +959,9 @@ spec_test_reconciler: FIRST run the deterministic TC gate — it is your evidenc
   (tc-inventory.py with the same flags only if the graph is unavailable — say so in the report)
   (an ID counts only when a test NAMED with it ran and passed; skipped/comment-only/duplicate IDs and
   unacknowledged test weakening fail it). Then write specs_vs_tests.md around that JSON.
+spec_impl_reconciler: start from python3 .claude/hooks/sdlc-graph.py context --agent spec_impl_reconciler --phase ${PHASE}
+  (+ orphans --phase ${PHASE}): the endpoint/type/FR inventory and every non-test spec section as file:start-end
+  — your checklist; open each span as you verify it (whole specs only if the graph is unavailable — say so).
 Perform bidirectional reconciliation. Report every MISSING (spec item with no code/test) and every
 EXTRA (code/test with no spec). Classify each: BLOCKING (in-scope FR-* unbuilt/untested) vs
 DEFERRED (explicitly out-of-scope, list the ID). Produce your named report.

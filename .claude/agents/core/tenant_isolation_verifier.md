@@ -42,6 +42,13 @@ Single-purpose mechanical verifier. Does NOT ask "does the code look secure?" �
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 - **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
+- **Your work list, from the project graph:** `python3 .claude/hooks/sdlc-graph.py context --agent tenant_isolation_verifier --phase {{PHASE}}`
+  — the ID-based routes in files changed this phase with their handler spans (Step 1's seed), and the spec
+  sections that define ownership and tenancy (data model, `created_by`/`owner`/"their own"/tenant) as
+  `file:start-end` spans (Step 6's source). Read those spans, not the whole `specs/` directory; open a listed
+  skipped span when a route's resource isn't covered. Routes are regex-extracted (rung 1): still grep the
+  handler files for routes it can't see. If the command fails or prints `GRAPH UNAVAILABLE`, say so in your
+  report and use the sources below and `docs/design/phases/{{PHASE}}/specs/` instead.
 
 ---
 
@@ -50,6 +57,7 @@ Single-purpose mechanical verifier. Does NOT ask "does the code look secure?" �
 ### Step 1 — Enumerate ID-based routes
 
 List every route that accepts a resource ID parameter. Sources:
+- `id_routes` from the graph work list above
 - `agent_state/phases/{{PHASE}}/api_developer/manifest.json` (if present)
 - Direct grep of handler files for path patterns: `:id`, `{id}`, `/{uuid}/`, URL parameter extraction calls
 
@@ -112,7 +120,7 @@ For each repository/data-access call identified in Step 4:
 Tenant scoping stops tenant A reading tenant B. It does **not** stop user A reading or editing user B's
 record **inside the same tenant** (board review 2026-09-30, SEC-12; `secure-coding.md` §1).
 
-1. From the phase specs, list every resource with an owner: a `created_by`/`owner_id`/`assignee_id`
+1. From the phase specs (the ownership sections on your graph work list), list every resource with an owner: a `created_by`/`owner_id`/`assignee_id`
    column, or acceptance criteria like "a user sees only their own drafts" or "only the author can
    edit".
 2. For each ID-based route on such a resource, trace the **caller's user ID** the same way you traced

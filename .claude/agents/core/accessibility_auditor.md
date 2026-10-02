@@ -65,7 +65,13 @@ Each row is a shortcut that has caused missed defects in this pipeline, with the
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Prior decisions with rationale (e.g. the target conformance level, an accepted a11y exception with justification, the chosen component library's ARIA baseline). Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
 1. `~/.claude/skills/ui/accessibility-patterns.md` — WCAG AA reference: semantic elements, ARIA, keyboard nav, focus management, contrast, screen-reader patterns (and the axe rule → SC mapping)
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design / §Accessibility — the conformance target (default WCAG 2.2 AA) and any project constraints
-3. `docs/design/phases/{{PHASE}}/specs/` — TC-A11Y-*/TC-UI-* test cases, design tokens (the intended contrast pairs), and per-screen intent
+3. The spec slices, from the project graph: `python3 .claude/hooks/sdlc-graph.py context --agent accessibility_auditor --phase {{PHASE}}`
+   — the web screens with their routes, the accessibility rows (TC-A11Y-* and a11y-worded TC-UI-* with spec
+   `file:line` and status), and each web screen spec's intent, accessibility, states, design-token and
+   interaction sections as `file:start-end` spans (the intended contrast pairs live in the token/CSS
+   sections). Read those spans, not the whole `specs/` directory; open a listed skipped span when a finding
+   needs it. If the command fails or prints `GRAPH UNAVAILABLE`, say so in your report and read
+   `docs/design/phases/{{PHASE}}/specs/` (TC-A11Y-*/TC-UI-* test cases, design tokens, per-screen intent) instead.
 4. `agent_state/phases/{{PHASE}}/manifest.json` — the built pages, routes, and components in scope for this phase
 
 ---

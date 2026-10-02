@@ -32,6 +32,18 @@ Bidirectional validation between phase specs and the implemented system. Runs af
 
 - **`docs/PROJECT_FACTS.md` — GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 - **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
+- **The inventory and the reading list, from the project graph:**
+  `python3 .claude/hooks/sdlc-graph.py context --agent spec_impl_reconciler --phase {{PHASE}}` and
+  `python3 .claude/hooks/sdlc-graph.py orphans --phase {{PHASE}}`.
+  This reconciliation needs whole-spec coverage, so the graph does not narrow WHAT you check: it lists every
+  spec section except the TC inventory tables (those are `spec_test_reconciler`'s) as `file:start-end` spans,
+  and that list is your checklist — every span must be verified and appear in your report. What it saves is
+  the up-front read: you open each span when you verify it, with the inventory already built — each declared
+  endpoint with its handler span or `MISSING` (Level 1), routes changed this phase that no contract declares
+  (Direction B), contract types with their code definition or `NOT FOUND`, and in-scope FRs no spec section
+  names. Inventory links are rung-1 regex by name: confirm each before you report it; grep for what it can't
+  see (event names, config keys, jobs). If either command fails or prints `GRAPH UNAVAILABLE`, say so in your
+  report and read `docs/design/phases/{{PHASE}}/specs/` whole instead.
 
 ---
 

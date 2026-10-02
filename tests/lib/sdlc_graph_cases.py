@@ -556,6 +556,8 @@ check("PR08", ({"Acceptance Criteria", "GET /api/orders/{id}"}, set()),
 check("PR09", (True, True), (any("NOT DECLARED" not in x and "GET /api/orders/{}" in x for x in ui["bound_endpoints (declared in a contract?)"]),
                               [s["screen"] for s in ui["screens"]] == ["orders-list"]),
       "ui_developer: bound endpoints checked against the contracts (STOP condition) + its screens only")
+check("PR09b", True, any(r.startswith("TC-SEC-001") for r in ui["security_rows (TC-SEC: implement the mitigation)"]),
+      "ui_developer: TC-SEC rows too (the threat model's UI mitigations)")
 mb = ctxd("mobile_developer")
 check("PR10", (True, False), (any(r.startswith(MB) for r in mb[RK]), any(r.startswith(WF) for r in mb[RK])), "mobile_developer: the RN screen, not the web one")
 db = ctxd("database_agent")

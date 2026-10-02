@@ -119,8 +119,14 @@ Brownfield is the normal case from phase 2 on. Before writing anything:
 0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
 1. `agent_state/phases/{{PHASE}}/audit_report.md` and `agent_state/codebase/` — see "Existing code first".
 2. `docs/IMPLEMENTATION_GUIDELINES.md` — tech stack, coding standards, **§Runtime contract**, **§Commands and versions**, §10 configuration.
-3. `docs/design/phases/{{PHASE}}/specs/` — TRDs defining what to build, and the threat model's mitigations and `TC-SEC-*` IDs for this phase (implement them; don't just note them).
-4. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — payload types, error codes.
+3. Your slice of the phase specs, from the project graph: `python3 .claude/hooks/sdlc-graph.py context --agent backend_developer --phase {{PHASE}}`
+   — `phase_context.md` and `threat_model.md` to read first, then the TRD sections that define what to build
+   (acceptance criteria, interface and data contracts, data model, flows, edge cases) as `file:start-end`
+   spans, the `TC-SEC-*` rows whose mitigations you implement (implement them; don't just note them), and the
+   phase's endpoints with their handler spans. Read those spans, not the whole `specs/` directory. Every
+   skipped span (test inventories, BRD traceability, screen specs) is listed: open one when your work touches it.
+   If the command fails or prints `GRAPH UNAVAILABLE`, say so in your progress file and read `docs/design/phases/{{PHASE}}/specs/` (TRDs, the threat model's mitigations and `TC-SEC-*` IDs) instead.
+4. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` — payload types, error codes (item 3 lists its sections).
 5. `docs/design/database.md` and `migrations/` — the schema you code against, and the connection-pool budget.
 
 ---

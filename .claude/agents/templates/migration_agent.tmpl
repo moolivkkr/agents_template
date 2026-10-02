@@ -112,6 +112,11 @@ written, don't improvise schema: list the problem under `## Requests for other o
 1. `docs/design/database.md` — the authoritative schema and its Migration Plan (stages, N-1 flags, table sizes).
 2. `migrations/`, `migrations/registry.yaml`, `agent_state/phases/{{PHASE-1}}/migration_agent/manifest.json` — see "Existing migrations first".
 3. `docs/IMPLEMENTATION_GUIDELINES.md` — {{MIGRATION_TOOL}} conventions, §Runtime contract (migrations run only through the `migrate` entry point — a Job or a one-shot container — never when `serve` starts), §Commands and versions.
+4. The spec sections behind this phase's schema change, from the project graph:
+   `python3 .claude/hooks/sdlc-graph.py context --agent migration_agent --phase {{PHASE}}` — data-model sections and
+   every section with schema content as `file:start-end` spans, and the tables that already exist. Read those
+   spans, not the whole `specs/` directory. If the command fails or prints `GRAPH UNAVAILABLE`, say so in your
+   manifest and read the Data Model sections of `docs/design/phases/{{PHASE}}/specs/` instead.
 
 ## Migration File Rules
 

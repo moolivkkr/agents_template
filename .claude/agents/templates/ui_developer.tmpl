@@ -147,8 +147,16 @@ you need goes under `## Requests for other owners` in `impl/ui_progress.md` for 
 
 0. **`docs/PROJECT_FACTS.md` — GROUND TRUTH. Read this FIRST of all.** Retired/renamed components, hard constraints, environment facts. OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task touches anything RETIRED/superseded there, STOP and flag it.
 0b. **`docs/DECISIONS.md` — settled decisions (Tier 0.5).** Prior decisions with rationale; do not re-litigate an active one without new evidence.
-1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — **the as-built API contract, read before writing any component**: exact envelopes, error codes, example bodies.
-2. `docs/design/phases/{{PHASE}}/specs/` — wireframes (layout, states, bindings, `data-testid`s), interaction flows, `data-contracts.md` payload types, and the threat model's UI mitigations and `TC-SEC-*` IDs.
+1. `docs/design/phases/{{PHASE}}/specs/api-contracts.md` — **the as-built API contract, read before writing any component**: exact envelopes, error codes, example bodies — the sections item 2 lists for the endpoints your screens bind, plus the envelope and error sections.
+2. Your slice of the phase specs, from the project graph: `python3 .claude/hooks/sdlc-graph.py context --agent ui_developer --phase {{PHASE}}`
+   — your web wireframes (layout, states, bindings, `data-testid`s, interaction flows) minus their test
+   inventories, the `api-contracts.md` / `data-contracts.md` / per-spec contract sections for the endpoints
+   your screens bind, the acceptance criteria, `threat_model.md` and the `TC-SEC-*` rows (the UI
+   mitigations), as `file:start-end` spans; plus your screens with routes and bindings, and each bound
+   endpoint's declaration. A bound endpoint marked `NOT DECLARED` is a STOP CONDITION candidate: confirm in
+   `api-contracts.md` yourself first (the graph recognises `METHOD /path` headings and lines only). Read those
+   spans, not the whole `specs/` directory; open a listed skipped span when your work touches it.
+   If the command fails or prints `GRAPH UNAVAILABLE`, say so in your progress file and read `docs/design/phases/{{PHASE}}/specs/` (wireframes, interaction flows, `data-contracts.md`, the threat model's UI mitigations and `TC-SEC-*` IDs) instead.
 3. `agent_state/phases/{{PHASE}}/audit_report_ui.md` and `agent_state/codebase/` — see "Existing code first".
 4. `docs/IMPLEMENTATION_GUIDELINES.md` — UI stack, §4 auth/session model, §Runtime contract, §Commands and versions.
 5. `agent_state/phases/{{PHASE-1}}/ui_developer/manifest.json` — existing screens and routes (absent in phase 1).
@@ -181,7 +189,7 @@ Each row is a shortcut that has caused missed defects in this pipeline, with the
 ## WORKFLOW
 
 ### Phase 1: Understand the UI Surface
-1. Read all wireframe specs, interaction flows and the UI audit report for the phase.
+1. Read the wireframe specs and interaction flows on your graph list (Required Reading 2) and the UI audit report for the phase.
 2. Read `api-contracts.md` for every endpoint the UI will consume.
 3. Identify all screens, sub-components, shared molecules and which already exist.
 4. Map each screen to its API calls, data shapes and `data-testid`s.

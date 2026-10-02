@@ -144,8 +144,13 @@ A missing endpoint or response shape goes under `## Requests for other owners` i
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Workflow (Expo vs bare), navigation library, React Compiler on/off, accessibility-prop style, device tool. Do not re-litigate an active decision without new evidence.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` §24 Mobile, §4 auth/session model, §Commands and versions, and §Runtime contract (the backend's `/healthz` + `/readyz` and version paths — a connectivity or "server unavailable" state checks those, never an invented `/health`).
-2. `docs/design/phases/{{PHASE}}/specs/`: every screen spec in scope, with its testIDs, states and API bindings, and the threat model's mobile mitigations and `TC-SEC-*` IDs.
-3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` and, once 2A.4 has run, `api-contracts.md`; the envelope in `~/.claude/skills/api/response-envelope.md`.
+2. Your slice of the phase specs, from the project graph: `python3 .claude/hooks/sdlc-graph.py context --agent mobile_developer --phase {{PHASE}}`
+   — every React Native screen spec in scope (testIDs, states, API bindings) minus its test inventory, the
+   contract sections for the endpoints those screens bind, the acceptance criteria, `threat_model.md` and the
+   `TC-SEC-*` rows (the mobile mitigations), as `file:start-end` spans; plus your screens with routes and
+   bindings. Read those spans, not the whole `specs/` directory; open a listed skipped span when your work
+   touches it. If the command fails or prints `GRAPH UNAVAILABLE`, say so in your progress file and read every screen spec in scope in `docs/design/phases/{{PHASE}}/specs/`, with the threat model's mobile mitigations and `TC-SEC-*` IDs, instead.
+3. `docs/design/phases/{{PHASE}}/specs/data-contracts.md` and, once 2A.4 has run, `api-contracts.md` (item 2 lists the sections your screens bind); the envelope in `~/.claude/skills/api/response-envelope.md`.
 4. `{{MOBILE_APP_DIR}}/package.json`: the real RN / Expo / router / RNTL versions. Code to those, not to memory.
 5. `agent_state/phases/{{PHASE}}/audit_report_ui.md`, `agent_state/codebase/`, and `agent_state/phases/{{PHASE-1}}/mobile_developer/manifest.json`: existing routes and screens not to break.
 6. **Google Stitch renders** (when `docs/design/stitch.json` exists): `~/.claude/skills/ui/stitch-design.md` §6.6 and, per screen, `docs/design/stitch/<key>.mobile/screenshot.png` + `screen.html`.
