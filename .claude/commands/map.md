@@ -119,6 +119,23 @@ If `--phase` is provided:
 mkdir -p agent_state/codebase
 ```
 
+### Structure from the graph (deterministic; the mappers don't re-derive it)
+```bash
+# Files, symbols, routes, tables, imports and a ranked repo map come from sdlc-graph (seconds, no LLM).
+SG=.claude/hooks/sdlc-graph.py; [ -f "$SG" ] || SG="$HOME/.claude/hooks/startup/sdlc-graph.py"
+if python3 "$SG" build --incremental >/dev/null; then
+  { echo "# Structure (sdlc-graph, $(git rev-parse --short HEAD))"; echo '```'
+    python3 "$SG" stats --max-tokens 1500
+    python3 "$SG" repomap --max-tokens 3000
+    python3 "$SG" orphans --max-tokens 1500; echo '```'; } > agent_state/codebase/structure.md
+else
+  echo "⚠ sdlc-graph unavailable — mappers derive structure themselves (say so in SUMMARY.md)"
+fi
+```
+Give every mapper `agent_state/codebase/structure.md` as its starting map: it states the ranked files,
+symbols, routes, tables and orphans as found by rung-1 regex extraction. Mappers verify what they rely
+on and spend their effort on judgment (patterns, quality, concerns, strategy), not on re-listing files.
+
 ### Determine focus areas
 ```bash
 FOCUS="${ARG_FOCUS:-all}"

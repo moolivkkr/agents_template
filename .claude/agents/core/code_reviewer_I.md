@@ -37,6 +37,7 @@ Reviews code against language conventions, project naming standards, and style r
 1. `~/.claude/skills/languages/{{LANG}}.md` — language idioms and anti-patterns
 2. `docs/IMPLEMENTATION_GUIDELINES.md` §Design Constraints — naming conventions, patterns
 3. `agent_state/agent_registry.json` — which language skill pack is active
+4. What to review: `python3 .claude/hooks/sdlc-graph.py diff-context --phase {{PHASE}}` — the changed symbols with their spans (`file:start-end`), the endpoints and tables they touch, and the spec sections that govern them. Review those spans and read those sections instead of the whole `specs/` directory. If it fails or prints `GRAPH UNAVAILABLE`, say so in your report and use `git diff $(cat agent_state/phases/{{PHASE}}/base_sha)..HEAD` plus the phase specs instead.
 
 ---
 

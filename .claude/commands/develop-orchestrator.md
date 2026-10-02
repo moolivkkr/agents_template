@@ -227,7 +227,7 @@ implementation phase: `verify-gate.sh` enforces them as a floor.)
 
 ```bash
 # 0. Framework hooks the gate and the evidence steps need (projects created before 2026-09-30 lack them).
-for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py commands-table.py acceptance-map.py docs-policy.py debate-status.py remember.sh stitch-state.py stitch-capture.mjs stitch-fidelity.py; do
+for h in verify-gate.sh junit-to-sidecar.py tc-inventory.py sdlc-graph.py commands-table.py acceptance-map.py docs-policy.py debate-status.py remember.sh stitch-state.py stitch-capture.mjs stitch-fidelity.py; do
   [ -f ".claude/hooks/$h" ] || { mkdir -p .claude/hooks && cp "$HOME/.claude/hooks/startup/$h" .claude/hooks/ && chmod +x ".claude/hooks/$h"; } \
     || echo "⛔ BLOCKED: .claude/hooks/$h missing and not staged in ~/.claude/hooks/startup (run ./install.sh from the framework repo)"
 done
@@ -247,6 +247,10 @@ python3 .claude/hooks/commands-table.py docs/IMPLEMENTATION_GUIDELINES.md --out 
 [ -f "$P/base_sha" ] || git rev-parse HEAD > "$P/base_sha"
 # 3. Spec TC priorities for the results converters.
 python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"
+# 4. The project graph (agent_state/graph/): agents' work lists (`context`), reviewers' `diff-context`, the TC gate.
+#    Queries refresh it incrementally; the gate rebuilds it in full. If it can't build, agents fall back and say so.
+python3 .claude/hooks/sdlc-graph.py build >/dev/null \
+  || echo "⚠ sdlc-graph build failed: agents fall back to reading specs/ whole (they must say so in their reports)"
 ```
 
 Evidence rules for every test tier are in `~/.claude/skills/testing/test-results-sidecar.md`: JUnit XML
@@ -585,7 +589,8 @@ EVIDENCE (skills/testing/test-results-sidecar.md):
 
 ```
 Agent prompt (subagent_type: unit_test_agent): "[GROUND TRUTH] You are unit_test_agent running Wave 3a for Phase ${PHASE}.
-Read docs/design/phases/${PHASE}/phase_context.md, then the specs' TC-* IDs with tier: unit.
+Get your work list: python3 .claude/hooks/sdlc-graph.py context --agent unit_test_agent --phase ${PHASE}
+(phase_context.md, the unit rows still to do, the spec sections to read); read only those slices.
 Derive each test's expected values from the SPEC (acceptance criteria, contracts, edge cases), not
 from the implementation: a test that restates the code proves nothing. For every behaviour, include
 at least one negative/boundary case. Mock only true external boundaries.
@@ -596,7 +601,8 @@ at least one negative/boundary case. Mock only true external boundaries.
 
 ```
 Agent prompt (subagent_type: integration_test_agent): "[GROUND TRUTH] You are integration_test_agent running Wave 3b for Phase ${PHASE}.
-Read phase_context.md and the specs' TC-* IDs with tier: integration.
+Get your work list: python3 .claude/hooks/sdlc-graph.py context --agent integration_test_agent --phase ${PHASE}
+(phase_context.md, the integration rows still to do, spec/contract sections, endpoints with handler spans).
 Against REAL dependencies (Testcontainers / the stack's versions from §Commands and versions):
 repository CRUD, cache behaviour, the response envelope for every endpoint
 (~/.claude/skills/api/response-envelope.md §What tests assert), the abuse-case matrix
@@ -740,7 +746,7 @@ Run the component tier. [EVIDENCE block] report: ui_test_results"
 Agent prompt (subagent_type: e2e_orchestrator): "[GROUND TRUTH] You are e2e_orchestrator running Wave 3c-web for Phase ${PHASE}, AFTER ui_test_agent.
 BASE URL: ${APP_BASE_URL} (verify GET <BASE URL>/healthz is 200 first; if not, verdict BLOCKED).
 Scope = every TC-E2E-* in this phase's spec inventory plus all earlier phases' committed e2e specs
-(regression). Never invent scenarios. Run once with retries 0; a pass-on-retry is FLAKY (a failure).
+(regression): python3 .claude/hooks/sdlc-graph.py unlocked --phase ${PHASE}. Never invent scenarios. Run once with retries 0; a pass-on-retry is FLAKY (a failure).
 Write screenshots/traces for failures. [EVIDENCE block] report: e2e_results"
 ```
 
@@ -894,6 +900,10 @@ Each spawn prompt (prepend the GROUND TRUTH line):
 ```
 Agent prompt (subagent_type: <agent_name>): "[GROUND TRUTH] You are <agent_name> running Wave 4 Track A for Phase ${PHASE}.
 Review ALL source changed/added in this phase against IMPLEMENTATION_GUIDELINES and the phase specs.
+Map it first: python3 .claude/hooks/sdlc-graph.py diff-context --phase ${PHASE} (changed symbols with spans,
+endpoints/tables touched, governing spec sections) and read the spec sections it lists, not the whole specs/
+directory (unless it is unavailable — then say so). breaking_change_reviewer also runs
+python3 .claude/hooks/sdlc-graph.py consumers --changed-since <previous phase's gate commit>.
 Use the Unified Severity Model (~/.claude/skills/core/code-quality.md): BLOCKING | WARNING | INFO.
 Every finding MUST cite file:line. Produce your named report at the exact path above.
 Definition of Done: report written, every BLOCKING finding has file:line + a fix recommendation,
@@ -928,9 +938,10 @@ esac; }
 Each spawn prompt (prepend GROUND TRUTH):
 ```
 Agent prompt (subagent_type: <reconciler>): "[GROUND TRUTH] You are <reconciler> running Wave 4 Track C for Phase ${PHASE}.
-spec_test_reconciler: FIRST run the deterministic inventory — it is your evidence, your prose explains it:
-  python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --results agent_state/phases/${PHASE}/reports/test_results.json [+ every other results sidecar that exists: acceptance_report.json, performance_results.json, e2e_results.json, mobile_e2e_results.json] \
+spec_test_reconciler: FIRST run the deterministic TC gate — it is your evidence, your prose explains it:
+  python3 .claude/hooks/sdlc-graph.py gate --phase ${PHASE} --tc-only --results agent_state/phases/${PHASE}/reports/test_results.json [+ every other results sidecar that exists: acceptance_report.json, performance_results.json, e2e_results.json, mobile_e2e_results.json] \
     --diff-base $(cat agent_state/phases/${PHASE}/base_sha) --out agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json
+  (tc-inventory.py with the same flags only if the graph is unavailable — say so in the report)
   (an ID counts only when a test NAMED with it ran and passed; skipped/comment-only/duplicate IDs and
   unacknowledged test weakening fail it). Then write specs_vs_tests.md around that JSON.
 Perform bidirectional reconciliation. Report every MISSING (spec item with no code/test) and every
@@ -1106,7 +1117,10 @@ Anti-rationalization: "the fix looks right, no need to re-run" is WRONG — alwa
 
 **Stall rule:** if `loop_count > 2` with no new fact (or the same failing action repeats without progress) → STALL → REPLAN: write the failure mode, evict the falsified assumption, rewrite `plan[]` (usually re-classify), and escalate after the tier's retry cap (`sdlc-config.json`) to `debate_moderator` or the human. A verified, broadly-true assumption may be promoted to a Tier 0 fact via `/remember`.
 
-The PARENT session (not an agent) reads all Wave 3+4 reports and builds the feedback document:
+The PARENT session (not an agent) builds the feedback document. Start from the one-screen summary,
+`python3 .claude/hooks/sdlc-graph.py gate --phase ${PHASE} --summary` (TC gate + roster + evidence
+sidecars + reconciler counts, every blocker on one line), then open only the reports it names. If it is
+unavailable, read all Wave 3+4 reports:
 
 1. Read `unit_tests.md` — any failures?
 2. Read `integration_tests.md` — any failures?
@@ -1210,7 +1224,7 @@ When anything is stale, in this order:
    if mobile code changed, and `acceptance_test_agent` if any code changed since its run.
 4. **Re-run the inventory LAST, unconditionally,** after steps 2–3 (and after Track B/D acceptance and
    performance have their final sidecars). Re-spawn `spec_test_reconciler` with EVERY results sidecar:
-   `tc-inventory.py --results reports/test_results.json reports/acceptance_report.json reports/performance_results.json reports/e2e_results.json [reports/mobile_e2e_results.json …] --diff-base …`.
+   `sdlc-graph.py gate --tc-only --results reports/test_results.json reports/acceptance_report.json reports/performance_results.json reports/e2e_results.json [reports/mobile_e2e_results.json …] --diff-base …`.
    Otherwise the gate reads a Wave 4 inventory in which acceptance/performance rows are still UNTESTED.
 5. **Re-review security** (SEC-07) when code changed after Wave 4. Re-spawn `security_reviewer`
    (subagent_type: security_reviewer) scoped to
@@ -1247,6 +1261,9 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
       `ui_developer` / `mobile_developer` manifests has an approved/conformant Stitch screen at its
       latest revision whose render still matches its sha256; nothing is `pending_approval`,
       `sync_back_pending` or `drift`; every `stitch_deviations[]` entry is fixed or accepted + synced.
+    - **TC inventory (check h):** `sdlc-graph.py gate --tc-only` — every HIGH/MEDIUM TC ID has a test named
+      with it that ran and passed (results mode, every sidecar in reports/), no duplicate/malformed IDs,
+      range-defined IDs included, no unacknowledged test weakening since `base_sha`. It is the only TC gate.
 
 0b. **Agent-roster completeness (execution guarantee) — run FIRST, via the shared hook.** The single
     source of truth for this check is `.claude/hooks/verify-gate.sh`. It passes iff (1) every
@@ -1418,9 +1435,13 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
    re-run the hook on the final state — a gate.passed that the hook would block is not a pass:
    ```bash
    M="agent_state/phases/${PHASE}/manifest.json"; [ -f "$M" ] || echo '{}' > "$M"
+   # e2e_workflows_unlocked (C3): PHASE_PLAN §E2E Workflows Unlocked, via the graph; [] if unavailable
+   WF="$(python3 .claude/hooks/sdlc-graph.py --json --full unlocked --phase "${PHASE}" 2>/dev/null | jq -c '.manifest_field // []' 2>/dev/null)"; [ -n "$WF" ] || WF='[]'
    jq --argjson score "${GATE_SCORE:-0}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
      --slurpfile mig <(cat agent_state/phases/${PHASE}/migration_agent/manifest.json 2>/dev/null || echo '{}') \
+     --argjson wf "$WF" \
      '.gate = {passed: true, verified_by: "verify-gate.sh", roster_complete: true, gate_score: $score, ts: $ts}
+      | .e2e_workflows_unlocked = $wf
       | .schema.migrations_created = ($mig[0].migrations_created // $mig[0].migrations // [])' \
      "$M" > "$M.tmp" && mv "$M.tmp" "$M"
    touch "agent_state/phases/${PHASE}/gate.passed"

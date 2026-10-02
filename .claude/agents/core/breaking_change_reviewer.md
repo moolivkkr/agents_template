@@ -49,7 +49,12 @@ Each row is a shortcut that has caused missed defects in this pipeline, with the
 
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** A prior decision may authorize a breaking change with a migration path; honor it. Do not re-litigate an active decision without new evidence; if new evidence contradicts one, append a reversing entry or escalate — don't silently diverge.
-1. `git diff` of this phase against the previous phase's gate tag/commit — the set of changed signatures, types, schemas, and columns
+1. `git diff` of this phase against the previous phase's gate tag/commit — the set of changed signatures, types, schemas, and columns.
+   Start from the graph: `python3 .claude/hooks/sdlc-graph.py consumers --changed-since <that tag/commit>` lists every
+   changed symbol that has consumers outside the change (callers, importing files, frontend callers, screen
+   bindings, endpoints), whether it existed at the base, and the first gated phase containing its file; migrations
+   that touch tables come with each table's readers and writers. Callers resolve by name (rung 1), so confirm
+   each consumer before calling it breaking. If it fails or prints `GRAPH UNAVAILABLE`, say so and search as in Check 2.
 2. Previous phases' manifests (`agent_state/phases/*/manifest.json`) — what contracts each phase published and consumed
 3. `~/.claude/skills/core/api-excellence.md` §Versioning — the project's compatibility/versioning policy
 4. `docs/IMPLEMENTATION_GUIDELINES.md` — deploy model (rolling vs. atomic), API versioning scheme
@@ -80,7 +85,7 @@ For each, record: the old form → new form.
 **Property to verify:** For each changed contract, no earlier-phase consumer still depends on the old form without being updated.
 
 For every entry in the Check 1 inventory:
-1. Search the ENTIRE repo (not just this phase's directories) for consumers of the old form — call sites, API clients, type imports, event handlers, config reads.
+1. Search the ENTIRE repo (not just this phase's directories) for consumers of the old form — call sites, API clients, type imports, event handlers, config reads. Seed the search with `sdlc-graph.py consumers <symbol|"METHOD /path"|table:NAME>`; grep for what it can't see (config keys, event names, string-built routes).
 2. For each consumer, determine its phase of origin (which phase created it).
 3. Classify: **updated in this phase** (safe) vs. **still on the old contract** (breaking).
 4. For API/event contracts, include the frontend client and any external consumer named in the guidelines.

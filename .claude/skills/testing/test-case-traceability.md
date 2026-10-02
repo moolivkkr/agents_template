@@ -255,6 +255,14 @@ python3 .claude/hooks/tc-inventory.py --phase "$P" \
   --out "agent_state/reconciliation/phase-$P/specs_vs_tests.json"
 ```
 
+**The gate runs the same inventory through the project graph:** `sdlc-graph.py gate --phase P --tc-only`
+(`verify-gate.sh` check (h); `spec_test_reconciler` writes `specs_vs_tests.json` with it). It imports
+`tc-inventory.py`'s parsers and weakening check and agrees with it on every ID tc-inventory sees, and it
+also BLOCKs on what tc-inventory can't see: an ID defined only by a range row (`| TC-X-1 – TC-X-4 | … |`,
+or a line starting with a range and a priority), and an ID cell that is malformed (`TC-SEC-REG-001`,
+`TC-UNIT-012a`), which tc-inventory silently drops. It always runs in results mode and needs `base_sha`.
+`sdlc-graph.py tc --phase P [--tier T] [--status todo]` lists the same rows, budgeted, for agents.
+
 The output is an `sdlc.test-results/v1` sidecar (`tier: tc-inventory`). It FAILs on any of:
 - a HIGH/MEDIUM ID that is missing, failing, skipped-only or comment-only;
 - an ID that another phase also defines;
@@ -328,7 +336,7 @@ is how a later phase's change to an earlier phase's behaviour is caught.
 | `ux_designer` | UI, FORM, COMP, A11Y and mobile rows for the screens it specifies |
 | Each test agent | Writes a named test for every row of its tier, runs it, and produces its sidecar |
 | `test_runner` | Re-runs every tier; its sidecars are what the inventory reads |
-| `spec_test_reconciler` | Runs `tc-inventory.py` (source and results mode) and explains the result |
+| `spec_test_reconciler` | Runs the TC gate (`sdlc-graph.py gate --tc-only`; `tc-inventory.py` if the graph is unavailable) and explains the result |
 
 ---
 

@@ -93,7 +93,11 @@ Each row is a shortcut that has caused missed defects in this pipeline, with the
 5. `docs/design/phases/${PHASE}/threat_model.md` (and `agent_state/phases/${PHASE}/reports/threat_model.md`) — mitigations and `TC-SEC-*` IDs in scope: each mitigation is a property to verify
 6. `docs/IMPLEMENTATION_GUIDELINES.md` §4 (auth, token storage, CSRF, WebSocket auth) and §Design Constraints
 7. `docs/BRD.md` §NFR-SEC-* — specific security requirements with IDs
-8. The diff for your mode (see Scope), and every handler, middleware, service, config and migration file in it
+8. The diff for your mode (see Scope), and every handler, middleware, service, config and migration file in it.
+   Map it first with `python3 .claude/hooks/sdlc-graph.py diff-context --phase ${PHASE}` (Wave 5v: add
+   `--base $(cat agent_state/phases/${PHASE}/wave4_sha)`): changed symbols with spans, the endpoints and
+   tables each touches, and the governing spec sections. It is a map, not the review — read every changed
+   handler. If it fails or prints `GRAPH UNAVAILABLE`, say so and work from the diff alone.
 
 ---
 

@@ -65,7 +65,9 @@ verified.
 
 The scope is the spec inventory: this phase's `Tier: e2e` rows, plus the committed e2e specs of every
 earlier phase. It never invents scenarios.
-The old scoping input (`e2e_workflows_unlocked` in phase manifests) had no producer (ARCH-07) and is gone.
+The old scoping input (`e2e_workflows_unlocked` in phase manifests) had no producer (ARCH-07). It is now
+derived from PHASE_PLAN §E2E Workflows Unlocked by `sdlc-graph.py unlocked` and used as a cross-check: an
+unlocked workflow with no TC-E2E row is a spec gap you report, never a scenario you invent.
 
 `mobile_e2e_orchestrator` is the native-app counterpart. This agent never claims to test native
 screens.
@@ -91,8 +93,11 @@ screens.
 0. `docs/PROJECT_FACTS.md` — **GROUND TRUTH.** Read before anything else. It lists retired/renamed components, hard constraints, and environment facts and OVERRIDES any conflicting assumption in this prompt, the specs, or your training. If your task references anything marked RETIRED/superseded there, STOP and flag it. (Protocol: `~/.claude/skills/core/shared-context-protocol.md`)
 0b. `docs/DECISIONS.md` — **settled decisions (Tier 0.5).** Accepted quarantines and waivers, with expiry. Do not re-litigate an active decision without new evidence.
 1. `docs/IMPLEMENTATION_GUIDELINES.md` — product type and e2e tool.
-2. This phase's inventory rows with `Tier: e2e` (`docs/design/phases/{{PHASE}}/specs/`), and
-   `agent_state/phases/{{PHASE}}/tc_priorities.json`.
+2. Your scope, from the project graph: `python3 .claude/hooks/sdlc-graph.py unlocked --phase {{PHASE}}` —
+   this phase's TC-E2E rows (spec `file:line`), the workflows PHASE_PLAN unlocks (this phase + earlier
+   phases as regression) and the committed e2e spec files — and
+   `agent_state/phases/{{PHASE}}/tc_priorities.json`. Open only the spec rows it names. If it fails or
+   prints `GRAPH UNAVAILABLE`, say so and read the `Tier: e2e` rows in `docs/design/phases/{{PHASE}}/specs/`.
 3. `agent_state/phases/{{PHASE}}/ui_test_agent/manifest.json` (web) — the handed-off spec files.
 4. `agent_state/config/verify-commands.json` — `commands."test:e2e"`.
 5. `~/.claude/skills/testing/playwright.md` (web) — config, flake policy, traces.
@@ -127,8 +132,9 @@ TC-E2E row of this phase `UNTESTED`. That blocks the gate honestly instead of pa
 
 1. **This phase:** every inventory row with `Tier: e2e`. For each, find the committed test **named**
    with its ID. Source mode is enough here:
-   `python3 .claude/hooks/tc-inventory.py --phase {{PHASE}} --out "$P/e2e_scope.json"`. Read the
-   `cases` whose tier is `e2e`.
+   `python3 .claude/hooks/sdlc-graph.py tc --phase {{PHASE}} --tier e2e` (each row's covering tests), or
+   `python3 .claude/hooks/tc-inventory.py --phase {{PHASE}} --out "$P/e2e_scope.json"` and its `cases`
+   whose tier is `e2e` when the graph is unavailable.
 2. **Regression:** the whole committed e2e suite, which is every earlier phase's specs. The table's
    `test:e2e` command runs the full suite, so nothing is selected by hand, and nothing earlier is
    dropped.

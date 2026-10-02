@@ -82,6 +82,10 @@ cp "$REPO_DIR/.claude/hooks/"*.sh "$REPO_DIR/.claude/hooks/"*.py "$REPO_DIR/.cla
 install -m 755 "$REPO_DIR/.claude/guard/vet-package.py" "$CLAUDE_DIR/hooks/vet-package.py"   # agents call ~/.claude/hooks/vet-package.py
 cp "$REPO_DIR/.claude/settings.json" "$CLAUDE_DIR/hooks/startup/project-settings.json"
 echo "  ✅ hooks staged in $CLAUDE_DIR/hooks/startup/ (project copies made by new-project.sh / /autonomous)"
+# ── Scripts run from a project directory (one shared copy; they act on $PWD or --project) ──
+mkdir -p "$CLAUDE_DIR/scripts/startup"
+install -m 755 "$REPO_DIR/scripts/startup-autonomous-run.sh" "$CLAUDE_DIR/scripts/startup/startup-autonomous-run.sh"
+echo "  ✅ unattended /autonomous supervisor → $CLAUDE_DIR/scripts/startup/startup-autonomous-run.sh (docs/AUTONOMOUS_GUIDE.md §10)"
 
 # ── Agent templates (for agent_factory to generate project-specific agents) ──
 echo "Installing agent templates → $DEST_TEMPLATES/"
