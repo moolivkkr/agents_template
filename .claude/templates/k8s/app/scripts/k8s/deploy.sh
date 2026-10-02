@@ -1,5 +1,6 @@
 #!/bin/bash
 # deploy.sh <dev|qa> [--reuse | --rollback]  — deploy this project to the sdlc lab cluster.
+# deploy.sh <staging|prod> [--rollback]      — hands over to deploy-eks.sh (Amazon EKS; human or CI only).
 #
 #   dev             build every image in deploy/k8s/images.txt from the working tree, push to the
 #                   in-cluster registry, pin the overlay to the pushed DIGESTS, apply, migrate, seed,
@@ -18,6 +19,10 @@
 # phase's execution.jsonl — the evidence verify-gate.sh requires on k8s projects.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
+case "$ENV_NAME" in staging|prod)   # Amazon EKS: promoted digests only, never built here
+  [ -x "$HERE/deploy-eks.sh" ] || die "no scripts/k8s/deploy-eks.sh — instantiate the EKS layer (instantiate.sh <project> <app> --eks)"
+  exec "$HERE/deploy-eks.sh" "$@" ;;
+esac
 MODE=build; [ "$ENV_NAME" = qa ] && MODE=promote
 case "${2:-}" in --reuse) MODE=reuse ;; --rollback) MODE=rollback ;; "") ;; *) die "unknown option $2" ;; esac
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
@@ -98,30 +103,6 @@ python3 "$DL" set-images "$OVERLAY/kustomization.yaml" "${IMAGES[@]}"
 # ── apply → migrate → seed → rollout ─────────────────────────────────────────────────────────────
 VERDICT=HEALTHY
 DIGESTS=(); for pair in "${IMAGES[@]}"; do DIGESTS+=("${pair##*@}"); done
-stuck() { kc get pods ${1:+-l "$1"} -o json 2>/dev/null | python3 "$DL" stuck --digests "${DIGESTS[@]}"; }
-run_job() {  # $1 cronjob template, $2 step name — fails fast on a pod that can never start
-  local job="$2-$(date +%s)" i s f r
-  kc create job "$job" --from="cronjob/$1" >/dev/null || { step "$2" fail; return 1; }
-  for i in $(seq 1 120); do
-    s="$(kc get job "$job" -o jsonpath='{.status.succeeded}')"; [ "${s:-0}" -ge 1 ] && { step "$2" ok; return 0; }
-    f="$(kc get job "$job" -o jsonpath='{.status.conditions[?(@.type=="Failed")].status}')"; [ "$f" = True ] && break
-    r="$(stuck "job-name=$job")"; [ -n "$r" ] && { log "$r"; break; }
-    sleep 2
-  done
-  step "$2" fail; log "$2 job failed:"; kc logs "job/$job" --tail=40 >&2 || true
-  kc delete job "$job" --wait=false >/dev/null 2>&1 || true   # a never-started Job never TTLs out
-  return 1
-}
-wait_rollout() {  # $1 deployment.apps/<name> — fails fast when a new-digest pod can never start
-  local i sel r
-  sel="$(kc get "$1" -o jsonpath='{.spec.selector.matchLabels.app}')"
-  for i in $(seq 1 120); do
-    kc rollout status "$1" --timeout=2s >/dev/null 2>&1 && return 0
-    r="$(stuck "${sel:+app=$sel}")"; [ -n "$r" ] && { log "$1: $r"; return 1; }
-    sleep 1
-  done
-  return 1
-}
 # db-access: refuse a render in which a workload can read a database role it must not have (a service
 # with the migrator or superuser keys, envFrom the whole secret, ...) before anything reaches the cluster.
 if kubectl kustomize "$OVERLAY" > "$TMP/rendered.yaml" \
@@ -144,14 +125,7 @@ fi
 SMOKE='{"total":0,"passed":0,"failed":0,"failures":[]}'
 if [ "$VERDICT" = HEALTHY ]; then
   SMOKE="$("$HERE/smoke.sh" "$ENV_NAME" "$SHA")" || VERDICT=DEGRADED
-  parity=ok
-  for pair in "${IMAGES[@]}"; do
-    name="${pair%%=*}"; digest="${pair##*@}"
-    ids="$(kc get pods -l "app=$name" --field-selector=status.phase=Running -o jsonpath='{range .items[*]}{.status.containerStatuses[*].imageID}{"\n"}{end}')"
-    [ -n "$ids" ] || { parity=fail; log "no running pods for $name"; continue; }
-    while IFS= read -r id; do case "$id" in *"@$digest") ;; *) parity=fail; log "pod runs $id, expected @$digest" ;; esac; done <<< "$ids"
-  done
-  step digest_parity "$parity"; [ "$parity" = ok ] || VERDICT=DEGRADED
+  digest_parity || VERDICT=DEGRADED
 fi
 
 # ── evidence ─────────────────────────────────────────────────────────────────────────────────────
@@ -162,17 +136,7 @@ log "$NS: $VERDICT ($MODE, $SHA) — $BASE_URL"
 
 # ── housekeeping (only after HEALTHY: nothing a working env needs is touched) ─────────────────────
 if [ "$VERDICT" = HEALTHY ]; then
-  # kustomize renames generated ConfigMaps/Secrets (<name>-<hash>) on every content change and `apply`
-  # never deletes: remove generated objects the current render no longer references.
-  current="$(kc apply -f "$TMP/rendered.yaml" --dry-run=client -o name 2>/dev/null | grep -E '^(configmap|secret)/' || true)"
-  prefixes="$(printf '%s\n' "$current" | sed -nE 's#^(configmap|secret)/(.*)-[a-z0-9]{10}$#\1/\2#p' | sort -u)"
-  for obj in $(kc get configmaps,secrets -o name 2>/dev/null); do
-    base="$(printf '%s' "$obj" | sed -nE 's#^(configmap|secret)/(.*)-[a-z0-9]{10}$#\1/\2#p')"
-    [ -n "$base" ] || continue
-    printf '%s\n' "$prefixes" | grep -qxF "$base" || continue          # not one of our generators
-    printf '%s\n' "$current" | grep -qxF "$obj" && continue             # the one in use
-    kc delete "$obj" --wait=false >/dev/null 2>&1 && log "removed stale $obj"
-  done
+  prune_generated "$TMP/rendered.yaml"
   "$HERE/registry-prune.sh" >&2 || log "registry prune skipped (see above)"
 fi
 [ "$VERDICT" = HEALTHY ]

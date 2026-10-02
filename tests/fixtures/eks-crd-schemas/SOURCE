@@ -1,0 +1,7 @@
+JSON schemas for the CRD kinds the EKS layer renders, so tests/eks-templates.test.sh validates them
+offline with kubeconform instead of skipping them. Copied 2026-10-01 from the datreeio CRDs-catalog:
+  https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/external-secrets.io/externalsecret_v1.json
+  https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/external-secrets.io/secretstore_v1.json
+  https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/eks.amazonaws.com/ingressclassparams_v1.json
+Refresh them when the External Secrets Operator chart (eks-bootstrap.sh ESO_CHART_VERSION) or EKS Auto
+Mode's IngressClassParams API changes.

@@ -1,0 +1,8 @@
+# Voluntary disruptions (Auto Mode node replacement — nodes live at most 21 days — drains, upgrades)
+# take at most one API pod at a time.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata: {name: api}
+spec:
+  maxUnavailable: 1
+  selector: {matchLabels: {app: api}}

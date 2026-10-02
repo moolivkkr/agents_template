@@ -26,7 +26,7 @@ if [ "${1:-}" = "--guard" ]; then
   install -m 755 "$REPO_DIR/.claude/guard/make-policy.py"    "$HOOKS/sdlc-guard-make-policy.py"
   install -m 755 "$REPO_DIR/.claude/guard/vet-package.py"    "$HOOKS/vet-package.py"      # secure-coding §5: vet new dependencies
   install -m 755 "$REPO_DIR/.claude/guard/shims/kubectl"     "$SHIMS/kubectl"
-  ln -sf kubectl "$SHIMS/helm"; ln -sf kubectl "$SHIMS/limactl"
+  for t in helm limactl aws crane; do ln -sf kubectl "$SHIMS/$t"; done   # aws/crane: EKS + ECR are human/CI only
   echo "✅ sdlc-guard installed → $HOOKS/ (hook, env hook, policy generator, shims)"
   [ -f "$HOME/.config/sdlc-guard/policy.json" ] \
     && echo "   policy: $HOME/.config/sdlc-guard/policy.json" \

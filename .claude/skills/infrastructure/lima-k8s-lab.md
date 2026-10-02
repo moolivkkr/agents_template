@@ -3,6 +3,8 @@
 The framework's non-prod Kubernetes target: k3s in Lima VMs on one or two Macs, one namespace per
 app per environment (`<app>-dev`, `<app>-qa`). Agents deploy to it unattended; humans own the cluster.
 Templates live in `~/.claude/templates/k8s/` (repo: `.claude/templates/k8s/`).
+Staging and prod run the same base on Amazon EKS, promoted from qa by digest. Humans or CI deploy
+them, never agents: see `eks.md`.
 
 ## Topology (two Macs over a Thunderbolt bridge)
 

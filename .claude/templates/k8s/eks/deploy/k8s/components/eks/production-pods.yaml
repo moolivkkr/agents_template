@@ -1,0 +1,25 @@
+# Production shape for the API (repeat for every stateless service deployment_agent adds):
+# its own ServiceAccount (no token mounted: it calls no Kubernetes API; an EKS Pod Identity association
+# for it is created by Terraform only if var.service_policies names it), requests sized for bin-packing
+# by EKS Auto Mode (Karpenter), and spread over availability zones (hard) and nodes (soft) so one AZ or
+# node going away never takes every replica. matchLabelKeys keeps the spread per ReplicaSet during a
+# rolling update.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: api}
+spec:
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxSurge: 1, maxUnavailable: 0}
+  template:
+    spec:
+      serviceAccountName: api
+      automountServiceAccountToken: false
+      topologySpreadConstraints:
+      - {maxSkew: 1, topologyKey: topology.kubernetes.io/zone, whenUnsatisfiable: DoNotSchedule, labelSelector: {matchLabels: {app: api}}, matchLabelKeys: [pod-template-hash]}
+      - {maxSkew: 1, topologyKey: kubernetes.io/hostname, whenUnsatisfiable: ScheduleAnyway, labelSelector: {matchLabels: {app: api}}, matchLabelKeys: [pod-template-hash]}
+      containers:
+      - name: api
+        resources:
+          requests: {cpu: 250m, memory: 256Mi}
+          limits: {memory: 512Mi}

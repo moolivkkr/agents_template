@@ -1,0 +1,19 @@
+# Ingress through EKS Auto Mode's built-in load balancing (the managed AWS Load Balancer Controller).
+# The IngressClass "__APP__-alb" and its IngressClassParams (internet-facing, the ACM certificate,
+# IngressGroup "__APP__", only this app's namespaces) are cluster-scoped: scripts/k8s/eks-bootstrap.sh
+# applies them once per cluster (deploy/k8s/eks-cluster.yaml). Auto Mode ignores annotations on an
+# IngressClass and does not support alb.ingress.kubernetes.io/group.name on an Ingress; listen-ports,
+# ssl-redirect and healthcheck-path stay Ingress annotations
+# (docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html, read 2026-10-01).
+# Target type is ip (the Auto Mode default), so the ALB health-checks pods directly: /readyz.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: web
+  annotations:
+    alb.ingress.kubernetes.io/listen-ports: '[{"HTTP": 80}, {"HTTPS": 443}]'
+    alb.ingress.kubernetes.io/ssl-redirect: "443"
+    alb.ingress.kubernetes.io/healthcheck-path: /readyz
+    alb.ingress.kubernetes.io/success-codes: "200"
+spec:
+  ingressClassName: __APP__-alb

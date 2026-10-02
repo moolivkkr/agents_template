@@ -19,7 +19,7 @@ INPUT="$(cat)"
 PY="$(command -v python3 || echo /usr/bin/python3)"
 
 if [ ! -x "$PY" ]; then
-  if printf '%s' "$INPUT" | grep -Eq '(kubectl|helm|limactl|kubecolor|aws |gcloud|az |terraform|--target=(prod|staging))'; then
+  if printf '%s' "$INPUT" | grep -Eq '(kubectl|helm|limactl|kubecolor|aws |gcloud|az |terraform|crane|-eks\.sh|eks-bootstrap|--target=(prod|staging))'; then
     echo "sdlc-guard: python3 unavailable; refusing cluster/cloud command (fail-closed)" >&2; exit 2
   fi
   exit 0
@@ -660,7 +660,13 @@ def check_keychain(argv):
     if os.path.basename(argv[0]) == "security" and argv[1:2] and argv[1] in KEYCHAIN_READ:
         deny(f"security {argv[1]} reads the macOS Keychain (stored passwords, tokens, keys); agents never read it")
 
-CLOUD_DENY = {"gcloud", "az", "doctl", "flyctl", "fly", "heroku", "vercel", "netlify", "railway", "eksctl", "kops", "oci", "ibmcloud"}
+CLOUD_DENY = {"gcloud", "az", "doctl", "flyctl", "fly", "heroku", "vercel", "netlify", "railway", "eksctl", "kops", "oci", "ibmcloud",
+              # AWS credential brokers: they mint real-account sessions for whatever runs under them
+              "aws-vault", "saml2aws", "aws-sso-util", "aws-iam-authenticator"}
+# terraform/tofu subcommands that never touch a backend or provider credentials (`init` only with
+# -backend=false). Everything else reads real state or infrastructure: plan, refresh, output, show,
+# state, console, import, test (which can create resources), workspace, login, init with a backend, ...
+TF_OFFLINE = {"fmt", "validate", "version", "help", "providers", "graph", "get", "metadata"}
 def check_cloud(argv, env):
     a0 = os.path.basename(argv[0])
     if a0 in CLOUD_DENY and not (argv[1:2] in (["--version"], ["version"], ["help"], ["--help"])):
@@ -677,10 +683,44 @@ def check_cloud(argv, env):
         words = [a for a in argv[1:] if not a.startswith("-")]
         if words[:1] and words[0] in ("apply", "destroy", "import", "up", "deploy", "taint") or words[:2] == ["state", "rm"]:
             ask(f"{a0} {words[0]} changes real infrastructure")
+        if a0 in ("terraform", "tofu") and words:
+            if words[0] == "init":
+                if not any(a in ("-backend=false", "--backend=false") for a in argv[1:]):
+                    ask(f"{a0} init without -backend=false opens the remote state backend with real cloud credentials (offline checks: init -backend=false, validate, fmt)")
+            elif words[0] not in TF_OFFLINE:
+                ask(f"{a0} {words[0]} reads or changes real state/infrastructure with cloud credentials (agents run fmt, validate, init -backend=false)")
     if a0 in ("npm", "pnpm", "yarn") and argv[1:2] == ["publish"] or a0 in ("twine",) or (a0 == "cargo" and argv[1:2] == ["publish"]):
         ask("publishing a package leaves this machine")
     if a0 == "claude" and any(a in ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions") for a in argv):
         deny("agents may not launch unguarded Claude sessions")
+
+def check_crane(argv, env):
+    """crane against a registry that isn't on this machine: pushing, copying or tagging there is a release
+    step (ECR promotion is promote-eks.sh / deploy-eks.sh, run by a human or CI), and even a read is
+    non-local network. localhost:5001 (the lab registry, via its forward) stays allowed."""
+    if os.path.basename(argv[0]) != "crane": return
+    for a in argv[1:]:
+        a = expand(a, env)
+        if a.startswith(("-", "/", ".", "~")) or "/" not in a: continue
+        host = a.split("/")[0]
+        if not ("." in host or ":" in host or host == "localhost"): continue   # linux/amd64, repo/name
+        h = host.rsplit(":", 1)[0].strip("[]").lower() if not host.startswith("[") else host.split("]")[0].strip("[").lower()
+        if h in LOCAL_HOSTS or h.endswith(".localhost") or h.startswith("127."): continue
+        ask(f"crane against {host} leaves this machine (a remote registry push/copy/tag is a release step for a human or CI)")
+
+# Release scripts for the EKS environments (staging, prod): human or CI only, like /deploy --target=staging|prod.
+# Their kubectl/aws/crane calls would be refused one by one anyway (EKS is not the pinned kubeconfig, aws
+# is not LocalStack); this says why up front.
+EKS_SCRIPTS = re.compile(r"(^|/)(deploy-eks|promote-eks|eks-bootstrap|eks-outputs)\.sh$")
+ENV_SCRIPTS = {"deploy.sh", "seed.sh", "env-reset.sh", "smoke.sh"}
+def check_release_scripts(argv):
+    a = argv
+    if os.path.basename(a[0]) in ("bash", "sh", "zsh", "dash") and len(a) > 1 and not a[1].startswith("-"):
+        a = a[1:]
+    if EKS_SCRIPTS.search(a[0]):
+        deny(f"{os.path.basename(a[0])} acts on the EKS staging/prod environments: a human (or the CI deploy workflow) runs it, never an agent")
+    if os.path.basename(a[0]) in ENV_SCRIPTS and any(PROD_RE.search(x) or x == "staging" for x in a[1:]):
+        deny(f"{os.path.basename(a[0])} {' '.join(a[1:])}: staging/prod deploys are human-only (agents deploy dev and qa)")
 
 def check_kind_k3d(argv):
     a0 = os.path.basename(argv[0]); words = [a for a in argv[1:] if not a.startswith("-")]
@@ -737,6 +777,8 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
         check_sql(argv)
         check_network(argv, env)
         check_cloud(argv, env)
+        check_crane(argv, env)
+        check_release_scripts(argv)
         check_kind_k3d(argv)
         check_chmod(argv)
 
@@ -795,7 +837,7 @@ if [ $RC -eq 0 ] || [ $RC -eq 2 ]; then
   exit $RC
 fi
 # Engine crashed: fail closed for sensitive tools, otherwise let the normal permission flow decide.
-if printf '%s' "$INPUT" | grep -Eq '(kubectl|helm|limactl|kubecolor|aws |gcloud|terraform|--target=(prod|staging))'; then
+if printf '%s' "$INPUT" | grep -Eq '(kubectl|helm|limactl|kubecolor|aws |gcloud|terraform|crane|-eks\.sh|eks-bootstrap|--target=(prod|staging))'; then
   echo "sdlc-guard: engine error (rc=$RC) on a cluster/cloud command; failing closed. ${ERR}" >&2; exit 2
 fi
 exit 0

@@ -1,0 +1,52 @@
+# Cluster-scoped objects for one app in one EKS environment, applied ONCE per cluster by a human with
+# cluster-admin (scripts/k8s/eks-bootstrap.sh <staging|prod>, which fills the ENV and ACM_CERTIFICATE_ARN placeholders from overlays/<env>/eks.env).
+# The deploy identity (CI's role, mapped by an EKS access entry to the Kubernetes group
+# __APP__-deployers with AmazonEKSAdminPolicy scoped to this namespace) can't create any of these.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: __APP__-${ENV}
+  labels:
+    sdlc.io/env: ${ENV}
+    app.kubernetes.io/part-of: __APP__
+    # every pod in the base already meets "restricted" (non-root, seccomp RuntimeDefault, no privilege
+    # escalation, all capabilities dropped): enforce it so a later manifest can't quietly regress
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+---
+# EKS Auto Mode's managed ALB (docs.aws.amazon.com/eks/latest/userguide/auto-configure-alb.html):
+# configuration lives in IngressClassParams, not in IngressClass annotations.
+apiVersion: eks.amazonaws.com/v1
+kind: IngressClassParams
+metadata: {name: __APP__-alb}
+spec:
+  scheme: internet-facing
+  certificateARNs: ["${ACM_CERTIFICATE_ARN}"]
+  sslPolicy: ELBSecurityPolicy-TLS13-1-2-2021-06
+  group: {name: __APP__}
+  namespaceSelector:                       # only this app's namespace may use this class (and its cert)
+    matchLabels: {kubernetes.io/metadata.name: __APP__-${ENV}}
+---
+apiVersion: networking.k8s.io/v1
+kind: IngressClass
+metadata: {name: __APP__-alb}
+spec:
+  controller: eks.amazonaws.com/alb
+  parameters: {apiGroup: eks.amazonaws.com, kind: IngressClassParams, name: __APP__-alb}
+---
+# The namespaced admin policy covers built-in kinds; the External Secrets Operator kinds are granted
+# explicitly so the deploy identity can apply them without any cluster-wide right.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: __APP__-deployer-extras, namespace: __APP__-${ENV}}
+rules:
+- apiGroups: [external-secrets.io]
+  resources: [externalsecrets, secretstores]
+  verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: __APP__-deployer-extras, namespace: __APP__-${ENV}}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: __APP__-deployer-extras}
+subjects:
+- {apiGroup: rbac.authorization.k8s.io, kind: Group, name: __APP__-deployers}

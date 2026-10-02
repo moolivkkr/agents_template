@@ -85,4 +85,22 @@ terraform apply tf.plan              # apply the exact reviewed plan
 - Idempotency is the contract: a second `apply` with no code change must show "no changes"
 - Keep provider and Terraform versions pinned so CI and local produce identical plans
 
+## The EKS templates (`~/.claude/templates/k8s/eks/infra/terraform`)
+This layout is applied to AWS:
+- reusable `modules/` (`platform`: VPC, EKS Auto Mode, ECR, RDS, secrets, Pod Identity;
+  `github-oidc`: the CI deploy role);
+- one root per environment (`envs/staging`, `envs/prod`), each with its own S3 state key and
+  `use_lockfile`;
+- an `envs/state` root that creates the encrypted, versioned state bucket once, with local state.
+
+Two patterns worth copying:
+- **Secrets stay out of state.**
+  - RDS manages the master password (`manage_master_user_password`).
+  - Other passwords come from an `ephemeral "random_password"` written through a write-only
+    argument (`secret_string_wo` + `secret_string_wo_version`), so no secret value is ever in state
+    or a plan.
+- **Agents only run offline commands:** `fmt -check`, `init -backend=false`, `validate`, `tflint`.
+  sdlc-guard asks before `plan`, `output`, `state`, `test` or a backend `init`, and before `apply`
+  or `destroy`, because those use real credentials. Details: `eks.md`.
+
 > Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 2 HCL blocks: OpenTofu 1.12.6 fmt -check, init -backend=false + validate; 1 bash block: bash -n (macOS bash 3.2.57) + shellcheck 0.11.0.

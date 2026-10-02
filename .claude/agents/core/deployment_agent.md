@@ -28,6 +28,7 @@ output:
     - path: localstack/init/
     - path: deploy/k8s/
     - path: scripts/k8s/
+    - path: infra/terraform/
 dependencies:
   upstream: [backend_developer, ui_developer]
   downstream: [ci_cd_agent, observability_agent, reliability_agent]  # derived by _sync-deps.py — do not hand-edit
@@ -38,6 +39,7 @@ skill_packs:
   - "~/.claude/skills/infrastructure/localstack-aws-local.md"
   - "~/.claude/skills/infrastructure/kubernetes.md"
   - "~/.claude/skills/infrastructure/lima-k8s-lab.md"
+  - "~/.claude/skills/infrastructure/eks.md"
   - "~/.claude/skills/infrastructure/terraform.md"
   - "~/.claude/skills/infrastructure/secrets-management.md"
   - "~/.claude/skills/infrastructure/feature-flags.md"
@@ -273,6 +275,48 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
 - If the namespace doesn't exist, report BLOCKED and ask the human to run
   `app-namespaces.sh $APP`. Never try to create it.
 
+### 3h: Amazon EKS layer (targets `staging` / `prod`, author and validate only)
+
+When IMPLEMENTATION_GUIDELINES §11 names AWS/EKS for staging or prod, or `/deploy --target=staging|prod`
+finds no `deploy/k8s/overlays/<env>/eks.env`, add the EKS layer on top of 3g. Skill: `eks.md`.
+
+```bash
+bash ~/.claude/templates/k8s/app/instantiate.sh . "$APP" --eks   # never overwrites existing files
+```
+
+You **write and validate** this layer. You never deploy it, run Terraform against a real account, or
+use AWS credentials: the guard denies all of that, and staging/prod are human or CI only.
+
+Adapt:
+- **`deploy/k8s/components/eks/`**, for every stateless service you added to the base in 3g:
+  - a `production-pods.yaml`-style patch (ServiceAccount, requests, zone spread);
+  - a PodDisruptionBudget and an HPA;
+  - a `managed-database.yaml` patch that restates its `DB_USER`/`DB_PASSWORD`/`DATABASE_URL` in that
+    order. A strategic-merge patch puts its entries first, and `$(VAR)` expands only variables
+    defined earlier.
+
+  Keep the db-roles/migrate/seed patches as they are.
+- **`infra/terraform/envs/<env>/`**:
+  - `images` = the names in `images.txt`;
+  - `terraform.tfvars.example` from the guidelines: region, host, the GitHub repo, and its numeric
+    ids for the OIDC subject.
+
+  Leave the module wiring alone.
+- **Migrations:** on RDS/Aurora the migrator has no BYPASSRLS (`eks.md`, database roles). For every
+  table with `FORCE ROW LEVEL SECURITY`, check that the migration that creates it also creates the
+  `TO <migrator>` permissive policy. If one is missing, report it to the backend owner as a finding.
+- **Verify offline, all of these:**
+  - pin a dummy digest with `python3 scripts/k8s/deploylib.py set-images deploy/k8s/overlays/<env>/kustomization.yaml "api=<ECR_REGISTRY>/<app>/api@sha256:<64 hex>"`
+    in a scratch copy (never commit a fake pin);
+  - `kubectl kustomize deploy/k8s/overlays/<env>` piped to `deploylib.py db-access` and to
+    `eks-policy --registry <ECR_REGISTRY> --allow-placeholders`;
+  - kubeconform `-strict`;
+  - `terraform fmt -check -recursive infra/terraform`;
+  - `terraform -chdir=infra/terraform/envs/<env> init -backend=false` + `validate`;
+  - `tflint` when installed.
+- **Report** the human's next steps from `/deploy` "First time". Don't treat an unfilled `eks.env` as
+  a failure of yours: it is filled from Terraform after a human applies it.
+
 ---
 
 ## Step 4: Deployment Execution
@@ -287,8 +331,8 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
 | `--failover-test` | `./scripts/failover-test.sh` — validate HA failover |
 | `--target=dev` | `scripts/k8s/deploy.sh dev` — build, push by digest, migrate, seed, rollout, smoke on `<app>-dev` (lab cluster) |
 | `--target=qa` | `scripts/k8s/deploy.sh qa` — promote dev's HEALTHY digests to `<app>-qa`, same checks + digest parity |
-| `--target=staging` | Build production images, push to registry, deploy to staging (requires CI/CD config) |
-| `--target=prod` | ⚠ Requires explicit confirmation. Blue/green deployment with rollback. |
+| `--target=staging` | Amazon EKS, **human or CI only**: `promote-eks.sh staging` (qa digests → ECR) + `scripts/k8s/deploy.sh staging`. You author and validate the layer (3h) and print the steps; you never run them |
+| `--target=prod` | Amazon EKS, **human or CI only**, confirmed every time (typed `<app>-prod@<sha>` or the approved protected `prod` GitHub Environment); only digests staging ran HEALTHY |
 
 ### Execution Flow
 
@@ -387,6 +431,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/infrastructure/localstack-aws-local.md`
 - `~/.claude/skills/infrastructure/kubernetes.md`
 - `~/.claude/skills/infrastructure/lima-k8s-lab.md`
+- `~/.claude/skills/infrastructure/eks.md`
 - `~/.claude/skills/infrastructure/terraform.md`
 - `~/.claude/skills/infrastructure/secrets-management.md`
 - `~/.claude/skills/infrastructure/feature-flags.md`
@@ -429,6 +474,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Every image tag and toolchain version I wrote matches `## Commands and versions`; every Dockerfile has a numeric `USER` on its own line (no trailing comment) and `ARG GIT_SHA`.
 - [ ] For HA targets, the failover-test script was run and failover was observed — I did not claim HA without exercising it.
 - [ ] For dev/qa targets: both overlays render, `scripts/k8s/deploy.sh <env>` exited 0, and `agent_state/deploy/last-deploy-status.json` says HEALTHY for that env (the script's verdict, not mine).
+- [ ] For staging/prod (EKS) I only authored and validated offline. With a dummy digest pinned in a scratch copy, both overlays pass `db-access`, `eks-policy --allow-placeholders` and kubeconform. Terraform `fmt -check` and `init -backend=false` + `validate` pass. I ran no deploy, no `terraform plan/apply` and no `aws` command, and my report lists the human's next steps.
 - [ ] Every config value (ports, env, region) matches IMPLEMENTATION_GUIDELINES; no hardcoded placeholder that would break a real deploy.
 - [ ] If the deploy or health check failed, I report NOT READY with the specific failure — I do NOT emit a green report over an unhealthy deploy.
 - [ ] Logged a completion line to `agent_state/phases/{{PHASE}}/execution.jsonl` (roster check).

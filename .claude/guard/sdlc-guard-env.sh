@@ -1,6 +1,6 @@
 #!/bin/bash
 # sdlc-guard-env.sh — SessionStart hook (user settings). For Claude's Bash tool only, it puts the
-# guard's kubectl/helm/limactl shims first on PATH and pins KUBECONFIG to the agent kubeconfig named
+# guard's kubectl/helm/limactl/aws/crane shims first on PATH and pins KUBECONFIG to the agent kubeconfig named
 # in the guard policy, so scripts and subprocesses get the same identity and exec-time checks.
 [ -n "${CLAUDE_ENV_FILE:-}" ] || exit 0
 SHIMS="${SDLC_GUARD_SHIMS:-$HOME/.claude/hooks/sdlc-guard-shims}"

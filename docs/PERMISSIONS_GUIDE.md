@@ -9,7 +9,7 @@ or waits for you. No single mechanism does this; each layer below catches what t
 | **Credential absence** | the machine | anything prod: there is nothing to authenticate with | a prod credential you add later to a default path |
 | **RBAC + quota** | lab cluster (`cluster-up.sh`, `app-namespaces.sh`) | kubectl/helm writes outside `<app>-dev`/`<app>-qa`, including from scripts; namespace/RBAC/quota changes; kube-system secrets | misuse inside dev/qa (acceptable: disposable) |
 | **sdlc-guard hook** | `~/.claude/hooks/sdlc-guard.sh` (PreToolUse) | see below: top-level commands, including `bash -c`, `eval`, `$(…)`, wrappers, `$VAR` command names | commands inside scripts (the shims cover those) |
-| **PATH shims** | `~/.claude/hooks/sdlc-guard-shims/` (SessionStart) | kubectl/helm/limactl called by name from scripts, make, npx or python | a script calling a binary by absolute path |
+| **PATH shims** | `~/.claude/hooks/sdlc-guard-shims/` (SessionStart) | kubectl/helm/limactl/aws/crane called by name from scripts, make, npx or python | a script calling a binary by absolute path |
 | **allow / ask / deny rules** | `~/.claude/settings.json` | the usual spellings, even if hooks are disabled | anything spelled differently |
 | **Auto mode classifier** | `~/.claude/settings.json` → `autoMode` | intent across steps, prod deploys, exfiltration, self-modification | probabilistic |
 | **Managed settings** (optional) | `/Library/Application Support/ClaudeCode/` | tampering: root-owned guard and policy | — |

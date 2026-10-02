@@ -1,0 +1,14 @@
+# Same intent as the lab's env-isolation policy: pods accept traffic only from their own namespace and,
+# on the service port, from the VPC (the ALB targets pod IPs from its subnets). Egress is open (RDS,
+# Secrets Manager, STS). Enforced only when network policy is enabled for the cluster (EKS Auto Mode
+# supports it; it is off until enabled), so this is defense in depth, not the only boundary.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: env-isolation}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+  - from: [{podSelector: {}}]
+  - from: [{ipBlock: {cidr: 10.0.0.0/16}}]
+    ports: [{port: 8080, protocol: TCP}]

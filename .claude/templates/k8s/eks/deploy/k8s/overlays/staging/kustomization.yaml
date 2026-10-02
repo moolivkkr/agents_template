@@ -1,0 +1,36 @@
+# staging on Amazon EKS: the lab base + the EKS component. Images are PROMOTED, never built:
+# scripts/k8s/promote-eks.sh staging copies the newest HEALTHY qa digests into ECR (same digest) and
+# rewrites the images block below; the commit that changes it is the release record. Deploy with
+# scripts/k8s/deploy.sh staging (CI or a human; agents are refused by the guard).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: __APP__-staging
+resources: [../../base]
+components: [../../components/eks]
+labels:
+- pairs: {sdlc.io/env: staging}
+configMapGenerator:
+- name: eks-config      # eks.env, also sourced by scripts/k8s/deploy-eks.sh; the replacements read it
+  envs: [eks.env]
+  options: {disableNameSuffixHash: true}
+- name: app-config
+  literals: [APP_ENV=staging, DB_HOST=from-eks-config, DB_NAME=app, DB_SSLMODE=require, PGSSLMODE=require]
+replacements:
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.DB_HOST}
+  targets: [{select: {kind: ConfigMap, name: app-config}, fieldPaths: [data.DB_HOST]}]
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.APP_HOST}
+  targets: [{select: {kind: Ingress, name: web}, fieldPaths: [spec.rules.0.host]}]
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.AWS_REGION}
+  targets: [{select: {kind: SecretStore, name: aws-secrets-manager}, fieldPaths: [spec.provider.aws.region]}]
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.DB_MASTER_SECRET_ARN}
+  targets: [{select: {kind: ExternalSecret, name: db-credentials}, fieldPaths: ["spec.data.[secretKey=DB_SUPERUSER_USER].remoteRef.key", "spec.data.[secretKey=DB_SUPERUSER_PASSWORD].remoteRef.key"]}]
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.DB_MIGRATOR_SECRET}
+  targets: [{select: {kind: ExternalSecret, name: db-credentials}, fieldPaths: ["spec.data.[secretKey=DB_MIGRATOR_USER].remoteRef.key", "spec.data.[secretKey=DB_MIGRATOR_PASSWORD].remoteRef.key"]}]
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.DB_APP_SECRET}
+  targets: [{select: {kind: ExternalSecret, name: db-credentials}, fieldPaths: ["spec.data.[secretKey=DB_APP_USER].remoteRef.key", "spec.data.[secretKey=DB_APP_PASSWORD].remoteRef.key"]}]
+- source: {kind: ConfigMap, name: eks-config, fieldPath: data.VPC_CIDR}
+  targets: [{select: {kind: NetworkPolicy, name: env-isolation}, fieldPaths: [spec.ingress.1.from.0.ipBlock.cidr]}]
+# BEGIN images (managed by scripts/k8s/promote-eks.sh: ECR digests only, never edit by hand)
+images:
+- {name: api, newName: 000000000000.dkr.ecr.us-east-1.amazonaws.com/__APP__/api, newTag: not-promoted}
+# END images
