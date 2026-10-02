@@ -1090,7 +1090,7 @@ interleaved, and the answers were graded blind. The totals include cache reads, 
 | Change tested | Median tokens per question | Accuracy | Decision | Evidence |
 |---|---|---|---|---|
 | Interactive `sdlc-graph find`/`status` on, vs exploring with Grep/Read (21 questions × 2 arms × 2 runs) | 124,589 → 163,994 (**+31.6%**) | 0.96 → 0.99 | shipped **off** (the bar was −20%) | [docs/evals/graph-find/](docs/evals/graph-find/README.md) |
-| CLAUDE.md slimmed from 62 KB to 12.7 KB, runbooks moved verbatim to `docs/ops/*.md` with an index (28 questions, 38 runs per arm) | 120,830 → 67,346 (**−44%**); median cost $0.206 → $0.091 | 0.99 → 0.96 (3 partial answers vs 1, no wrong ones) | kept in that project | [docs/evals/claude-md-slim/](docs/evals/claude-md-slim/README.md) |
+| CLAUDE.md slimmed from 62 KB to 12.7 KB, runbooks moved verbatim to `docs/ops/*.md` with an index (28 questions, 38 runs per arm) | 120,830 → 67,346 (**−44%**); median cost $0.206 → $0.091 | 0.99 → 0.96 (3 partial vs 1, no wrong ones; the gap was one question, fixed by a one-line pointer and correct on 2 re-runs) | kept in that project | [docs/evals/claude-md-slim/](docs/evals/claude-md-slim/README.md) |
 
 Why: every API step re-reads the fixed context (CLAUDE.md, system prompt, tools), mostly as cache reads. The
 total therefore tracks the number of steps times the size of that fixed context, not how much text the model
