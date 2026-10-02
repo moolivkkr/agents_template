@@ -482,10 +482,18 @@ still hold>"` (human decision; it is kept in the baseline).
 # One deterministic inventory per phase, against THIS acceptance run's results when present.
 RES="agent_state/accept/test_results.json"   # written by the Step 0b regression (test_runner, all phases)
 mkdir -p agent_state/accept/tc
+# The graph's inventory (tc-inventory.py's rules + range-defined and malformed IDs); built once, then queried.
+# --source when there is no regression sidecar, so another run's stale sidecars in reports/ aren't picked up.
+python3 .claude/hooks/sdlc-graph.py build >/dev/null; GRC=$?
 for PD in docs/design/phases/*/; do
   N=$(basename "$PD")
-  python3 .claude/hooks/tc-inventory.py --phase "$N" $( [ -f "$RES" ] && echo --results "$RES") \
-    --out "agent_state/accept/tc/phase-$N.json" >/dev/null || true
+  if [ "$GRC" -eq 0 ]; then
+    python3 .claude/hooks/sdlc-graph.py --no-refresh tc --phase "$N" $( [ -f "$RES" ] && echo --results "$RES" || echo --source) \
+      --out "agent_state/accept/tc/phase-$N.json" >/dev/null || true
+  else   # graph unavailable: same rules without the range/malformed checks — say so in the acceptance report
+    python3 .claude/hooks/tc-inventory.py --phase "$N" $( [ -f "$RES" ] && echo --results "$RES") \
+      --out "agent_state/accept/tc/phase-$N.json" >/dev/null || true
+  fi
 done
 python3 - <<'PY'
 import glob, json

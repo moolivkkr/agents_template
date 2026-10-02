@@ -1608,6 +1608,8 @@ UNIT_CATS = [
     ("edge", re.compile(r"edge cases?|failure modes?|error (cases|handling)|abuse")),
     ("flow", re.compile(r"flows?\b|behaviou?r|algorithms?|pseudocode|state machine|lifecycle|sequence|processing")),
 ]
+UI_DOC_RE = re.compile(r"(?i)(?<![a-z])(ui|ux|screens?|pages?|frontend|front-end|wireframes?|views?)(?![a-z])")
+UI_AUDITORS = {"accessibility_auditor", "ui_standards_auditor"}
 CROSS_CUT_RE = re.compile(r"(?i)envelope|error|convention|common|shared|auth|pagination|canonical|overview|general")
 BACKEND_ROLES = {"backend_developer", "api_developer", "backend_audit_agent"}
 DB_ROLES = {"database_agent", "migration_agent"}
@@ -1626,7 +1628,7 @@ PROFILE_DESC = {
     "tenant_isolation_verifier": "data-model sections + sections that define ownership/tenancy (created_by, owner, "
                                  "'their own', tenant)",
     "migration_safety_reviewer": "data-model / schema sections the migrations must satisfy",
-    "accessibility_auditor": "web screen specs' accessibility, states, tokens and interaction sections",
+    "accessibility_auditor": "web screen specs' accessibility, states, tokens, layout/markup/component and interaction sections",
     "ui_standards_auditor": "every screen spec section except test inventories (bindings come from the graph)",
     "spec_impl_reconciler": "every spec section except test inventories (spec_test_reconciler's): read each on demand "
                             "while you verify it, using the inventory below",
@@ -1676,7 +1678,7 @@ def doc_units(g, d):
                           children=[]))
     for x in tops:
         u = mk(x["line"], x["end_line"], x["name"], unit_cat(x["name"]))
-        kids = [k for k in secs if k["level"] == lv + 1 and x["line"] < k["line"] <= x["end_line"]]
+        kids = [k for k in secs if k["level"] == x["level"] + 1 and x["line"] < k["line"] <= x["end_line"]]
         u["children"] = [mk(k["line"], k["end_line"], k["name"], unit_cat(k["name"])) for k in kids]
         u["intro_end"] = (kids[0]["line"] - 1) if kids else x["end_line"]
         units.append(u)
@@ -1715,7 +1717,7 @@ def profile_choice(role, kind, u, bound, want, g, f):
     if role in UI_ROLES:
         if kind == "screen":
             return whole if want is None or u["platform"] == want else f"{u['platform']} screen (the other UI role)"
-        if cat == "preamble" or (kind == "spec" and cat == "general"):
+        if cat == "preamble" or (kind == "spec" and cat in ("general", "ui")):
             return whole
         if kind == "contract" and (not bound or CROSS_CUT_RE.search(u["title"])):
             return whole
@@ -1742,7 +1744,7 @@ def profile_choice(role, kind, u, bound, want, g, f):
     if role == "accessibility_auditor":
         if kind != "screen" or u["platform"] == "mobile":
             return "not a web screen spec" if kind != "screen" else "mobile screen (mobile_platform_auditor)"
-        if cat == "preamble" or "a11y" in sig or re.search(r"(?i)accessib|a11y|states?\b|tokens?|css|interaction|focus|keyboard", u["title"]):
+        if cat == "preamble" or "a11y" in sig or re.search(r"(?i)accessib|a11y|states?\b|tokens?|css|interaction|focus|keyboard|component|markup|layout|\bdom\b|wireframe|screen|page", u["title"]):
             return whole
         return "no accessibility-relevant content"
     if role == "ui_standards_auditor":
@@ -1755,8 +1757,13 @@ def profile_choice(role, kind, u, bound, want, g, f):
 def profile_sections(g, phase, role):
     """(read rows, skipped rows, read tokens, whole-dir tokens) for a profile role."""
     docs = g.nodes("kind IN ('spec','screen_spec') AND phase=? ORDER BY file", phase)
+    for d in docs:      # a component spec NAMED as UI (08_ui.md, frontend.md) is a screen spec to the UI roles
+        base_ = os.path.splitext(os.path.basename(d["file"]))[0]
+        d["ui_doc"] = d["kind"] == "screen_spec" or (bool(UI_DOC_RE.search(base_)) and not CONTRACT_RE.search(d["file"]))
+        if d["ui_doc"] and not d.get("platform"):
+            d["platform"] = "mobile" if MOBILE_RE.search(base_) else "web"
     want = UI_ROLES.get(role)
-    if role in UI_ROLES and want and not any(d.get("platform") == want for d in docs if d["kind"] == "screen_spec"):
+    if role in UI_ROLES and want and not any(d.get("platform") == want for d in docs if d["ui_doc"]):
         want = None                                   # no screen is marked for this platform: can't tell, read them all
     bound = set()
     if role in UI_ROLES:
@@ -1765,12 +1772,13 @@ def profile_sections(g, phase, role):
             if want is None or (d and d.get("platform") == want):
                 bound |= {e["dst"] for e in g.edges("src=? AND rel='binds'", s["id"])}
         for d in docs:
-            if d["kind"] == "screen_spec" and (want is None or d.get("platform") == want):
+            if d["ui_doc"] and (want is None or d.get("platform") == want):
                 bound |= {e["dst"] for e in g.edges("rel='mentions_ep' AND file=?", d["file"])}
     read, skipped, read_tok, whole_tok = [], [], 0, 0
     for d in docs:
         f, base = d["file"], os.path.basename(d["file"])
-        kind = "screen" if d["kind"] == "screen_spec" else "contract" if CONTRACT_RE.search(base) else "spec"
+        kind = ("screen" if d["kind"] == "screen_spec" or (d["ui_doc"] and (role in UI_ROLES or role in UI_AUDITORS))
+                else "contract" if CONTRACT_RE.search(base) else "spec")
         whole_tok += d.get("tokens") or 0
         spans, skips = [], []
         units = doc_units(g, d)
@@ -1824,8 +1832,12 @@ def context_profile(g, phase, role):
     for c in inv["cases"]:
         tiers[c["tier"] or "?"] = tiers.get(c["tier"] or "?", 0) + 1
     out = {"agent": role, "phase": phase, "profile": PROFILE_DESC[key]}
-    rf = [p for p in (os.path.join("docs", "design", "phases", str(phase), "phase_context.md"),
-                      os.path.join("docs", "design", "phases", str(phase), "threat_model.md"))
+    want_rf = []                     # only what the role's job uses: verifiers/auditors get no phase prose
+    if role in BACKEND_ROLES or role in DB_ROLES or role in UI_ROLES or role == "spec_impl_reconciler":
+        want_rf.append("phase_context.md")
+    if role in BACKEND_ROLES or role in UI_ROLES:
+        want_rf.append("threat_model.md")
+    rf = [p for p in (os.path.join("docs", "design", "phases", str(phase), x) for x in want_rf)
           if os.path.exists(os.path.join(g.root, p))]
     out["read_first"] = rf
     out["spec_sections_to_read (file: line spans)"] = read

@@ -490,6 +490,14 @@ FlatList of orders.
 ## Data Bindings
 | ordersList | GET /api/orders/{id} | data | OBJECT |
 """)
+write(D, "docs/design/phases/1/specs/09_ui.md", """# Orders UI
+## Layout
+Header, then the orders table.
+## The 4 States
+loading / error / empty / data
+## Data Model
+`ui_prefs` table: owner_id, columns shown.
+""")
 write(D, "api/orders.go", '''package api
 
 type Handler struct{}
@@ -558,6 +566,11 @@ check("PR09", (True, True), (any("NOT DECLARED" not in x and "GET /api/orders/{}
       "ui_developer: bound endpoints checked against the contracts (STOP condition) + its screens only")
 check("PR09b", True, any(r.startswith("TC-SEC-001") for r in ui["security_rows (TC-SEC: implement the mitigation)"]),
       "ui_developer: TC-SEC rows too (the threat model's UI mitigations)")
+U9 = "docs/design/phases/1/specs/09_ui.md"
+LN[U9] = open(os.path.join(D, U9)).read().split("\n")
+check("PR09c", ({"Layout", "The 4 States"}, {"Data Model"}, set()),
+      (read_titles(ui, U9) & {"Layout", "The 4 States"}, read_titles(bk, U9) - {"Orders UI"}, read_titles(bk, U9) & {"Layout", "The 4 States"}),
+      "a component spec named as UI (09_ui.md) is a screen spec to ui_developer; backend still reads its non-UI sections")
 mb = ctxd("mobile_developer")
 check("PR10", (True, False), (any(r.startswith(MB) for r in mb[RK]), any(r.startswith(WF) for r in mb[RK])), "mobile_developer: the RN screen, not the web one")
 db = ctxd("database_agent")

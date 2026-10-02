@@ -42,7 +42,7 @@ arguments:
   - name: traceability
     required: false
     default: false
-    description: "Run the TC-* inventory (tc-inventory.py) — spec IDs vs tests NAMED with them (and, with results, that ran and passed)"
+    description: "Run the TC-* inventory (sdlc-graph.py tc, the gate's inventory; tc-inventory.py if the graph is unavailable) — spec IDs vs tests NAMED with them (and, with results, that ran and passed)"
   - name: mobile
     required: false
     default: false
@@ -260,13 +260,19 @@ R="agent_state/phases/${PHASE}/reports"
 RESULTS=$(ls "$R"/test_results.json "$R"/mobile_e2e_results.json "$R"/acceptance_report.json \
              "$R"/performance_results.json "$R"/system_test_results.json 2>/dev/null)
 BASE="$(cat agent_state/phases/${PHASE}/base_sha 2>/dev/null)"
-python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" ${RESULTS:+--results $RESULTS} ${BASE:+--diff-base "$BASE"} --out "$OUT"
+# The gate's own inventory (tc-inventory.py's rules + range-defined and malformed IDs). Exit 4 = graph unavailable:
+# fall back to tc-inventory.py (same rules without those two checks) and say so in the report.
+python3 .claude/hooks/sdlc-graph.py tc --phase "${PHASE}" ${RESULTS:+--results $RESULTS} $([ -z "$RESULTS" ] && echo --source) \
+  ${BASE:+--diff-base "$BASE"} --out "$OUT"; RC=$?
+[ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" ${RESULTS:+--results $RESULTS} ${BASE:+--diff-base "$BASE"} --out "$OUT"
 jq -r --arg p "${PHASE}" '"TC-* Inventory — Phase \($p) (\(.mode) mode): \(.passed)/\(.total) HIGH+MEDIUM covered",
        "  missing:        \(.missing | join(", "))",
        "  failing:        \(.failing | join(", "))",
        "  skipped-only:   \(.skipped_only | join(", "))",
        "  comment-only:   \(.comment_only | join(", "))   (IDs in comments do not count — put them in test names)",
        "  duplicate IDs:  \(.duplicate_ids | keys | join(", "))",
+       "  malformed IDs:  \((.graph.malformed_ids // []) | join("; "))   (rows tc-inventory.py cannot see)",
+       "  range-defined:  \((.graph.range_expanded_ids // []) | length) IDs required by range rows",
        "  weakening:      \(.weakening_unacknowledged | map("\(.file) \(.kind)") | join("; "))"' "$OUT"
 jq -r '.cases | group_by(.name | capture("TC-(?<c>[A-Z0-9]+)-").c) | .[] |
        "    \(.[0].name | capture("TC-(?<c>[A-Z0-9]+)-").c): \(map(select(.verdict=="PASS")) | length)/\(length)"' "$OUT"

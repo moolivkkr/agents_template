@@ -54,12 +54,21 @@ If specs contain TC-* IDs (pattern `TC-[A-Z0-9]+-\d+`):
 # --diff-base, and a HEAD~20 guess is not the phase, so no base_sha = BLOCKED.
 BASE="$(cat "agent_state/phases/${PHASE:?}/base_sha" 2>/dev/null)"
 [ -n "$BASE" ] || { echo "⛔ BLOCKED: no agent_state/phases/${PHASE}/base_sha (written at Wave 0c)"; exit 1; }
-python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" \
-  --results "agent_state/phases/${PHASE}/reports/test_results.json" \
-  --diff-base "$BASE" \
+R="agent_state/phases/${PHASE}/reports"; RESULTS=()
+for s in test_results e2e_results mobile_e2e_results acceptance_report performance_results system_test_results; do
+  if [ -f "$R/$s.json" ]; then RESULTS+=("$R/$s.json"); fi
+done
+# The one TC gate (verify-gate.sh (h) runs the same command): tc-inventory.py's rules + range-defined and
+# malformed IDs, always results mode.
+python3 .claude/hooks/sdlc-graph.py gate --phase "${PHASE}" --tc-only --results ${RESULTS[@]+"${RESULTS[@]}"} --diff-base "$BASE" \
+  --out "agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"; RC=$?
+# RC 4 = graph unavailable only: fall back to tc-inventory.py (same rules, without the range/malformed checks)
+# and say so in specs_vs_tests.md.
+[ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results ${RESULTS[@]+"${RESULTS[@]}"} --diff-base "$BASE" \
   --out "agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"
-# exit 1 = a HIGH/MEDIUM ID is missing/failing, an ID is defined by two phases, a range annotation,
-# or unacknowledged test weakening — each listed in the JSON. The gate reads this file.
+# exit 1 = a HIGH/MEDIUM ID is missing/failing, an ID is defined by two phases, a range annotation, an uncovered
+# range-defined ID, a malformed ID cell, or unacknowledged test weakening — each a BLOCKING: line and in the
+# JSON. The gate reads this file.
 ```
 
 Output: `agent_state/reconciliation/phase-N/specs_vs_tests.md` + `agent_state/reconciliation/phase-N/test_case_inventory.md`

@@ -138,9 +138,10 @@ blocking.
 - **Out of scope for this phase?** Don't list the row here. List it in the target phase's spec, and
   name it under `### Deferred` in this one, as prose rather than a table row.
 
-`python3 .claude/hooks/tc-inventory.py --phase <P> --spec-only --out <file>` prints the phase's ID
-count and writes `{id: priority}`. The orchestrator runs it in Wave 0c to produce
-`tc_priorities.json`, which the results converters use.
+`python3 .claude/hooks/sdlc-graph.py tc --phase <P> --spec-only --out <file>` prints the phase's ID
+count and writes `{id: priority}`, IDs defined by a range row included. The orchestrator runs it in
+Wave 0c to produce `tc_priorities.json`, which the results converters use (`tc-inventory.py` with the
+same flags only when the graph is unavailable).
 
 ---
 
@@ -238,7 +239,7 @@ def test_TC_SEC_20101_other_users_order_is_not_found(client, alice, bob_order):
 ```bash
 P="${PHASE:?}"
 # Source mode (while writing tests): does a non-skipped test NAMED with each ID exist?
-python3 .claude/hooks/tc-inventory.py --phase "$P" --out /tmp/tc_source.json
+python3 .claude/hooks/sdlc-graph.py tc --phase "$P" --source --out /tmp/tc_source.json
 # Results mode (the evidence): did that test run and PASS? Pass every runner sidecar that exists.
 SIDECARS=()
 for s in test_results e2e_results mobile_e2e_results acceptance_report performance_results system_test_results; do
@@ -249,14 +250,17 @@ done
 [ ${#SIDECARS[@]} -gt 0 ] || { echo "⛔ no runner sidecars in agent_state/phases/$P/reports"; exit 1; }
 BASE="$(cat "agent_state/phases/$P/base_sha" 2>/dev/null)"
 [ -n "$BASE" ] || { echo "⛔ no agent_state/phases/$P/base_sha"; exit 1; }
-python3 .claude/hooks/tc-inventory.py --phase "$P" \
+python3 .claude/hooks/sdlc-graph.py gate --phase "$P" --tc-only \
   --results "${SIDECARS[@]}" \
   --diff-base "$BASE" \
   --out "agent_state/reconciliation/phase-$P/specs_vs_tests.json"
+# Exit 4 (GRAPH UNAVAILABLE) only: the same flags on tc-inventory.py — same rules without the two graph-only
+# checks below — and say so in the report.
 ```
 
-**The gate runs the same inventory through the project graph:** `sdlc-graph.py gate --phase P --tc-only`
-(`verify-gate.sh` check (h); `spec_test_reconciler` writes `specs_vs_tests.json` with it). It imports
+**This is the one TC gate:** `sdlc-graph.py gate --phase P --tc-only` (`verify-gate.sh` check (h);
+`spec_test_reconciler` writes `specs_vs_tests.json` with it; `/test --traceability`, `/accept` and Wave 0c
+use `sdlc-graph.py tc`, the same inventory). `tc-inventory.py` stays the parser library and the fallback. It imports
 `tc-inventory.py`'s parsers and weakening check and agrees with it on every ID tc-inventory sees, and it
 also BLOCKs on what tc-inventory can't see: an ID defined only by a range row (`| TC-X-1 – TC-X-4 | … |`,
 or a line starting with a range and a priority), and an ID cell that is malformed (`TC-SEC-REG-001`,

@@ -95,9 +95,11 @@ if not bad:
 sys.exit(1 if bad else 0)
 PY
 
-# 2. TC-* coverage — HIGH+MEDIUM must be 100%. Read the tc-inventory sidecar Step 3d wrote (verdict
-#    PASS = every HIGH/MEDIUM ID has a test that ran and passed), not prose. No sidecar blocks too,
-#    unless the specs define no TC-* IDs at all (the table's "skip if no TC-* IDs in specs").
+# 2. TC-* coverage — HIGH+MEDIUM must be 100%. Read the TC-gate sidecar Step 3d wrote with
+#    `sdlc-graph.py gate --tc-only` (verdict PASS = every HIGH/MEDIUM ID, range-defined ones included, has a
+#    test that ran and passed; no malformed IDs), not prose. verify-gate.sh check (h) re-runs that same gate
+#    on the current tree at the gate, so a stale or fallback (tc-inventory.py) sidecar can't pass the phase.
+#    No sidecar blocks too, unless the specs define no TC-* IDs at all (the table's "skip if no TC-* IDs in specs").
 #    (This used grep -P, which macOS grep rejects: the check silently never ran there.)
 TC_JSON="agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json"
 if [ -f "$TC_JSON" ]; then

@@ -87,7 +87,8 @@ It missed pytest's `test_*.py`, and it silently skipped the check whenever grep 
 non-skipped test **named** with each ID?
 ```bash
 python3 .claude/hooks/sdlc-graph.py tc --phase ${PHASE}            # rows, priority, tier, spec file:line, covering tests (budgeted)
-python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --out agent_state/reconciliation/phase-${PHASE}/tc_inventory_source.json
+python3 .claude/hooks/sdlc-graph.py tc --phase ${PHASE} --source --out agent_state/reconciliation/phase-${PHASE}/tc_inventory_source.json
+# exit 4 (GRAPH UNAVAILABLE) only: python3 .claude/hooks/tc-inventory.py --phase ${PHASE} --out <same file>, and say so
 ```
 
 **Results mode + weakening check** (Wave 4 and Wave 5v, the evidence): did that test RUN and PASS,

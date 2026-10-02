@@ -202,12 +202,16 @@ One ID per row; never a range.
    list. `k = 00` is reserved for the phase's security-merge rows. `i` = 01–99, per category, in
    document order.
 2. Before writing, scan `docs/design/phases/*/` for every ID in your block, e.g. with
-   `python3 .claude/hooks/tc-inventory.py --phase <n> --spec-only --out /tmp/p<n>.json` for each
-   existing phase. If any is taken (legacy numbering), move to the next spare component index after
+   `python3 .claude/hooks/sdlc-graph.py tc --phase <n> --spec-only --out /tmp/p<n>.json` for each
+   existing phase (IDs a range row defines are included; `tc-inventory.py` with the same flags if the
+   graph is unavailable). If any is taken (legacy numbering), move to the next spare component index after
    the last component, and note it in the spec header.
 3. More than 99 IDs in one category: continue in the next spare index the same way.
-4. After writing: `python3 .claude/hooks/tc-inventory.py --phase {{PHASE}} --spec-only --out /tmp/check.json`
-   must list every row you wrote (this proves the table parses), with the priorities you meant.
+4. After writing: `python3 .claude/hooks/sdlc-graph.py tc --phase {{PHASE}} --spec-only --out /tmp/check.json`
+   must list every row you wrote (this proves the table parses), with the priorities you meant, and
+   `python3 .claude/hooks/sdlc-graph.py tc --phase {{PHASE}}` must show no `malformed_ids` and no
+   `duplicate_ids` (the gate blocks on both). If the graph is unavailable (exit 4), use
+   `tc-inventory.py --phase {{PHASE}} --spec-only` and say so.
 
 **Rows to generate (test-case-generation.md matrices):**
 
@@ -274,7 +278,7 @@ phase). Touch only the TC-ACC rows of the listed FRs and IDs:
   it and leave it.
 - Append to the spec an `## Amendments` line per FR: `<date> FR-xxx <status>: <what changed> —
   rows kept/added/retired: <ids>`. The acceptance agent needs the retired IDs to remove their tests.
-- Then `tc-inventory.py --phase <n> --spec-only` for each phase you touched must list the new rows.
+- Then `sdlc-graph.py tc --phase <n> --spec-only --out <file>` for each phase you touched must list the new rows.
 The FR's other tiers (unit, integration) belong to the owning component's next implementation. Note
 them under the amendment if they're needed; don't write them here.
 

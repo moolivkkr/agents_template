@@ -43,14 +43,20 @@ Concrete re-verifications the parent runs itself (do not delegate):
 CMD="$(jq -er '.commands["test:unit"] // empty' agent_state/config/verify-commands.json)" \
   || { echo "⛔ no test:unit row in agent_state/config/verify-commands.json"; exit 1; }
 PHASE="${PHASE:?}" bash -o pipefail -c "$CMD" 2>&1 | tee /tmp/gate_unit.log; RC=${PIPESTATUS[0]}; echo "exit=$RC"
-# TC coverage the deterministic way (names of tests that ran and passed; not grep). An empty
-# --diff-base makes tc-inventory skip the weakening check, so a missing base_sha stops here.
+# TC coverage the deterministic way (names of tests that ran and passed; not grep): the one TC gate, the same
+# command verify-gate.sh (h) runs. A missing base_sha stops here (the weakening check needs it).
 BASE="$(cat "agent_state/phases/${PHASE}/base_sha" 2>/dev/null)"
 [ -n "$BASE" ] || { echo "⛔ no base_sha for phase ${PHASE}"; exit 1; }
-python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results "agent_state/phases/${PHASE}/reports/test_results.json" \
+R="agent_state/phases/${PHASE}/reports"; RESULTS=()
+for s in test_results e2e_results mobile_e2e_results acceptance_report performance_results system_test_results; do
+  if [ -f "$R/$s.json" ]; then RESULTS+=("$R/$s.json"); fi
+done
+python3 .claude/hooks/sdlc-graph.py gate --phase "${PHASE}" --tc-only --results ${RESULTS[@]+"${RESULTS[@]}"} --diff-base "$BASE" \
+  --out /tmp/gate_tc.json; RC=$?
+# Exit 4 = graph unavailable only: tc-inventory.py has the same rules minus the range/malformed checks, so its
+# PASS is not a gate PASS — record "graph unavailable" and let verify-gate.sh (h) decide.
+[ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --results ${RESULTS[@]+"${RESULTS[@]}"} \
   --diff-base "$BASE" --out /tmp/gate_tc.json
-# The phase gate's own TC check is stricter (range-defined + malformed IDs): verify-gate.sh (h) runs
-# python3 .claude/hooks/sdlc-graph.py gate --phase "${PHASE}" --tc-only — a Layer-1 PASS here never overrides it.
 # No suppression added to force a pass (tc-inventory's weakening list covers skip/only/removed asserts)
 git diff -U0 "$BASE"..HEAD | grep -E '^\+.*(//[[:space:]]*nolint|@ts-ignore|eslint-disable)' && echo "⚠ suppression added"
 ```
