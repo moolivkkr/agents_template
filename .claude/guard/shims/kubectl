@@ -1,5 +1,5 @@
 #!/bin/bash
-# PATH shim for kubectl/helm/limactl (installed as three links to this file). Re-applies sdlc-guard at
+# PATH shim for kubectl/helm/limactl/aws/crane (installed as links to this file). Re-applies sdlc-guard at
 # exec time, so calls made from scripts, make, npx or python subprocesses are checked too — the
 # PreToolUse hook only sees the top-level command. sdlc-guard-env.sh puts this directory first on PATH
 # for Claude's Bash tool. "ask" counts as deny here: a subprocess has no human to ask.

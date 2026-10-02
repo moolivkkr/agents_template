@@ -56,7 +56,7 @@ DENY = [
     "Bash(kubectl config use-context *)", "Bash(kubectl config set-context *)", "Bash(kubectl config set-cluster *)",
     "Bash(kubectl config set-credentials *)", "Bash(kubectl delete namespace *)", "Bash(kubectl delete ns *)",
     "Bash(limactl delete *)", "Bash(limactl factory-reset *)", "Bash(limactl unprotect *)",
-    "Bash(gcloud *)", "Bash(az *)", "Bash(eksctl *)", "Bash(doctl *)",
+    "Bash(gcloud *)", "Bash(az *)", "Bash(eksctl *)", "Bash(doctl *)", "Bash(aws-vault *)", "Bash(saml2aws *)",
     "Read(~/.kube/sdlc-lab-admin.yaml)", "Read(~/.kube/config)", "Read(~/.ssh/**)", "Read(~/.aws/**)",
     "Edit(~/.kube/**)", "Edit(~/.config/sdlc-guard/**)", "Edit(~/.claude/hooks/**)",
 ]

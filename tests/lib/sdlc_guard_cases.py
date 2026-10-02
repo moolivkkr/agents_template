@@ -211,6 +211,32 @@ CASES = [
  ("C08", "ask",  "Bash", "chmod -R 777 storage"),
  ("C09", "allow","Bash", "npm ci && npm test"),
  ("C10", "allow","Bash", "go test ./... && go build ./cmd/..."),
+ # --- EKS (staging/prod): offline IaC checks allowed; real state, cloud sessions, ECR and release scripts are not
+ ("E01", "allow","Bash", "terraform fmt -check -recursive infra/terraform"),
+ ("E02", "allow","Bash", "terraform -chdir=infra/terraform/envs/prod init -backend=false -input=false"),
+ ("E03", "allow","Bash", "terraform -chdir=infra/terraform/envs/prod validate"),
+ ("E04", "ask",  "Bash", "terraform -chdir=infra/terraform/envs/prod init"),
+ ("E05", "ask",  "Bash", "terraform plan -out=tf.plan"),
+ ("E06", "ask",  "Bash", "tofu output -json eks_env"),
+ ("E07", "ask",  "Bash", "terraform state list"),
+ ("E08", "ask",  "Bash", "terraform test"),
+ ("E09", "deny", "Bash", "aws eks update-kubeconfig --name shop-staging --kubeconfig /tmp/k"),
+ ("E10", "deny", "Bash", "aws-vault exec prod -- kubectl get pods"),
+ ("E11", "deny", "Bash", "saml2aws login"),
+ ("E12", "deny", "Bash", "scripts/k8s/deploy.sh prod"),
+ ("E13", "deny", "Bash", "bash scripts/k8s/deploy.sh staging --rollback"),
+ ("E14", "deny", "Bash", "scripts/k8s/promote-eks.sh staging"),
+ ("E15", "deny", "Bash", "./scripts/k8s/eks-bootstrap.sh prod"),
+ ("E16", "deny", "Bash", "EKS_KUBECONFIG=/tmp/k scripts/k8s/deploy-eks.sh staging"),
+ ("E17", "deny", "Bash", "scripts/k8s/seed.sh prod"),
+ ("E18", "allow","Bash", "scripts/k8s/deploy.sh qa"),
+ ("E19", "allow","Bash", "scripts/k8s/deploy.sh dev --rollback"),
+ ("E20", "ask",  "Bash", "crane copy localhost:5001/shop/api@sha256:aa 123456789012.dkr.ecr.us-east-1.amazonaws.com/shop/api:abc"),
+ ("E21", "ask",  "Bash", "crane digest 123456789012.dkr.ecr.us-east-1.amazonaws.com/shop/api:staging-healthy-abc"),
+ ("E22", "allow","Bash", "crane push /tmp/x/api.tar localhost:5001/shop/api:abc"),
+ ("E23", "allow","Bash", "crane ls localhost:5001/shop/api"),
+ ("E24", "allow","Bash", "kubectl kustomize deploy/k8s/overlays/prod"),
+ ("E25", "deny", "Bash", "KUBECONFIG=/tmp/eks-prod.yaml kubectl -n shop-prod get pods"),
  # --- tamper protection
  ("T01", "deny", "Bash", "jq '.hooks={}' ~/.claude/settings.json > ~/.claude/settings.json.new && mv ~/.claude/settings.json.new ~/.claude/settings.json"),
  ("T02", "deny", "Bash", "echo '{}' > ~/.claude/settings.json"),
@@ -399,6 +425,18 @@ def main():
     check("SH1", 126, p.returncode, "shim blocks `kubectl delete ns shop-qa` from a subprocess (exit 126)", p.stderr)
     p = subprocess.run([os.path.join(shims, "kubectl"), "get", "pods", "-n", "shop-dev"], capture_output=True, text=True, env=senv)
     check("SH2", "REAL-KUBECTL get pods -n shop-dev", p.stdout.strip(), "shim passes an allowed call to the real kubectl", p.stderr)
+    for tool in ("aws", "crane"):
+        with open(os.path.join(realdir, tool), "w") as f:
+            f.write(f"#!/bin/sh\necho REAL-{tool.upper()} \"$@\"\n")
+        os.chmod(os.path.join(realdir, tool), 0o755)
+    p = subprocess.run([os.path.join(shims, "aws"), "eks", "update-kubeconfig", "--name", "shop-prod"], capture_output=True, text=True, env=senv)
+    check("SH3", 126, p.returncode, "aws shim blocks a real-account call from a subprocess (exit 126)", p.stderr)
+    p = subprocess.run([os.path.join(shims, "aws"), "--endpoint-url", "http://localhost:4566", "s3", "ls"], capture_output=True, text=True, env=senv)
+    check("SH4", "REAL-AWS --endpoint-url http://localhost:4566 s3 ls", p.stdout.strip(), "aws shim passes a LocalStack call", p.stderr)
+    p = subprocess.run([os.path.join(shims, "crane"), "tag", "1.dkr.ecr.us-east-1.amazonaws.com/a/api@sha256:aa", "prod-healthy-x"], capture_output=True, text=True, env=senv)
+    check("SH5", 126, p.returncode, "crane shim blocks tagging in ECR from a subprocess (ask = deny there)", p.stderr)
+    p = subprocess.run([os.path.join(shims, "crane"), "push", "/tmp/api.tar", "localhost:5001/shop/api:abc"], capture_output=True, text=True, env=senv)
+    check("SH6", "REAL-CRANE push /tmp/api.tar localhost:5001/shop/api:abc", p.stdout.strip(), "crane shim passes a push to the lab registry", p.stderr)
 
     # SessionStart env hook: shims first on PATH + KUBECONFIG pinned from the policy
     envfile = os.path.join(W, "claude-env")
