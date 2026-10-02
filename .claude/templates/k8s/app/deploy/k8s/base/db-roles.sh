@@ -15,6 +15,18 @@
 #                     SELECT/INSERT/UPDATE/DELETE, sequences: USAGE/SELECT), so FORCE RLS applies to it.
 #   The bootstrap superuser is used only by Postgres itself and by this script.
 #
+# Managed Postgres (Amazon RDS / Aurora PostgreSQL, the EKS targets): there is no superuser. The script
+# then runs as the instance's master user (NOSUPERUSER CREATEROLE CREATEDB, member of rds_superuser),
+# which PostgreSQL does not allow to grant BYPASSRLS ("only superuser roles or roles with BYPASSRLS can
+# specify BYPASSRLS", postgresql.org/docs/17/sql-createrole.html; the RDS master role has no BYPASSRLS,
+# docs.aws.amazon.com/AmazonRDS/latest/UserGuide/Appendix.PostgreSQL.CommonDBATasks.Roles.rds_superuser.html).
+# So there the migrator is NOBYPASSRLS (a WARNING says so) and a FORCE-RLS table needs a policy
+# `TO <migrator> USING (true) WITH CHECK (true)` for cross-tenant migrations and seeds (skill eks.md).
+# The app role is NOBYPASSRLS either way: that is the property that matters, and it holds on both.
+# The master user also makes itself a member of the migrator (it must SET ROLE to it to hand it the
+# database, and be a member to set its default privileges), and statement logging is turned off for
+# the password session only where the server allows it (keep log_statement=none in the parameter group).
+#
 # Idempotent: it checks before it changes anything, passwords included (it tries a login with the
 # password before resetting it), so on a converged database it prints "no changes" and alters nothing.
 # It never prints or logs a password: values come from the environment (psql \getenv, never argv), and
@@ -62,16 +74,21 @@ DECLARE
   s      record;
   attrs  text;
   n      int := 0;
+  su     boolean := (SELECT rolsuper FROM pg_roles WHERE rolname = current_user);
+  bypass boolean := (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user);
 BEGIN
-  IF NOT (SELECT rolsuper FROM pg_roles WHERE rolname = current_user) THEN
-    RAISE EXCEPTION 'db-roles: must run as a superuser (connected as %)', current_user;
+  IF NOT su AND NOT (SELECT rolcreaterole AND rolcreatedb FROM pg_roles WHERE rolname = current_user) THEN
+    RAISE EXCEPTION 'db-roles: must run as a superuser, or on managed Postgres as the master user (CREATEROLE CREATEDB) (connected as %)', current_user;
+  END IF;
+  IF NOT bypass THEN
+    RAISE WARNING 'db-roles: % is not a superuser and has no BYPASSRLS (managed Postgres), so the migrator % is NOBYPASSRLS: FORCE-RLS tables need a policy TO % for cross-tenant migrations and seeds', current_user, m, m;
   END IF;
   IF m = a OR m IN ('', current_user) OR a IN ('', current_user) THEN
     RAISE EXCEPTION 'db-roles: the migrator (%), app (%) and superuser (%) must be three different roles', m, a, current_user;
   END IF;
 
-  -- 1. the two roles, with exactly these attributes
-  FOR r IN SELECT * FROM (VALUES (m, true), (a, false)) v(name, bypass) LOOP
+  -- 1. the two roles, with exactly these attributes (the migrator gets BYPASSRLS where the server allows it)
+  FOR r IN SELECT * FROM (VALUES (m, bypass), (a, false)) v(name, bypass) LOOP
     attrs := 'LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION ' || CASE WHEN r.bypass THEN 'BYPASSRLS' ELSE 'NOBYPASSRLS' END;
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = r.name) THEN
       EXECUTE format('CREATE ROLE %I %s', r.name, attrs);
@@ -84,14 +101,20 @@ BEGIN
   END LOOP;
   m_oid := (SELECT oid FROM pg_roles WHERE rolname = m);
   a_oid := (SELECT oid FROM pg_roles WHERE rolname = a);
+  -- 1b. managed Postgres: the master user must be able to SET ROLE to the migrator (to hand it the
+  --     database) and have its privileges (to set its default privileges and take over objects)
+  IF NOT su AND NOT (pg_has_role(current_user, m_oid, 'SET') AND pg_has_role(current_user, m_oid, 'USAGE')) THEN
+    EXECUTE format('GRANT %I TO %I', m, current_user);
+    RAISE NOTICE 'db-roles: granted % to % (managed Postgres: the master user administers the migrator)', m, current_user; n := n + 1;
+  END IF;
 
   -- 2. neither role can SET ROLE into something stronger: the app role into the migrator or any
   --    BYPASSRLS/superuser role, the migrator into a superuser
   FOR r IN SELECT g.rolname AS grp, u.rolname AS member, gr.rolname AS grantor
            FROM pg_auth_members am JOIN pg_roles g ON g.oid = am.roleid JOIN pg_roles u ON u.oid = am.member
            JOIN pg_roles gr ON gr.oid = am.grantor
-           WHERE (am.member = a_oid AND (am.roleid = m_oid OR g.rolsuper OR g.rolbypassrls))
-              OR (am.member = m_oid AND g.rolsuper) LOOP
+           WHERE (am.member = a_oid AND (am.roleid = m_oid OR g.rolsuper OR g.rolbypassrls OR g.rolname IN ('rds_superuser', 'rds_password', 'rds_replication')))
+              OR (am.member = m_oid AND (g.rolsuper OR g.rolname IN ('rds_superuser', 'rds_password', 'rds_replication'))) LOOP
     EXECUTE format('REVOKE %I FROM %I GRANTED BY %I', r.grp, r.member, r.grantor);
     RAISE NOTICE 'db-roles: revoked membership of % in %', r.member, r.grp; n := n + 1;
   END LOOP;
@@ -171,6 +194,7 @@ BEGIN
     SELECT o.classid, o.objid, i.type, i.identity
     FROM owned o, pg_identify_object(o.classid, o.objid, 0) i
     WHERE o.owner <> m_oid
+      AND pg_has_role(current_user, o.owner, 'USAGE')   -- managed Postgres: only what the master user may hand over
       AND NOT EXISTS (SELECT FROM pg_depend d WHERE d.classid = o.classid AND d.objid = o.objid AND d.objsubid = 0
                         AND d.deptype IN ('e', 'i'))   -- objsubid 0: a partition key column depends 'i' on its own table
     ORDER BY o.classid <> 'pg_namespace'::regclass, i.type = 'sequence', i.identity
@@ -210,12 +234,9 @@ login_ok() {
 }
 set_password() {
   ROLE_NAME="$1" ROLE_PASSWORD="$2" psql_su <<'SQL'
-SET log_statement = 'none';
-SET log_min_error_statement = 'panic';
-SET log_min_duration_statement = -1;
-SET log_min_duration_sample = -1;
-SET log_transaction_sample_rate = 0;
-SET log_error_verbosity = 'terse';
+SELECT count(set_config(p, v, false)) AS _quiet FROM (VALUES ('log_statement', 'none'), ('log_min_error_statement', 'panic'),
+  ('log_min_duration_statement', '-1'), ('log_min_duration_sample', '-1'), ('log_transaction_sample_rate', '0'),
+  ('log_error_verbosity', 'terse')) s(p, v) WHERE has_parameter_privilege(p, 'SET') \gset
 \set VERBOSITY terse
 \set SHOW_CONTEXT never
 \getenv role_name ROLE_NAME
@@ -224,6 +245,9 @@ ALTER ROLE :"role_name" PASSWORD :'role_password';
 SQL
 }
 pw_changes=0
+if [ "$(psql_su -tAc "SELECT has_parameter_privilege('log_statement', 'SET')")" != t ]; then
+  echo "db-roles: note: this server does not let $PGUSER turn statement logging off for the password session (managed Postgres): keep log_statement=none in its parameter group" >&2
+fi
 for role in MIGRATOR APP; do
   user_var="DB_${role}_USER"; pw_var="DB_${role}_PASSWORD"
   if ! login_ok "${!user_var}" "${!pw_var}"; then
