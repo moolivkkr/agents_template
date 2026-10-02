@@ -49,7 +49,8 @@ errors.
 - `deploy/k8s/app.env`: APP, REGISTRY, INGRESS_PORT, SMOKE_PATHS, VERSION_PATH.
 - `deploy/k8s/images.txt`: `<image-name> <build-context> [dockerfile]` for each built service.
 - `deploy/k8s/base/`: one `<service>.yaml` per stateless service, plus `postgres.yaml`, `jobs.yaml`
-  (the `db-roles`, `db-migrate` and `db-seed` Job templates), `ingress.yaml` and `db-roles.sh` (rule 10).
+  (the `db-roles`, `db-migrate`, `db-seed` and `db-rls-check` Job templates), `ingress.yaml`,
+  `db-roles.sh` (rule 10) and `db-rls-check.sh` (rule 7, decision D-001).
 - `deploy/k8s/overlays/{dev,qa}/kustomization.yaml`: namespace, host, `APP_ENV`, replicas, and the
   **managed images block**. Only `deploylib.py set-images` writes that block, and only with digests.
 - `scripts/k8s/*`: identical in every project. Don't fork them; fix the template instead.

@@ -255,12 +255,15 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
 - **`jobs.yaml`**:
   - point `db-migrate` and `db-seed` at the service that owns the schema, with its real migrate and
     seed commands;
-  - keep the `wait-for-db` init containers, and keep the `db-roles` template unchanged;
+  - keep the `wait-for-db` init containers, and keep the `db-roles` and `db-rls-check` templates
+    unchanged (`db-rls-check` runs as the app role after seed and fails the deploy on a FORCE-RLS
+    table without its migrator policy or on a policy that reaches the app role, decision D-001);
   - the commands must retry the DB connection for about 60 s and treat auth errors as fatal;
   - seeds must be idempotent upserts.
 - **Database roles** (`lima-k8s-lab.md` rules 7 and 10): every service's Deployment reads only
   `DB_APP_USER`/`DB_APP_PASSWORD` (the RLS-bound app role), `db-migrate`/`db-seed` only
-  `DB_MIGRATOR_*`, and nothing but Postgres and `db-roles` gets `DB_SUPERUSER_*`. Never `envFrom` the
+  `DB_MIGRATOR_*`, `db-rls-check` only `DB_APP_*`, and nothing but Postgres and `db-roles` gets
+  `DB_SUPERUSER_*`. Never `envFrom` the
   `db-credentials` secret. `deploy.sh` refuses a render that breaks this (`deploylib.py db-access`). A
   data migration or backfill Job runs as the migrator, and its template is named `db-*`.
 - **Postgres**: keep `postgres.yaml` if the project uses Postgres; otherwise replace it with the

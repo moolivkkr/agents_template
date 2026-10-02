@@ -176,6 +176,23 @@ verified backup. Record the reason in the file header and in `reports/migrations
   `ALTER TABLE … ADD COLUMN IF NOT EXISTS`, `DROP … IF EXISTS`.
 - **Security:** the migration role owns the schema; the application role gets DML grants only, and
   row-level-security policies come from the design's Security section when tenancy is pooled.
+- **Row-level security and the migrator policy (PostgreSQL, decision D-001).** The SQL is in
+  `databases/postgres.md` ("The migrator policy"), and your archetype (`migration-pattern-<lang>.md`)
+  shows it in your tool's format.
+  - The first migration that enables RLS creates `app_grant_migrator(regclass)`.
+  - Every migration that puts a table under `FORCE ROW LEVEL SECURITY` ends with
+    `SELECT app_grant_migrator('<table>');`. That call creates `<table>_migrator_all`, a permissive
+    policy `TO` the table owner (the migrator) only.
+  - Why: on RDS/Aurora the migrator has no BYPASSRLS, so without this policy its seeds and backfills see
+    no rows or fail, and the deploy's `db-rls-check` Job refuses the build. On the lab it is harmless.
+  - Never write an unconditional (`USING (true)`) policy `TO PUBLIC`, with no `TO`, or `TO` the
+    application role. `migration_safety_reviewer` blocks it as a tenant-isolation breach.
+  - Never lift `FORCE` (`NO FORCE ROW LEVEL SECURITY`) for a data migration: it takes an
+    `ACCESS EXCLUSIVE` lock.
+  - Adopting D-001 on an existing schema: one new migration creates the helper and calls it for every
+    FORCE-RLS table that lacks the policy.
+  - Migration tests run the migrator NOBYPASSRLS (the RDS case) and read the results as the
+    application role.
 
 ## DOWN migrations (optional)
 
