@@ -49,7 +49,8 @@ errors.
 - `deploy/k8s/app.env`: APP, REGISTRY, INGRESS_PORT, SMOKE_PATHS, VERSION_PATH.
 - `deploy/k8s/images.txt`: `<image-name> <build-context> [dockerfile]` for each built service.
 - `deploy/k8s/base/`: one `<service>.yaml` per stateless service, plus `postgres.yaml`, `jobs.yaml`
-  (the `db-roles`, `db-migrate` and `db-seed` Job templates), `ingress.yaml` and `db-roles.sh` (rule 10).
+  (the `db-roles`, `db-migrate`, `db-seed` and `db-rls-check` Job templates), `ingress.yaml`,
+  `db-roles.sh` (rule 10) and `db-rls-check.sh` (rule 7, decision D-001).
 - `deploy/k8s/overlays/{dev,qa}/kustomization.yaml`: namespace, host, `APP_ENV`, replicas, and the
   **managed images block**. Only `deploylib.py set-images` writes that block, and only with digests.
 - `scripts/k8s/*`: identical in every project. Don't fork them; fix the template instead.
@@ -80,17 +81,28 @@ errors.
    |---|---|---|
    | `DB_SUPERUSER_USER/_PASSWORD` | bootstrap superuser (`postgres`; `app` on a volume made before the two roles) | Postgres itself and the `db-roles` Job, nobody else |
    | `DB_MIGRATOR_USER/_PASSWORD` | `app_migrator`: NOSUPERUSER BYPASSRLS, owns the database and every object in it | `db-migrate`, `db-seed` (the `db-*` Job templates) |
-   | `DB_APP_USER/_PASSWORD` | `app_runtime`: NOSUPERUSER NOBYPASSRLS, owns nothing; CONNECT, USAGE on `public`, DML via default privileges | every service (`api.yaml`) |
+   | `DB_APP_USER/_PASSWORD` | `app_runtime`: NOSUPERUSER NOBYPASSRLS, owns nothing; CONNECT, USAGE on `public`, DML via default privileges | every service (`api.yaml`) and the `db-rls-check` Job |
 
    - The app role is what makes `FORCE ROW LEVEL SECURITY` real: it isn't the owner and can't bypass
      RLS, so a tenant query without a WHERE clause still returns one tenant's rows. It can't CREATE,
-     ALTER, DROP, TRUNCATE or `SET ROLE` the migrator. The migrator's BYPASSRLS lets data migrations
-     and seeds reach every tenant without lifting FORCE RLS, so they take no table-wide exclusive locks
-     (`backend/archetypes/migration-pattern-python.md`, `infrastructure/saas-tenancy-models.md`).
+     ALTER, DROP, TRUNCATE or `SET ROLE` the migrator. The migrator reaches every tenant in data
+     migrations and seeds without lifting FORCE RLS, so they take no table-wide exclusive locks. On the
+     lab it has BYPASSRLS. Decision D-001 also gives every FORCE-RLS table a migrator-only policy
+     (`SELECT app_grant_migrator('<table>')`, `databases/postgres.md`). That policy is what works on
+     RDS/Aurora, where BYPASSRLS can't be granted (`infrastructure/eks.md`), and here it is harmless.
+     Write migrations with it on the lab too, so they run unchanged on staging and prod
+     (`backend/archetypes/migration-pattern-*.md`, `infrastructure/saas-tenancy-models.md`).
+   - **The `db-rls-check` Job proves it after every migrate + seed**, as the app role, before the
+     rollout (`db-rls-check.sh`). The deploy fails if any of these hold:
+     - a FORCE-RLS table lacks its migrator policy;
+     - an unconditional (`USING (true)`) policy names any role but the table owner, e.g. `TO PUBLIC`
+       or `TO app_runtime`;
+     - the app role reads a row with no tenant set.
    - **deploy.sh enforces who reads what** on every render, before anything is applied
      (`deploylib.py db-access`): superuser keys only in Postgres and `db-roles`, migrator keys only in
-     Postgres and `db-*` Job templates (never a Deployment), no `envFrom` or volume of the whole
-     secret, no old `DB_USER`/`DB_PASSWORD`. The apply step fails and names the container otherwise.
+     Postgres and `db-*` Job templates (never a Deployment), `db-rls-check` present and holding the app
+     keys only, no `envFrom` or volume of the whole secret, no old `DB_USER`/`DB_PASSWORD`. The apply
+     step fails and names the container otherwise.
    - `secrets.env` is gitignored, and deploy.sh refuses to write passwords into one git would track.
      When it's missing, deploy.sh rebuilds it from the namespace so a fresh checkout doesn't lock
      itself out of the volume: from the newest three-role secret, or, in a namespace from before the

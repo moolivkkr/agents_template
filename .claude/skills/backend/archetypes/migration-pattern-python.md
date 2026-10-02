@@ -17,7 +17,7 @@ tags:
 
 > **Canonical reference**: This is the Python counterpart to `backend/archetypes/migration-pattern.md` (Go/golang-migrate). Both produce the same `widgets` and `widget_categories` tables, indexes, RLS policies and constraints. This chain also creates a `tenants` registry first, so the seed has a list of tenants to seed (see "Seed Data Migration").
 
-> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked; alembic 1.20.0 offline upgrade and downgrade SQL generated through env.py up to d4e5f6a7b8c9 (the batched backfill refuses `--sql` with its own message); the migration tests pass against PostgreSQL 16 with the two roles (`run.sh --live`, 12 passed): round trips as `app_migrator` (BYPASSRLS), env.py refusing `app_runtime`, the seed reaching a tenant with no widgets, a re-run adding nothing and not reviving a deleted default, `provision_tenant()` idempotent, RLS isolating `app_runtime`. `pg_locks` was read while a batch was paused mid-UPDATE (AccessShareLock + RowExclusiveLock on widgets, no AccessExclusiveLock; the application's SELECT and INSERT ran with `lock_timeout = 200ms`) and while `ALTER TABLE ... NO FORCE` was open (AccessExclusiveLock; the application's query timed out). SQLAlchemy 2.1.1, asyncpg 0.31.0.
+> Python samples checked 2026-09-30 on Python 3.12.8 with pyright 1.1.414 (`tests/archetype-compile/python/run.sh`): type-checked; alembic 1.20.0 offline upgrade and downgrade SQL generated through env.py up to d4e5f6a7b8c9 (the batched backfill refuses `--sql` with its own message); the migration tests pass against PostgreSQL 16 with the two roles (`run.sh --live`, 12 passed; re-run 2026-10-01 for decision D-001): round trips as `app_migrator` NOBYPASSRLS, the RDS case, which reaches every tenant only through its migrator policies (with one `app_grant_migrator` call removed, 11 of the 12 fail), env.py refusing `app_runtime`, the seed reaching a tenant with no widgets, a re-run adding nothing and not reviving a deleted default, `provision_tenant()` idempotent, RLS isolating `app_runtime`. `pg_locks` was read while a batch was paused mid-UPDATE (AccessShareLock + RowExclusiveLock on widgets, no AccessExclusiveLock; the application's SELECT and INSERT ran with `lock_timeout = 200ms`) and while `ALTER TABLE ... NO FORCE` was open (AccessExclusiveLock; the application's query timed out). SQLAlchemy 2.1.1, asyncpg 0.31.0.
 
 Complete Alembic migration setup for async SQLAlchemy + asyncpg. Every generated migration MUST follow this pattern.
 
@@ -40,9 +40,10 @@ Naming convention: `YYYYMMDD_HHMMSS_description.py` — matches the Go archetype
 
 **Who runs migrations.** Two database roles, neither of them a superuser:
 
-- The **migration role** (`app_migrator` in the tests) owns the schema and every table, and has
-  `BYPASSRLS`. Only the migrate Job (or a developer running `alembic upgrade`) gets its credentials;
-  the application's Deployment never mounts them.
+- The **migration role** (`app_migrator`) owns the database, the schema and every table. On the lab it
+  also has `BYPASSRLS`. On Amazon RDS/Aurora it can't: the master user is no superuser and can't grant
+  it (`infrastructure/eks.md`). Only the migrate Job (or a developer running `alembic upgrade`) gets its
+  credentials; the application's Deployment never mounts them.
 - The **application role** (`app_runtime`) owns nothing and has no `BYPASSRLS`, so row-level security
   applies to every query it makes (`infrastructure/saas-tenancy-models.md`). It reads and writes the
   tables through `ALTER DEFAULT PRIVILEGES FOR ROLE app_migrator ... GRANT SELECT, INSERT, UPDATE,
@@ -50,17 +51,25 @@ Naming convention: `YYYYMMDD_HHMMSS_description.py` — matches the Go archetype
   in `tests/test_migrations.py` has the statements).
 
 Data migrations, seeds and foreign-key validation read and write every tenant's rows. The migration
-role does that without changing any RLS setting, so a backfill batch holds row locks and `ROW
-EXCLUSIVE` on the table, and the application's reads and writes don't wait for it. `env.py` refuses to
-run as a role that RLS applies to, so the application's credentials can't start a migration that would
-fail halfway. Tables still get `FORCE ROW LEVEL SECURITY`, so a table owner without `BYPASSRLS` (a
-misconfigured deployment) is refused rather than shown every tenant.
+role does that through its own policy (decision D-001), the same on both deploy paths:
+- The first migration creates the helper `app_grant_migrator(regclass)`.
+- Every migration that creates a tenant table calls it. That gives the table a permissive policy `TO`
+  its owner only, `USING (true) WITH CHECK (true)` (`databases/postgres.md`, "The migrator policy").
+- No RLS setting changes. A backfill batch holds row locks and `ROW EXCLUSIVE` on the table, and the
+  application's reads and writes don't wait for it.
+- The application's role is neither the owner nor a member of it, so the policy never applies to it.
+- A table without its migrator policy refuses the migrator under `FORCE` (no tenant set) rather than
+  showing it every tenant. On RDS the migration fails; the deploy's `db-rls-check` Job names the table.
+
+`env.py` refuses to run as a role that doesn't own the database (the application's), so its credentials
+can't start a migration that would fail halfway. The tests below run the migrator **without**
+`BYPASSRLS`, the RDS case. The lab's `BYPASSRLS` only adds to what the policy already grants.
 
 The trade-off, measured with `pg_locks` on PostgreSQL 16 by the migration tests:
 
 | Design | Locks on `widgets` while a backfill batch runs | Cost |
 |---|---|---|
-| Migration role with `BYPASSRLS` (this archetype) | `ROW EXCLUSIVE` plus the rows it updates. The application's `SELECT` and `INSERT` ran during a paused batch with `lock_timeout = 200ms`. | A role that sees every tenant's rows. As table owner it could already turn RLS off (`ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`), so `BYPASSRLS` only removes the error an accidental tenant-less query by that role would get. Keep its secret in the migrate Job. |
+| Owner with its migrator policy (this archetype, D-001; `BYPASSRLS` too on the lab) | `ROW EXCLUSIVE` plus the rows it updates. The application's `SELECT` and `INSERT` ran during a paused batch with `lock_timeout = 200ms` (measured with the migrator NOBYPASSRLS). | A role that sees every tenant's rows. As table owner it could already turn RLS off (`ALTER TABLE ... NO FORCE ROW LEVEL SECURITY`), so the policy only removes the error a tenant-less query by that role would get. Keep its secret in the migrate Job; never write the policy `TO` any other role. |
 | Owner without `BYPASSRLS`, `FORCE` lifted inside every batch (the previous version of this archetype) | `ACCESS EXCLUSIVE` from the `ALTER TABLE` until the batch commits. The application's `SELECT` timed out behind it. | Every batch blocks all reads and writes of the table, and its `ALTER TABLE` first waits for every running query on the table while new ones queue behind it. |
 | Owner without `BYPASSRLS`, `FORCE` lifted once around the whole backfill | Not measured separately: the same `ALTER TABLE`, so `ACCESS EXCLUSIVE` twice (lift, restore) if each runs in its own transaction, for the whole backfill if not. | If the backfill fails midway, `FORCE` stays off for the owner until someone restores it. |
 
@@ -174,21 +183,25 @@ def run_migrations_offline() -> None:
 
 
 def check_migration_role(connection: Connection) -> None:
-    """Refuse to migrate as a role that row-level security applies to (the application's role).
+    """Refuse to migrate as any role but the migration role, which owns the database (the application's
+    role owns nothing).
 
-    Data migrations and seeds read and write every tenant's rows; under RLS they would fail halfway
-    through the chain instead of before it. See "Who runs migrations".
+    Data migrations and seeds read and write every tenant's rows through the migrator policy each table
+    gets (decision D-001), which applies to the table owner only; as another role they would fail
+    halfway through the chain instead of before it. BYPASSRLS is not required: on RDS/Aurora the
+    migration role has none. See "Who runs migrations".
     """
     # Its own transaction, ended before alembic begins one. A query outside it would auto-begin a
     # transaction that alembic then treats as the caller's: it would not commit it, and closing the
     # connection would roll every migration back.
     with connection.begin():
-        bypasses_rls = connection.execute(
-            text("SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user")
+        owns_database = connection.execute(
+            text("SELECT datdba = (SELECT oid FROM pg_roles WHERE rolname = current_user) "
+                 "FROM pg_database WHERE datname = current_database()")
         ).scalar_one()
-    if not bypasses_rls:
+    if not owns_database:
         raise RuntimeError(
-            "alembic must run as the migration role (owner of the tables, BYPASSRLS), "
+            "alembic must run as the migration role (owner of the database and its tables), "
             "not as the application role: DATABASE_URL has the wrong credentials"
         )
 
@@ -275,6 +288,9 @@ Create Date: 2026-01-15 09:50:00.000000+00:00
 One row per tenant: the list a seed or a backfill iterates over (a tenant with no widgets yet is still
 a tenant), and the row signup creates (app/db/tenants.py provision_tenant). RLS keys on id, so the
 application role sees only its own tenant's row.
+
+The first migration, so it also creates app_grant_migrator(), the helper every migration that creates
+a tenant table calls for the migrator's own policy (decision D-001, databases/postgres.md).
 """
 
 from __future__ import annotations
@@ -288,7 +304,36 @@ branch_labels = None
 depends_on = None
 
 
+# app_grant_migrator(t): a PERMISSIVE policy on t TO t's owner (the migration role) only, USING (true)
+# WITH CHECK (true), so seeds and backfills reach every tenant under FORCE ROW LEVEL SECURITY without
+# BYPASSRLS. The target comes from the catalog: no role name in the SQL.
+APP_GRANT_MIGRATOR = """
+    CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+    LANGUAGE plpgsql
+    SET search_path = pg_catalog, pg_temp
+    AS $fn$
+    DECLARE
+        owner_role name;
+        pol        name;
+    BEGIN
+        SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+          INTO owner_role, pol
+          FROM pg_class c WHERE c.oid = tbl;
+        IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+            EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);
+        ELSE
+            EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+                           pol, tbl, owner_role);
+        END IF;
+    END
+    $fn$
+"""
+
+
 def upgrade() -> None:
+    op.execute(APP_GRANT_MIGRATOR)
+    op.execute("REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC")
+
     op.create_table(
         "tenants",
         sa.Column("id", sa.Uuid(), primary_key=True),  # chosen by provisioning, not by the database
@@ -304,11 +349,14 @@ def upgrade() -> None:
             USING (id = current_setting('app.current_tenant_id')::UUID)
             WITH CHECK (id = current_setting('app.current_tenant_id')::UUID)
     """)
+    op.execute("SELECT app_grant_migrator('tenants')")  # tenants_migrator_all, TO the owner only
 
 
 def downgrade() -> None:
+    op.execute("DROP POLICY IF EXISTS tenants_migrator_all ON tenants")
     op.execute("DROP POLICY IF EXISTS tenant_isolation ON tenants")
     op.drop_table("tenants")
+    op.execute("DROP FUNCTION IF EXISTS app_grant_migrator(regclass)")
 ```
 
 ## Table Creation Migration — UP + DOWN
@@ -404,6 +452,8 @@ def upgrade() -> None:
             USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
             WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID)
     """)
+    # The migrator's own policy (D-001): seeds and backfills see every tenant, the application doesn't
+    op.execute("SELECT app_grant_migrator('widgets')")
 
     # -----------------------------------------------------------------
     # Triggers — auto-update updated_at
@@ -439,6 +489,7 @@ def downgrade() -> None:
     """Exact reverse of upgrade — drop everything in reverse order."""
 
     op.execute("DROP TRIGGER IF EXISTS trg_widgets_updated_at ON widgets")
+    op.execute("DROP POLICY IF EXISTS widgets_migrator_all ON widgets")
     op.execute("DROP POLICY IF EXISTS tenant_isolation ON widgets")
 
     op.execute("DROP INDEX IF EXISTS idx_widgets_tenant_status")
@@ -495,8 +546,8 @@ def upgrade() -> None:
     """)
 
     # Add category_id FK to widgets. Creating a foreign key runs a validation query that reads both
-    # tables; the migration role has BYPASSRLS, so RLS neither hides rows from it nor refuses it for
-    # having no tenant set (see "Who runs migrations").
+    # tables as the owner; widgets_migrator_all lets it see every row with FORCE on and no tenant set
+    # (see "Who runs migrations").
     op.add_column("widgets", sa.Column("category_id", sa.Uuid(), nullable=True))
     op.create_foreign_key(
         "fk_widgets_category", "widgets", "widget_categories",
@@ -516,6 +567,7 @@ def upgrade() -> None:
             USING (tenant_id = current_setting('app.current_tenant_id')::UUID)
             WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::UUID)
     """)
+    op.execute("SELECT app_grant_migrator('widget_categories')")
 
 
 def downgrade() -> None:
@@ -523,6 +575,7 @@ def downgrade() -> None:
     op.drop_constraint("fk_widgets_category", "widgets", type_="foreignkey")
     op.drop_column("widgets", "category_id")
 
+    op.execute("DROP POLICY IF EXISTS widget_categories_migrator_all ON widget_categories")
     op.execute("DROP POLICY IF EXISTS tenant_isolation ON widget_categories")
     op.execute("DROP INDEX IF EXISTS idx_widget_categories_tenant_slug")
     op.drop_table("widget_categories")
@@ -563,8 +616,8 @@ def upgrade() -> None:
     widgets. Idempotent: a default the tenant already has (live or soft-deleted) is skipped, so a re-run
     adds nothing and a category the tenant deleted stays deleted. ON CONFLICT DO NOTHING covers a
     provision_tenant() for the same tenant committing at the same moment.
-    The migration role has BYPASSRLS, so it sees every tenant (see "Who runs migrations"). The list is
-    a snapshot: app/db/tenants.py keeps its own copy for tenants created later.
+    The migration role sees every tenant through its migrator policies (see "Who runs migrations"). The
+    list is a snapshot: app/db/tenants.py keeps its own copy for tenants created later.
     """
     op.execute("""
         INSERT INTO widget_categories (tenant_id, name, slug, description, sort_order)
@@ -617,8 +670,8 @@ down_revision = "c3d4e5f6a7b8"
 
 def upgrade() -> None:
     """
-    Small tables (< 100K rows): one UPDATE. The migration role has BYPASSRLS, so it sees every
-    tenant's widgets (see "Who runs migrations").
+    Small tables (< 100K rows): one UPDATE. The migration role sees every tenant's widgets through its
+    migrator policies (see "Who runs migrations").
     """
     op.execute("""
         UPDATE widgets w
@@ -642,9 +695,9 @@ def downgrade() -> None:
 ```python
 # For tables > 100K rows, backfill in batches. Inside autocommit_block() every statement commits on its
 # own, so each batch is a short transaction: no lock is held for the whole run, and a failure keeps the
-# batches already done (re-running continues where it stopped). The migration role has BYPASSRLS, so a
-# batch changes no RLS setting and takes no table lock: ROW EXCLUSIVE on widgets plus its rows, which
-# the application's reads and writes don't wait for.
+# batches already done (re-running continues where it stopped). The migration role reaches every tenant
+# through its migrator policies, so a batch changes no RLS setting and takes no table lock: ROW EXCLUSIVE
+# on widgets plus its rows, which the application's reads and writes don't wait for.
 import sqlalchemy as sa
 from alembic import context, op
 
@@ -777,15 +830,18 @@ async def provision_tenant(session: AsyncSession, tenant_id: UUID, name: str) ->
 
 """
 Verify that all migrations apply, roll back and re-apply cleanly, as the two roles they run with when
-deployed: the migration role (owns the tables, BYPASSRLS) runs them, and the application role (owns
-nothing, no BYPASSRLS) reads the result under row-level security. Never as a superuser: a superuser
-skips RLS and hides every failure on the application's side.
+deployed: the migration role (owns the tables; no BYPASSRLS here, as on RDS/Aurora, so only its
+migrator policies let it reach every tenant) runs them, and the application role (owns nothing, no
+BYPASSRLS) reads the result under row-level security. Never as a superuser: a superuser skips RLS and
+hides every failure on both sides.
 This catches common issues:
 - Missing downgrade logic
 - Non-idempotent operations
 - Foreign key dependency ordering
 - A seed that misses tenants, adds duplicates, or brings back a default a tenant deleted
-- An application role that can see another tenant's rows, or run the migrations
+- A tenant table without its migrator policy (decision D-001): its seed or backfill fails
+- An application role that can see another tenant's rows (a migrator policy that reaches it), or run
+  the migrations
 """
 
 from __future__ import annotations
@@ -805,7 +861,7 @@ from sqlalchemy.pool import NullPool
 
 from app.db.tenants import provision_tenant
 
-MIGRATOR = "app_migrator"  # owns the schema and runs the migrations: NOSUPERUSER BYPASSRLS
+MIGRATOR = "app_migrator"  # owns the schema and runs the migrations: NOSUPERUSER NOBYPASSRLS (as on RDS)
 RUNTIME = "app_runtime"  # the application: owns nothing, NOSUPERUSER NOBYPASSRLS
 DEFAULTS = ["customer", "deprecated", "general", "internal"]
 
@@ -832,7 +888,7 @@ def db_roles(pg_url: str) -> DbRoles:
     async def provision() -> None:
         admin = await asyncpg.connect(_plain(pg_url))
         try:  # CREATE ROLE takes no bind parameters; the passwords are generated hex
-            await admin.execute(f"CREATE ROLE {MIGRATOR} LOGIN NOSUPERUSER BYPASSRLS PASSWORD '{passwords[MIGRATOR]}'")
+            await admin.execute(f"CREATE ROLE {MIGRATOR} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{passwords[MIGRATOR]}'")
             await admin.execute(f"CREATE ROLE {RUNTIME} LOGIN NOSUPERUSER NOBYPASSRLS PASSWORD '{passwords[RUNTIME]}'")
             await admin.execute(f"CREATE DATABASE migrations_test OWNER {MIGRATOR}")
         finally:
@@ -1067,9 +1123,10 @@ alembic upgrade head --sql > migration.sql
 - Unique indexes MUST use partial index `WHERE deleted_at IS NULL`
 - Schema migrations and seed data are SEPARATE files — never combine
 - Data migrations (backfills) are SEPARATE from schema changes
-- Migrations run as the migration role: owns the tables, has `BYPASSRLS`, is not a superuser, and its credentials go to the migrate Job only. The application connects as a role that owns nothing and has no `BYPASSRLS`; `env.py` refuses to migrate as such a role
+- Migrations run as the migration role: owns the database and the tables, is not a superuser (`BYPASSRLS` on the lab, none on RDS/Aurora), and its credentials go to the migrate Job only. The application connects as a role that owns nothing and has no `BYPASSRLS`; `env.py` refuses to migrate as any role that doesn't own the database
+- The first migration creates `app_grant_migrator(regclass)`; every migration that creates a tenant table calls `SELECT app_grant_migrator('<table>')` (decision D-001). Never write an unconditional (`USING (true)`) policy `TO PUBLIC`, to the application's role or to any role but the table owner: it hands the application every tenant's rows (BLOCKING in review; the deploy's `db-rls-check` fails on it)
 - Data migrations never toggle RLS: `ALTER TABLE ... NO FORCE ROW LEVEL SECURITY` takes an `ACCESS EXCLUSIVE` lock, which blocks the application's queries on the table until the transaction ends
-- Migration tests run as those two roles, never a superuser (a superuser skips RLS and hides the application's failures)
+- Migration tests run as those two roles with the migration role NOBYPASSRLS (the RDS case), never a superuser (a superuser skips RLS and hides the failures on both sides)
 - Seeds select tenants from the `tenants` registry (not from whichever rows happen to exist), skip rows the tenant already has (soft-deleted ones included) and use `ON CONFLICT DO NOTHING`; tenants created later get the same defaults from `provision_tenant()`
 - Large table updates (> 100K rows) MUST use batch processing to avoid long locks
 - `CREATE INDEX CONCURRENTLY` cannot run inside a transaction — use `op.execute()` outside transaction context

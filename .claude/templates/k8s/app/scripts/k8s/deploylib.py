@@ -22,7 +22,8 @@
                                                                Prints key names only, never a value
   db-access   < kubectl create --dry-run=client -o json -f rendered.yaml   (or any JSON List of objects)
                                                                refuse a render in which a workload can read
-                                                               a database role it must not have (POLICY)
+                                                               a database role it must not have (POLICY), or
+                                                               db-migrate has no app-role db-rls-check (D-001)
   eks-policy  --registry R [--allow-placeholders] < rendered JSON
                                                                refuse a staging/prod (EKS) render that breaks
                                                                EKS_POLICY: secrets only from ExternalSecret,
@@ -42,8 +43,10 @@ BLOCK = re.compile(r"(# BEGIN images[^\n]*\n)(.*?)(# END images)", re.S)
 # One secret (db-credentials, from the overlay's gitignored secrets.env) holds three user/password pairs;
 # each workload references only the keys of its own role (POLICY, enforced on every render by db-access).
 #   SUPERUSER  bootstrap superuser: Postgres itself and the db-roles Job (deploy/k8s/base/db-roles.sh)
-#   MIGRATOR   owns the schema and every table, NOSUPERUSER BYPASSRLS: db-migrate, db-seed (the db-* Jobs)
-#   APP        the services: NOSUPERUSER NOBYPASSRLS, owns nothing, so FORCE row-level security applies
+#   MIGRATOR   owns the schema and every table, NOSUPERUSER; BYPASSRLS on the lab, NOBYPASSRLS on RDS/Aurora,
+#              where each FORCE-RLS table's migrator-only policy reaches every tenant (D-001): db-migrate, db-seed
+#   APP        the services and db-rls-check: NOSUPERUSER NOBYPASSRLS, owns nothing, so FORCE row-level security
+#              applies. db-rls-check proves it live after every migrate (db-rls-check.sh), as this role only
 DB_ROLES = (("SUPERUSER", "postgres"), ("MIGRATOR", "app_migrator"), ("APP", "app_runtime"))
 DB_SECRET = re.compile(r"^db-credentials(-[a-z0-9]{10})?$")   # generator name, bare or hash-suffixed
 ROLE_NAME = re.compile(r"^[a-z_][a-z0-9_]{0,62}$")
@@ -135,9 +138,17 @@ def db_access_problems(objs):
       migrator keys   StatefulSet/postgres and the db-* Job templates (CronJob/Job named db-*) only:
                       never a service (Deployment, other StatefulSets, DaemonSet)
       app keys        anyone
+      db-rls-check    the app keys only, and it must exist wherever db-migrate does: it proves after every
+                      migrate, from the runtime role's own session, that RLS still binds that role and that
+                      every FORCE-RLS table's unconditional policy is the migrator's alone (D-001). Run as
+                      any other role its proof would be about the wrong role.
       never           envFrom or a volume of the whole secret (that is all three roles), or the old
                       one-superuser keys DB_USER/DB_PASSWORD"""
     out = []
+    names = {f"{o.get('kind')}/{(o.get('metadata') or {}).get('name', '')}" for o in objs}
+    if "CronJob/db-migrate" in names and "CronJob/db-rls-check" not in names:
+        out.append("CronJob/db-migrate has no CronJob/db-rls-check beside it: every migrate must be followed by the "
+                   "app-role RLS check (deploy/k8s/base/jobs.yaml, db-rls-check.sh, D-001)")
     for o in objs:
         ps = pod_spec(o)
         if ps is None:
@@ -149,17 +160,25 @@ def db_access_problems(objs):
             for ef in c.get("envFrom") or []:
                 if DB_SECRET.match((ef.get("secretRef") or {}).get("name", "")):
                     out.append(f"{where}: envFrom the whole db-credentials secret (all three roles); reference your own keys with secretKeyRef")
+            app_keys = set()
             for e in c.get("env") or []:
                 ref = (e.get("valueFrom") or {}).get("secretKeyRef") or {}
                 if not DB_SECRET.match(ref.get("name", "")):
                     continue
                 key = ref.get("key", "")
-                if key.startswith("DB_SUPERUSER_") and who not in ("StatefulSet/postgres", "CronJob/db-roles"):
+                if key.startswith("DB_APP_"):
+                    app_keys.add(key)
+                if name == "db-rls-check" and not key.startswith("DB_APP_"):
+                    out.append(f"{where}: reads {key}; db-rls-check proves what the runtime role can see, so it holds DB_APP_* only")
+                elif key.startswith("DB_SUPERUSER_") and who not in ("StatefulSet/postgres", "CronJob/db-roles"):
                     out.append(f"{where}: reads {key}; only Postgres and the db-roles Job may hold the superuser")
                 elif key.startswith("DB_MIGRATOR_") and who != "StatefulSet/postgres" and not (kind in ("CronJob", "Job") and name.startswith("db-")):
                     out.append(f"{where}: reads {key}; only the db-* Job templates (migrate, seed) may hold the migrator, a service uses DB_APP_*")
                 elif key in ("DB_USER", "DB_PASSWORD"):
                     out.append(f"{where}: reads {key}, the old one-superuser key; services use DB_APP_USER/DB_APP_PASSWORD, migrate and seed DB_MIGRATOR_*")
+            if name == "db-rls-check" and kind in ("CronJob", "Job") and c in (ps.get("containers") or []) \
+                    and app_keys != {"DB_APP_USER", "DB_APP_PASSWORD"}:
+                out.append(f"{where}: must log in as the app role (DB_APP_USER and DB_APP_PASSWORD from db-credentials)")
         for v in ps.get("volumes") or []:
             if DB_SECRET.match((v.get("secret") or {}).get("secretName", "")):
                 out.append(f"{who}: mounts the whole db-credentials secret as volume {v.get('name')}")

@@ -155,7 +155,7 @@ def test_harness_batch_waits_for_a_locked_row_and_rechecks_it(alembic_config: Co
 
 def test_harness_force_toggle_blocks_the_application(alembic_config: Config, db_roles: DbRoles, pg_url: str) -> None:
     """The replaced design lifted FORCE inside every batch. The ALTER TABLE's lock doesn't depend on
-    BYPASSRLS, so the migration role (the owner) stands in for the owner without it."""
+    BYPASSRLS or on the migrator policy, so the migration role (the owner) shows what it cost."""
     command.downgrade(alembic_config, "base")
     command.upgrade(alembic_config, "head")
     tenant = uuid.uuid4()

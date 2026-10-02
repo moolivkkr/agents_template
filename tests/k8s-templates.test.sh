@@ -130,7 +130,7 @@ if python3 -c 'import yaml' 2>/dev/null || command -v yq >/dev/null; then
     [ -s "$W/$e.yaml" ] || continue
     to_json "$W/$e.yaml" > "$W/$e.json"
     python3 "$DL" db-access < "$W/$e.json" 2>"$W/$e.access" && ok "db-access: overlay $e passes the role policy" || bad "db-access $e: $(cat "$W/$e.access")"
-    python3 - "$W/$e.json" "$RS" > "$W/$e.checks" 2>&1 <<'PY' || echo "FAIL|role checks crashed: $(tail -1 "$W/$e.checks")" >> "$W/$e.checks"
+    python3 - "$W/$e.json" "$RS" "$K8S/app/deploy/k8s/base/db-rls-check.sh" > "$W/$e.checks" 2>&1 <<'PY' || echo "FAIL|role checks crashed: $(tail -1 "$W/$e.checks")" >> "$W/$e.checks"
 import json, sys
 objs = json.load(open(sys.argv[1]))["items"]
 by = {f"{o['kind']}/{o['metadata']['name']}": o for o in objs}
@@ -156,10 +156,20 @@ check(rj["containers"][0]["command"] == ["bash", "/db-roles/db-roles.sh"] and rv
       "the db-roles Job runs the same script from the same ConfigMap (read-only root, own /tmp)")
 cm = by.get("ConfigMap/db-roles")
 check(cm is not None and cm["data"]["db-roles.sh"] == open(sys.argv[2]).read(), "ConfigMap db-roles (no hash suffix) carries db-roles.sh byte for byte")
+check(cm is not None and set(cm["data"]) == {"db-roles.sh"}, "ConfigMap db-roles holds db-roles.sh only (initdb runs every *.sh in it)")
+rc = by.get("CronJob/db-rls-check")
+check(rc is not None and keys(rc) == ["DB_APP_PASSWORD", "DB_APP_USER"], f"db-rls-check reads only DB_APP_* ({', '.join(keys(rc)) if rc else 'missing'}): it proves what the runtime role sees (D-001)")
+rcs = spec(rc) if rc else {"containers": [{}], "volumes": []}
+rcv = {v["name"]: v for v in rcs.get("volumes", [])}
+check(rcs["containers"][0].get("command") == ["bash", "/db-rls-check/db-rls-check.sh"] and rcv.get("db-rls-check", {}).get("configMap", {}).get("name") == "db-rls-check"
+      and rcs["containers"][0].get("securityContext", {}).get("readOnlyRootFilesystem") is True,
+      "the db-rls-check Job runs db-rls-check.sh from its own ConfigMap (read-only root)")
+cr = by.get("ConfigMap/db-rls-check")
+check(cr is not None and cr["data"]["db-rls-check.sh"] == open(sys.argv[3]).read(), "ConfigMap db-rls-check (no hash suffix) carries db-rls-check.sh byte for byte")
 PY
     while IFS='|' read -r v m; do [ "$v" = PASS ] && ok "$e: $m" || bad "$e: ${m:-$v}"; done < "$W/$e.checks"   # (no heredoc inside <(...): bash 3.2 mangles it)
   done
-  python3 - "$DL" "$W/dev.json" <<'PY' && ok "db-access refuses: API with the migrator, a worker with the superuser, envFrom/volume of the whole secret, old DB_PASSWORD, a non-db-* CronJob with the migrator; reads kubectl's back-to-back JSON" || bad "db-access let a forbidden render through"
+  python3 - "$DL" "$W/dev.json" <<'PY' && ok "db-access refuses: API with the migrator, a worker with the superuser, envFrom/volume of the whole secret, old DB_PASSWORD, a non-db-* CronJob with the migrator, no db-rls-check, db-rls-check as the migrator; reads kubectl's back-to-back JSON" || bad "db-access let a forbidden render through"
 import copy, json, subprocess, sys
 dl, objs = sys.argv[1], json.load(open(sys.argv[2]))["items"]
 api = next(o for o in objs if o["kind"] == "Deployment" and o["metadata"]["name"] == "api")
@@ -181,6 +191,13 @@ bad = {
 cron = copy.deepcopy(next(o for o in objs if o["kind"] == "CronJob" and o["metadata"]["name"] == "db-migrate"))
 cron["metadata"]["name"] = "nightly-report"
 bad["non-db cronjob+migrator"] = objs + [cron]
+rls = next(o for o in objs if o["kind"] == "CronJob" and o["metadata"]["name"] == "db-rls-check")
+bad["no db-rls-check"] = [o for o in objs if o is not rls]
+rls_mig = copy.deepcopy(rls)
+for e in rls_mig["spec"]["jobTemplate"]["spec"]["template"]["spec"]["containers"][0]["env"]:
+    if (e.get("valueFrom") or {}).get("secretKeyRef", {}).get("key", "").startswith("DB_APP_"):
+        e["valueFrom"]["secretKeyRef"]["key"] = e["valueFrom"]["secretKeyRef"]["key"].replace("DB_APP_", "DB_MIGRATOR_")
+bad["db-rls-check as the migrator"] = [o for o in objs if o is not rls] + [rls_mig]
 assert access(objs) == 0 and access(objs, stream=True) == 0, "clean render refused"
 failed = [k for k, items in bad.items() if access(items) == 0]
 assert not failed, failed
@@ -189,6 +206,8 @@ else skip "neither PyYAML nor yq installed (rendered-manifest role checks)"; fi
 DS="$K8S/app/scripts/k8s/deploy.sh"
 r="$(grep -n 'run_job db-roles' "$DS" | head -1 | cut -d: -f1)"; m="$(grep -n 'run_job db-migrate' "$DS" | head -1 | cut -d: -f1)"
 [ -n "$r" ] && [ -n "$m" ] && [ "$r" -lt "$m" ] && ok "deploy.sh runs the db-roles Job before db-migrate" || bad "deploy.sh: db-roles not run before migrate"
+sd="$(grep -n 'run_job db-seed' "$DS" | head -1 | cut -d: -f1)"; rl="$(grep -n 'run_job db-rls-check' "$DS" | head -1 | cut -d: -f1)"; ro="$(grep -n 'wait_rollout "$d"' "$DS" | head -1 | cut -d: -f1)"
+[ -n "$sd" ] && [ -n "$rl" ] && [ -n "$ro" ] && [ "$sd" -lt "$rl" ] && [ "$rl" -lt "$ro" ] && ok "deploy.sh runs db-rls-check after seed and before the rollout (D-001)" || bad "deploy.sh: db-rls-check missing or out of order"
 grep -q 'python3 "$DL" db-access' "$DS" && grep -q 'check-ignore -q "$SECRETS"' "$DS" \
   && ok "deploy.sh checks every render with db-access and refuses a secrets.env git would track" || bad "deploy.sh lacks the db-access or gitignore guard"
 

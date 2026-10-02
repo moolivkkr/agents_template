@@ -11,8 +11,13 @@
 #   2 converge     the Job (same script, same mount as the ConfigMap) creates both roles NOBYPASSRLS,
 #                  warns about the migrator, hands the database to the migrator, sets default privileges
 #   3 idempotent   a second run prints "no changes" and the catalog snapshot is identical
-#   4 RLS          FORCE RLS + a policy TO the migrator: the migrator migrates and seeds across tenants;
-#                  the app role sees one tenant, can't write another's, can't SET ROLE, ALTER, or lift RLS
+#   4 RLS          D-001: a tenant table made with the skill's own block (databases/postgres.md: FORCE RLS,
+#                  tenant policy, app_grant_migrator() -> migrator-only policy): the NOBYPASSRLS migrator
+#                  seeds and backfills both tenants; the app role sees one tenant, can't write another's,
+#                  can't touch the policies, SET ROLE, ALTER or lift RLS; without the policy the
+#                  migrator's backfill reaches 0 rows (control)
+#   4b db-rls-check the deploy's app-role Job: fails on a FORCE-RLS table with no migrator policy and on
+#                  every unconditional policy that reaches the app role; passes on the archetype schema
 #   5 secrets      no password in the server log (default log_statement=none, as on RDS) or Job output;
 #                  the "can't turn logging off" note is printed; a wrong master password fails fast
 set -uo pipefail
@@ -27,7 +32,8 @@ docker info >/dev/null 2>&1 || { echo "docker is not running"; exit 1; }
 T="$(mktemp -d "${TMPDIR:-/tmp}/eks-db-roles.XXXXXX")"; chmod 700 "$T"
 cleanup() { docker rm -f "$P" >/dev/null 2>&1; rm -rf "$T"; }
 trap cleanup EXIT
-mkdir "$T/cm" && cp "$TPL/deploy/k8s/base/db-roles.sh" "$T/cm/" && chmod 555 "$T/cm/db-roles.sh" && chmod 755 "$T" "$T/cm"
+mkdir "$T/cm" "$T/rls" && cp "$TPL/deploy/k8s/base/db-roles.sh" "$T/cm/" && cp "$TPL/deploy/k8s/base/db-rls-check.sh" "$T/rls/" \
+  && chmod 555 "$T/cm/db-roles.sh" "$T/rls/db-rls-check.sh" && chmod 755 "$T" "$T/cm" "$T/rls"
 
 pw() { python3 -c 'import secrets; print(secrets.token_hex(24))'; }
 ROOT_PW="$(pw)"; MASTER_PW="$(pw)"; MIG_PW="$(pw)"; APP_PW="$(pw)"
@@ -97,28 +103,77 @@ echo "== 3 idempotent"
 s1="$(snapshot)"; out="$(job "$JOB")"; rc=$?; s2="$(snapshot)"; echo "$out" > "$T/job2.out"
 [ $rc -eq 0 ] && grep -q 'db-roles: no changes' <<<"$out" && [ "$s1" = "$s2" ] && ok "second run: 'no changes', catalog snapshot identical ($s1)" || bad "second run rc=$rc: $out ($s1 -> $s2)"
 
-echo "== 4 RLS with a NOBYPASSRLS migrator"
-out="$(q app_migrator "$MIG_PW" <<'SQL'
+echo "== 4 RLS with a NOBYPASSRLS migrator: the archetype's migrator policy (D-001)"
+# The SQL under test is the skill's own block (databases/postgres.md, Row-Level Security): the helper
+# app_grant_migrator() and the tenant table's ENABLE/FORCE/tenant policy/migrator policy, run as the migrator.
+python3 "$REPO/tests/lib/rls_pattern.py" > "$T/rls.sql" || { bad "could not extract the RLS block from databases/postgres.md"; }
+uuid_a=aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa; uuid_b=bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb
+out="$( { echo "CREATE TABLE certificates (id bigserial PRIMARY KEY, tenant_id uuid NOT NULL, serial text NOT NULL);"
+          cat "$T/rls.sql"
+          echo "SELECT app_grant_migrator('certificates');"   # a re-run changes nothing (idempotent)
+          echo "INSERT INTO certificates (tenant_id, serial) VALUES ('$uuid_a', 'a-1'), ('$uuid_b', 'b-1'), ('$uuid_b', 'b-2');"
+          echo "UPDATE certificates SET serial = upper(serial);"   # cross-tenant backfill, no tenant set
+          echo "SELECT count(*) || ' ' || string_agg(serial, ',' ORDER BY serial) FROM certificates;"; } | q app_migrator "$MIG_PW" | grep -v '^$')"
+[ "$out" = "3 A-1,B-1,B-2" ] && ok "migrator (owner, NOBYPASSRLS, FORCE RLS): creates the table with the archetype block, seeds and backfills both tenants with no tenant set: $out" || bad "migrator backfill: $out"
+pol="$(asu <<<"SELECT string_agg(polname || ' TO ' || array_to_string(polroles::regrole[], ',') || ' ' || pg_get_expr(polqual, polrelid), '; ' ORDER BY polname) FROM pg_policy WHERE polrelid = 'certificates'::regclass")"
+[ "$pol" = "certificates_migrator_all TO app_migrator true; tenant_isolation TO - (tenant_id = (current_setting('app.current_tenant_id'::text))::uuid)" ] \
+  && ok "policies: the migrator-only policy names app_migrator alone (from the table owner, no role in the SQL), the tenant policy is for everyone" || bad "policies: $pol"
+out="$(q app_runtime "$APP_PW" <<<"BEGIN; SELECT set_config('app.current_tenant_id', '$uuid_b', true) \g /dev/null
+SELECT string_agg(serial, ',' ORDER BY serial) FROM certificates; COMMIT;")"
+[ "$out" = "B-1,B-2" ] && ok "app_runtime as tenant b sees only b's rows (B-1,B-2), no WHERE clause" || bad "app_runtime tenant b: $out"
+out="$(q app_runtime "$APP_PW" <<<"SELECT count(*) FROM certificates")"; rc=$?
+[ $rc -ne 0 ] && grep -q 'unrecognized configuration parameter' <<<"$out" && ok "app_runtime with no tenant set is refused (fails closed)" || bad "app_runtime no tenant: rc=$rc $out"
+for stmt in "INSERT INTO certificates (tenant_id, serial) VALUES ('$uuid_b', 'planted')" "UPDATE certificates SET serial = 'x' WHERE tenant_id = '$uuid_b' RETURNING 1" \
+            "SELECT app_grant_migrator('certificates')" "DROP POLICY certificates_migrator_all ON certificates" "ALTER POLICY certificates_migrator_all ON certificates TO PUBLIC"; do
+  out="$(q app_runtime "$APP_PW" <<<"BEGIN; SELECT set_config('app.current_tenant_id', '$uuid_a', true) \g /dev/null
+$stmt; COMMIT;")"; rc=$?
+  { [ $rc -ne 0 ] || [ -z "$out" ]; } && ok "app_runtime as tenant a can't: $stmt ($(grep -oE 'violates row-level security|permission denied|must be owner' <<<"$out" | head -1 || echo 'no rows'))" || bad "app_runtime as a: $stmt -> $out"
+done
+[ "$(asu <<<"SELECT count(*) FROM certificates WHERE serial = 'planted' OR serial = 'x'")" = 0 ] && ok "no row of tenant b was written or changed by tenant a" || bad "tenant a wrote into b"
+out="$(q app_runtime "$APP_PW" <<'SQL'
 CREATE TABLE notes (id bigserial PRIMARY KEY, tenant text NOT NULL, body text NOT NULL);
-ALTER TABLE notes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE notes FORCE ROW LEVEL SECURITY;
-CREATE POLICY tenant_isolation ON notes USING (tenant = current_setting('app.tenant', true)) WITH CHECK (tenant = current_setting('app.tenant', true));
-CREATE POLICY migrator_all ON notes TO app_migrator USING (true) WITH CHECK (true);
-INSERT INTO notes (tenant, body) VALUES ('a', 'note a'), ('b', 'note b');
-SELECT count(*) FROM notes;
+SET ROLE app_migrator;
+ALTER TABLE certificates NO FORCE ROW LEVEL SECURITY;
+SET row_security = off; SELECT count(*) FROM certificates;
+SQL
+)"; rc=$?
+[ $rc -ne 0 ] && ok "app_runtime can't CREATE, SET ROLE the migrator, lift FORCE or turn row_security off" || bad "app_runtime: $out"
+
+# Without the migrator policy a NOBYPASSRLS migrator is blind: the reason D-001 exists (negative control)
+out="$(q app_migrator "$MIG_PW" <<SQL
+CREATE TABLE legacy (id bigserial PRIMARY KEY, tenant_id uuid NOT NULL, n int NOT NULL DEFAULT 0);
+INSERT INTO legacy (tenant_id) VALUES ('$uuid_a'), ('$uuid_b');
+ALTER TABLE legacy ENABLE ROW LEVEL SECURITY; ALTER TABLE legacy FORCE ROW LEVEL SECURITY;
+CREATE POLICY tenant_isolation ON legacy USING (tenant_id = current_setting('app.current_tenant_id', true)::uuid);
+WITH u AS (UPDATE legacy SET n = n + 1 RETURNING 1) SELECT count(*) FROM u;
 SQL
 )"
-[ "$out" = 2 ] && ok "migrator (owner, FORCE RLS, policy TO app_migrator) migrates and seeds both tenants: sees 2 rows" || bad "migrator: $out"
-out="$(q app_runtime "$APP_PW" <<<"SELECT count(*) FROM notes")"
-[ "$out" = 0 ] && ok "app_runtime without a tenant sees 0 rows" || bad "app_runtime no tenant: $out"
-out="$(q app_runtime "$APP_PW" <<<"SET app.tenant = 'a'; SELECT string_agg(body, ',') FROM notes")"
-[ "$out" = "note a" ] && ok "app_runtime as tenant a sees only 'note a'" || bad "app_runtime tenant a: $out"
-for stmt in "SET app.tenant = 'a'; INSERT INTO notes (tenant, body) VALUES ('b', 'x')" "SET ROLE app_migrator" \
-            "ALTER TABLE notes NO FORCE ROW LEVEL SECURITY" "ALTER TABLE notes DISABLE ROW LEVEL SECURITY" "DROP POLICY tenant_isolation ON notes" \
-            "SET row_security = off; SELECT count(*) FROM notes" "CREATE TABLE intruder (x int)"; do
-  out="$(q app_runtime "$APP_PW" <<<"$stmt")"; rc=$?
-  { [ $rc -ne 0 ] || grep -qiE 'error|denied|violates|must be owner' <<<"$out"; } && ok "app_runtime refused: $stmt" || bad "app_runtime allowed: $stmt -> $out"
+[ "$(tail -1 <<<"$out")" = 0 ] && ok "control: without the migrator policy the NOBYPASSRLS migrator's backfill updates 0 of 2 rows" || bad "control backfill: $out"
+
+echo "== 4b the db-rls-check Job (as app_runtime) on this database"
+RLSJOB="$(envf rls.env <<EOF
+PGUSER=app_runtime
+PGPASSWORD=$APP_PW
+EOF
+)"
+rls() { docker run --rm --user 70 --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges \
+          --env-file "$RLSJOB" -e PGHOST="$(ip)" -e PGDATABASE=app -e PGSSLMODE=prefer -v "$T/rls:/db-rls-check:ro" \
+          postgres:17-alpine bash /db-rls-check/db-rls-check.sh 2>&1; }
+out="$(rls)"; rc=$?
+[ $rc -ne 0 ] && grep -q 'FAIL legacy has FORCE ROW LEVEL SECURITY but no migrator policy' <<<"$out" && ! grep -q 'FAIL.*certificates' <<<"$out" \
+  && ok "db-rls-check fails the deploy on the table without a migrator policy (legacy), and only on it" || bad "db-rls-check on legacy: rc=$rc $out"
+out="$(q app_migrator "$MIG_PW" <<<"SELECT app_grant_migrator('legacy'); WITH u AS (UPDATE legacy SET n = n + 1 RETURNING 1) SELECT count(*) FROM u;" | grep -v '^$')"
+[ "$out" = 2 ] && ok "adopting D-001 on an existing table: app_grant_migrator('legacy') in a new migration, and the backfill reaches both rows" || bad "legacy after the helper: $out"
+out="$(rls)"; rc=$?
+[ $rc -eq 0 ] && grep -q 'db-rls-check: ok: 2 FORCE-RLS table(s)' <<<"$out" && ok "db-rls-check passes: $(tail -1 <<<"$out" | cut -c1-120)" || bad "db-rls-check clean: rc=$rc $out"
+for leak in "CREATE POLICY leak ON certificates TO PUBLIC USING (true)" "CREATE POLICY leak ON certificates TO app_runtime USING (true)" \
+            "CREATE POLICY leak ON certificates FOR SELECT USING (tenant_id IS NOT NULL)" "ALTER POLICY certificates_migrator_all ON certificates TO PUBLIC"; do
+  q app_migrator "$MIG_PW" <<<"$leak" >/dev/null
+  out="$(rls)"; rc=$?
+  [ $rc -ne 0 ] && grep -q 'db-rls-check: FAIL' <<<"$out" && ok "db-rls-check refuses: $leak ($(grep -m1 -o 'FAIL [^(:]*' <<<"$out" | cut -c1-90))" || bad "db-rls-check let through: $leak -> $out"
+  q app_migrator "$MIG_PW" <<<"DROP POLICY IF EXISTS leak ON certificates; SELECT app_grant_migrator('certificates');" >/dev/null
 done
+out="$(rls)"; [ $? -eq 0 ] && ok "db-rls-check passes again once the leaks are gone (app_grant_migrator re-points its policy to the owner)" || bad "db-rls-check after cleanup: $out"
 
 echo "== 5 secrets"
 logs="$(docker logs "$P" 2>&1)"; all="$logs $(cat "$T/job1.out" "$T/job2.out")"

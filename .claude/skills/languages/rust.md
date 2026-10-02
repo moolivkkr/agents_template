@@ -848,6 +848,32 @@ ALTER TABLE inventory FORCE ROW LEVEL SECURITY;
 CREATE POLICY tenant_isolation ON inventory
     USING (tenant_id = current_setting('app.current_tenant_id')::uuid)
     WITH CHECK (tenant_id = current_setting('app.current_tenant_id')::uuid);
+
+-- The migrator's policy (decision D-001): TO the table owner (the migrator) only, so migrations and seeds
+-- reach every tenant without BYPASSRLS (RDS/Aurora has none) and without lifting FORCE. This is the first
+-- migration, so it creates the helper; later migrations only call it (databases/postgres.md).
+CREATE OR REPLACE FUNCTION app_grant_migrator(tbl regclass) RETURNS void
+LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp
+AS $fn$
+DECLARE
+    owner_role name;
+    pol        name;
+BEGIN
+    SELECT pg_get_userbyid(c.relowner), left(c.relname, 49) || '_migrator_all'
+      INTO owner_role, pol
+      FROM pg_class c WHERE c.oid = tbl;
+    IF EXISTS (SELECT FROM pg_policy WHERE polrelid = tbl AND polname = pol) THEN
+        EXECUTE format('ALTER POLICY %I ON %s TO %I', pol, tbl, owner_role);
+    ELSE
+        EXECUTE format('CREATE POLICY %I ON %s AS PERMISSIVE FOR ALL TO %I USING (true) WITH CHECK (true)',
+                       pol, tbl, owner_role);
+    END IF;
+END
+$fn$;
+REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;
+SELECT app_grant_migrator('orders');
+SELECT app_grant_migrator('inventory');
 ```
 
 ---

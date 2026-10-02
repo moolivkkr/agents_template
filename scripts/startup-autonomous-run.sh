@@ -119,6 +119,15 @@ new_uuid() {
   else u="$(python3 -c 'import uuid;print(uuid.uuid4())' 2>/dev/null)"; fi
   printf '%s' "$u" | tr 'A-F' 'a-f'
 }
+# Exec shim that restores default INT/TERM/HUP for the child (see the launch below). perl ships with
+# macOS and most Linux images; python3 is the fallback; with neither, launch as-is (TERM still works).
+if command -v perl >/dev/null 2>&1; then
+  SIGRESET=(perl -e '$SIG{$_}="DEFAULT" for qw(INT TERM HUP); exec {$ARGV[0]} @ARGV or die "exec $ARGV[0]: $!\n"')
+elif command -v python3 >/dev/null 2>&1; then
+  SIGRESET=(python3 -c 'import os,signal,sys
+for s in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP): signal.signal(s,signal.SIG_DFL)
+os.execvp(sys.argv[1],sys.argv[1:])')
+else SIGRESET=(); fi
 
 # ── budgets: flag > env > run.json .budgets > supervisor.config.json > default ─────────────────────
 budget() {   # $1 key, $2 flag value, $3 env value, $4 default
@@ -291,7 +300,10 @@ while :; do
   log "attempt $attempt: $(printf '%q ' "${ARGV[@]}")"
 
   set -m   # own process group: a background child of a non-interactive shell otherwise ignores SIGINT
-  "${ARGV[@]}" > "$stream" 2> "$errf" < /dev/null &
+  # A supervisor started with SIGINT already ignored (`cmd &` from a script, some CI runners) passes that
+  # to the child, and bash can't undo an ignored-on-entry signal — so the clean SIGINT stop never lands.
+  # Reset INT/TERM/HUP to default in an exec shim (same PID) before the child starts.
+  ${SIGRESET[@]+"${SIGRESET[@]}"} "${ARGV[@]}" > "$stream" 2> "$errf" < /dev/null &
   CHILD=$!
   set +m
   while kill -0 "$CHILD" 2>/dev/null; do

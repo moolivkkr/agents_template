@@ -104,8 +104,8 @@ esac
 
 - **Steps the script runs and refuses:** preflight (`eks.env` filled, `EKS_KUBECONFIG` is this env's
   cluster and never the lab's, digests exist in ECR), then render, `deploylib.py db-access` and
-  `eks-policy`, apply, ExternalSecret sync, db-roles, migrate, seed, rollout, smoke over HTTPS,
-  digest parity.
+  `eks-policy`, apply, ExternalSecret sync, db-roles, migrate, seed, the app-role RLS check
+  (`db-rls-check`, decision D-001), rollout, smoke over HTTPS, digest parity.
 - **Evidence:** the same files as dev/qa (`agent_state/deploy/<env>/history.jsonl`,
   `last-deploy-status.json`), plus the ECR tag `<env>-healthy-<sha>`. In CI, `history.jsonl` is
   uploaded as a workflow artifact.

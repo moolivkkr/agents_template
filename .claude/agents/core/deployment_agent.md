@@ -255,12 +255,15 @@ Then adapt it to the services you discovered in Step 1. Don't edit `scripts/k8s/
 - **`jobs.yaml`**:
   - point `db-migrate` and `db-seed` at the service that owns the schema, with its real migrate and
     seed commands;
-  - keep the `wait-for-db` init containers, and keep the `db-roles` template unchanged;
+  - keep the `wait-for-db` init containers, and keep the `db-roles` and `db-rls-check` templates
+    unchanged (`db-rls-check` runs as the app role after seed and fails the deploy on a FORCE-RLS
+    table without its migrator policy or on a policy that reaches the app role, decision D-001);
   - the commands must retry the DB connection for about 60 s and treat auth errors as fatal;
   - seeds must be idempotent upserts.
 - **Database roles** (`lima-k8s-lab.md` rules 7 and 10): every service's Deployment reads only
   `DB_APP_USER`/`DB_APP_PASSWORD` (the RLS-bound app role), `db-migrate`/`db-seed` only
-  `DB_MIGRATOR_*`, and nothing but Postgres and `db-roles` gets `DB_SUPERUSER_*`. Never `envFrom` the
+  `DB_MIGRATOR_*`, `db-rls-check` only `DB_APP_*`, and nothing but Postgres and `db-roles` gets
+  `DB_SUPERUSER_*`. Never `envFrom` the
   `db-credentials` secret. `deploy.sh` refuses a render that breaks this (`deploylib.py db-access`). A
   data migration or backfill Job runs as the migrator, and its template is named `db-*`.
 - **Postgres**: keep `postgres.yaml` if the project uses Postgres; otherwise replace it with the
@@ -295,16 +298,24 @@ Adapt:
     order. A strategic-merge patch puts its entries first, and `$(VAR)` expands only variables
     defined earlier.
 
-  Keep the db-roles/migrate/seed patches as they are.
+  Keep the db-roles/migrate/seed/rls-check patches as they are.
 - **`infra/terraform/envs/<env>/`**:
   - `images` = the names in `images.txt`;
   - `terraform.tfvars.example` from the guidelines: region, host, the GitHub repo, and its numeric
     ids for the OIDC subject.
 
   Leave the module wiring alone.
-- **Migrations:** on RDS/Aurora the migrator has no BYPASSRLS (`eks.md`, database roles). For every
-  table with `FORCE ROW LEVEL SECURITY`, check that the migration that creates it also creates the
-  `TO <migrator>` permissive policy. If one is missing, report it to the backend owner as a finding.
+- **Migrations (decision D-001):** on RDS/Aurora the migrator has no BYPASSRLS (`eks.md`, database
+  roles).
+  - For every table with `FORCE ROW LEVEL SECURITY`, check that the migration that creates it also
+    calls `SELECT app_grant_migrator('<table>')`. The helper (`databases/postgres.md`, "The migrator
+    policy") creates `<table>_migrator_all`, a permissive policy TO the table owner only, which is the
+    migrator.
+  - If a call is missing, report it to the backend owner as a finding.
+  - If any `USING (true)` policy targets PUBLIC, the runtime role or any role but the owner, report it as
+    BLOCKING.
+  - The `db-rls-check` Job (as the app role, after migrate and seed) fails the deploy on either case.
+    Never edit it, its ConfigMap or its `DB_APP_*`-only credentials to get a deploy through.
 - **Verify offline, all of these:**
   - pin a dummy digest with `python3 scripts/k8s/deploylib.py set-images deploy/k8s/overlays/<env>/kustomization.yaml "api=<ECR_REGISTRY>/<app>/api@sha256:<64 hex>"`
     in a scratch copy (never commit a fake pin);

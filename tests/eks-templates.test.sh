@@ -121,6 +121,12 @@ check(by["NetworkPolicy/env-isolation"]["spec"]["ingress"][1]["from"][0]["ipBloc
 roles = spec(by["CronJob/db-roles"])["containers"][0]
 envs = {e["name"]: e.get("value") for e in roles["env"]}
 check(envs["PGHOST"] == "$(DB_HOST)" and cm("app-config")["data"]["PGSSLMODE"] == "require", "db-roles connects to RDS over TLS as the master user (DB_SUPERUSER_*)")
+rls = spec(by["CronJob/db-rls-check"])
+rlsenv = {e["name"]: e for e in rls["containers"][0]["env"]}
+check(rlsenv["PGHOST"].get("value") == "$(DB_HOST)" and rlsenv["PGDATABASE"].get("value") == "$(DB_NAME)"
+      and {rlsenv[k]["valueFrom"]["secretKeyRef"]["key"] for k in ("PGUSER", "PGPASSWORD")} == {"DB_APP_USER", "DB_APP_PASSWORD"}
+      and "$DB_HOST" in rls["initContainers"][0]["command"][2],
+      "db-rls-check proves RLS on RDS over TLS as the app role (DB_APP_*), waiting for DB_HOST (D-001)")
 check(not any(o["kind"] == "Service" and o["spec"].get("type") in ("LoadBalancer", "NodePort") for o in objs), "no LoadBalancer/NodePort Service")
 # Pod Security "restricted" (enforced on the namespace by eks-cluster.yaml): non-root, RuntimeDefault seccomp,
 # no privilege escalation, every capability dropped — for every container, init containers included

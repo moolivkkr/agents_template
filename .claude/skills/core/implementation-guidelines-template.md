@@ -1033,6 +1033,12 @@ Example: `Test{{Function}}_{{Scenario}}_{{ExpectedResult}}`
 {{RLS_POLICY_EXAMPLE}}
 ```
 
+- **Migrator policy (decision D-001):** every FORCE-RLS table also gets `SELECT app_grant_migrator('<table>');`
+  in the migration that creates it. The helper is created once in the first migration
+  (`databases/postgres.md`, "The migrator policy"). The policy is permissive and TO the table owner (the
+  migrator) only. On RDS/Aurora the migrator has no BYPASSRLS, and this policy is what lets migrations and
+  seeds reach every tenant. No unconditional policy may name PUBLIC or the application's role.
+
 ### 15.4 Tenant-Scoped Operations
 
 - **Rule:** Every service method that accesses data MUST accept tenant_id

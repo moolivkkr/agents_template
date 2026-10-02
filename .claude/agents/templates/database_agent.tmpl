@@ -130,7 +130,7 @@ Produce (or update) a document with these sections:
 4. **Access Patterns** — table of: pattern name | frequency | query shape | index used.
 5. **Connection Pool Budget** — the calculation below, with the numbers filled in.
 6. **Naming Conventions** — table names (snake_case for relational), field names, constraint names.
-7. **Security** — roles and grants (the application role gets DML only; the migration role owns the schema), tenant isolation (row-level security for pooled tenancy where {{DB_TECH}} supports it), and sensitive-field classification (what is encrypted, masked or never logged).
+7. **Security** — roles and grants (the application role gets DML only; the migration role owns the schema), tenant isolation (row-level security for pooled tenancy where {{DB_TECH}} supports it), and sensitive-field classification (what is encrypted, masked or never logged). On PostgreSQL with RLS, every FORCE-RLS table also gets the migrator-only policy (decision D-001, `databases/postgres.md` "The migrator policy"). The first migration creates `app_grant_migrator(regclass)`; each tenant table's migration calls it. That policy, not BYPASSRLS, is what lets migrations and seeds reach every tenant on RDS/Aurora. No unconditional policy targets PUBLIC or the application role.
 8. **Migration Plan** — the ordered, expand/contract-staged list of changes `migration_agent` implements.
 
 ## Schema evolution (expand/contract, N-1 compatible)

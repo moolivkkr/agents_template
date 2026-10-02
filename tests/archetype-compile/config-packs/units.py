@@ -278,7 +278,7 @@ BLOCKS = {
     # ── core/shared-backend-patterns.md
     "core/shared-backend-patterns.md#sql1": dict(anchor='-- EVERY query MUST filter by tenant_id', check="mysql", fixture="mysql_orders_tenant", params=True,
                                                  subst=[("re", r"\?$", "?;"), ("re", r"status\)$", "status);")]),  # a list of statements
-    "core/shared-backend-patterns.md#sql2": dict(anchor='-- RLS policy as a safety net (PostgreSQL example)', check="pg", fixture="orders_tenant"),
+    "core/shared-backend-patterns.md#sql2": dict(anchor='-- RLS policy as a safety net (PostgreSQL example)', check="pg", fixture="orders_tenant_d001"),
     "core/shared-backend-patterns.md#sql3": dict(anchor='-- Mark as deleted, never physically remove', check="pg", fixture="orders_full", params=True,
                                                  subst=[("re", r"\$2$", "$2;"), ("re", r"IS NULL$", "IS NULL;")]),  # a list of statements
     "core/shared-backend-patterns.md#sql4": dict(anchor='-- Include version in update WHERE clause', check="pg", fixture="orders_full", params=True),
@@ -539,7 +539,8 @@ BLOCKS = {
                                        wrap="CREATE TABLE audit_fields_example (\n  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),\n{}\n);\n"),
     "databases/postgres.md#sql2": dict(anchor='-- B-tree (default): equality and range queries', check="pg", fixture="app"),
     "databases/postgres.md#sql3": dict(anchor='-- Always parameterized — never string concatenation', check="pg", fixture="app", params=True),
-    "databases/postgres.md#sql4": dict(anchor='ALTER TABLE certificates ENABLE ROW LEVEL SECURITY;', check="pg", fixture="app"),
+    "databases/postgres.md#sql4": dict(anchor="-- ONCE, in the project's first migration (before any tenant table): the migrator-policy helper (D-001).",
+                                       check="pg", fixture="app"),
     "databases/postgres.md#sql5": dict(anchor='-- Use appropriate isolation level', check="pg", rollback_between=True),
     "databases/postgres.md#sql6": dict(anchor="-- Cursor-based (keyset) — the only pagination: the cursor encodes the last row's (created_at, id)",
                                        check="pg", fixture="app", params=True),
@@ -628,7 +629,7 @@ BLOCKS = {
     "infrastructure/localstack-aws-local.md#sh10": dict(anchor='# /deploy --target=ha-local', check="sh",
                                                         sc_exclude={"SC1113": "not a shebang: the first line is a comment that starts with '# /'"}),
     # ── infrastructure/saas-tenancy-models.md
-    "infrastructure/saas-tenancy-models.md#sql1": dict(anchor='-- Enable RLS on every tenant-scoped table', check="pg", fixture="resources"),
+    "infrastructure/saas-tenancy-models.md#sql1": dict(anchor='-- Enable RLS on every tenant-scoped table', check="pg", fixture="resources_d001"),
     "infrastructure/saas-tenancy-models.md#sql2": dict(anchor='-- WRONG: global uniqueness', check="pg", fixture="unique_demo",
                                                        subst=[("re", r"^(UNIQUE\(.*\))$", r"ALTER TABLE unique_demo ADD \1;")]),
     "infrastructure/saas-tenancy-models.md#yaml1": dict(anchor='# Kubernetes namespace per premium tenant', check="yaml", k8s=True,
@@ -838,6 +839,18 @@ NGQL_CLAIMS = [
 ]
 
 # ─────────────────────────────────────────────────────────────────────────── SQL fixtures ──
+def _d001_helper() -> str:
+    """The app_grant_migrator() definition exactly as databases/postgres.md documents it (decision D-001):
+    blocks that only CALL the helper (it is created once, in a project's first migration) run after it."""
+    import pathlib
+    import re as _re
+    doc = (pathlib.Path(__file__).resolve().parents[3] / ".claude/skills/databases/postgres.md").read_text(encoding="utf-8")
+    m = _re.search(r"(CREATE OR REPLACE FUNCTION app_grant_migrator\(tbl regclass\).*?REVOKE ALL ON FUNCTION app_grant_migrator\(regclass\) FROM PUBLIC;)", doc, _re.S)
+    if not m:
+        raise SystemExit("units.py: databases/postgres.md no longer defines app_grant_migrator() (D-001)")
+    return m.group(1)
+
+
 SQL_FIXTURES = {
     # PostgreSQL: the tables the database packs' fragments assume
     "app": """
@@ -865,6 +878,8 @@ CREATE TABLE certs (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uui
                       " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
                       " GRANT CREATE ON SCHEMA public TO app_owner;",
     "resources": "CREATE TABLE resources (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, name text);",
+    "resources_d001": "CREATE TABLE resources (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, name text);\n" + _d001_helper(),
+    "orders_tenant_d001": "CREATE TABLE orders (id uuid PRIMARY KEY DEFAULT gen_random_uuid(), tenant_id uuid NOT NULL, total numeric);\n" + _d001_helper(),
     "unique_demo": "CREATE TABLE unique_demo (tenant_id uuid NOT NULL, serial_number text, name text, slug text);",
     "tenants": "CREATE TABLE tenants (id uuid PRIMARY KEY DEFAULT gen_random_uuid());",
     # MySQL 8.4
@@ -996,32 +1011,82 @@ CLAIMS = [
          setup=_TENANCY_RLS + "BEGIN; SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, true);",
          query="INSERT INTO resources (tenant_id) VALUES (md5('b')::uuid) RETURNING id", error='new row violates row-level security policy'),
 ]
-# rust.md's migration run as app_owner, a NOSUPERUSER NOBYPASSRLS role that owns the tables, so FORCE applies to
-# it. Rows go in per tenant with the tenant set (WITH CHECK); {BLOCK} is the block's own SQL.
+# postgres.md's RLS block (decision D-001) run as d001_owner, a NOSUPERUSER NOBYPASSRLS role that owns the table, the
+# migrator on RDS/Aurora; d001_runtime is the services' role (owns nothing). {BLOCK} is the block's own SQL.
+_D001_SETUP = (
+    "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'd001_owner') THEN"
+    " CREATE ROLE d001_owner NOSUPERUSER NOBYPASSRLS; END IF;"
+    " IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'd001_runtime') THEN"
+    " CREATE ROLE d001_runtime NOSUPERUSER NOBYPASSRLS; END IF; END $$;"   # roles are cluster-wide: never DROP one
+    "GRANT CREATE ON SCHEMA public TO d001_owner; SET ROLE d001_owner;"
+    "CREATE TABLE certificates (id serial PRIMARY KEY, tenant_id uuid NOT NULL, status text NOT NULL DEFAULT 'new');"
+    "{BLOCK}"
+    "INSERT INTO certificates (tenant_id) SELECT CASE WHEN g <= 2 THEN md5('a')::uuid ELSE md5('b')::uuid END FROM generate_series(1, 5) g;"
+    "GRANT SELECT, INSERT, UPDATE ON certificates TO d001_runtime; GRANT USAGE ON SEQUENCE certificates_id_seq TO d001_runtime;")
+CLAIMS += [
+    dict(name="D-001: a NOBYPASSRLS owner seeds and backfills every tenant through its migrator policy", block="databases/postgres.md#sql4",
+         at="SELECT app_grant_migrator('certificates');", block_sql="databases/postgres.md#sql4", setup=_D001_SETUP,
+         query="WITH u AS (UPDATE certificates SET status = 'checked' RETURNING tenant_id) SELECT count(*) || ' rows, ' || count(DISTINCT tenant_id) || ' tenants' FROM u",
+         expect=[r"^5 rows, 2 tenants$"]),
+    dict(name="D-001: the migrator policy targets the table owner only (read from the catalog)", block="databases/postgres.md#sql4",
+         at="It gives a table a PERMISSIVE policy TO the table's owner only", block_sql="databases/postgres.md#sql4",
+         setup=_D001_SETUP + "SELECT app_grant_migrator('certificates');",   # a re-run is idempotent
+         query="SELECT string_agg(polname || ' ' || CASE WHEN polpermissive THEN 'permissive' ELSE 'restrictive' END || ' ' || polcmd::text || ' TO '"
+               " || array_to_string(polroles::regrole[], ',') || ' ' || pg_get_expr(polqual, polrelid) || '/' || pg_get_expr(polwithcheck, polrelid), '; ')"
+               " FROM pg_policy WHERE polrelid = 'certificates'::regclass AND polname LIKE '%migrator%'",
+         expect=[r"^certificates_migrator_all permissive \* TO d001_owner true/true$"]),
+    dict(name="D-001: the runtime role still sees only its tenant", block="databases/postgres.md#sql4",
+         at="ALTER TABLE certificates FORCE ROW LEVEL SECURITY;", block_sql="databases/postgres.md#sql4",
+         setup=_D001_SETUP + "RESET ROLE; SET ROLE d001_runtime; SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);",
+         query="SELECT count(*) || ' of 5' FROM certificates", expect=[r"^2 of 5$"]),
+    dict(name="D-001: the runtime role can't write another tenant's row", block="databases/postgres.md#sql4",
+         at="CREATE POLICY tenant_isolation ON certificates", block_sql="databases/postgres.md#sql4",
+         setup=_D001_SETUP + "RESET ROLE; SET ROLE d001_runtime; SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);",
+         query="INSERT INTO certificates (tenant_id) VALUES (md5('b')::uuid) RETURNING id",
+         error=r'new row violates row-level security policy for table "certificates"'),
+    dict(name="D-001: the runtime role can't call the helper", block="databases/postgres.md#sql4",
+         at="REVOKE ALL ON FUNCTION app_grant_migrator(regclass) FROM PUBLIC;", block_sql="databases/postgres.md#sql4",
+         setup=_D001_SETUP + "RESET ROLE; SET ROLE d001_runtime;",
+         query="SELECT app_grant_migrator('certificates')", error=r"permission denied for function app_grant_migrator"),
+    dict(name="D-001 control: without the migrator policy the NOBYPASSRLS owner's backfill fails", block="databases/postgres.md#sql4",
+         at="without FORCE the table owner bypasses the policy", block_sql="databases/postgres.md#sql4",
+         setup=_D001_SETUP + "DROP POLICY certificates_migrator_all ON certificates;",   # FORCE: the tenant policy now binds the owner
+         query="WITH u AS (UPDATE certificates SET status = 'checked' RETURNING 1) SELECT count(*) FROM u",
+         error=r'unrecognized configuration parameter "app\.current_tenant_id"'),
+]
+# rust.md's migration run as app_owner, a NOSUPERUSER NOBYPASSRLS role that owns the tables (the migrator on
+# RDS/Aurora), so FORCE applies to it and only the migration's own migrator policy (D-001) lets it seed both
+# tenants with no tenant set. rust_rt is the service's role (owns nothing); the isolation claims run as it.
+# {BLOCK} is the block's own SQL.
 _RUST_SETUP = (
     "DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'app_owner') THEN"
-    " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
+    " CREATE ROLE app_owner NOSUPERUSER NOBYPASSRLS; END IF;"
+    " IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'rust_rt') THEN"
+    " CREATE ROLE rust_rt NOSUPERUSER NOBYPASSRLS; END IF; END $$;"
     "GRANT CREATE ON SCHEMA public TO app_owner; SET ROLE app_owner;"
     "{BLOCK}"
-    "SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);"
     "INSERT INTO orders (tenant_id, total_cents) SELECT md5('a')::uuid, 100 FROM generate_series(1, 3);"
-    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('a')::uuid, 'sku-1', 1);"
-    "SELECT set_config('app.current_tenant_id', md5('b')::uuid::text, false);"
     "INSERT INTO orders (tenant_id, total_cents) SELECT md5('b')::uuid, 100 FROM generate_series(1, 5);"
-    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('b')::uuid, 'sku-1', 2), (md5('b')::uuid, 'sku-2', 3);"
+    "INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('a')::uuid, 'sku-1', 1),"
+    " (md5('b')::uuid, 'sku-1', 2), (md5('b')::uuid, 'sku-2', 3);"
+    "GRANT SELECT, INSERT, UPDATE, DELETE ON orders, inventory TO rust_rt;"
+    "RESET ROLE; SET ROLE rust_rt;"
     "SELECT set_config('app.current_tenant_id', md5('a')::uuid::text, false);")
 CLAIMS += [
-    dict(name="rust migration: tenant A sees only its orders (owner role, FORCE RLS)", block="languages/rust.md#sql1",
+    dict(name="rust migration: the owner (NOBYPASSRLS) seeds both tenants through its migrator policy", block="languages/rust.md#sql1",
+         at="SELECT app_grant_migrator('orders');", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP + "RESET ROLE; SET ROLE app_owner;",
+         query="SELECT count(*) || ' orders, ' || (SELECT count(*) FROM inventory) || ' inventory rows' FROM orders", expect=[r"^8 orders, 3 inventory rows$"]),
+    dict(name="rust migration: tenant A sees only its orders (service role, FORCE RLS)", block="languages/rust.md#sql1",
          at="ALTER TABLE orders FORCE ROW LEVEL SECURITY;", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
          query="SELECT count(*) FROM orders", expect=[r"^3$"]),
-    dict(name="rust migration: tenant A sees only its inventory (owner role, FORCE RLS)", block="languages/rust.md#sql1",
+    dict(name="rust migration: tenant A sees only its inventory (service role, FORCE RLS)", block="languages/rust.md#sql1",
          at="ALTER TABLE inventory FORCE ROW LEVEL SECURITY;", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
          query="SELECT string_agg(sku || '=' || quantity, ',') FROM inventory", expect=[r"^sku-1=1$"]),
     dict(name="rust migration: WITH CHECK refuses another tenant's inventory row", block="languages/rust.md#sql1",
          at="CREATE POLICY tenant_isolation ON inventory", block_sql="languages/rust.md#sql1", setup=_RUST_SETUP,
          query="INSERT INTO inventory (tenant_id, sku, quantity) VALUES (md5('b')::uuid, 'sku-9', 1) RETURNING sku",
          error=r'new row violates row-level security policy for table "inventory"'),
-    dict(name="rust migration: a reset tenant setting fails closed (owner role)", block="languages/rust.md#sql1",
+    dict(name="rust migration: a reset tenant setting fails closed (service role)", block="languages/rust.md#sql1",
          at="app.current_tenant_id with set_config(..., true) inside each transaction", block_sql="languages/rust.md#sql1",
          setup=_RUST_SETUP + "RESET app.current_tenant_id;", query="SELECT count(*) FROM orders",
          error=r'invalid input syntax for type uuid: ""|unrecognized configuration parameter'),

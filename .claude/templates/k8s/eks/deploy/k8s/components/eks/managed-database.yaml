@@ -2,7 +2,8 @@
 # DB_HOST, DB_NAME, DB_SSLMODE and PGSSLMODE from app-config (overlay: eks.env -> replacements), and
 # connects with TLS (RDS PostgreSQL 15+ sets rds.force_ssl=1 by default; the parameter group pins it).
 # Credentials are unchanged: the same db-credentials secret and keys (DB_SUPERUSER_* = the RDS master
-# user, read only by db-roles; DB_MIGRATOR_* by db-migrate/db-seed; DB_APP_* by the services), so
+# user, read only by db-roles; DB_MIGRATOR_* by db-migrate/db-seed; DB_APP_* by the services and
+# db-rls-check), so
 # deploylib.py db-access enforces the same who-reads-what policy here as on the lab.
 $patch: delete
 apiVersion: apps/v1
@@ -86,3 +87,22 @@ spec:
             - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_USER}}}
             - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_PASSWORD}}}
             - {name: DATABASE_URL, value: "postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):5432/$(DB_NAME)?sslmode=$(DB_SSLMODE)"}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: db-rls-check}
+spec:
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          initContainers:
+          - name: wait-for-db
+            envFrom: [{configMapRef: {name: app-config}}]
+            command: [sh, -c, 'for i in $(seq 1 120); do pg_isready -h "$DB_HOST" -p 5432 -q && exit 0; sleep 1; done; echo "database $DB_HOST unreachable after 120s" >&2; exit 1']
+          containers:
+          - name: rls
+            envFrom: [{configMapRef: {name: app-config}}]   # PGSSLMODE
+            env:
+            - {name: PGHOST, value: "$(DB_HOST)"}
+            - {name: PGDATABASE, value: "$(DB_NAME)"}

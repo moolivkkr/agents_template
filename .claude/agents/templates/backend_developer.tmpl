@@ -143,6 +143,7 @@ Brownfield is the normal case from phase 2 on. Before writing anything:
 2. Parameterized queries only; sort keys map to allowlisted columns (secure-coding §2).
 3. Every query that reads or writes tenant data is scoped by the caller's tenant — and by owner where the spec gives objects an owner (if multi-tenant).
 4. Every query carries a timeout (context deadline or statement timeout).
+5. With PostgreSQL row-level security, the service connects as the application role: it owns nothing and has no BYPASSRLS. Never connect as the migrator, which reaches every tenant through its migrator policy (decision D-001). If you write a migration yourself, follow `migration_agent`'s rule: every FORCE-RLS table calls `app_grant_migrator('<table>')`, and no `USING (true)` policy targets PUBLIC or the application role.
 
 ### Phase 3: Service Layer
 1. Implement service interfaces following the service archetype; wire dependencies via constructor injection.

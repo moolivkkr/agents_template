@@ -137,6 +137,27 @@ record **inside the same tenant** (board review 2026-09-30, SEC-12; `secure-codi
 Resources with no owner in the spec (tenant-shared data) are marked `n/a — tenant-shared (spec: …)`.
 They are not skipped silently.
 
+### Step 7 — Database-layer isolation: row-level security and the migrator policy (PostgreSQL)
+
+Skip this step with `n/a — no row-level security` when the project doesn't use RLS. RLS is the safety net
+under Steps 2-5: a missed `WHERE tenant_id` still returns one tenant's rows only if the role the service
+connects as is bound by RLS and no policy hands it every row. Check, citing `file:line`:
+
+1. **Connection role.** The service's runtime connection (DATABASE_URL / `DB_APP_*`) uses the
+   application role, which owns nothing and has no BYPASSRLS. It never uses the migrator, the superuser
+   or the table owner. On the k8s templates, `deploylib.py db-access` enforces this per render; check
+   any other config (compose, `.env`, helm values).
+2. **FORCE + tenant policy** on every tenant-scoped table in the migrations: `ENABLE` and
+   `FORCE ROW LEVEL SECURITY`, and a permissive tenant policy on `current_setting('app.current_tenant_id')`.
+3. **The migrator policy reaches only the migrator (decision D-001).** Every unconditional policy
+   (`USING (true)` / `WITH CHECK (true)`) must target only the table owner, as `app_grant_migrator()` makes
+   it. An unconditional policy `TO PUBLIC`, with no `TO`, `TO` the application role, or `TO` a role the
+   application role is a member of is **RLS-1, CRITICAL**: every request reads every tenant.
+4. **Runtime proof.** Where a k8s deploy exists, the last deploy's `rls` step passed: the `db-rls-check`
+   Job ran as the application role, which read no row with no tenant set and has no unconditional
+   policy. Read `agent_state/deploy/<env>/history.jsonl` (`steps.rls`). If none exists, say so; don't
+   assume it passed.
+
 ---
 
 ## Failure Modes Reference
@@ -151,6 +172,8 @@ They are not skipped silently.
 | IDOR-6 | 403 instead of 404 on mismatch | Service/Handler | `return ErrForbidden` when tenantID mismatches |
 | IDOR-7 | Owner not enforced (same tenant) | Service/Repository | spec says "only the author edits" but `WHERE id = $1 AND tenant_id = $2` has no owner predicate or permission check |
 | IDOR-8 | Tenant from the client | Handler/Middleware | tenantID read from a header, query or body (`X-Tenant-ID`) instead of the verified credential |
+| RLS-1 | Unconditional policy reaches the app role | Migration | `CREATE POLICY seed_all ON orders USING (true)` (no `TO`: PUBLIC), or `... TO app_runtime USING (true)`; the migrator-only policy must be `TO` the table owner alone (D-001, `app_grant_migrator`) |
+| RLS-2 | Service connects as a role RLS doesn't bind | Config | the API's DATABASE_URL uses the migrator, the table owner or a BYPASSRLS/superuser role |
 
 All failure modes are CRITICAL — immediate phase gate block.
 
@@ -174,6 +197,10 @@ PASS | N CRITICAL findings
 ## CRITICAL Findings (phase gate BLOCKED until resolved)
 | Route | Failure Mode | File | Line | Description | Fix |
 |-------|-------------|------|------|-------------|-----|
+
+## Database-Layer Isolation (Step 7) — or "n/a — no row-level security"
+| Table | FORCE RLS | Tenant policy | Unconditional policies → roles | Service connects as | Result |
+|-------|-----------|---------------|--------------------------------|---------------------|--------|
 
 ## In-Memory Store Audit
 | Store | Location | tenantID stored | Ownership check on read | Concurrency safe | Result |
@@ -236,6 +263,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] Report written to `agent_state/phases/{{PHASE}}/reports/tenant_isolation.md` (exact frontmatter path) using the template above.
 - [ ] Every ID-bearing route and every multi-tenant store was traced — the audit tables are populated, not summarized. Routes with no ID parameter are listed under "Routes Cleared".
 - [ ] Every resource the spec gives an owner has its Step 6 owner trace (list/search/export included); tenant-shared resources are marked n/a with the spec reference.
+- [ ] Step 7 is filled in for a project with row-level security, or marked `n/a — no row-level security`. Every unconditional policy and the roles it targets are listed: RLS-1 if any role other than the table owner is targeted.
 - [ ] The report's LAST line is `BLOCKING:N WARNING:N INFO:N`.
 - [ ] Every finding cites `file:line`; CRITICAL findings escalate immediately.
 - [ ] A `PASS` with zero routes traced is a FAIL to investigate, never a silent PASS. If no code produced this phase, say so explicitly with the reason.

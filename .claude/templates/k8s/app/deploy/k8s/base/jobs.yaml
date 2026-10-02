@@ -4,8 +4,12 @@
 #               deploy.sh before every migrate; prints "no changes" on a converged database
 #   db-migrate  forward-only schema migrations, as the MIGRATOR — run by deploy.sh before the rollout
 #   db-seed     static/reference data, idempotent, as the MIGRATOR — run by deploy.sh after migrate, and by seed.sh
+#   db-rls-check  as the APP role, after seed and before the rollout: row-level security still binds the
+#               runtime role, every FORCE-RLS table has the migrator-only policy and no unconditional policy
+#               reaches the runtime role (db-rls-check.sh, decision D-001); a failure fails the deploy
 # Credentials: each container reads only its own role's keys from db-credentials (deploylib.py db-access
-# refuses anything else): the superuser only here in db-roles, the migrator only in the db-* templates.
+# refuses anything else): the superuser only here in db-roles, the migrator only in db-migrate/db-seed,
+# and db-rls-check the app role only (its proof is about the role the services run as).
 # wait-for-db: a NEW pod's first connections are refused for a few seconds while k3s's network-policy
 # controller programs its IP (measured: 3/3 refused at t+0, 3/3 ok at t+5s under the env-isolation
 # policy). Job retries don't help (each retry is a new pod, new IP); waiting inside the pod does.
@@ -76,7 +80,9 @@ spec:
           - name: migrate
             image: api
             args: [migrate]
-            env:   # the MIGRATOR: owns what it creates, BYPASSRLS (data migrations never lift FORCE RLS)
+            env:   # the MIGRATOR: owns what it creates; BYPASSRLS on the lab, NOBYPASSRLS on RDS/Aurora, where
+                   # each FORCE-RLS table's migrator-only policy lets it reach every tenant (D-001). Data
+                   # migrations never lift FORCE RLS on either path
             - {name: DB_USER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_USER}}}
             - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_PASSWORD}}}
             - {name: DATABASE_URL, value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/app?sslmode=disable"}
@@ -112,3 +118,41 @@ spec:
             - {name: DB_PASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_MIGRATOR_PASSWORD}}}
             - {name: DATABASE_URL, value: "postgres://$(DB_USER):$(DB_PASSWORD)@postgres:5432/app?sslmode=disable"}
             securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: db-rls-check}
+spec:
+  suspend: true
+  schedule: "0 0 1 1 *"
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 3600   # results live in agent_state/deploy/*/history.jsonl
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext: {runAsNonRoot: true, seccompProfile: {type: RuntimeDefault}}
+          initContainers:
+          - name: wait-for-db
+            image: postgres:17-alpine
+            command: [sh, -c, 'for i in $(seq 1 120); do pg_isready -h postgres -p 5432 -q && exit 0; sleep 1; done; echo "postgres unreachable after 120s" >&2; exit 1']
+            securityContext: {runAsUser: 70, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+          containers:
+          - name: rls
+            image: postgres:17-alpine
+            command: [bash, /db-rls-check/db-rls-check.sh]
+            env:   # the APP role only: the proof is about the role every service connects as
+            - {name: PGHOST, value: postgres}
+            - {name: PGDATABASE, value: app}
+            - {name: PGUSER, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_APP_USER}}}
+            - {name: PGPASSWORD, valueFrom: {secretKeyRef: {name: db-credentials, key: DB_APP_PASSWORD}}}
+            securityContext: {runAsUser: 70, allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            volumeMounts:
+            - {name: db-rls-check, mountPath: /db-rls-check, readOnly: true}
+            - {name: tmp, mountPath: /tmp}
+          volumes:
+          - {name: db-rls-check, configMap: {name: db-rls-check, defaultMode: 0555}}
+          - {name: tmp, emptyDir: {}}
