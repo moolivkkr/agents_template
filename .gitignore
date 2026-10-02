@@ -9,3 +9,6 @@
 # Python bytecode from running hooks and test libs
 __pycache__/
 *.pyc
+
+# Phase ledger (hook-written observation log; docs/PHASE_LEDGER.md)
+agent_state/ledger/
