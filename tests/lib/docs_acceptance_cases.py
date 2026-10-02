@@ -344,6 +344,38 @@ write("docs/design/phases/2/PHASE_PLAN.md", PLAN2 + "- Retires FR-010 (replaced 
 rc, out, F, M = amap("--phase", "2", "--diff-base", BASE2)
 check("SC-14", [], [x["id"] for x in M["removed_outside_phase"]], "removing a phase-1 row + test is allowed when phase 2's plan names its FR")
 
+# ─── shared table parser (tc-inventory.py table_rows): a non-ID row mid-table is never a new header ──────
+import importlib.util
+sys.dont_write_bytecode = True
+_s = importlib.util.spec_from_file_location("am_mod", AM)
+amm = importlib.util.module_from_spec(_s)
+_s.loader.exec_module(amm)
+TP = tempfile.mkdtemp(prefix="am-tables.")
+open(os.path.join(TP, "BRD.md"), "w").write("""# BRD
+## Functional Requirements
+| ID | Requirement | Priority |
+|----|-------------|----------|
+| FR-001 | first | Must |
+| **Ingestion** | | |
+| FR-002 | after a section-divider row | Could |
+| FR-003 | escaped \\| pipe in the text | Should |
+""")
+B = amm.parse_brd(os.path.join(TP, "BRD.md"))
+check("TB-01", ("must", "could", "should"), (B["FR-001"]["moscow"], B["FR-002"]["moscow"], B["FR-003"]["moscow"]),
+      "BRD table: a section-divider row is not a header; Priority read by name for every FR row")
+check("TB-02", True, "escaped | pipe in the text" in B["FR-003"]["text"], "BRD table: `\\|` is a literal pipe, not a cell break")
+os.makedirs(os.path.join(TP, "docs/design/phases/1/specs"))
+open(os.path.join(TP, "docs/design/phases/1/specs/a.md"), "w").write("""# A (FR-001)
+| TC ID | Description | Priority | Tier |
+|---|---|---|---|
+| TC-X-001..003 | range row mid-table | HIGH | unit |
+| TC-X-010 | FR-001 SHALL 1 — persona sees it | LOW | acceptance |
+""")
+R = {r["id"]: r for r in amm.acceptance_rows(TP)}
+check("TB-03", (["TC-X-010"], "LOW"), (sorted(R), R.get("TC-X-010", {}).get("priority")),
+      "acceptance rows: a tier=acceptance row after a range row is still an acceptance row with its own priority")
+shutil.rmtree(TP, ignore_errors=True)
+
 shutil.rmtree(W, ignore_errors=True)
 print("─" * 44)
 print(f"docs-and-acceptance-map: {total - fails} passed, {fails} failed")

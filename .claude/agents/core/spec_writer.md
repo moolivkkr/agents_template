@@ -195,7 +195,9 @@ P·10000 + k·100 + i** (see *Allocating IDs* below).
 Exactly these five columns, in this order. **Priority** is HIGH, MEDIUM or LOW; anything else is read
 as MEDIUM. **Tier** is one of `unit`, `integration`, `component`, `e2e`, `acceptance`,
 `performance`, `mobile`, `device`, `system`, `manual` (owners: `test-case-traceability.md` §Tiers).
-One ID per row; never a range.
+One ID per row; never a range. The tools locate Priority and Tier by header NAME, from the header row
+directly above the `|---|` line, so keep that line; without it the rows read as MEDIUM with no tier.
+Write a pipe inside a cell as `\|`, inside backticks too (`provider\|model`), or it splits the cell.
 
 **Allocating IDs (project-unique, collision-free while specs are written in parallel):**
 1. `P` = this phase's number. `k` = this component's position (01–99) in PHASE_PLAN.md's component

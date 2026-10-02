@@ -351,6 +351,105 @@ _, tb = tci(B, 1, "--results", os.path.join(P1, "reports", "test_results.json"),
 check("C01", (0, "PASS", "PASS"), (rc, gjb["verdict"], tb["verdict"]), "clean phase: graph gate and tc-inventory both PASS (results mode)")
 check("C02", (2, 2), (gjb["passed"], gjb["total"]), "2/2 HIGH+MEDIUM covered; LOW not counted")
 
+# ═══ fixture E: TC table parsing — Priority/Tier by header NAME, header = a row followed by |---| ═══
+# The bug: any non-ID row (a range row, a malformed-ID row, a section divider) used to become "the header", so
+# the rows after it lost their Priority/Tier and defaulted to MEDIUM; `\|` inside a cell split it in two and
+# shifted every later column (ai-security read a tier as "region` key"). Both tools share ONE parser now.
+E = new_repo("e")
+write(E, "docs/design/phases/1/specs/parser.md", """# Parser (FR-001)
+## Test Case Inventory
+| TC ID | Description | Priority | Tier |
+|---|---|---|---|
+| TC-PRS-001 | before the range row | LOW | unit |
+| TC-PRS-010 – TC-PRS-012 | a range row mid-table | HIGH | integration |
+| TC-PRS-002 | after the range row keeps its columns | LOW | component |
+| TC-BAD-REG-001 | malformed ID mid-table | HIGH | e2e |
+| TC-PRS-003 | after the malformed row keeps its columns | LOW | e2e |
+| **Validation** | | | |
+| TC-PRS-004 | after a section-divider row | LOW | unit |
+
+## Reordered columns
+| Tier | Priority | Notes | TC ID | Description |
+|------|----------|-------|-------|-------------|
+| e2e | LOW | n/a | TC-PRS-020 | reordered columns |
+| unit | HIGH | | TC-PRS-021 | reordered, high |
+
+## Extra columns
+| # | TC ID | Category | FR | Description | Owner | Test Tier | Priority (MoSCoW-mapped) |
+|---|-------|----------|----|-------------|-------|-----------|--------------------------|
+| 1 | TC-PRS-030 | API | FR-001 | extra columns | team-a | integration | LOW |
+
+## Escaped pipes and code spans
+| TC ID | Description | Priority | Tier |
+|:--|:--|:-:|--:|
+| TC-PRS-040 | upsert with `provider\\|model\\|region` key | LOW | integration |
+| TC-PRS-041 | a \\| b, a literal pipe | HIGH | unit |
+| TC-PRS-042 | `code \\| span` and **bold** | `LOW` | `e2e` |
+
+## Pipe lines with no separator line are not a table
+| TC ID | Description | Priority | Tier |
+| TC-PRS-050 | no separator line under the first row | LOW | unit |
+
+## No Priority column
+| TC ID | Description | Tier |
+|---|---|---|
+| TC-PRS-060 | defaults to MEDIUM (blocking), tier still read | unit |
+""")
+write(E, "src/parser_test.go", 'package src\nimport "testing"\nfunc TestParser(t *testing.T) {\n'
+      + "".join(f'  t.Run("{i} case", func(t *testing.T) {{}})\n' for i in
+                ("TC-PRS-001", "TC-PRS-002", "TC-PRS-003", "TC-PRS-004", "TC-PRS-020", "TC-PRS-021", "TC-PRS-030",
+                 "TC-PRS-040", "TC-PRS-041", "TC-PRS-042", "TC-PRS-050", "TC-PRS-060", "TC-PRS-010", "TC-PRS-011", "TC-PRS-012"))
+      + "}\n")
+git(E, "add", "-A")
+git(E, "commit", "-qm", "parser fixture")
+E_WANT = {   # id → (priority, tier): what a reader of the rendered table sees
+    "TC-PRS-001": ("LOW", "unit"), "TC-PRS-002": ("LOW", "component"), "TC-PRS-003": ("LOW", "e2e"),
+    "TC-PRS-004": ("LOW", "unit"), "TC-PRS-020": ("LOW", "e2e"), "TC-PRS-021": ("HIGH", "unit"),
+    "TC-PRS-030": ("LOW", "integration"), "TC-PRS-040": ("LOW", "integration"), "TC-PRS-041": ("HIGH", "unit"),
+    "TC-PRS-042": ("LOW", "e2e"), "TC-PRS-050": ("MEDIUM", ""), "TC-PRS-060": ("MEDIUM", "unit"),
+}
+_, te = tci(E, 1)
+tpt = {c["name"]: (c["priority"], c["tier"]) for c in te["cases"]}
+_, ge = compare(E, 1)
+gpt = {c["name"]: (c["priority"], c["tier"]) for c in ge["cases"]}
+for k, (cid, ids, label) in enumerate([
+        ("TP01", ["TC-PRS-001", "TC-PRS-002"], "a range row mid-table is not a header: the row after it keeps Priority/Tier"),
+        ("TP02", ["TC-PRS-003"], "a malformed-ID row mid-table is not a header"),
+        ("TP03", ["TC-PRS-004"], "a section-divider row (**Validation** | | |) is not a header"),
+        ("TP04", ["TC-PRS-020", "TC-PRS-021"], "reordered columns: Priority/Tier located by header name"),
+        ("TP05", ["TC-PRS-030"], "extra columns + 'Test Tier' / 'Priority (MoSCoW-mapped)' headers located by name"),
+        ("TP06", ["TC-PRS-040"], "`provider\\|model\\|region` key: escaped pipes inside a code span do not split the cell"),
+        ("TP07", ["TC-PRS-041", "TC-PRS-042"], "escaped pipe in plain text; code-span/bold cells are unwrapped"),
+        ("TP08", ["TC-PRS-050"], "pipe lines with no |---| line have no header: default MEDIUM, no tier"),
+        ("TP09", ["TC-PRS-060"], "no Priority column: MEDIUM (blocking), tier still read"),
+        ]):
+    want = {i: E_WANT[i] for i in ids}
+    check(cid + "t", want, {i: tpt.get(i) for i in ids}, "tc-inventory: " + label)
+    check(cid + "g", want, {i: gpt.get(i) for i in ids}, "sdlc-graph:   " + label)
+check("TP10", {i: ("HIGH", "integration") for i in ("TC-PRS-010", "TC-PRS-011", "TC-PRS-012")},
+      {i: gpt.get(i) for i in ("TC-PRS-010", "TC-PRS-011", "TC-PRS-012")}, "sdlc-graph: the range row's own Priority/Tier come from the header")
+check("TP11", True, any(m.endswith(": TC-BAD-REG-001") for m in ge["graph"]["malformed_ids"]),
+      "the malformed row is still reported as malformed (not swallowed as a header)")
+agreement("E1", E, 1, expect_extra=["TC-PRS-010", "TC-PRS-011", "TC-PRS-012"])
+_ts = importlib.util.spec_from_file_location("tci_mod", TCI)
+tcim = importlib.util.module_from_spec(_ts)
+_ts.loader.exec_module(tcim)
+check("TP12", ["TC-A-1", "x `a|b` y", "LOW"], tcim.split_row(r"| TC-A-1 | x `a\|b` y | LOW |"), "split_row: escaped pipes stay in the cell, outer pipes dropped")
+check("TP13", ["a", "", "b"], tcim.split_row("a | | b"), "split_row: rows without outer pipes, empty cells kept")
+check("TP14", {1: None, 3: ["tc id", "priority"], 5: ["tc id", "priority"], 6: ["tc id", "priority"]},
+      {i: (r["header"] if r else None) for i, r in
+       ((i, tcim.table_rows("x\n|a|b|\n\n| TC ID | Priority |\n|--|--|\n| TC-A-1 | HIGH |\n| TC-A-2 – TC-A-3 | LOW |".split("\n")).get(i))
+        for i in (1, 3, 5, 6))},
+      "table_rows: header only for rows under a |---| line; a range row keeps the table's header")
+
+# BRD tables go through the same table_rows(): a divider row mid-table no longer renames the columns
+_o = sgm.Out("docs/BRD.md")
+sgm.ex_brd(_o, "# BRD\n## Functional Requirements\n| ID | Requirement | Priority |\n|---|---|---|\n| FR-001 | a | Must |\n"
+              "| **Ingestion** | | |\n| FR-002 | b \\| c | Could |\n")
+_mo = {n[2]: json.loads(n[-1]).get("moscow") for n in _o.nodes if n[1] == "req"}
+check("TP15", {"FR-001": "must", "FR-002": "could"}, {k: v for k, v in _mo.items() if k in ("FR-001", "FR-002")},
+      "sdlc-graph BRD: a section-divider row is not a header; `\\|` doesn't shift the Priority column")
+
 # ═══ D-002 warn-first policy: each new finding alone, each pre-existing blocker alone ════════════════
 # Every variant is a copy of the clean fixture B with ONE change. The four graph-only findings must WARN and
 # PASS by default and BLOCK under strict; every finding tc-inventory.py fails on must BLOCK in BOTH modes,
@@ -837,6 +936,8 @@ rc, log = verify_gate()
 check("H03w", (True, False), ("tc warning (D-002, not blocking): [range_ids]" in log and "TC-API-10103" in log,
                               any(l.strip().startswith("✗ tc:") and "TC-API-10103" in l for l in log.splitlines())),
       "verify-gate (h), default: uncovered range-defined IDs are a warning, not a ✗")
+check("H03r", (0, False), (rc, any("TC-UI-10101" in l for l in log.splitlines() if "✗" in l or "BLOCKING" in l)),
+      "verify-gate (h), default: the LOW row AFTER the range row stays LOW (the range row is not a header), so the gate passes")
 open(spec, "w").write(orig)
 os.remove(os.path.join(P1, "base_sha"))
 rc, log = verify_gate(STRICT)

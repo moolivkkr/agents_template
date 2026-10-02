@@ -53,8 +53,9 @@ Usage: sdlc-graph.py [--root DIR] [--graph-dir DIR] [--json] [--max-tokens N] [-
 Output is capped (--max-tokens, default 2000 ≈ 8 KB; --limit rows per list); --full lifts the caps.
 Every query first refreshes the graph incrementally (seconds) unless --no-refresh.
 
-TC GATE. `gate` computes the same inventory tc-inventory.py does — it imports tc-inventory.py's test-name
-parsers and test-weakening check, so a test counts the same way in both — and is stricter in four ways:
+TC GATE. `gate` computes the same inventory tc-inventory.py does — it imports tc-inventory.py's spec-table parser
+(table_rows/priority_tier), test-name parsers and test-weakening check, so a row and a test read the same way in
+both — and is stricter in four ways:
   1. A range written as a DEFINITION is expanded into required IDs: a table row whose ID cell is a range
      ("| TC-VAL-001 – TC-VAL-004 | … | MEDIUM | unit |") or a line that starts with a range and carries a
      priority ("TC-VAL-001 – TC-VAL-004 — validation cases (MEDIUM, unit)"). tc-inventory.py drops the middle
@@ -351,8 +352,9 @@ def moscow_of(text):
 
 
 def ex_brd(o, text):
-    header, skip_level = None, None
-    for i, line in enumerate(text.split("\n"), 1):
+    skip_level, lines = None, text.split("\n")
+    trows = tci.table_rows(lines)           # tc-inventory.py's table parser: header = the row above a |---| line
+    for i, line in enumerate(lines, 1):
         s = line.strip()
         h = HEADING_RE.match(s)
         if h:
@@ -361,7 +363,6 @@ def ex_brd(o, text):
                 skip_level = None
             if skip_level is None and SKIP_BRD_SEC_RE.search(h.group(2)):
                 skip_level = level
-            header = None
         if skip_level is not None:
             continue
         if h:
@@ -372,15 +373,15 @@ def ex_brd(o, text):
                        category=m.group(1).rsplit("-", 1)[0], moscow=moscow_of(title))
             continue
         if s.startswith("|"):
-            if re.fullmatch(r"[\s|:-]+", s):
+            row = trows.get(i - 1)
+            if row is None:                 # a |---| delimiter row
                 continue
-            cells = [c.strip() for c in s.strip("|").split("|")]
+            cells = row["raw"]
             first = strip_md(cells[0]) if cells else ""
             m = REQ_RE.fullmatch(first)
             if not m:
-                header = [c.lower() for c in cells]
                 continue
-            pj = next((j for j, c in enumerate(header or []) if re.search(r"priority|moscow", c)), None)
+            pj = next((j for j, c in enumerate(row["header"] or []) if re.search(r"priority|moscow", c)), None)
             mo = moscow_of(cells[pj]) if pj is not None and pj < len(cells) else moscow_of(s)
             o.node(f"req:{first}", "req", first, line=i, text=" | ".join(cells[1:])[:200],
                    category=first.rsplit("-", 1)[0], moscow=mo)
@@ -484,8 +485,9 @@ def ex_phasedoc(o, text, phase):
         title = next((t for (s, e, lv, t) in secs if lv == 1), f"phase {phase}")
         o.node(f"phase:{phase}", "phase", title[:120], phase=phase, line=1)
 
-    header, last_header, in_code = None, None, False
+    in_code = False
     plan_sec, wf_blocks = None, []
+    trows = tci.table_rows(lines)           # tc-inventory.py's table parser: one header rule for both tools
     for i, line in enumerate(lines, 1):
         s = line.strip()
         if s.startswith("```"):
@@ -546,52 +548,39 @@ def ex_phasedoc(o, text, phase):
                                                   "no priority on the line" if not PRIO_WORD_RE.search(s) else
                                                   "range is not the line's subject" if k == 0 or not line_def else
                                                   "only the line's first range is a definition"))
-        # tables — the TC inventory, mirroring tc-inventory.py's spec_rows() exactly
-        if not s.startswith("|"):
-            header = None
-            for tid in mention_ids:
-                o.edge(sid, "mentions_tc", f"tcid:{tid}", line=i, deferred=in_deferred(i) or None)
+        # tables — the TC inventory, through tc-inventory.py's own table_rows()/priority_tier()
+        row = trows.get(i - 1)
+        if row is None:                     # not a table row (or a |---| delimiter row)
+            if not s.startswith("|"):
+                for tid in mention_ids:
+                    o.edge(sid, "mentions_tc", f"tcid:{tid}", line=i, deferred=in_deferred(i) or None)
             continue
-        if re.fullmatch(r"[\s|:-]+", s):
-            continue
-        cells = [c.strip().strip("`*_ ") for c in s.strip("|").split("|")]
-        idc = next((c for c in cells if re.fullmatch(r"TC-[A-Z0-9]+-\d+", c)), None)
+        cells = row["cells"]
+        idc = None if row["is_header"] else next((c for c in cells if tci.TC_CELL.fullmatch(c)), None)
         if screen:
             b = re.match(r"^\|\s*`?([\w.]+)`?\s*\|\s*`?(GET|POST|PUT|PATCH|DELETE)\s+(\S+?)`?\s*\|\s*([^|]*)\|\s*(ARRAY|OBJECT)?", s)
             if b:
                 o.edge(screen, "binds", ep_id(b.group(2), b.group(3)), line=i, component=b.group(1),
                        field=b.group(4).strip(), shape=b.group(5))
         if idc is None:
-            rc = next((c for c in cells if RANGE_CELL_RE.fullmatch(c)), None)
+            rc = None if row["is_header"] else next((c for c in cells if RANGE_CELL_RE.fullmatch(c)), None)
             if rc:
-                hdr = header or last_header or []
-                col = lambda name: next((j for j, h in enumerate(hdr) if name in h), None)
-                pj, tj = col("priority"), col("tier")
-                pr = (cells[pj].upper() if pj is not None and pj < len(cells) else "") or "MEDIUM"
-                tier = cells[tj].lower() if tj is not None and tj < len(cells) else ""
-                expand_range(o, RANGE_CELL_RE.fullmatch(rc), phase, i, sid, sec_title(i), s, True,
-                             pr if pr in ("HIGH", "MEDIUM", "LOW") else "MEDIUM", tier, None)
-            else:
+                pr, tier, _inv = tci.priority_tier(row)
+                expand_range(o, RANGE_CELL_RE.fullmatch(rc), phase, i, sid, sec_title(i), s, True, pr, tier, None)
+            elif not row["is_header"]:
                 for c in cells:
-                    if MALFORMED_CELL_RE.fullmatch(c) and not re.fullmatch(r"TC-[A-Z0-9]+-\d+", c) \
+                    if MALFORMED_CELL_RE.fullmatch(c) and not tci.TC_CELL.fullmatch(c) \
                             and not RANGE_CELL_RE.fullmatch(c) and re.search(r"\d", c):
                         o.node(f"tcbad:{phase}/{c}", "tc_malformed", c, phase=phase, line=i, section=sec_title(i),
                                text=s[:160])
-            if header is not None:
-                last_header = header
-            header = [c.lower() for c in cells]
             for tid in mention_ids:
                 o.edge(sid, "mentions_tc", f"tcid:{tid}", line=i, deferred=in_deferred(i) or None)
             continue
-        col = lambda name: next((j for j, h in enumerate(header or []) if name in h), None)
-        pj, tj = col("priority"), col("tier")
-        pr = (cells[pj].upper() if pj is not None and pj < len(cells) else "") or "MEDIUM"
-        pr = pr if pr in ("HIGH", "MEDIUM", "LOW") else "MEDIUM"
-        tier = cells[tj].lower() if tj is not None and tj < len(cells) else ""
+        pr, tier, inventory = tci.priority_tier(row)
         desc = next((c for c in cells if c != idc and len(c) > 12), "")
         reqs = sorted(set(REQ_RE.findall(s)))
         o.node(f"tc:{phase}/{idc}", "tc", idc, phase=phase, line=i, priority=pr, tier=tier,
-               inventory=pj is not None, desc=desc[:140], section=sec_title(i), sec=sid,
+               inventory=inventory, desc=desc[:140], section=sec_title(i), sec=sid,
                category=idc.split("-")[1], reqs=reqs, deferred=in_deferred(i) or None)
         o.edge(doc, "defines_tc", f"tc:{phase}/{idc}", line=i)
         for r in reqs:

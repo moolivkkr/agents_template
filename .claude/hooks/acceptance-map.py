@@ -87,7 +87,8 @@ def moscow_of(text):
 def parse_brd(path):
     """{fr: {"blocks": [text], "moscow": str|None, "as_built": bool}} from the BRD's definition lines."""
     lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
-    frs, header, skip_level, i = {}, None, None, 0
+    frs, skip_level, i = {}, None, 0
+    trows = tci.table_rows(lines)       # tc-inventory.py's table parser: header = the row above a |---| line
 
     def entry(fr):
         return frs.setdefault(fr, {"blocks": [], "moscow": None, "as_built": False})
@@ -105,7 +106,6 @@ def parse_brd(path):
             i += 1
             continue
         if h:
-            header = None
             ids = FR_RE.findall(h.group(2))
             if ids and h.group(2).lstrip("*_` ").startswith(ids[0]):          # "### FR-012 — Title"
                 level, block, j = len(h.group(1)), [s], i + 1
@@ -128,11 +128,12 @@ def parse_brd(path):
             if re.fullmatch(r"[\s|:-]+", s):
                 i += 1
                 continue
-            cells = [c.strip() for c in s.strip("|").split("|")]
+            row = trows[i]
+            cells = row["raw"]
             first = cells[0].strip("*_` ")
             if FR_RE.fullmatch(first):
                 e = entry(first)
-                cols = header or [""] * len(cells)
+                cols = row["header"] or [""] * len(cells)
                 kept = [c for j, c in enumerate(cells[1:], 1) if not DROP_COL_RE.search(cols[j] if j < len(cols) else "")]
                 e["blocks"].append(norm_text(" | ".join(kept)))
                 pj = next((j for j, c in enumerate(cols) if PRIORITY_COL_RE.search(c)), None)
@@ -140,11 +141,8 @@ def parse_brd(path):
                     e["moscow"] = e["moscow"] or moscow_of(cells[pj])
                 e["moscow"] = e["moscow"] or moscow_of(s)
                 e["as_built"] = e["as_built"] or "as-built" in s.lower()
-            else:
-                header = cells
             i += 1
             continue
-        header = None
         lead = re.sub(r"^([-*+]\s+|\d+\.\s+)?[*_`]*", "", s)
         ids = FR_RE.findall(lead[:20])
         if ids and lead.startswith(ids[0]) and re.match(re.escape(ids[0]) + r"[*_`]*\s*([:—–.-]|\s)", lead):

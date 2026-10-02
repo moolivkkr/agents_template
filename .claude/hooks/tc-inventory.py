@@ -7,7 +7,11 @@
 
 Spec side: the TC inventory TABLES in docs/design/phases/N/**/*.md (rows whose ID cell is a TC ID;
 Priority/Tier columns when present, priority defaults to MEDIUM = blocking). Range lines such as
-"TC-E-106 to TC-E-110" are groupings, not IDs. An ID defined by more than one phase is an error: IDs are
+"TC-E-106 to TC-E-110" are groupings, not IDs. Table parsing (table_rows / priority_tier, shared with
+sdlc-graph.py and acceptance-map.py): the header is the row directly above a |---| line, and every row below
+it reads Priority/Tier by header NAME (any order, extra columns fine) — a range, malformed-ID or divider row
+mid-table is a data row, not a new header; `\\|` is a literal pipe (inside code spans too); pipe lines with no
+|---| line have no header (MEDIUM, no tier); a table with no Priority column is MEDIUM. An ID defined by more than one phase is an error: IDs are
 project-unique (spec_writer allocates them).
 
 Test side, a TC ID counts only when it is in the NAME of a test case (test title, subtest name,
@@ -38,6 +42,7 @@ import argparse, datetime, json, os, re, subprocess, sys
 TC = r"TC[-_]([A-Z0-9]+)[-_](\d+)"
 # TC_X_1 inside TestFoo_TC_X_1, and Go/JUnit-style TestTC_X_1 / testTC_X_1
 TC_RE = re.compile(r"(?:(?<![A-Za-z0-9])|(?<=[Tt]est))" + TC + r"(?![0-9])")
+TC_CELL = re.compile(r"TC-[A-Z0-9]+-\d+")      # a spec table cell that IS a TC ID
 RANGE_RE = re.compile(r"\bTC-[A-Z0-9]+-\d+\s*(?:to|through|thru|–|—|\.\.|-)\s*TC-[A-Z0-9]+-\d+\b")
 SKIP_DIRS = {".git", "node_modules", "vendor", "dist", "build", ".next", "coverage", "Pods", "agent_state",
              "docs", ".claude", "__pycache__", "target", ".venv", "venv", ".gradle", "DerivedData", ".expo"}
@@ -52,6 +57,73 @@ def ids_in(text):
     return {norm(m) for m in TC_RE.finditer(text or "")}
 
 
+# ─── markdown tables (shared: sdlc-graph.py and acceptance-map.py import these, so the tools can't drift) ───
+DELIM_CELL_RE = re.compile(r":?-+:?")
+PRIORITIES = ("HIGH", "MEDIUM", "LOW")
+DEFAULT_PRIORITY = "MEDIUM"     # no Priority column, or a value that isn't HIGH/MEDIUM/LOW: blocking
+
+
+def split_row(line):
+    """A markdown table row → its raw cells (GFM): `\\|` is a literal pipe, also inside a code span, and the
+    leading/trailing pipes are not cells. "| a | `x\\|y` |" → ["a", "`x|y`"]."""
+    s = line.strip()
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|") and not s.endswith("\\|"):
+        s = s[:-1]
+    return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", s)]
+
+
+def cell_text(cell):
+    """A cell without its markdown decoration: `code`, **bold**, _em_."""
+    return cell.strip().strip("`*_ ")
+
+
+def is_delimiter(line):
+    """The |---|:--:| line under a table header (every cell dashes, optional colons)."""
+    s = line.strip()
+    return "-" in s and "|" in s and all(DELIM_CELL_RE.fullmatch(c) for c in split_row(s))
+
+
+def table_rows(lines):
+    """{line index: {"cells", "raw", "header", "is_header"}} for every table row in `lines` (separator rows
+    excluded). A row is a HEADER only when the next line is a |---| delimiter line; every row below it, up to
+    the first non-table line, reads its columns from that header — a range row, a malformed-ID row or a
+    section-divider row ("| **Auth** | | |") mid-table is a data row, never a new header. Pipe lines with no
+    delimiter line are not a table: their rows have header None (so Priority/Tier default)."""
+    rows, header = {}, None
+    for i, line in enumerate(lines):
+        s = line.strip()
+        if not s.startswith("|"):
+            header = None                                   # a table ended
+            continue
+        if re.fullmatch(r"[\s|:-]+", s):                   # delimiter (or empty) row
+            continue
+        raw = split_row(s)
+        cells = [cell_text(c) for c in raw]
+        is_header = i + 1 < len(lines) and is_delimiter(lines[i + 1]) and not any(TC_CELL.fullmatch(c) for c in cells)
+        if is_header:
+            header = [c.lower() for c in cells]
+        rows[i] = {"cells": cells, "raw": raw, "header": header, "is_header": is_header}
+    return rows
+
+
+def column(header, name):
+    """Index of the first header cell containing `name` (located by NAME, never by position), else None."""
+    return next((j for j, h in enumerate(header or []) if name in h), None)
+
+
+def priority_tier(row):
+    """(priority, tier, inventory) of a TC row from its table's header: Priority/Tier columns by name; no
+    Priority column (or an unknown value such as "Critical") → MEDIUM; no Tier column → ""; `inventory` = the
+    table has a Priority column (an inventory row beats a passing mention of the ID)."""
+    cells, header = row["cells"], row["header"]
+    pj, tj = column(header, "priority"), column(header, "tier")
+    pr = cells[pj].upper() if pj is not None and pj < len(cells) else ""
+    tier = cells[tj].lower() if tj is not None and tj < len(cells) else ""
+    return (pr if pr in PRIORITIES else DEFAULT_PRIORITY), tier, pj is not None
+
+
 # ─── spec inventory ───────────────────────────────────────────────────────────────────────────────
 def spec_rows(phase_dir):
     """{id: {"priority", "tier", "where"}} from markdown tables under a phase's design dir."""
@@ -62,25 +134,12 @@ def spec_rows(phase_dir):
                 continue
             path = os.path.join(base, fn)
             lines = open(path, encoding="utf-8", errors="replace").read().split("\n")
-            header = None
-            for i, line in enumerate(lines):
-                s = line.strip()
-                if not s.startswith("|"):
-                    header = None                       # a table ended
+            for i, r in sorted(table_rows(lines).items()):
+                idc = next((c for c in r["cells"] if TC_CELL.fullmatch(c)), None)
+                if idc is None or r["is_header"]:
                     continue
-                if re.fullmatch(r"[\s|:-]+", s):          # separator row
-                    continue
-                cells = [c.strip().strip("`*_ ") for c in s.strip("|").split("|")]
-                idc = next((c for c in cells if re.fullmatch(r"TC-[A-Z0-9]+-\d+", c)), None)
-                if idc is None:
-                    header = [c.lower() for c in cells]  # a header (or any non-ID row) names the columns
-                    continue
-                col = lambda name: next((j for j, h in enumerate(header or []) if name in h), None)
-                pj, tj = col("priority"), col("tier")
-                pr = (cells[pj].upper() if pj is not None and pj < len(cells) else "") or "MEDIUM"
-                pr = pr if pr in ("HIGH", "MEDIUM", "LOW") else "MEDIUM"
-                tier = cells[tj].lower() if tj is not None and tj < len(cells) else ""
-                row = {"priority": pr, "tier": tier, "where": f"{path}:{i + 1}", "inventory": pj is not None}
+                pr, tier, inv = priority_tier(r)
+                row = {"priority": pr, "tier": tier, "where": f"{path}:{i + 1}", "inventory": inv}
                 prev = out.get(idc)
                 if prev is None or (row["inventory"] and not prev["inventory"]):
                     out[idc] = row                       # an inventory row (has Priority) beats a passing mention
