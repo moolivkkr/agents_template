@@ -111,6 +111,16 @@ matter, not the 40-entry `patterns.md`.
 
 ---
 
+## Questions in the main session (`sdlc-graph.py find` / `status`)
+
+The interactive session answers "where is FR-x implemented", "why did we choose Y", "which HIGH tests have no
+test", "where are we" without reading specs whole: `python3 .claude/hooks/sdlc-graph.py find "<question>"` resolves
+the IDs it names exactly (FR/NFR/TC/D-n/F-n/ADR, "METHOD /path", file, `symbol`, table, "phase N") and ranks
+FTS5 hits as `file:start-end` + a one-line summary + graph neighbours; `status [--phase N]` is the project/phase
+summary. Open only the spans listed. Switch: `agent_state/config/graph-policy.json` `{"interactive": true|false}`
+(env `SDLC_GRAPH_INTERACTIVE=0|1`); disabled → one line, exit 5 → explore normally. Pipeline agents keep using
+`context` / `gate` / `trace` regardless of the switch.
+
 ## Retrieval Recipes by Agent
 
 | Agent / phase | Retrieval call | Loads |

@@ -16,6 +16,11 @@ Reads all phase gate files, manifests, and test results. Prints a comprehensive 
 
 ## Step 0 — Read State
 
+Graph first: `python3 .claude/hooks/sdlc-graph.py status` (and `status --phase N` for the current phase) prints
+gate state, roster completion, TC coverage, D-002 warnings, blocking findings and the last deploy record in ≤ ~2k
+tokens. Build the report from it and open only the files it points at. If it exits non-zero (GRAPH UNAVAILABLE, or
+exit 5 "interactive graph disabled" by `agent_state/config/graph-policy.json`), fall back to the reads below.
+
 ```bash
 # Completed phases
 COMPLETED=$(ls agent_state/phases/*/gate.passed 2>/dev/null | sed -n -E 's|.*phases/([0-9]+)/.*|\1|p' | sort -n)

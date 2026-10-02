@@ -50,6 +50,17 @@ Usage: sdlc-graph.py [--root DIR] [--graph-dir DIR] [--json] [--max-tokens N] [-
                                          show / set agent_state/config/gate-policy.json (which of the four
                                          stricter checks below block; the rest warn)
 
+INTERACTIVE (the main session's questions; behind agent_state/config/graph-policy.json "interactive", env
+SDLC_GRAPH_INTERACTIVE=0|1; disabled → one line on stdout, exit 5; pipeline commands above are never affected):
+  find <question...>   (alias ask)       IDs in the question resolved exactly first (FR/NFR/OBJ, TC, D-NNN/D35,
+                                         F-NNN, AD/ADR-N, "METHOD /path", file, `symbol`, table, "phase N"), then
+                                         FTS5 bm25 hits over spec/BRD/ledger/doc sections, reports, manifests, code
+                                         symbols, routes, tests and tables: file:start-end + a one-line deterministic
+                                         summary + graph neighbours. Open only those spans. [--kind K,...] [--top N]
+  status [--phase N]                     where the project is: per phase gate state, roster completion, TC coverage,
+                                         D-002 warnings, blocking findings; last deploy record
+  interactive [on|off]                   show / set the switch (agent_state/config/graph-policy.json)
+
 Output is capped (--max-tokens, default 2000 ≈ 8 KB; --limit rows per list); --full lifts the caps.
 Every query first refreshes the graph incrementally (seconds) unless --no-refresh.
 
@@ -94,7 +105,7 @@ _spec = importlib.util.spec_from_file_location("tc_inventory", _tci_path)
 tci = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tci)
 
-SCHEMA_VERSION = "1"
+SCHEMA_VERSION = "2"   # 2: docs/docids/fts (the find index)
 # A graph built by different extractor code is rebuilt in full, so an upgrade never leaves stale rows behind.
 EXTRACTOR_SIG = hashlib.sha256(open(os.path.abspath(__file__), "rb").read() + open(_tci_path, "rb").read()).hexdigest()[:16]
 SCHEMA = """
@@ -104,6 +115,12 @@ CREATE TABLE IF NOT EXISTS edges(src TEXT NOT NULL, rel TEXT NOT NULL, dst TEXT 
                                  line INTEGER, attrs TEXT);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, kind TEXT, sha TEXT, size INTEGER, mtime INTEGER);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS docs(id INTEGER PRIMARY KEY, file TEXT NOT NULL, kind TEXT, phase INTEGER, start INTEGER,
+                                end_ INTEGER, title TEXT, summary TEXT, body TEXT);
+CREATE TABLE IF NOT EXISTS docids(doc INTEGER NOT NULL, ref TEXT NOT NULL, def INTEGER, file TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS d_file ON docs(file);
+CREATE INDEX IF NOT EXISTS di_ref ON docids(ref, def);
+CREATE INDEX IF NOT EXISTS di_file ON docids(file);
 CREATE INDEX IF NOT EXISTS n_id ON nodes(id);
 CREATE INDEX IF NOT EXISTS n_kind ON nodes(kind, phase);
 CREATE INDEX IF NOT EXISTS n_file ON nodes(file);
@@ -265,6 +282,10 @@ def strip_md(s):
 class Out:
     def __init__(self, rel):
         self.rel, self.nodes, self.edges, self._seen = rel, [], [], set()
+        self.docs = []                      # find index rows: (kind, phase, start, end, title, summary, body, {ref: def})
+
+    def doc(self, kind, phase, start, end, title, summary, body, refs=None):
+        self.docs.append((kind, phase, start, end, (title or "")[:200], (summary or "")[:240], body or "", refs or {}))
 
     def node(self, id, kind, name=None, phase=None, line=None, end_line=None, **attrs):
         a = {k: v for k, v in attrs.items() if v not in (None, "", [], {})}
@@ -306,6 +327,10 @@ def classify(rel):
             return "phase_sha", ph
         if sub == "manifest.json":
             return "manifest", ph
+        if sub == "gate.passed":
+            return "phase_gate", ph
+        if re.fullmatch(r"[^/]+\.md", sub):
+            return "phase_note", ph          # decision-log, lessons, PHASE_SUMMARY, audit_report: find index only
         if re.fullmatch(r"reports/[^/]+\.json", sub):
             return "report_json", ph
         if re.fullmatch(r"reports/[^/]+\.md", sub):
@@ -319,6 +344,8 @@ def classify(rel):
         if rel.endswith(".md"):
             return "report_md", ph
         return None, None
+    if parts[0] == "docs" and rel.endswith(".md"):
+        return "doc", None                   # any other doc: find index only, no graph nodes
     if parts[0] in ("docs", "agent_state", ".claude"):
         return None, None
     if is_test_path(rel) and not rel.endswith(".rs"):
@@ -722,6 +749,8 @@ def ex_agent_state(o, text, kind, phase):
                    ts=e.get("ts"))
             if isinstance(rep, str) and rep not in ("null", ""):
                 o.edge(f"agent:{e.get('agent')}", "produced", f"report:{rep}", line=i, status=e.get("status"))
+    elif kind == "phase_gate":
+        o.node(f"gate:{phase}", "phase_gate", "gate.passed", phase=phase, line=1, text=text.strip()[:160])
     elif kind == "phase_sha":
         o.node(f"{os.path.basename(rel)}:{phase}", "phase_sha", os.path.basename(rel), phase=phase, line=1,
                sha=text.strip()[:64])
@@ -732,7 +761,10 @@ def ex_agent_state(o, text, kind, phase):
             return
         g = m.get("gate") if isinstance(m.get("gate"), dict) else {}
         o.node(f"manifest:{phase}", "manifest", f"manifest {phase}", phase=phase, line=1,
-               gate_passed=g.get("passed"), e2e_workflows_unlocked=m.get("e2e_workflows_unlocked"))
+               gate_passed=g.get("passed"), e2e_workflows_unlocked=m.get("e2e_workflows_unlocked"),
+               gate_state=g.get("state") if isinstance(g.get("state"), str) else None,
+               status=m.get("status") if isinstance(m.get("status"), str) else None,
+               goal=str(m.get("goal"))[:160] if isinstance(m.get("goal"), str) else None)
     elif kind == "report_json":
         try:
             j = json.loads(text)
@@ -1090,6 +1122,198 @@ def ex_tests(o, text, rel):
 CODE_EXTRACTORS = {"go": None, "ts": None, "js": None, "py": None, "java": None, "kt": None, "rs": None}
 
 
+# ─── the find index (interactive questions): one row per section / symbol / route / test / table / report ──────
+# Rows are a pure function of one file (like the graph), so incremental == full holds for the index too.
+FTS_BODY_MAX = 12000
+DEC_RE = re.compile(r"(?<![A-Za-z0-9-])D-?(\d{1,4})(?![\w-])")
+FACT_RE = re.compile(r"(?<![A-Za-z0-9-])F-(\d{1,4})(?![\w-])")
+ADR_RE = re.compile(r"(?<![A-Za-z0-9-])(ADR|AD)-(\d{1,4})(?![\w-])")
+SHALL_RE = re.compile(r"\bshall\b", re.I)
+DOCSTRING_Q = ('"' * 3, "'" * 3)
+
+
+def refs_in(text):
+    """{canonical ID} mentioned in a text: FR/NFR/OBJ, TC, D-n (D-002 == D2), F-n, AD-n/ADR-n, endpoints."""
+    out = set(REQ_RE.findall(text))
+    out |= {f"TC-{a}-{n}" for a, n in TC_ID_RE.findall(text)}
+    out |= {f"D-{int(n)}" for n in DEC_RE.findall(text)}
+    out |= {f"F-{int(n)}" for n in FACT_RE.findall(text)}
+    out |= {f"{k}-{int(n)}" for k, n in ADR_RE.findall(text)}
+    out |= {ep_id(m.group(1), m.group(2)) for m in EP_RE.finditer(text)}
+    return out
+
+
+def _clean(s):
+    s = re.sub(r"<!--.*?-->|<[^>]+>", " ", s)
+    s = re.sub(r"^[-*+>]\s+|^\d+[.)]\s+", "", s.strip())
+    s = s.replace("**", "").replace("`", "").replace("__", "")
+    return re.sub(r"\s+", " ", s).strip(" |")
+
+
+def summarize(title, lines):
+    """Heading + the first SHALL/EARS line, else the first sentence of the first prose line. No LLM."""
+    first, in_code = None, False
+    for l in lines[:80]:
+        st = l.strip()
+        if st.startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code or not st or st.startswith(("#", "<!--", "---", "===")) or re.fullmatch(r"[\s|:-]+", st):
+            continue
+        if SHALL_RE.search(st):
+            if st.startswith("|"):
+                st = next((c for c in st.strip("|").split("|") if SHALL_RE.search(c)), st)
+            return f"{title} — {_clean(st)}"
+        if first is None and not st.startswith("|"):
+            first = _clean(st)
+    if first:
+        first = re.split(r"(?<=[.!?])\s", first)[0]
+        return f"{title} — {first}"
+    return title
+
+
+def words_of(ident):
+    return re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", ident).replace("_", " ").replace(".", " ").replace("/", " ")
+
+
+def md_rows(o, dkind, phase, text):
+    """One row per heading, spanning its OWN lines (to the next heading of any level), + a preamble row.
+    A bare heading (no own lines) is kept only when it is the file's last line, so its title stays findable."""
+    lines = text.split("\n")
+    heads, in_code = [], False
+    for i, l in enumerate(lines, 1):
+        if l.strip().startswith("```"):
+            in_code = not in_code
+            continue
+        if not in_code and l.startswith("#"):
+            h = HEADING_RE.match(l.strip())
+            if h:
+                heads.append((i, strip_md(h.group(2)), True))
+    bounds = heads
+    if not heads or heads[0][0] > 1:
+        bounds = [(1, os.path.basename(o.rel), False)] + heads
+    for k, (s0, title, is_head) in enumerate(bounds):
+        e0 = bounds[k + 1][0] - 1 if k + 1 < len(bounds) else len(lines)
+        while e0 > s0 and not lines[e0 - 1].strip():
+            e0 -= 1
+        own = lines[s0 - 1:e0]
+        if not "\n".join(own).strip():
+            continue
+        for (c0, c1, ctitle) in md_chunks(lines, s0, e0, title, is_head):
+            part = lines[c0 - 1:c1]
+            body = "\n".join(part)
+            refs = {r: 0 for r in refs_in(body)}
+            for r in refs_in(ctitle if c0 != s0 or not is_head else title):
+                refs[r] = 1
+            skip = 1 if (c0 == s0 and is_head) or ctitle != title else 0
+            o.doc(dkind, phase, c0, c1, ctitle, summarize(ctitle, part[skip:]), body[:FTS_BODY_MAX], refs)
+
+
+ITEM_START_RE = re.compile(r"^\s{0,3}(?:[-*+]\s+|\|\s*)?\**\s*((?:FR|NFR|OBJ|CON|OQ)(?:-[A-Z]+)*-\d+[a-z]?|D-?\d{1,4}|F-\d{1,4})\b(?!-)")
+CHUNK_LINES = 60
+
+
+def md_chunks(lines, s0, e0, title, is_head):
+    """A long section is split so a hit points at a small span: at each requirement/decision item that starts a
+    line (when the section holds 2+ of them), and every CHUNK_LINES lines. Short sections stay one row."""
+    if e0 - s0 + 1 <= CHUNK_LINES and not any(ITEM_START_RE.match(lines[i - 1]) for i in range(s0 + 1, e0 + 1)):
+        return [(s0, e0, title)]
+    starts = [i for i in range(s0 + (1 if is_head else 0), e0 + 1) if ITEM_START_RE.match(lines[i - 1])]
+    cuts = sorted({s0} | (set(starts) if len(starts) >= 2 or (starts and e0 - s0 + 1 > CHUNK_LINES) else set()))
+    out = []
+    for k, c0 in enumerate(cuts):
+        c1 = cuts[k + 1] - 1 if k + 1 < len(cuts) else e0
+        while c1 > c0 and not lines[c1 - 1].strip():
+            c1 -= 1
+        if c0 > s0 and not "\n".join(lines[c0 - 1:c1]).strip():
+            continue
+        t = title
+        if c0 in starts:
+            t = _clean(lines[c0 - 1])[:120] or title
+        for x0 in range(c0, c1 + 1, CHUNK_LINES):
+            x1 = min(c1, x0 + CHUNK_LINES - 1)
+            out.append((x0, x1, t if x0 == c0 else f"{t} (cont. L{x0})"))
+    return out
+
+
+def json_strings(j, out, budget=6000):
+    """Flatten a JSON report's string/number leaves into 'key: value' lines (bounded)."""
+    if sum(len(x) for x in out) > budget:
+        return
+    if isinstance(j, dict):
+        for k, v in j.items():
+            if isinstance(v, str) or (isinstance(v, (int, float)) and not isinstance(v, bool)):
+                out.append(f"{k}: {v}")
+            else:
+                json_strings(v, out, budget)
+    elif isinstance(j, list):
+        for v in j[:200]:
+            json_strings(v, out, budget)
+    elif isinstance(j, str):
+        out.append(j)
+
+
+def fts_extract(o, kind, phase, text):
+    rel = o.rel
+    base = os.path.basename(rel)
+    if kind == "phasedoc":
+        dk = "screen" if re.search(r"\.(wireframe|ui-spec)\.md$", base) else "spec" if "/specs/" in rel else "phasedoc"
+        md_rows(o, dk, phase, text)
+    elif kind in ("brd", "ledger", "doc", "phase_note", "report_md"):
+        md_rows(o, {"phase_note": "note", "report_md": "report"}.get(kind, kind), phase, text)
+    elif kind in ("report_json", "manifest"):
+        try:
+            j = json.loads(text)
+        except ValueError:
+            return
+        strs = []
+        json_strings(j, strs)
+        body = "\n".join(strs)[:FTS_BODY_MAX]
+        head = ""
+        if isinstance(j, dict):
+            g_ = j.get("gate") if isinstance(j.get("gate"), dict) else {}
+            bits = [f"{k} {j[k]}" for k in ("tier", "verdict", "status", "total", "passed", "failed")
+                    if isinstance(j.get(k), (str, int)) and not isinstance(j.get(k), bool)]
+            if g_:
+                bits.append(f"gate {g_.get('state') or ('passed' if g_.get('passed') else 'not passed')}")
+            if isinstance(j.get("goal"), str):
+                bits.append(j["goal"][:100])
+            head = ", ".join(bits)
+        title = f"phase {phase} manifest" if kind == "manifest" else base
+        o.doc("manifest" if kind == "manifest" else "report", phase, 1, text.count("\n") + 1, title,
+              f"{title} — {head}" if head else title, body, {r: 0 for r in refs_in(body)})
+    elif kind in ("code", "test"):
+        lines = text.split("\n")
+        for (nid, nk, name, ph, _f, line, end, attrs) in o.nodes:
+            a = json.loads(attrs)
+            if nk == "symbol":
+                sig = lines[line - 1].strip() if 0 < line <= len(lines) else ""
+                doc = ""
+                nxt = lines[line].strip() if line < len(lines) else ""
+                prev = lines[line - 2].strip() if line >= 2 else ""
+                if nxt.startswith(DOCSTRING_Q):
+                    doc = nxt.strip("\"' ") or (lines[line + 1].strip() if line + 1 < len(lines) else "")
+                elif prev.startswith(("//", "#", "/*", "*")) and not prev.startswith("#!"):
+                    doc = prev.lstrip("/#* ")
+                o.doc("symbol", None, line, end or line, name,
+                      f"{a.get('symkind', 'symbol')} {name} — {sig[:110]}" + (f" — {doc[:80]}" if doc else ""),
+                      f"{words_of(name)} {words_of(rel)} {sig} {doc}", {f"sym:{name.lower()}": 1})
+            elif nk == "test":
+                ids = a.get("ids") or []
+                o.doc("test", None, line, line, name, f"test {name}" + (f" [{', '.join(ids[:4])}]" if ids else ""),
+                      f"{words_of(name)} {words_of(rel)}", {i: 0 for i in ids})
+        for (src, rl, dst, _f, line, attrs) in o.edges:
+            if rl == "route":
+                a = json.loads(attrs)
+                o.doc("route", None, line, line, dst[3:], f"route {dst[3:]} → {a.get('handler')}",
+                      f"{dst[3:]} {words_of(dst[3:])} {words_of(str(a.get('handler')))} {words_of(rel)}", {dst: 1})
+    elif kind in ("migration", "prisma"):
+        for (nid, nk, name, ph, _f, line, end, attrs) in o.nodes:
+            if nk == "table":
+                o.doc("table", None, line, line, f"table {name}", f"table {name} — created in {base}",
+                      f"{name} {words_of(name)} table migration {words_of(rel)}", {f"table:{name}": 1})
+
+
 def extract(rel, kind, phase, text):
     o = Out(rel)
     if kind == "phasedoc":
@@ -1100,7 +1324,7 @@ def extract(rel, kind, phase, text):
         ex_ledger(o, text)
     elif kind == "stitch":
         ex_stitch(o, text)
-    elif kind in ("roster", "exec", "phase_sha", "manifest", "report_json", "report_md"):
+    elif kind in ("roster", "exec", "phase_sha", "phase_gate", "manifest", "report_json", "report_md"):
         ex_agent_state(o, text, kind, phase)
     elif kind == "migration":
         ex_sql(o, text)
@@ -1123,6 +1347,7 @@ def extract(rel, kind, phase, text):
                     done = False
             if not done:
                 ex_code(o, text, is_test)
+    fts_extract(o, kind, phase, text)
     return o
 
 
@@ -1142,6 +1367,12 @@ class Graph:
         self.path = os.path.join(self.dir, "graph.sqlite")
         self.db = sqlite3.connect(self.path, timeout=60)
         self.db.executescript(SCHEMA)
+        self.fts5 = True
+        try:
+            self.db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(title, body, tokenize='porter unicode61')")
+        except sqlite3.OperationalError:       # no FTS5 in this sqlite: plain table, LIKE ranking in find
+            self.fts5 = False
+            self.db.execute("CREATE TABLE IF NOT EXISTS fts(title TEXT, body TEXT)")
         if self.meta("schema_version") not in (None, SCHEMA_VERSION):
             self.wipe()
         self.stats = {}
@@ -1156,7 +1387,7 @@ class Graph:
         self.db.execute("INSERT OR REPLACE INTO meta VALUES(?,?)", (k, v))
 
     def wipe(self):
-        for t in ("nodes", "edges", "files", "meta"):
+        for t in ("nodes", "edges", "files", "meta", "docs", "docids", "fts"):
             self.db.execute(f"DELETE FROM {t}")
 
     def q(self, sql, *a):
@@ -1186,10 +1417,16 @@ class Graph:
         return out
 
     # ── indexing ──
+    def forget_docs(self, rel):
+        self.db.execute("DELETE FROM fts WHERE rowid IN (SELECT id FROM docs WHERE file=?)", (rel,))
+        self.db.execute("DELETE FROM docs WHERE file=?", (rel,))
+        self.db.execute("DELETE FROM docids WHERE file=?", (rel,))
+
     def forget(self, rel):
         self.db.execute("DELETE FROM nodes WHERE file=?", (rel,))
         self.db.execute("DELETE FROM edges WHERE file=?", (rel,))
         self.db.execute("DELETE FROM files WHERE path=?", (rel,))
+        self.forget_docs(rel)
 
     def index(self, rel, kind, phase, raw=None):
         p = os.path.join(self.root, rel)
@@ -1205,6 +1442,12 @@ class Graph:
         self.db.execute("DELETE FROM edges WHERE file=?", (rel,))
         self.db.executemany("INSERT INTO nodes VALUES(?,?,?,?,?,?,?,?)", o.nodes)
         self.db.executemany("INSERT INTO edges VALUES(?,?,?,?,?,?)", o.edges)
+        self.forget_docs(rel)
+        for (dk, ph, s0, e0, title, summ, body, refs) in o.docs:
+            cur = self.db.execute("INSERT INTO docs(file, kind, phase, start, end_, title, summary, body) VALUES(?,?,?,?,?,?,?,?)",
+                                  (rel, dk, ph, s0, e0, title, summ, body))
+            self.db.execute("INSERT INTO fts(rowid, title, body) VALUES(?,?,?)", (cur.lastrowid, title, body))
+            self.db.executemany("INSERT INTO docids VALUES(?,?,?,?)", [(cur.lastrowid, r, d, rel) for r, d in sorted(refs.items())])
         self.db.execute("INSERT OR REPLACE INTO files VALUES(?,?,?,?,?)",
                         (rel, kind, hashlib.sha256(raw).hexdigest(), st.st_size, int(st.st_mtime_ns)))
 
@@ -2715,6 +2958,485 @@ def cmd_stats(g, a):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
+# Interactive questions: find / status (the main session), behind graph-policy.json "interactive"
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
+GRAPH_POLICY_FILE = os.path.join("agent_state", "config", "graph-policy.json")
+# The shipped default, decided by measurement (scripts/eval-question-tokens.py, docs/evals/graph-find-eval.md):
+INTERACTIVE_DEFAULT = True
+INTERACTIVE_RC = 5          # distinct exit code: "the capability is switched off, explore normally"
+INTERACTIVE_CMDS = ("find", "ask", "status")
+
+
+def interactive_policy(root):
+    """(enabled, source). env SDLC_GRAPH_INTERACTIVE=0|1 (one run) > graph-policy.json {"interactive": bool} > default.
+    An unreadable file, or a non-boolean value, falls back to the default and says so."""
+    env = (os.environ.get("SDLC_GRAPH_INTERACTIVE") or "").strip().lower()
+    if env in ("1", "true", "on", "yes"):
+        return True, "env SDLC_GRAPH_INTERACTIVE=1"
+    if env in ("0", "false", "off", "no"):
+        return False, "env SDLC_GRAPH_INTERACTIVE=0"
+    path = os.path.join(root, GRAPH_POLICY_FILE)
+    if os.path.exists(path):
+        try:
+            v = json.load(open(path)).get("interactive")
+            if isinstance(v, bool):
+                return v, GRAPH_POLICY_FILE
+            return INTERACTIVE_DEFAULT, f"default ({GRAPH_POLICY_FILE} has no boolean \"interactive\")"
+        except (OSError, ValueError, AttributeError) as e:
+            return INTERACTIVE_DEFAULT, f"default ({GRAPH_POLICY_FILE} unreadable: {e})"
+    return INTERACTIVE_DEFAULT, "default"
+
+
+def cmd_interactive(root, a):
+    path = os.path.join(root, GRAPH_POLICY_FILE)
+    if a.state:
+        try:
+            doc = json.load(open(path)) if os.path.exists(path) else {}
+            if not isinstance(doc, dict):
+                raise ValueError("top level must be an object")
+        except (OSError, ValueError) as e:
+            return {"_line": f"sdlc-graph interactive: {path} is unreadable ({e}) — fix or delete it first", "_rc": 2}
+        doc["interactive"] = a.state == "on"
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+    on, src = interactive_policy(root)
+    return {"_line": f"interactive graph (find/status): {'on' if on else 'off'} — from {src}; default {'on' if INTERACTIVE_DEFAULT else 'off'}; "
+                     f"pipeline commands are unaffected", "_rc": 0}
+
+
+STOPWORDS = set("""a an the of in on at to for from by with and or not no is are was were be been being do does did
+have has had it its this that these those there here what which who whom whose where when why how whether any all
+some each every our we us you your i me my they them their he she his her can could should would will shall may
+might must about into over under than then so if as up out also just only show tell list find give explain please
+get got let lets which's what's where's how's why's vs via per one two etc ok yes still currently right now
+know want need see look""".split())
+QKIND_ALIASES = {"docs": {"spec", "screen", "phasedoc", "brd", "ledger", "doc", "note"},
+                 "code": {"symbol", "route", "table"}, "tests": {"test"}, "reports": {"report", "manifest"}}
+
+
+def query_refs(q):
+    """IDs and targets named in a question, in order: (kind, canonical, as written)."""
+    out, seen = [], set()
+
+    def add(k, c, raw):
+        if (k, c) not in seen:
+            seen.add((k, c))
+            out.append((k, c, raw))
+    for m in EP_RE.finditer(q):
+        add("ep", ep_id(m.group(1), m.group(2)), m.group(0))
+    for m in REQ_RE.finditer(q):
+        add("req", m.group(1), m.group(1))
+    for m in re.finditer(r"(?<![A-Za-z0-9])TC-([A-Z0-9]+)-(\d+)(?![0-9])", q):
+        add("tc", f"TC-{m.group(1)}-{m.group(2)}", m.group(0))
+    for m in DEC_RE.finditer(q):
+        add("ledger", f"D-{int(m.group(1))}", m.group(0))
+    for m in FACT_RE.finditer(q):
+        add("ledger", f"F-{int(m.group(1))}", m.group(0))
+    for m in ADR_RE.finditer(q):
+        add("ledger", f"{m.group(1)}-{int(m.group(2))}", m.group(0))
+    for m in re.finditer(r"\bphase\s*#?\s*(\d{1,2})\b", q, re.I):
+        add("phase", int(m.group(1)), m.group(0))
+    for m in re.finditer(r"\btable\s+[`\"']?([a-z_][a-z0-9_]*)", q, re.I):
+        add("table", m.group(1).lower(), m.group(0))
+    for m in re.finditer(r"[`\"']?((?:[\w.-]+/)+[\w.-]+\.\w{1,5}|[\w-]+\.(?:py|go|ts|tsx|js|jsx|java|kt|rs|sql|md|json|yaml|yml))[`\"']?", q):
+        add("file", m.group(1), m.group(1))
+    for m in re.finditer(r"`([A-Za-z_][\w.]*)(?:\(\))?`|\b([A-Za-z_]\w*_\w+|[a-z]+[A-Z]\w*|[A-Z][a-z0-9]+[A-Z]\w*)(?:\(\))?", q):
+        name = m.group(1) or m.group(2)
+        if name and not REQ_RE.fullmatch(name) and not name.startswith("TC_"):
+            add("symbol", name, name)
+    return out
+
+
+def query_terms(q, refs):
+    t = q
+    for (_k, _c, raw) in refs:
+        if _k in ("ep", "req", "tc", "ledger", "file"):
+            t = t.replace(raw, " ")
+    words = []
+    for w in re.findall(r"[A-Za-z0-9_]+", words_of(t)):
+        lw = w.lower()
+        if len(lw) < 2 or lw in STOPWORDS or lw.isdigit() and len(lw) < 2:
+            continue
+        if lw not in words:
+            words.append(lw)
+    return words[:16]
+
+
+def span(r):
+    return f"{r['file']}:{r['start']}" + (f"-{r['end_']}" if r["end_"] and r["end_"] != r["start"] else "")
+
+
+def doc_rows(g, where, *args):
+    cols = ("id", "file", "kind", "phase", "start", "end_", "title", "summary")
+    return [dict(zip(cols, r)) for r in g.q(f"SELECT {', '.join(cols)} FROM docs WHERE {where}", *args)]
+
+
+def req_brief(g, rid):
+    """FR-x → phases, TC rows, with tests, results — one short string."""
+    cache = g.cache.setdefault("req_brief", {})
+    if rid in cache:
+        return cache[rid]
+    phases = sorted({int(e["dst"][6:]) for e in g.edges("src=? AND rel='assigned_to'", f"req:{rid}") if e["dst"][6:].isdigit()})
+    tcs = sorted({e["src"].split("/", 1)[1] for e in g.edges("rel='verifies_req' AND dst=?", f"req:{rid}")})
+    with_tests = sum(1 for t in tcs if g.q("SELECT 1 FROM edges WHERE rel='verifies' AND dst=? LIMIT 1", f"tcid:{t}"))
+    s = f"{rid}: phase {','.join(map(str, phases)) or '?'}; {len(tcs)} TC row(s) cite it ({with_tests} with tests)"
+    cache[rid] = s
+    return s
+
+
+def neighbours(g, r):
+    """The graph around one hit, as a short string."""
+    k = r["kind"]
+    out = []
+    if k in ("spec", "screen", "phasedoc", "brd", "ledger", "doc", "note", "report"):
+        refs = [x[0] for x in g.q("SELECT ref FROM docids WHERE doc=? ORDER BY def DESC, ref", r["id"])]
+        reqs = [x for x in refs if REQ_RE.fullmatch(x)]
+        tcs = [x for x in refs if x.startswith("TC-")]
+        eps = [x for x in refs if x.startswith("ep:")]
+        decs = [x for x in refs if re.fullmatch(r"(D|F|AD|ADR)-\d+", x)]
+        if reqs:
+            out.append("; ".join(req_brief(g, x) for x in reqs[:2]) + (f" (+{len(reqs) - 2} FR)" if len(reqs) > 2 else ""))
+        if tcs:
+            out.append(f"{len(tcs)} TC ids")
+        for e in eps[:2]:
+            h = handlers_for(g, e)
+            out.append(f"{e[3:]} → " + (h[0]["span"] or h[0]["handler"] if h else "no handler found"))
+        if decs:
+            out.append("cites " + ", ".join(decs[:4]))
+    elif k == "symbol":
+        sym = g.nodes("kind='symbol' AND file=? AND line=? AND name=?", r["file"], r["start"], r["title"])
+        if sym:
+            n = len(callers_of(g, sym[0]))
+            out.append(f"{n} caller(s) by name")
+            eps = endpoints_of_symbol(g, sym[0])
+            if eps:
+                out.append("serves " + ", ".join(e[3:] for e in eps[:3]))
+    elif k == "route":
+        h = handlers_for(g, f"ep:{r['title']}")
+        if h and h[0]["span"]:
+            out.append("handler " + h[0]["span"])
+        decl = g.edges("rel='declares' AND dst=?", f"ep:{r['title']}")
+        if decl:
+            out.append(f"declared {decl[0]['file']}:{decl[0]['line']}")
+    elif k == "test":
+        ids = [x[0] for x in g.q("SELECT ref FROM docids WHERE doc=?", r["id"])]
+        res = [f"{i} {results_for(g, i) or 'no result'}" for i in ids[:3]]
+        if res:
+            out.append("; ".join(res))
+    elif k == "table":
+        t = r["title"][6:]
+        rd = len({x["src"] for x in g.edges("rel='reads' AND dst=?", f"table:{t}")})
+        wr = len({x["src"] for x in g.edges("rel='writes' AND dst=?", f"table:{t}")})
+        out.append(f"{rd} reader / {wr} writer symbol(s)")
+    return " | ".join(out)
+
+
+def exact_lines(g, kind, canon, raw):
+    """Exact resolution of one ID/target named in the question → list of short strings."""
+    if kind == "req":
+        t = cmd_trace(g, argparse.Namespace(id=canon))
+        if not t.get("defined_at") and not t.get("tc") and not t.get("spec_sections"):
+            return [f"{canon}: not defined in docs/BRD.md and named by no spec"]
+        if not t.get("defined_at"):     # e.g. an FR under a BRD "amendment" heading (the graph skips those sections)
+            d = doc_rows(g, "kind='brd' AND id IN (SELECT doc FROM docids WHERE ref=? AND def=1) ORDER BY start LIMIT 1", canon)
+            if d:
+                t["defined_at"], t["text"] = span(d[0]), d[0]["summary"]
+        tc = t.get("tc") or []
+        with_tests = sum(1 for x in tc if x.get("tests"))
+        res = {}
+        for x in tc:
+            res[x.get("result") or "no result"] = res.get(x.get("result") or "no result", 0) + 1
+        lines = [f"{canon}{' [' + t['moscow'].upper() + ']' if t.get('moscow') else ''} defined {t.get('defined_at') or '?'} — {(t.get('text') or '')[:150]}",
+                 f"  phases {', '.join(t.get('phases') or []) or '?'}; spec sections: "
+                 + ", ".join(f"{s['where']}" for s in (t.get("spec_sections") or [])[:5])
+                 + (f" (+{len(t['spec_sections']) - 5})" if len(t.get("spec_sections") or []) > 5 else ""),
+                 f"  {len(tc)} TC rows (row-cited or in its spec sections), {with_tests} with tests; results " + ", ".join(f"{k} {v}" for k, v in sorted(res.items()))]
+        eps = t.get("endpoints") or []
+        if eps:
+            lines.append("  endpoints: " + "; ".join(f"{e['endpoint']} → {', '.join(h for h in e['handlers'] if h) or 'no handler'}" for e in eps[:4])
+                         + (f" (+{len(eps) - 4})" if len(eps) > 4 else ""))
+        return lines
+    if kind == "tc":
+        t = cmd_trace(g, argparse.Namespace(id=canon))
+        if not t.get("defined_in") and not t.get("tests"):
+            return [f"{canon}: no spec row and no test names it"]
+        d = t["defined_in"][0] if t.get("defined_in") else {}
+        res = sorted({x.get("verdict") for x in t.get("results") or [] if x.get("verdict")})
+        return [f"{canon} phase {d.get('phase', '?')} {d.get('priority', '?')} {d.get('tier') or ''} row {d.get('spec', '?')} ({d.get('section', '')[:60]})"
+                + (f" [also phase {', '.join(str(x['phase']) for x in t['defined_in'][1:])}]" if len(t.get("defined_in") or []) > 1 else ""),
+                f"  tests: " + (", ".join(x["at"] for x in t.get("tests", [])[:4]) or "none")
+                + f"; results: {', '.join(res) or 'none'}; FRs: {', '.join(t.get('requirements') or []) or '?'}"]
+    if kind == "ledger":
+        rows = doc_rows(g, "id IN (SELECT doc FROM docids WHERE ref=? AND def=1) ORDER BY CASE kind WHEN 'ledger' THEN 0 "
+                           "WHEN 'doc' THEN 1 ELSE 2 END, file, start", canon)
+        if rows:
+            return [f"{raw}: {span(r)} — {r['summary'][:200]}" for r in rows[:3]] + \
+                   ([f"  (+{len(rows) - 3} more definitions)"] if len(rows) > 3 else [])
+        rows = doc_rows(g, "id IN (SELECT doc FROM docids WHERE ref=?) ORDER BY file, start", canon)
+        return [f"{raw}: no heading defines it; mentioned at " + ", ".join(span(r) for r in rows[:5]) if rows else f"{raw}: not found"]
+    if kind == "ep":
+        c = consumers_one(g, raw)
+        hs = c.get("handlers") or []
+        return [f"{c['endpoint']}: declared {', '.join(c.get('declared_in') or []) or 'in no contract'}; handler "
+                + (", ".join(f"{h['handler'].split('#')[-1]} {h['span'] or h['route_at']}" for h in hs[:3]) or "none found"),
+                f"  TC rows {len(c.get('tc_rows') or [])}; screens {', '.join(x['screen'] for x in c.get('screen_bindings') or []) or 'none'}; "
+                f"frontend callers {len(c.get('frontend_callers') or [])}"]
+    if kind == "table":
+        c = consumers_one(g, f"table:{canon}")
+        if not c.get("created_by") and not c.get("readers") and not c.get("writers"):
+            return []
+        return [f"table {canon}: created {', '.join(c['created_by'][:2]) or '?'}; altered by {len(c['altered_by'])} migration(s)",
+                f"  readers {len(c['readers'])}: " + ", ".join(x[4:] for x in c["readers"][:6]) + (" …" if len(c["readers"]) > 6 else ""),
+                f"  writers {len(c['writers'])}: " + ", ".join(x[4:] for x in c["writers"][:6]) + (" …" if len(c["writers"]) > 6 else "")]
+    if kind == "file":
+        f = canon.strip("./")
+        hit = g.q("SELECT path, kind FROM files WHERE path=?", f) or g.q("SELECT path, kind FROM files WHERE path LIKE ? ORDER BY length(path) LIMIT 2", f"%/{f}")
+        if not hit:
+            return []
+        f, fk = hit[0]
+        syms = g.nodes("kind='symbol' AND file=? ORDER BY line", f)
+        routes = [e["dst"][3:] for e in g.edges("rel='route' AND file=?", f)]
+        imps = importers_of(g, f) if fk in ("code", "test") else []
+        return [f"{f} ({fk}): {len(syms)} symbols" + (": " + ", ".join(f"{s['name']}:{s['line']}" for s in syms[:8]) if syms else "")
+                + (f"; routes {', '.join(routes[:4])}" if routes else "") + (f"; {len(imps)} importer(s)" if fk in ("code", "test") else "")]
+    if kind == "symbol":
+        _k, ns = resolve_target(g, canon)
+        ns = [n for n in ns if n.get("kind") == "symbol"]
+        if not ns:
+            return []
+        out = []
+        for s in ns[:3]:
+            eps = endpoints_of_symbol(g, s)
+            out.append(f"{s['name']} {s['file']}:{s['line']}-{s['end_line']} — {len(callers_of(g, s))} caller(s) by name"
+                       + (f"; serves {', '.join(e[3:] for e in eps[:3])}" if eps else ""))
+        if len(ns) > 3:
+            out.append(f"  (+{len(ns) - 3} more definitions named {canon})")
+        return out
+    if kind == "phase":
+        return status_phase_lines(g, canon, brief=True)
+    return []
+
+
+DOC_KIND_ORDER = {"brd": 0, "ledger": 0, "spec": 1, "screen": 1, "phasedoc": 2, "doc": 2, "route": 2, "table": 2,
+                  "symbol": 3, "manifest": 3, "report": 4, "note": 4, "test": 5}
+
+
+def fts_hits(g, terms, kinds, top, exclude=(), refs=()):
+    """Rows that mention an ID the question names come first (definitions, then by term matches and kind), then
+    bm25 text hits re-ranked by how many distinct question terms they contain."""
+    cols = "d.id, d.file, d.kind, d.phase, d.start, d.end_, d.title, d.summary, d.body"
+    names = ("id", "file", "kind", "phase", "start", "end_", "title", "summary", "body", "bm25")
+    stems = [t[:max(4, len(t) - 3)] if len(t) > 5 else t for t in terms]
+    pool = []
+    if refs:
+        qm = ",".join("?" * len(refs))
+        rows = g.q(f"SELECT {cols}, max(x.def) FROM docids x JOIN docs d ON d.id = x.doc WHERE x.ref IN ({qm}) "
+                   f"GROUP BY d.id LIMIT 3000", *refs)
+        for r in rows:
+            d = dict(zip(names, r))
+            if kinds and d["kind"] not in kinds:
+                continue
+            hay = (d["title"] + " " + d["body"]).lower()
+            pool.append((-(d["bm25"] or 0), -sum(1 for t in stems if t in hay), DOC_KIND_ORDER.get(d["kind"], 6),
+                         d["file"], d["start"], d))
+        pool.sort(key=lambda x: x[:5])
+    if not terms or (pool and len(terms) <= 2):     # an ID question with a word or two: its own rows are the answer
+        return pick_hits([x[-1] for x in pool], top, exclude)
+    if g.fts5:
+        match = " OR ".join('"' + t.replace('"', "") + '"' for t in terms)
+        rows = g.q(f"SELECT {cols}, bm25(fts, 6.0, 1.0) AS s FROM fts JOIN docs d ON d.id = fts.rowid "
+                   f"WHERE fts MATCH ? ORDER BY s LIMIT 400", match)
+    else:                                           # no FTS5: LIKE + term count (slower, same output shape)
+        like = " OR ".join(["(d.title LIKE ? OR d.body LIKE ?)"] * len(terms))
+        args = [x for t in terms for x in (f"%{t}%", f"%{t}%")]
+        rows = [r + (0.0,) for r in g.q(f"SELECT {cols} FROM docs d WHERE {like} LIMIT 4000", *args)]
+    scored = []
+    for r in rows:
+        d = dict(zip(names, r))
+        if kinds and d["kind"] not in kinds:
+            continue
+        hay = (d["title"] + " " + d["body"]).lower()
+        hay_t = d["title"].lower()
+        matched = sum(1 for t in stems if t in hay)
+        in_title = sum(1 for t in stems if t in hay_t)
+        scored.append((-matched, -in_title, d["bm25"], d["file"], d["start"], d))
+    scored.sort(key=lambda x: x[:5])
+    ref_cap = max(1, (top + 1) // 2) if scored else top      # leave room for text hits when the question has words
+    first = pick_hits([x[-1] for x in pool], ref_cap, exclude)
+    return first + pick_hits([x[-1] for x in scored], top - len(first), exclude, seed=first)
+
+
+def pick_hits(cands, top, exclude=(), seed=None):
+    out, per_file = list(seed or []), {}
+    for o in out:
+        per_file[o["file"]] = per_file.get(o["file"], 0) + 1
+    base = len(out)
+    for d in cands:
+        if (d["file"], d["start"]) in exclude:
+            continue
+        if any(o["file"] == d["file"] and not (d["end_"] < o["start"] or d["start"] > o["end_"]) for o in out):
+            continue                                # dedup overlapping spans of one file
+        if per_file.get(d["file"], 0) >= 2:
+            continue
+        per_file[d["file"]] = per_file.get(d["file"], 0) + 1
+        out.append(d)
+        if len(out) - base >= top:
+            break
+    return out[base:]
+
+
+def cmd_find(g, a):
+    q = " ".join(a.question).strip()
+    if not q:
+        return {"_line": "sdlc-graph find: give a question, IDs, an endpoint, a file or a symbol", "_rc": 2}
+    refs = query_refs(q)
+    exact, used = [], []
+    for (k, c, raw) in refs[:8]:
+        lines = exact_lines(g, k, c, raw)
+        if lines:
+            exact += lines
+            used.append(raw if k != "phase" else f"phase {c}")
+    kinds = set()
+    for k in (a.kind or "").split(","):
+        k = k.strip()
+        if k:
+            kinds |= QKIND_ALIASES.get(k, {k})
+    terms = query_terms(q, refs)
+    keys = []
+    for (k, c, raw) in refs:
+        keys.append({"table": f"table:{c}", "symbol": f"sym:{str(c).lower()}"}.get(k, c) if k != "phase" else None)
+    hits = fts_hits(g, terms, kinds, a.top, refs=[k for k in keys if k])
+    out = {"find": q, "resolved": used or "none", "terms": " ".join(terms) or "none"}
+    if exact:
+        out["exact"] = exact
+    out["hits"] = [f"[{h['kind']}{' p' + str(h['phase']) if h['phase'] is not None else ''}] {span(h)} — {h['summary'][:170]}"
+                   + (f" || {nb}" if (nb := neighbours(g, h)) else "") for h in hits] or ["no text hits"]
+    out["next"] = ("open ONLY these spans (Read with offset/limit); drill in with `trace <FR|TC>`, `consumers <target>`, "
+                   "`impact <file|symbol>`, `status --phase N`. Nothing relevant here → explore normally.")
+    return out
+
+
+def phase_list(g):
+    ps = set(g.phases())
+    for d in ("docs/design/phases", "agent_state/phases"):
+        p = os.path.join(g.root, d)
+        if os.path.isdir(p):
+            ps |= {int(x) for x in os.listdir(p) if x.isdigit()}
+    return sorted(ps)
+
+
+def phase_gate_state(g, p):
+    gate = g.nodes("kind='phase_gate' AND phase=?", p)
+    man = g.nodes("kind='manifest' AND phase=?", p)
+    m = man[0] if man else {}
+    if gate:
+        return "PASSED (gate.passed)", m
+    if m.get("gate_passed") is True:
+        return "PASSED (manifest)", m
+    if m.get("gate_state"):
+        return m["gate_state"], m
+    return ("not gated" if man else "no manifest"), m
+
+
+def phase_title(g, p, m):
+    n = g.nodes("kind='phase' AND phase=?", p)
+    return (n[0]["name"] if n else m.get("goal") or "")[:80]
+
+
+def status_phase_lines(g, p, brief=False):
+    state, m = phase_gate_state(g, p)
+    rs = roster_summary(g, p)
+    has_specs = bool(g.q("SELECT 1 FROM nodes WHERE kind='tc' AND phase=? LIMIT 1", p))
+    tcs = ""
+    inv = None
+    if has_specs:
+        res = discover_results(g, p)
+        inv = tc_inventory(g, p, results=res or None)
+        tcs = (f"TC (graph gate view) {inv['passed']}/{inv['total']} HIGH+MEDIUM covered ({inv['mode']} mode), missing {len(inv['missing'])}, "
+               f"failing {len(inv['failing'])}, D-002 warnings {inv['warning_count']}")
+    roster = (f"roster {len(rs['required']) - len(rs['missing'])}/{len(rs['required'])} completed" if rs["roster_present"]
+              else "no roster.json")
+    plan = g.nodes("kind='phase' AND phase=?", p)
+    head = (f"phase {p}" + (f" — {phase_title(g, p, m)}" if phase_title(g, p, m) else "") + f": gate {state}" + (f" (manifest status {m['status']})" if m.get("status") else "")
+            + f"; {roster}" + (f"; {tcs}" if tcs else "; no TC rows") + (f"; plan {plan[0]['file']}" if plan else ""))
+    if brief:
+        return [head]
+    lines = [head]
+    if rs["missing"]:
+        lines.append("  roster missing: " + ", ".join(rs["missing"][:12]) + (" …" if len(rs["missing"]) > 12 else ""))
+    if rs["dangling_failed"]:
+        lines.append("  failed, never re-completed: " + ", ".join(rs["dangling_failed"][:8]))
+    if inv:
+        if inv["missing"]:
+            lines.append("  uncovered HIGH/MEDIUM: " + ", ".join(inv["missing"][:10]) + (f" (+{len(inv['missing']) - 10})" if len(inv["missing"]) > 10 else ""))
+        if inv["failing"]:
+            lines.append("  failing: " + ", ".join(inv["failing"][:10]))
+        for w in inv["warnings"]:
+            lines.append(f"  warning [{w['check']}] {w['count']}: {w['what']}")
+    ev = evidence_summary(g, p)
+    blk = [f"{r['file']} BLOCKING:{r['blocking']}" for r in ev["reconcilers"] if r["blocking"]]
+    blk += [f"{s['file']} verdict {s['verdict']}" for s in ev["sidecars"] if s["verdict"] not in ("PASS", None)]
+    if blk:
+        lines.append("  blocking findings: " + "; ".join(blk[:8]) + (f" (+{len(blk) - 8})" if len(blk) > 8 else ""))
+    if m.get("gate_state") and not g.nodes("kind='phase_gate' AND phase=?", p):
+        r = doc_rows(g, "kind='manifest' AND phase=?", p)
+        if r:
+            lines.append(f"  manifest: {span(r[0])} — {r[0]['summary'][:200]}")
+    return lines
+
+
+def last_deploy(root):
+    out = []
+    p = os.path.join(root, "agent_state", "deploy", "last-deploy-status.json")
+    if os.path.exists(p):
+        try:
+            j = json.load(open(p))
+            out.append("last deploy: " + ", ".join(f"{k}={j[k]}" for k in ("target", "env", "status", "verdict", "healthy", "sha", "image", "ts", "at")
+                                                    if k in j and isinstance(j[k], (str, int, bool)))[:300])
+        except (OSError, ValueError):
+            out.append("last deploy: agent_state/deploy/last-deploy-status.json unreadable")
+    d = os.path.join(root, "agent_state", "deploy")
+    if os.path.isdir(d):
+        for env in sorted(os.listdir(d)):
+            h = os.path.join(d, env, "history.jsonl")
+            if os.path.isfile(h):
+                ls = [l for l in open(h, errors="replace").read().splitlines() if l.strip()]
+                if ls:
+                    out.append(f"{env} deploys: {len(ls)}; last {ls[-1][:200]}")
+    return out or ["no deploy record (agent_state/deploy/)"]
+
+
+def cmd_status(g, a):
+    if a.phase is not None:
+        p = int(a.phase)
+        return {"status": f"phase {p}", "phase": status_phase_lines(g, p), "deploy": last_deploy(g.root),
+                "next": "spans: `find \"phase N <topic>\"`; TC rows: `tc --phase N --status missing`; gate detail: `gate --phase N --summary`"}
+    phases = phase_list(g)
+    rows, current = [], None
+    for p in phases:
+        state, _m = phase_gate_state(g, p)
+        planned = bool(g.nodes("kind='phase' AND phase=?", p)) or bool(_m)
+        if current is None and planned and not state.startswith("PASSED") and state not in ("NOT_APPLICABLE",) \
+                and (_m.get("status") or "").upper() not in ("CLOSED", "CLOSED_AS_WORKSTREAM", "STUB", "CANCELLED"):
+            current = p
+        rows += status_phase_lines(g, p, brief=True)
+    decs = {r[0] for r in g.q("SELECT DISTINCT x.ref FROM docids x JOIN docs d ON d.id = x.doc "
+                              "WHERE d.kind='ledger' AND x.def=1 AND x.ref LIKE 'D-%'")}
+    facts = {r[0] for r in g.q("SELECT DISTINCT x.ref FROM docids x JOIN docs d ON d.id = x.doc "
+                               "WHERE d.kind='ledger' AND x.def=1 AND x.ref LIKE 'F-%'")}
+    head = (g.meta("head") or "")[:10]
+    return {"status": f"{os.path.basename(g.root)} @ {head} (graph built {g.meta('built_at')})",
+            "current_phase": current if current is not None else "all gated",
+            "phases": rows,
+            "ledger": f"{len(decs)} decision heading(s) (D-n) and {len(facts)} fact heading(s) (F-n) in docs/DECISIONS.md / "
+                      "docs/PROJECT_FACTS.md — `find D-n` resolves one",
+            "deploy": last_deploy(g.root),
+            "next": "`status --phase N` for missing roster agents, uncovered TC IDs, warnings and blocking findings"}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════════════════════
 # Budgeted output
 # ═══════════════════════════════════════════════════════════════════════════════════════════════
 def cap_lists(obj, limit, top=True):
@@ -2844,12 +3566,28 @@ def main(argv=None):
     pm.add_argument("--warn", action="store_true", help="all four back to warnings")
     po.add_argument("--strict-check", action="append", choices=sorted(TC_GATE_CHECKS), help="enforce one check (repeatable)")
     po.add_argument("--warn-check", action="append", choices=sorted(TC_GATE_CHECKS), help="one check back to a warning")
+    fd = sp.add_parser("find", aliases=["ask"]); common(fd, False)
+    fd.add_argument("question", nargs="*"); fd.add_argument("--kind", help="docs,code,tests,reports or a row kind (spec, brd, symbol…)")
+    fd.add_argument("--top", type=int, default=8, help="text hits to show (default 8)")
+    st_ = sub("status"); st_.add_argument("--phase")
+    it = sub("interactive"); it.add_argument("state", nargs="?", choices=["on", "off"])
     a = ap.parse_args(argv)
+    if a.cmd == "ask":
+        a.cmd = "find"
     if a.max_tokens is None:
-        a.max_tokens = {"context": 5000, "diff-context": 4000}.get(a.cmd, 2000)
+        a.max_tokens = {"context": 5000, "diff-context": 4000, "find": 1500}.get(a.cmd, 2000)
     if not os.path.isdir(a.root):
         print(f"sdlc-graph: no such root {a.root}", file=sys.stderr)
         return 3
+    if a.cmd == "interactive":                  # no graph needed
+        res = cmd_interactive(os.path.abspath(a.root), a)
+        print(res["_line"], file=sys.stdout if res["_rc"] == 0 else sys.stderr)
+        return res["_rc"]
+    if a.cmd in INTERACTIVE_CMDS:              # checked before the graph is opened: a disabled project pays nothing
+        on, src = interactive_policy(os.path.abspath(a.root))
+        if not on:
+            print(f"interactive graph disabled ({src}) — explore normally")
+            return INTERACTIVE_RC
     if a.cmd == "policy":                       # no graph needed
         res = cmd_policy(os.path.abspath(a.root), a)
         if "_line" in res:
@@ -2873,7 +3611,7 @@ def main(argv=None):
         return 4
     fn = {"stats": cmd_stats, "tc": cmd_tc, "context": cmd_context, "diff-context": cmd_diff_context, "impact": cmd_impact,
           "consumers": cmd_consumers, "trace": cmd_trace, "orphans": cmd_orphans, "unlocked": cmd_unlocked,
-          "gate": cmd_gate, "repomap": cmd_repomap, "warnings": cmd_warnings}[a.cmd]
+          "gate": cmd_gate, "repomap": cmd_repomap, "warnings": cmd_warnings, "find": cmd_find, "status": cmd_status}[a.cmd]
     if a.cmd in ("tc", "gate") and a.diff_base is not None and not a.diff_base.strip():
         print("sdlc-graph: --diff-base is empty (agent_state/phases/N/base_sha missing?) — the weakening check needs "
               "the commit the phase started from; leave the flag out only for a source-mode inventory", file=sys.stderr)

@@ -946,6 +946,183 @@ rc, log = verify_gate()
 check("H04w", (0, True, True), (rc, "[base_sha_required]" in log, "1 D-002 warning(s)" in log),
       "verify-gate (h), default: missing base_sha is a warning; the ok line counts the warnings and names the commands")
 
+# ─── interactive questions: find / status / the graph-policy.json switch ─────────────────────────────
+F = new_repo("f")
+write(F, "docs/BRD.md", """# BRD
+## 4. Functional Requirements
+**FR-001 — List orders** (MUST)
+- The system SHALL list a buyer's orders newest first.
+
+**FR-002 — Cancel orders** (SHOULD)
+- The system SHALL let a buyer cancel an unshipped order.
+""")
+write(F, "docs/DECISIONS.md", """# DECISIONS
+## Active Decisions
+### D-001 — Orders live in Postgres
+- status: active
+- decision: > Postgres is the store for orders.
+
+### D35 — Postgres advisory locks serialise the nightly settlement job
+- status: active
+- decision: > The settlement job takes pg_advisory_xact_lock so two replicas never settle twice.
+- rationale: > A queue table was rejected; advisory locks need no extra table.
+""")
+write(F, "docs/PROJECT_FACTS.md", """# FACTS
+### F-001 — Graph database is NebulaGraph
+- status: active
+""")
+write(F, "docs/adr/ADR-002-settlement.md", """# ADR-002: settlement scheduling
+We run settlement nightly from cron. Postgres is mentioned here only in passing.
+""")
+write(F, "docs/design/phases/1/PHASE_PLAN.md", """# Phase 1 — Orders
+## Scope
+- FR-001
+""")
+write(F, "docs/design/phases/1/specs/orders.md", """# Orders (FR-001)
+## Acceptance Criteria
+- WHEN a buyer opens the orders page THE SYSTEM SHALL list orders newest first.
+## API
+### GET /api/orders
+## Test Coverage Required
+| TC ID | Description | Priority | Tier |
+|---|---|---|---|
+| TC-API-001 | GET /api/orders lists orders (FR-001) | HIGH | integration |
+| TC-API-002 | empty list (FR-001) | MEDIUM | integration |
+""")
+write(F, "docs/design/phases/2/PHASE_PLAN.md", """# Phase 2 — Cancellation
+## Scope
+- FR-002
+""")
+write(F, "docs/design/phases/2/specs/cancel.md", """# Cancel (FR-002)
+## Test Coverage Required
+| TC ID | Description | Priority | Tier |
+|---|---|---|---|
+| TC-CAN-001 | cancel an unshipped order (FR-002) | HIGH | unit |
+""")
+write(F, "agent_state/phases/1/gate.passed", "2026-09-01\n")
+write(F, "agent_state/phases/1/manifest.json", json.dumps({"phase": 1, "goal": "Orders", "status": "COMPLETE", "gate": {"passed": True}}))
+write(F, "agent_state/phases/2/roster.json", json.dumps({"phase": 2, "required": ["unit_test_agent", "code_reviewer_I"]}))
+write(F, "agent_state/phases/2/execution.jsonl", json.dumps({"agent": "unit_test_agent", "phase": 2, "status": "completed", "report": None}) + "\n")
+write(F, "migrations/001_orders.sql", "CREATE TABLE orders (id bigint primary key);\n")
+write(F, "api/orders.go", '''package api
+
+// ListOrders returns a buyer's orders newest first.
+func ListOrders() { query("SELECT id FROM orders") }
+func SettleNightly() { lock() }
+func Routes(r Router) {
+	r.GET("/api/orders", ListOrders)
+}
+''')
+write(F, "api/orders_test.go", '''package api
+import "testing"
+func TestOrders(t *testing.T) {
+    t.Run("TC-API-001 lists orders", func(t *testing.T) {})
+}
+''')
+git(F, "add", "-A")
+git(F, "commit", "-qm", "f")
+ON = dict(WARN, SDLC_GRAPH_INTERACTIVE="1")
+rc, out, _ = sg(F, "find", "where is FR-001 implemented", env=ON)
+check("FD01", (0, True, True), (rc, "FR-001 [MUST] defined docs/BRD.md:3" in out, "TC rows" in out),
+      "find: an FR in the question resolves exactly (definition file:line, MoSCoW, TC rows) before any text hit")
+rc, out, _ = sg(F, "find", "TC-API-001", env=ON)
+check("FD02", (0, True, True), (rc, "TC-API-001 phase 1 HIGH integration row docs/design/phases/1/specs/orders.md:" in out,
+                                "api/orders_test.go:" in out), "find: a TC ID resolves to its spec row and its test")
+rc, out, _ = sg(F, "find", "what did D35 decide, and D-001?", env=ON)
+check("FD03", (True, True), ("D35: docs/DECISIONS.md:7-10" in out, "D-001: docs/DECISIONS.md:3-5" in out),
+      "find: D35 and D-001 both resolve to their ledger headings (D-n == Dn)")
+rc, out, _ = sg(F, "find", "GET /api/orders", env=ON)
+check("FD04", True, "handler ListOrders api/orders.go:4" in out, "find: an endpoint resolves to its handler span")
+rc, out, _ = sg(F, "--json", "find", "why did we pick postgres advisory locks for settlement", env=ON)
+j = json.loads(out)
+check("FD05", (True, True), (j["hits"][0].startswith("[ledger] docs/DECISIONS.md:7-10"), not any("ADR-002" in h for h in j["hits"][:1])),
+      "find: FTS ranking puts the decision that matches most question terms first, not a passing mention")
+check("FD06", True, "SHALL list orders newest first" in sg(F, "find", "orders newest first", env=ON)[1],
+      "find: the one-line summary is the section's first SHALL line (deterministic, no LLM)")
+rc, out, _ = sg(F, "find", "orders settlement postgres nightly buyer", "--max-tokens", "60", env=ON)
+check("FD07", True, len(out) <= 60 * 4 + 40, f"find: --max-tokens caps the answer ({len(out)} chars)")
+rc, out, _ = sg(F, "find", "`SettleNightly`", env=ON)
+check("FD08", True, "SettleNightly api/orders.go:5" in out, "find: a backticked symbol resolves to its definition span")
+rc, out, _ = sg(F, "find", "table orders", env=ON)
+check("FD09", True, "table orders: created migrations/001_orders.sql:1" in out and "readers 1" in out,
+      "find: 'table X' resolves to the creating migration and its readers")
+rc, out, _ = sg(F, "ask", "zzqx nonsenseword", env=ON)
+check("FD10", (0, True), (rc, "no text hits" in out), "find/ask: alias works; no match says so")
+
+# incremental index == full rebuild (the find tables, not only graph.jsonl)
+def index_dump(gd):
+    import sqlite3
+    c = sqlite3.connect(os.path.join(gd, "graph.sqlite"))
+    docs = sorted(c.execute("SELECT file, kind, phase, start, end_, title, summary, body FROM docs").fetchall(), key=repr)
+    ids = sorted(c.execute("SELECT d.file, d.start, x.ref, x.def FROM docids x JOIN docs d ON d.id = x.doc").fetchall(), key=repr)
+    fts = sorted(c.execute("SELECT d.file, d.start, f.title FROM fts f JOIN docs d ON d.id = f.rowid").fetchall(), key=repr)
+    n = c.execute("SELECT count(*) FROM fts").fetchone()[0]
+    return docs, ids, fts, n
+
+
+GDI, GDF = os.path.join(W, "f-inc"), os.path.join(W, "f-full")
+sg(F, "--graph-dir", GDI, "build")
+write(F, "docs/DECISIONS.md", open(os.path.join(F, "docs/DECISIONS.md")).read() + "\n### D36 — Refunds go through the ledger\n- status: active\n")
+write(F, "docs/RUNBOOK.md", "# Runbook\nRestart the settlement worker after a failed night.\n")
+os.remove(os.path.join(F, "docs/adr/ADR-002-settlement.md"))
+rc, out, _ = sg(F, "--graph-dir", GDI, "build", "--incremental")
+sg(F, "--graph-dir", GDF, "build")
+check("FD11", True, index_dump(GDI) == index_dump(GDF) and index_dump(GDI)[3] == len(index_dump(GDI)[0]),
+      "find index: incremental re-index == full rebuild (docs, IDs, FTS rows; no orphan FTS rows)")
+check("FD12", sg(F, "--graph-dir", GDF, "--no-refresh", "find", "settlement worker restart D36", env=ON)[1],
+      sg(F, "--graph-dir", GDI, "--no-refresh", "find", "settlement worker restart D36", env=ON)[1],
+      "find output is identical on the incremental and the full index")
+
+# status
+rc, _o, _e = sg(F, "--json", "--full", "status", env=ON)
+st = json.loads(_o)
+check("FS01", (0, 2), (rc, st.get("current_phase")), "status: the current phase is the first planned phase not gated")
+p1 = next(x for x in st["phases"] if x.startswith("phase 1"))
+p2 = next(x for x in st["phases"] if x.startswith("phase 2"))
+check("FS02", (True, True, True), ("gate PASSED (gate.passed)" in p1, "roster 1/2 completed" in p2, "TC (graph gate view) 0/1" in p2),
+      "status: gate state, roster completion and TC coverage per phase")
+rc, out, _ = sg(F, "status", "--phase", "2", env=ON)
+check("FS03", (0, True, True), (rc, "roster missing: code_reviewer_I" in out, "uncovered HIGH/MEDIUM: TC-CAN-001" in out),
+      "status --phase N: missing roster agents and uncovered IDs")
+check("FS04", True, len(sg(F, "status", env=ON)[1]) <= 2000 * 4 + 40, "status stays under its budget")
+
+# the switch
+os.makedirs(os.path.join(F, "agent_state/config"), exist_ok=True)
+rc, out, _ = sg(F, "interactive", "off")
+check("FS05", (0, False), (rc, json.load(open(os.path.join(F, "agent_state/config/graph-policy.json")))["interactive"]),
+      "interactive off writes graph-policy.json")
+for cmd in (["find", "FR-001"], ["ask", "x"], ["status"]):
+    rc, out, err = sg(F, *cmd)
+    check("FS06", (5, 1, True), (rc, len(out.strip().splitlines()), out.startswith("interactive graph disabled (agent_state/config/graph-policy.json)")),
+          f"disabled: `{cmd[0]}` prints one line and exits 5")
+rc, out, _ = sg(F, "find", "FR-001", env=dict(WARN, SDLC_GRAPH_INTERACTIVE="1"))
+check("FS07", (0, True), (rc, "FR-001" in out), "env SDLC_GRAPH_INTERACTIVE=1 overrides the file for one run")
+rc, tr = sgj(F, "trace", "FR-001")
+check("FS08", (0, "FR-001"), (rc, tr.get("req")), "the switch never affects pipeline commands (trace still answers)")
+sg(F, "interactive", "on")
+rc, out, _ = sg(F, "status", env=dict(WARN, SDLC_GRAPH_INTERACTIVE="0"))
+check("FS09", 5, rc, "env SDLC_GRAPH_INTERACTIVE=0 disables for one run even when the file says on")
+write(F, "agent_state/config/graph-policy.json", "{not json")
+rc, out, _ = sg(F, "interactive")
+check("FS10", True, "unreadable" in out, "an unreadable graph-policy.json falls back to the default and says so")
+os.remove(os.path.join(F, "agent_state/config/graph-policy.json"))
+
+# schema change → full rebuild of the find index
+import sqlite3 as _sq
+GDS = os.path.join(W, "f-schema")
+sg(F, "--graph-dir", GDS, "build")
+c = _sq.connect(os.path.join(GDS, "graph.sqlite"))
+c.execute("UPDATE meta SET value='1' WHERE key='schema_version'")
+for t in ("fts", "docids", "docs"):
+    c.execute(f"DROP TABLE {t}")
+c.commit()
+c.close()
+rc, out, _ = sg(F, "--graph-dir", GDS, "find", "advisory locks", env=ON)
+c = _sq.connect(os.path.join(GDS, "graph.sqlite"))
+sv = c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0]
+c.close()
+check("FS11", (0, True, "2"), (rc, "docs/DECISIONS.md" in out, sv), "a schema-version change wipes and rebuilds (incl. the find index)")
+
 print(f"\nsdlc-graph: {total - fails}/{total} passed")
 shutil.rmtree(W, ignore_errors=True)
 sys.exit(1 if fails else 0)
