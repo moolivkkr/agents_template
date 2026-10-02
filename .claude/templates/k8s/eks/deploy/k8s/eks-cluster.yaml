@@ -1,5 +1,5 @@
 # Cluster-scoped objects for one app in one EKS environment, applied ONCE per cluster by a human with
-# cluster-admin (scripts/k8s/eks-bootstrap.sh <staging|prod>, which fills ${...} from overlays/<env>/eks.env).
+# cluster-admin (scripts/k8s/eks-bootstrap.sh <staging|prod>, which fills the ENV and ACM_CERTIFICATE_ARN placeholders from overlays/<env>/eks.env).
 # The deploy identity (CI's role, mapped by an EKS access entry to the Kubernetes group
 # __APP__-deployers with AmazonEKSAdminPolicy scoped to this namespace) can't create any of these.
 apiVersion: v1
