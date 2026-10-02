@@ -208,8 +208,10 @@ def phase_signature(root):
 
 
 def derive_phase(root, pin=None):
-    """pin (SDLC_PHASE / policy.phase) > active /autonomous run > highest open phase dir with a manifest
-    > latest phase dir > "unscoped"."""
+    """pin (SDLC_PHASE / policy.phase) > active /autonomous run > highest phase dir that is not closed (no gate.passed,
+    manifest absent or not in a closed state) > latest phase dir > "unscoped". A dir WITHOUT a manifest counts as open:
+    /plan and /develop create the phase dir long before the gate writes its manifest, so requiring a manifest would
+    keep labelling new work with an older, still-IN_FLIGHT phase."""
     if pin is not None:
         return pin
     run = read_json(os.path.join(root, "agent_state", "autonomous", "run.json"), None)
@@ -223,7 +225,7 @@ def derive_phase(root, pin=None):
         nums = []
     for n in nums:
         pdir = os.path.join(phases, str(n))
-        if os.path.isfile(os.path.join(pdir, "manifest.json")) and not phase_closed(pdir):
+        if not phase_closed(pdir):
             return n
     return nums[0] if nums else "unscoped"
 

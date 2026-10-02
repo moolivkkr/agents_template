@@ -255,7 +255,7 @@ def case_phase():
     d = project({})
     check("no phases → unscoped", ledger.derive_phase(d) == "unscoped")
     os.makedirs(os.path.join(d, "agent_state", "phases", "3"))
-    check("dirs without manifests → latest dir", ledger.derive_phase(d) == 3)
+    check("dir without a manifest → that dir", ledger.derive_phase(d) == 3)
     for n, m in ((5, {"phase": 5, "status": "IN_FLIGHT"}), (8, {"status": "CLOSED_AS_WORKSTREAM", "gate": {"state": "NOT_APPLICABLE"}}),
                  (9, {"status": "STUB", "gate": {"state": "NOT_APPLICABLE"}}), (4, {"phase": 4})):
         p = os.path.join(d, "agent_state", "phases", str(n))
@@ -267,6 +267,11 @@ def case_phase():
     json.dump({"phase": 6}, open(os.path.join(p6, "manifest.json"), "w"))
     open(os.path.join(p6, "gate.passed"), "w").write("ok")
     check("gate.passed closes a phase", ledger.derive_phase(d) == 5)
+    os.remove(os.path.join(p6, "gate.passed"))        # 6 open again; a bare 7 above it still wins
+    os.makedirs(os.path.join(d, "agent_state", "phases", "7"))
+    check("newer dir with no manifest beats an older IN_FLIGHT manifest", ledger.derive_phase(d) == 7)
+    os.rmdir(os.path.join(d, "agent_state", "phases", "7"))
+    open(os.path.join(p6, "gate.passed"), "w").write("ok")
     os.makedirs(os.path.join(d, "agent_state", "autonomous"))
     json.dump({"active": True, "phase": 11, "status": "running"}, open(os.path.join(d, "agent_state", "autonomous", "run.json"), "w"))
     check("active /autonomous run.json wins", ledger.derive_phase(d) == 11)
@@ -276,8 +281,7 @@ def case_phase():
     # through the hook: policy pin, env pin, and cache invalidation when a new phase dir appears
     run(d, P("Stop"))
     p10 = os.path.join(d, "agent_state", "phases", "10")
-    os.makedirs(p10)
-    json.dump({"phase": 10}, open(os.path.join(p10, "manifest.json"), "w"))
+    os.makedirs(p10)                       # new phase dir, no manifest yet (the gate writes it) → beats IN_FLIGHT 5
     run(d, P("Stop"))
     run(d, P("Stop"), env={"SDLC_PHASE": "7"})
     os.makedirs(os.path.join(d, "agent_state", "config"), exist_ok=True)

@@ -61,11 +61,11 @@ The ledger uses the first rule that applies:
 
 1. A pin: the `SDLC_PHASE=<n>` environment variable, or `"phase": <n>` in `agent_state/config/ledger-policy.json`.
 2. An active `/autonomous` run: `agent_state/autonomous/run.json` with `"active": true` gives its `phase`.
-3. The highest `agent_state/phases/<N>/` that has a `manifest.json` and is still open. A phase counts as closed when it has a `gate.passed` file, when the manifest's `gate.passed` is true, or when its `gate.state`, `gate.status` or `status` is PASSED, NOT_APPLICABLE, CLOSED…, COMPLETE…, DONE or STUB.
+3. The highest `agent_state/phases/<N>/` that is not closed. A phase counts as closed when it has a `gate.passed` file, when the manifest's `gate.passed` is true, or when its `gate.state`, `gate.status` or `status` is PASSED, NOT_APPLICABLE, CLOSED…, COMPLETE…, DONE or STUB. A directory with no manifest counts as open. `/plan` and `/develop` create the phase directory long before the gate writes its manifest, so a rule that required a manifest would keep labelling new work with an older phase that is still IN_FLIGHT.
 4. The highest numbered phase directory.
 5. `unscoped`.
 
-The result is cached per session and recomputed whenever a phase directory, `run.json` or the policy file changes. If the automatic answer is wrong for a project (for example, a new phase that has no manifest yet while an older one is still open), pin the phase in the policy file while the phase runs.
+The result is cached per session and recomputed whenever a phase directory, `run.json` or the policy file changes. If the automatic answer is wrong for a project (for example, a stray higher-numbered directory that isn't a phase), pin the phase in the policy file while the phase runs.
 
 ## Reading it
 
