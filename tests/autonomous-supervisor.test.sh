@@ -101,9 +101,18 @@ P="$(new_proj hours)"; CF="$P/fake/clock"; echo 1000000 > "$CF"
 AUTONOMOUS_SUPERVISOR_CLOCK_FILE="$CF" sup "$P" clock=7200,crash,done --max-hours 1
 [ "$RC" = 22 ] && [ "$(calls "$P")" = 1 ] && ok "max_hours=1 → exit 22 when the clock passes the deadline" || bad "max_hours (rc=$RC calls=$(calls "$P"))"
 P="$(new_proj hoursrun)"; CF="$P/fake/clock"; echo 1000000 > "$CF"
-( sleep 1; echo 1010000 > "$CF" ) & bump=$!
+# Move the clock only once the fake child is running (a fixed sleep raced the launch under load).
+( i=0; while [ ! -f "$P/fake/hanging" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done; echo 1010000 > "$CF" ) & bump=$!
 AUTONOMOUS_SUPERVISOR_CLOCK_FILE="$CF" sup "$P" hang --max-hours 1; wait "$bump" 2>/dev/null
 [ "$RC" = 22 ] && grep -q INT "$P/fake/signals" 2>/dev/null && ok "deadline during a run: child sent SIGINT, exit 22" || bad "running child not stopped at deadline (rc=$RC)"
+# Started with SIGINT ignored (`supervisor &` from a script): the child must still get the clean SIGINT,
+# not only the SIGTERM fallback. Before the exec shim this recorded TERM every time.
+P="$(new_proj hoursign)"; CF="$P/fake/clock"; echo 1000000 > "$CF"
+( i=0; while [ ! -f "$P/fake/hanging" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done; echo 1010000 > "$CF" ) & bump=$!
+( cd "$P" && AUTONOMOUS_SUPERVISOR_CLOCK_FILE="$CF" FAKE_DIR="$P/fake" FAKE_PLAN=hang \
+  perl -e '$SIG{INT}="IGNORE"; exec @ARGV' /bin/bash "$SUP" --claude-bin "$FAKE" --max-hours 1 ) >"$P/fake/out" 2>&1; RC=$?
+wait "$bump" 2>/dev/null
+[ "$RC" = 22 ] && grep -q INT "$P/fake/signals" 2>/dev/null && ok "SIGINT ignored on entry: child still gets SIGINT (exec shim)" || bad "SIGINT-ignored supervisor: child got [$(tr '\n' ' ' < "$P/fake/signals" 2>/dev/null)] (rc=$RC)"
 
 echo "── API errors"
 P="$(new_proj billing)"; sup "$P" billing,done
@@ -127,7 +136,7 @@ P="$(new_proj sigterm)"
 # shell's async children do; an ignored-on-entry signal can't be trapped, and the child would inherit it).
 set -m
 ( cd "$P" && FAKE_DIR="$P/fake" FAKE_PLAN="hang" exec /bin/bash "$SUP" --claude-bin "$FAKE" ) >"$P/fake/out" 2>&1 &
-spid=$!; i=0; while [ ! -f "$P/fake/hanging" ] && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); done
+spid=$!; i=0; while [ ! -f "$P/fake/hanging" ] && [ "$i" -lt 600 ]; do sleep 0.1; i=$((i+1)); done
 kill -TERM "$spid"; wait "$spid"; RC=$?; set +m
 [ "$RC" = 143 ] && ok "SIGTERM → supervisor exits 143" || bad "SIGTERM exit code $RC"
 grep -q INT "$P/fake/signals" 2>/dev/null && ok "signal forwarded to the child (SIGINT first, so its turn ends cleanly)" || bad "child never got the signal"

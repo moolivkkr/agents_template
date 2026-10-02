@@ -296,9 +296,11 @@ reset them; `--reset-budgets` does. A breach pauses `run.json` with the reason.
 
 On SIGINT, SIGTERM or SIGHUP the supervisor sends the child SIGINT, which ends its turn cleanly (a SIGTERM'd
 `claude -p` leaves the turn unfinished), then SIGTERM after `AUTONOMOUS_SUPERVISOR_KILL_GRACE`
-seconds (default 30). It records `interrupted` and releases the lock. Run it from a terminal, tmux or
-a launchd job rather than `cmd &` from a script: a background job of a non-interactive shell starts
-with SIGINT ignored, and then only the SIGTERM fallback reaches the child.
+seconds (default 30). It records `interrupted` and releases the lock. It works however it is started
+(terminal, tmux, launchd, or `cmd &` from a script): a background job of a non-interactive shell starts
+with SIGINT ignored, so the child is launched through a small exec shim (perl, else python3) that
+restores the default INT/TERM/HUP handling first. To stop a backgrounded supervisor, send it SIGTERM
+(`kill <pid>`); a SIGINT sent to a supervisor that itself started with SIGINT ignored never arrives.
 
 One supervisor per project: `agent_state/autonomous/supervisor.lock/` holds its pid. A lock whose
 process is gone is reclaimed.
