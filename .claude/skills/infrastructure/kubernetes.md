@@ -94,4 +94,20 @@ spec:
 Local dev/qa environments (Lima + k3s, per-app namespaces, digest promotion, reset, rollback, and the
 gotchas measured there): see `lima-k8s-lab.md` in this directory.
 
+## Staging and production on Amazon EKS
+`--target=staging|prod` runs the same kustomize base on EKS through a kustomize **Component**
+(`deploy/k8s/components/eks`), so the base is never forked. The Component:
+- swaps the in-cluster Postgres for RDS over TLS;
+- takes `db-credentials` from AWS Secrets Manager with External Secrets Operator (same keys, same
+  `db-access` policy);
+- adds a PodDisruptionBudget, an HPA (the Deployment then sets no `replicas`), zone
+  `topologySpreadConstraints`, requests/limits, a NetworkPolicy, and the EKS Auto Mode ALB IngressClass
+  with the ACM certificate.
+
+Images reach EKS only as digests promoted from qa (`crane copy` into ECR keeps the digest).
+`deploylib.py eks-policy` refuses a render that breaks any of this.
+
+Humans or CI deploy staging and prod; agents only author and validate the layer offline, and prod asks
+for a confirmation every time. Full model, choices and sources: `eks.md` in this directory.
+
 > Config blocks checked 2026-09-30 (`bash tests/archetype-compile/config-packs/run.sh --live`): 3 YAML blocks parsed (duplicate keys fail), kubeconform -strict (Kubernetes 1.37.1 schemas).

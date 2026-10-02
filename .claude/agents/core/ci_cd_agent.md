@@ -22,6 +22,7 @@ output:
   artifacts:
     - path: .github/workflows/ci.yml
     - path: .github/workflows/cd.yml
+    - path: .github/workflows/deploy-eks.yml
 dependencies:
   upstream: [impl_guidelines_agent]
   runs_after: [deployment_agent]
@@ -32,6 +33,7 @@ skill_packs:
   - "~/.claude/skills/infrastructure/docker.md"
   - "~/.claude/skills/infrastructure/secrets-management.md"
   - "~/.claude/skills/infrastructure/lima-k8s-lab.md"
+  - "~/.claude/skills/infrastructure/eks.md"
   - "~/.claude/skills/core/git-workflow.md"
 ---
 
@@ -73,6 +75,17 @@ Jobs (in order):
    `kubeconform -strict -summary` must pass on the output. No cluster is needed; the lab-cluster
    deploy itself stays local (`scripts/k8s/deploy.sh`, skill `lima-k8s-lab.md`). A CI job can't
    reach it, and shouldn't.
+   When `deploy/k8s/overlays/staging` exists (the EKS layer, skill `eks.md`), the same job also:
+   - renders `staging` and `prod` and runs them through `deploylib.py db-access` and
+     `eks-policy --registry <ECR_REGISTRY from eks.env>`;
+   - runs kubeconform on the CRD kinds (ExternalSecret/SecretStore/IngressClassParams) with a CRD
+     schema location (`-schema-location default -schema-location
+     'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'`);
+   - runs `terraform fmt -check -recursive infra/terraform`, and
+     `terraform -chdir=infra/terraform/envs/<env> init -backend=false && terraform validate` per
+     environment, plus tflint.
+
+   None of it needs AWS credentials.
 
 Each job: cache dependencies using lock file hash.
 
@@ -88,7 +101,24 @@ Each job: cache dependencies using lock file hash.
 - Upload JUnit XML, screenshots and device logs as artifacts on every run. Recipes:
   `~/.claude/skills/testing/maestro.md` §CI, `detox.md`, `mobile-testing-strategy.md` §5.
 
-## CD Pipeline (`cd.yml`)
+## CD Pipeline (`cd.yml`, or `deploy-eks.yml` on the EKS layer)
+
+**EKS projects** (`deploy/k8s/overlays/staging/eks.env` exists): use the template
+`.github/workflows/deploy-eks.yml` that `instantiate.sh --eks` copies. Don't write a new one. Keep
+these properties (skill `eks.md`):
+- **Credentials:** GitHub OIDC via `aws-actions/configure-aws-credentials` with `role-to-assume:
+  ${{ vars.AWS_DEPLOY_ROLE_ARN }}` and `permissions: id-token: write` on the deploy job only.
+  **No AWS access keys in secrets, ever.**
+- **No build:** it deploys the digests the merged overlay pins.
+- **Triggers:** staging on push to main touching its overlay; prod by `workflow_dispatch` only.
+- **Environments:** every deploy job runs in `environment: <env>`. For prod, required reviewers
+  restricted to `main` are the human confirmation, and `deploy-eks.sh` refuses prod without it.
+- **Tools:** kubectl and crane pinned and checksum-verified.
+- **Evidence:** the deploy record is uploaded as an artifact.
+
+Report the GitHub settings a human must make: Environments, reviewers, the variable.
+
+Other platforms:
 
 Triggers: push to main (after CI passes), manual dispatch
 
@@ -99,7 +129,7 @@ Jobs:
 4. **deploy-prod** — manual approval gate, then deploy
 
 ## Rules
-- Never hardcode secrets — use `${{ secrets.X }}`
+- Never hardcode secrets — use `${{ secrets.X }}`; for cloud access use OIDC role assumption, never stored cloud keys
 - Pin action versions (`actions/checkout@v4` not `@main`)
 - Cache hit rate > 80% — use correct cache key with lock file hash
 - Fail fast: lint before test, test before build
@@ -116,6 +146,7 @@ These hold the conventions and patterns for the work you're doing. Before writin
 - `~/.claude/skills/infrastructure/docker.md`
 - `~/.claude/skills/infrastructure/secrets-management.md`
 - `~/.claude/skills/infrastructure/lima-k8s-lab.md`
+- `~/.claude/skills/infrastructure/eks.md`
 - `~/.claude/skills/core/git-workflow.md`
 <!-- END reference-packs -->
 

@@ -4,7 +4,7 @@ description: "Roll back a deployment to the previous known-good build and valida
 arguments:
   - name: target
     required: true
-    description: "Deployment target to roll back: local | dev | qa | staging | prod  (dev/qa = lab Kubernetes cluster)"
+    description: "Deployment target to roll back: local | dev | qa | staging | prod  (dev/qa = lab Kubernetes cluster; staging/prod = Amazon EKS, human or CI only)"
   - name: confirm
     required: false
     default: false
@@ -129,8 +129,18 @@ docker compose up -d --no-deps <app services>                 # the datastore ke
 Remove the temporary worktree afterwards (`git worktree remove "$WT"`).
 
 ### Staging / Production
-Redeploy the previous release's recorded image digests (or the platform's previous revision) with the
-platform named in IMPLEMENTATION_GUIDELINES §11. No `migrate` step runs: the schema stays.
+**Amazon EKS projects** (`deploy/k8s/overlays/<env>/eks.env`, skill `infrastructure/eks.md`) are
+human or CI only, like `/deploy`. The guard refuses agents. Print the steps and stop:
+- **CI:** revert the promotion commit (the one that changed `deploy/k8s/overlays/<env>/`). The
+  deploy-eks workflow redeploys the previous digests. For prod, a reviewer approves the run in the
+  protected `prod` environment.
+- **By hand:** `EKS_KUBECONFIG=<kubeconfig> scripts/k8s/deploy.sh <env> --rollback`. It picks the newest
+  earlier HEALTHY deploy in `agent_state/deploy/<env>/history.jsonl` and pins the overlay to it, so
+  commit that change afterwards. Prod asks for the typed `<app>-prod@<sha>` again.
+
+Other platforms: redeploy the previous release's recorded image digests (or the platform's previous
+revision) with the platform named in IMPLEMENTATION_GUIDELINES §11. Either way no `migrate` step runs:
+the schema stays.
 
 Wait for the runtime contract's probes:
 ```bash

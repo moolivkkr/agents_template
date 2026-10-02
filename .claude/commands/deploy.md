@@ -1,11 +1,11 @@
 ---
 command: deploy
-description: Deploy the application. Reads IMPLEMENTATION_GUIDELINES for infra config. Supports local (compose), dev/qa (lab Kubernetes cluster), staging, and production targets.
+description: Deploy the application. Reads IMPLEMENTATION_GUIDELINES for infra config. Supports local (compose), dev/qa (lab Kubernetes cluster), and staging/prod (Amazon EKS, human or CI only).
 arguments:
   - name: target
     required: false
     default: local
-    description: "Deployment target: local | ha-local | dev | qa | staging | prod  (dev/qa = the Lima k3s lab cluster)"
+    description: "Deployment target: local | ha-local | dev | qa | staging | prod  (dev/qa = the Lima k3s lab cluster; staging/prod = Amazon EKS, human or CI only)"
   - name: failover_test
     required: false
     default: false
@@ -68,6 +68,56 @@ esac
 - **Failure handling:** read the log lines the script prints (it fails fast with the pod's exact
   reason, e.g. `CreateContainerConfigError`, `ImagePullBackOff`, a migrate error); fix the cause;
   re-run. A DEGRADED dev deploy blocks promotion to qa.
+
+---
+
+## Targets `staging` and `prod` — Amazon EKS (human or CI only)
+
+For projects with `deploy/k8s/overlays/<env>/eks.env` (skill: `infrastructure/eks.md`), staging and
+prod run the same kustomize base on EKS:
+- **Images:** promoted by digest from qa, never rebuilt.
+- **Database:** RDS PostgreSQL with the same two roles.
+- **Credentials:** from AWS Secrets Manager (External Secrets Operator, Pod Identity).
+
+**Agents never deploy these.** The guard denies `/deploy --target=staging|prod`, the EKS scripts, `aws`
+and any non-lab kubeconfig. So this command does not deploy: it prints the human's steps and stops.
+An agent's part is authoring the layer and validating it offline (deployment_agent Step 3h).
+
+```bash
+case "$TARGET" in staging|prod)
+  [ -f "deploy/k8s/overlays/$TARGET/eks.env" ] || { echo "no EKS layer: deployment_agent instantiates it (Step 3h: instantiate.sh . <app> --eks)"; exit 1; }
+  echo "⛔ /deploy --target=$TARGET is a human or CI step. Run, outside Claude:"
+  echo "  1. scripts/k8s/promote-eks.sh $TARGET    # copy the verified digests into ECR, pin the overlay"
+  echo "  2. commit deploy/k8s/overlays/$TARGET/   # the release record"
+  echo "  3. CI: the deploy-eks workflow (prod: approve the run in the protected 'prod' environment)"
+  echo "     or by hand: EKS_KUBECONFIG=<kubeconfig> scripts/k8s/deploy.sh $TARGET   (prod asks you to type <app>-prod@<sha>)"
+  exit 0 ;;
+esac
+```
+
+| | `staging` | `prod` |
+|---|---|---|
+| Images | qa's newest HEALTHY digests, copied into ECR by `promote-eks.sh staging` (same digest, verified) | staging's digests, only if ECR carries their `staging-healthy-<sha>` tag (set by a HEALTHY staging deploy) |
+| Data | RDS for PostgreSQL (single-AZ), migrate + seed Jobs as the migrator | RDS Multi-AZ, deletion protection, 14-day backups |
+| Confirmation | none beyond running it (human or CI) | **every time**: typed `<app>-prod@<sha>` on a terminal, or the approved run of the protected GitHub Environment `prod` in CI |
+| URL | `https://<APP_HOST>` (ALB + ACM) | same |
+
+- **Steps the script runs and refuses:** preflight (`eks.env` filled, `EKS_KUBECONFIG` is this env's
+  cluster and never the lab's, digests exist in ECR), then render, `deploylib.py db-access` and
+  `eks-policy`, apply, ExternalSecret sync, db-roles, migrate, seed, rollout, smoke over HTTPS,
+  digest parity.
+- **Evidence:** the same files as dev/qa (`agent_state/deploy/<env>/history.jsonl`,
+  `last-deploy-status.json`), plus the ECR tag `<env>-healthy-<sha>`. In CI, `history.jsonl` is
+  uploaded as a workflow artifact.
+- **Health is a gate:** a DEGRADED or FAILED staging/prod deploy exits non-zero, writes the marker
+  (which `/accept` and `/status` read), and never tags the images healthy.
+- **First time (human, once):**
+  1. Apply `infra/terraform/envs/state`.
+  2. Apply `infra/terraform/envs/<env>` (`plan -out`, review, `apply`).
+  3. Run `scripts/k8s/eks-outputs.sh <env>` and commit `eks.env`.
+  4. Run `scripts/k8s/eks-bootstrap.sh <env>`, which installs ESO and the namespace, IngressClass and RBAC.
+  5. In GitHub, create Environments `staging` and `prod`. Give `prod` required reviewers and restrict
+     it to `main`. Set the variable `AWS_DEPLOY_ROLE_ARN` from `terraform output deploy_role_arn`.
 
 ---
 
@@ -190,9 +240,11 @@ python3 -c 'import json,sys,datetime; print(json.dumps({"ts": datetime.datetime.
 (`IMAGES_JSON` = `{"<service>": "<repo>@sha256:<digest>"}` for containerized targets; `VERDICT` from Step 4/5.)
 
 ### Staging / Production
-**⚠ Confirm with user before proceeding for staging and prod targets.**
-
-Reads infrastructure config from IMPLEMENTATION_GUIDELINES. Applies deployment using configured orchestration (Docker Compose / Kubernetes / cloud CLI).
+On Kubernetes projects these are the Amazon EKS targets above: human or CI only, prod confirmed every
+time. On a project whose IMPLEMENTATION_GUIDELINES §11 names another platform, the same rules hold:
+**⚠ confirm with the user before staging, and require explicit confirmation for prod.** Deploy recorded
+digests, never a fresh build, and leave the commands for the human rather than running them with
+cloud credentials.
 
 ---
 
