@@ -17,6 +17,10 @@ arguments:
   - name: max_phases
     required: false
     description: "Limit to N phases (default: all phases from BRD)"
+  - name: one_step
+    required: false
+    default: false
+    description: "Run only the step named by run.json next_step, update run.json, then end the turn (set by scripts/startup-autonomous-run.sh --session-mode per-step)"
 ---
 
 # /autonomous — Full SDLC Pipeline (Minimal Human Interaction)
@@ -91,6 +95,24 @@ mode approves, defers, skips or forces a security finding on the human's behalf.
 **Long runs and context.** A full run can exceed one context window. Claude Code compacts
 automatically; after compaction, re-read `run.json` + `checkpoint.json` and continue from
 `next_step`. If the session itself ends, `/autonomous --resume` picks up from the same place.
+
+**Supervised runs (unattended).** `scripts/startup-autonomous-run.sh` (installed as
+`~/.claude/scripts/startup/startup-autonomous-run.sh`) is the outer loop for a run nobody watches. It
+launches this command with `claude -p … --permission-mode auto --permission-prompts none`, so
+nobody can answer a prompt: never wait for input, and reach a human only through `run.json`
+(`awaiting_human` / `paused` with a reason). When the session ends, the supervisor reads `run.json`:
+`complete` ends it, `awaiting_human` and `paused` stop it for a human, anything else (a crash,
+`stalled`, `failed`, an API error the StopFailure hook recorded) is relaunched as
+`/autonomous --resume`, within budgets (`max_cost_usd`, `max_hours`, `max_restarts`) it records
+under `run.json.supervisor`. Don't edit `run.json.supervisor` or `run.json.budgets`; keep them when
+you rewrite `run.json` (update fields with `jq`, don't replace the file).
+
+With `--one_step` (the supervisor's `per-step` session mode) run ONLY the step named by
+`run.json.next_step` at the start of this session: complete it, update `run.json` (`step`,
+`next_step`, `updated`) and end the turn. Don't start the following step; the supervisor starts it
+in a fresh session. The Stop hook allows the stop once `(phase, next_step)` has moved past the
+step recorded in `agent_state/autonomous/step_boundary.json`. Without `--one_step`, this command
+stays one continuous turn as described above.
 
 ---
 
@@ -654,6 +676,8 @@ approval. Resuming a run paused with `reason: "security_findings"` re-presents
 approval of any finding.
 
 - Resume from exactly where it stopped
+- Unattended: `startup-autonomous-run.sh` issues this resume itself after a crash, stall or
+  transient API error (see *Supervised runs* above and docs/AUTONOMOUS_GUIDE.md §10)
 - All previous state preserved in `agent_state/`
 - Git branches and tags preserved
 - No re-running of completed steps

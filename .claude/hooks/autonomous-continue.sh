@@ -39,6 +39,19 @@ RUN="$DIR/agent_state/autonomous/run.json"
 jq -e . "$RUN" >/dev/null 2>&1 || exit 0
 [ "$(jq -r '.active // false' "$RUN")" = "true" ] && [ "$(jq -r '.status // ""' "$RUN")" = "running" ] || exit 0
 
+# Supervised per-step mode (scripts/startup-autonomous-run.sh --session-mode per-step): the supervisor
+# writes step_boundary.json with the (phase, next_step) at launch and its own pid. Once the run has
+# moved past that step, the turn may end; the supervisor starts the next step in a fresh session.
+# A boundary whose supervisor is gone is stale and ignored.
+B="$DIR/agent_state/autonomous/step_boundary.json"
+if [ -f "$B" ] && jq -e . "$B" >/dev/null 2>&1; then
+  bpid="$(jq -r '.supervisor_pid // empty' "$B")"
+  if [ -n "$bpid" ] && kill -0 "$bpid" 2>/dev/null \
+     && [ "$(jq -r '"\(.phase // "")|\(.next_step // "")"' "$B")" != "$(jq -r '"\(.phase // "")|\(.next_step // "")"' "$RUN")" ]; then
+    exit 0
+  fi
+fi
+
 # Waiting on background work is not a stop: let the turn end without spending a nudge.
 pending="$(field '((.background_tasks // []) | length) + ((.session_crons // []) | length)')"
 [ "${pending:-0}" -gt 0 ] 2>/dev/null && exit 0
