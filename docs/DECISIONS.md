@@ -62,3 +62,39 @@ _None yet. The first `/plan` (ADR) or `/develop` (debate) run will populate this
 ## Reversed Decisions (history — do not act on these)
 
 _None yet._
+
+### D-001 — RDS migrator: per-table migrator-only RLS policy (no BYPASSRLS on managed Postgres)
+- status: active
+- scope: global
+- date: 2026-10-01
+- source: human:/remember
+- confidence: confirmed
+- reverses: —
+- reversed_by: —
+- link: .claude/skills/infrastructure/eks.md
+- decision: > On managed Postgres (RDS/Aurora) the migrator role is NOBYPASSRLS, because the RDS master user is not a superuser and cannot grant BYPASSRLS. Every migration that creates a tenant table with FORCE ROW LEVEL SECURITY also creates a permissive policy TO the migrator role only (USING (true) WITH CHECK (true)), so cross-tenant migrations and seeds work while the runtime role stays confined by RLS. The lab/self-hosted path keeps BYPASSRLS for the migrator.
+- rationale: > Keeps FORCE RLS (the table owner cannot silently bypass isolation) and the same runtime isolation as the lab. Runner-up ENABLE-instead-of-FORCE on RDS rejected: the owner role would bypass RLS, which is weaker.
+
+### D-002 — Graph TC gate: warning-first rollout of the stricter checks
+- status: active
+- scope: global
+- date: 2026-10-01
+- source: human:/remember
+- confidence: confirmed
+- reverses: —
+- reversed_by: —
+- link: .claude/hooks/sdlc-graph.py
+- decision: > verify-gate check (h) (sdlc-graph gate) reports its NEW stricter findings (malformed TC ID cells, range-defined IDs, results mode required, base_sha required) as WARNINGS until a project opts into enforcement; everything the previous tc-inventory gate blocked on still blocks.
+- rationale: > Existing projects (rera 275, brand-intelligence 87, ai-security 10 malformed rows) must first align to the new agent design; the owner expects a learning and fine-tuning period. Runner-up immediate enforcement rejected: it would block every in-flight phase at once.
+
+### D-003 — EKS compute: EKS Auto Mode
+- status: active
+- scope: global
+- date: 2026-10-01
+- source: human:/remember
+- confidence: confirmed
+- reverses: —
+- reversed_by: —
+- link: .claude/templates/k8s/eks/infra/terraform/modules/platform
+- decision: > EKS clusters use EKS Auto Mode (AWS-managed compute, ALB, EBS CSI, Pod Identity agent, network policy) via the terraform-aws-eks module.
+- rationale: > Fewer controllers for us to install and upgrade; AWS manages node lifecycle. Runner-up managed node groups + Karpenter + self-installed AWS Load Balancer Controller rejected for operational load; accepted cost: Auto Mode's per-instance management fee.
