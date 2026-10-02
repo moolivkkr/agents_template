@@ -203,6 +203,10 @@ print(json.dumps({"phase": int(sys.argv[2]), "generated": sys.argv[3], "required
 PY
 ```
 
+> **Phase ledger.** The ledger (`agent_state/ledger/`, docs/PHASE_LEDGER.md) records spawns, subagent
+> starts/finishes and files touched on its own, through hooks. Don't write to it. Put `TASK: <id>` in a spawn prompt to make
+> that spawn traceable there. It does not replace `execution.jsonl`, which the gate still reads.
+
 **Every wave that spawns an agent must append a completion line to the execution log** so Wave 6 (and
 `verify-gate.sh`) can verify it. `${AGENT_NAME}` MUST be the same real name that appears in
 `roster.required`, and `report` MUST be the relative path to that agent's primary output (or `null`
