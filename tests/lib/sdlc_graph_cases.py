@@ -38,8 +38,12 @@ def git(root, *args):
     return subprocess.run(["git", "-C", root, *args], check=True, capture_output=True, text=True).stdout
 
 
-def sg(root, *args, py=PY):
-    p = subprocess.run([py, SG, "--root", root, *args], capture_output=True, text=True)
+STRICT = dict(os.environ, SDLC_TC_GATE="strict")      # D-002: the four graph-only checks enforced for one run
+WARN = {k: v for k, v in os.environ.items() if k != "SDLC_TC_GATE"}   # the default: those four are warnings
+
+
+def sg(root, *args, py=PY, env=None):
+    p = subprocess.run([py, SG, "--root", root, *args], capture_output=True, text=True, env=env or WARN)
     return p.returncode, p.stdout, p.stderr
 
 
@@ -57,9 +61,9 @@ def tci(root, phase, *extra):
     return p.returncode, json.load(open(out))
 
 
-def gate(root, phase, *extra):
+def gate(root, phase, *extra, env=None):
     out = os.path.join(W, f"gate-{os.path.basename(root)}-{phase}.json")
-    rc, so, se = sg(root, "gate", "--phase", str(phase), "--tc-only", "--out", out, *extra)
+    rc, so, se = sg(root, "gate", "--phase", str(phase), "--tc-only", "--out", out, *extra, env=env)
     return rc, json.load(open(out)), so
 
 
@@ -275,17 +279,50 @@ write(A, "api/orders_test.go", open(os.path.join(A, "api/orders_test.go")).read(
 t2w, g2w = agreement("A4", A, 2, diff_base=BASE_A, expect_extra=["TC-VAL-001", "TC-VAL-002", "TC-VAL-003", "TC-RNG-001", "TC-RNG-002"])
 check("A4g", True, len(g2w["weakening_unacknowledged"]) >= 2, "added skip + .only since the base are unacknowledged weakening")
 git(A, "checkout", "--", "web/orders.test.ts", "api/orders_test.go")
+# the agreement runs above use the default policy (warn); the same inputs under strict only add blockers
+_ga = sgm.Graph(A)
+_ga.build(incremental=True)
+_wv = sgm.tc_inventory(_ga, 2, results=[SC], policy={"strict": set(), "source": "t", "error": None})
+_sv = sgm.tc_inventory(_ga, 2, results=[SC], policy={"strict": set(sgm.TC_GATE_CHECKS), "source": "t", "error": None})
+check("A5", (True, True, True), (set(_wv["missing"]) <= set(_sv["missing"]), _sv["failed"] > _wv["failed"],
+                                 {c["name"]: c["verdict"] for c in _wv["cases"]} == {c["name"]: c["verdict"] for c in _sv["cases"]}),
+      "strict ⊇ warn: same verdict per ID, strict only adds blockers (missing range IDs, malformed)")
 
-# ─── the gate: strict superset ─────────────────────────────────────────────────────────────────────
-rc, gj, so = gate(A, 2)
+# ─── the gate: strict superset (policy strict: the four D-002 checks enforced) ────────────────────────
+rc, gj, so = gate(A, 2, env=STRICT)
 check("G01", 1, rc, "gate FAILs fixture A phase 2")
 gb = "\n".join(so.splitlines())
 check("G02", True, "no runner results" not in gb, "with sidecars in reports/ the gate runs in results mode")
 check("G03", True, "no base commit" in gb, "gate BLOCKs when agent_state/phases/N/base_sha is missing")
 check("G04", True, "malformed TC ID" in gb and "TC-SEC-REG-001" in gb, "gate BLOCKs on a malformed ID cell")
 check("G05", True, "TC-VAL-002" in gb and "defined by a range" in gb, "gate BLOCKs on an uncovered range-defined ID and says so")
-rc, gj1, so1 = gate(A, 1)
-check("G06", True, "no runner results" in so1, "gate BLOCKs a phase with no runner sidecar (coverage nobody ran)")
+gb = "\n".join(l for l in so.splitlines() if l.startswith("BLOCKING: "))
+check("G03b", (True, True, True, []), ("no base commit" in gb, "malformed TC ID" in gb, "TC-VAL-002" in gb, gj["warnings"]),
+      "strict: base_sha, malformed and range findings are BLOCKING lines, and nothing is a warning")
+rc, gj1, so1 = gate(A, 1, env=STRICT)
+check("G06", True, "BLOCKING: TC: no runner results" in so1, "strict: gate BLOCKs a phase with no runner sidecar (coverage nobody ran)")
+# default policy (no gate-policy.json): the same four findings are WARNINGS; everything else still blocks
+rc, gw, sow = gate(A, 2)
+bl = [l for l in sow.splitlines() if l.startswith("BLOCKING: ")]
+wl = [l for l in sow.splitlines() if l.startswith("WARNING: ")]
+check("G08", (1, ["base_sha_required", "malformed_ids", "range_ids"]), (rc, sorted(w["check"] for w in gw["warnings"])),
+      "warn (default): fixture A phase 2 still FAILs; base_sha/malformed/range findings are warnings")
+check("G09", (False, False, False), (any("malformed" in l for l in bl), any("defined by a range" in l for l in bl), any("no base commit" in l for l in bl)),
+      "warn: no BLOCKING line for the four D-002 findings")
+check("G10", (True, True, True), (any("TC-SEC-REG-001" in l and "[malformed_ids]" in l for l in wl),
+                                  any("TC-VAL-002" in l and "[range_ids]" in l for l in wl), any("[base_sha_required]" in l for l in wl)),
+      "warn: each finding is a WARNING: line with the example and its fix")
+check("G11", (True, True, True, True, True),
+      (any("TC-API-101 failing" in l for l in bl), any("TC-API-102 is also defined by phase(s) 1" in l for l in bl),
+       any("TC-DUP-001 has 2 inventory rows" in l for l in bl), any("range annotation in a test" in l for l in bl),
+       any("TC-API-102 (MEDIUM" in l and "only a comment" in l for l in bl)),
+      "warn: failing, cross-phase dup, in-phase dup, range annotation and comment-only still BLOCK")
+check("G12", (gw["warning_count"], "D-002", ["base_sha_required", "malformed_ids", "range_ids", "results_required"]),
+      (sum(w["count"] for w in gw["warnings"]), gw["policy"]["decision"], gw["policy"]["warn_checks"]),
+      "warn: the sidecar carries warning_count, per-check warnings and the policy in force")
+rc, gw1, so1 = gate(A, 1)
+check("G13", (True, False), ("WARNING: TC: [results_required]" in so1, "BLOCKING: TC: no runner results" in so1),
+      "warn: no runner sidecar is a warning (source mode, like tc-inventory without --results)")
 check("G07", True, os.path.isfile(os.path.join(A, "agent_state", "graph", "summary-phase-2.json")), "gate writes summary-phase-N.json")
 
 # ═══ fixture B: a clean phase — gate PASSes, and so does tc-inventory ══════════════════════════════
@@ -313,6 +350,147 @@ rc, gjb, sob = gate(B, 1)
 _, tb = tci(B, 1, "--results", os.path.join(P1, "reports", "test_results.json"), "--diff-base", open(os.path.join(P1, "base_sha")).read().strip())
 check("C01", (0, "PASS", "PASS"), (rc, gjb["verdict"], tb["verdict"]), "clean phase: graph gate and tc-inventory both PASS (results mode)")
 check("C02", (2, 2), (gjb["passed"], gjb["total"]), "2/2 HIGH+MEDIUM covered; LOW not counted")
+
+# ═══ D-002 warn-first policy: each new finding alone, each pre-existing blocker alone ════════════════
+# Every variant is a copy of the clean fixture B with ONE change. The four graph-only findings must WARN and
+# PASS by default and BLOCK under strict; every finding tc-inventory.py fails on must BLOCK in BOTH modes,
+# and tc-inventory must agree it fails (so warn mode never passes what tc-inventory fails).
+B_SPEC = "docs/design/phases/1/specs/orders.md"
+B_TEST = "src/orders_test.go"
+B_RES = "agent_state/phases/1/reports/test_results.json"
+
+
+def variant(name, mutate):
+    root = os.path.join(W, "v-" + name)
+    shutil.copytree(B, root, symlinks=True)
+    mutate(root)
+    return root
+
+
+def edit(root, rel, fn):
+    p = os.path.join(root, rel)
+    text = fn(open(p).read())
+    open(p, "w").write(text)
+
+
+def tci_full(root):
+    extra = []
+    if os.path.exists(os.path.join(root, B_RES)):
+        extra += ["--results", os.path.join(root, B_RES)]
+    bp = os.path.join(root, "agent_state/phases/1/base_sha")
+    if os.path.exists(bp):
+        extra += ["--diff-base", open(bp).read().strip()]
+    return tci(root, 1, *extra)
+
+
+def sidecar(root, cases_xml, rc="0"):
+    write(root, "agent_state/phases/1/junit/unit.xml", f"<testsuite>{cases_xml}</testsuite>")
+    subprocess.run([PY, J2S, "--tier", "unit", "--exit-code", rc, "--root", root, "--out", os.path.join(root, B_RES),
+                    os.path.join(root, "agent_state/phases/1/junit/unit.xml")], capture_output=True)
+
+
+OK_XML = ('<testcase classname="src" name="TestOrders/TC-API-10101 create order"/>'
+          '<testcase classname="src" name="TestOrders/TC-API-10102 reject bad order"/>')
+NEW = {   # check → mutation that produces exactly that finding on the clean fixture
+    "malformed_ids": lambda r: edit(r, B_SPEC, lambda t: t + "| TC-SEC-012a | SEC | suffix letter | HIGH | integration |\n"
+                                                          "| TC-E2E-ING-001 | E2E | inner hyphen | HIGH | e2e |\n"),
+    "range_ids": lambda r: edit(r, B_SPEC, lambda t: t + "| TC-VAL-10101 – TC-VAL-10103 | VAL | validation | MEDIUM | unit |\n"),
+    "results_required": lambda r: os.remove(os.path.join(r, B_RES)),
+    "base_sha_required": lambda r: os.remove(os.path.join(r, "agent_state/phases/1/base_sha")),
+}
+for k, (chk, mut) in enumerate(NEW.items(), 1):
+    root = variant(chk, mut)
+    rcw, gw_, sow_ = gate(root, 1)
+    rcs, gs_, sos_ = gate(root, 1, env=STRICT)
+    _, tv = tci_full(root)
+    check(f"D{k:02}a", (0, "PASS", [chk]), (rcw, gw_["verdict"], [w["check"] for w in gw_["warnings"]]),
+          f"warn (default): {chk} alone → WARNING, gate PASSes (tc-inventory: {tv['verdict']})")
+    check(f"D{k:02}b", (True, False), (f"WARNING: TC: [{chk}]" in sow_, any(l.startswith("BLOCKING: ") for l in sow_.splitlines())),
+          f"warn: {chk} is printed as a WARNING: line, no BLOCKING: line")
+    check(f"D{k:02}c", (1, "FAIL", []), (rcs, gs_["verdict"], gs_["warnings"]), f"strict: {chk} alone BLOCKs")
+    if chk != "results_required":       # tc-inventory, without --results, is in source mode: the named tests pass it
+        check(f"D{k:02}d", "PASS", tv["verdict"], f"{chk} is a graph-only finding: tc-inventory PASSes this variant")
+gw_ = gate(variant("malformed-count", NEW["malformed_ids"]), 1)[1]
+check("D05", (2, ["TC-E2E-ING-001", "TC-SEC-012a"]), (gw_["warning_count"], sorted(x.split(": ")[1] for x in gw_["warnings"][0]["items"])),
+      "warn: TC-SEC-012a and TC-E2E-ING-001 (the real-project shapes) are counted, each listed")
+
+OLD = {   # pre-existing tc-inventory blockers → mutation; each must BLOCK in warn mode too
+    "missing HIGH ID": lambda r: edit(r, B_SPEC, lambda t: t + "| TC-API-10109 | API | never tested | HIGH | integration |\n"),
+    "failed test": lambda r: sidecar(r, '<testcase classname="src" name="TestOrders/TC-API-10101 create order"><failure message="x"/></testcase>'
+                                        '<testcase classname="src" name="TestOrders/TC-API-10102 reject bad order"/>', "1"),
+    "comment-only": lambda r: (edit(r, B_SPEC, lambda t: t + "| TC-API-10110 | API | only a comment | HIGH | unit |\n"),
+                               edit(r, B_TEST, lambda t: t + "// TC-API-10110 TODO\n")),
+    "duplicate cross-phase": lambda r: write(r, "docs/design/phases/2/specs/x.md",
+                                             "| TC ID | Description | Priority |\n|---|---|---|\n| TC-API-10101 | again | HIGH |\n"),
+    "duplicate in-phase": lambda r: edit(r, B_SPEC, lambda t: t + "| TC-API-10101 | API | twice | HIGH | integration |\n"),
+    "range annotation in a test": lambda r: edit(r, B_TEST, lambda t: t + "// covers TC-API-10101 to TC-API-10102\n"),
+    "unacknowledged weakening": lambda r: edit(r, B_TEST, lambda t: t.replace("func TestOrders(t *testing.T) {",
+                                                                               "func TestOrders(t *testing.T) {\n  t.Skip(\"later\")")),
+}
+for k, (what, mut) in enumerate(OLD.items(), 1):
+    root = variant("old-" + str(k), mut)
+    rcw, gw_, sow_ = gate(root, 1)
+    _, tv = tci_full(root)
+    check(f"E{k:02}", (1, "FAIL", True, "FAIL"), (rcw, gw_["verdict"], any(l.startswith("BLOCKING: ") for l in sow_.splitlines()), tv["verdict"]),
+          f"warn (default): pre-existing blocker '{what}' still BLOCKs, and tc-inventory fails it too")
+root = variant("old-results-err", lambda r: None)
+open(os.path.join(root, "bad.json"), "w").write("{not json")
+rc, gw_, sow_ = gate(root, 1, "--results", os.path.join(root, "bad.json"))
+check("E08", (1, True), (rc, "unreadable results sidecar" in sow_), "warn: an unreadable --results sidecar still BLOCKs (tc-inventory exits on it)")
+root = variant("old-norows", lambda r: write(r, B_SPEC, "# Orders\n| TC ID | Priority |\n|---|---|\n| TC-A-1 – TC-A-3 | HIGH |\n"))
+rc, gw_, sow_ = gate(root, 1)
+check("E09", (1, "BLOCKED"), (rc, gw_["verdict"]), "warn: a phase whose only TC rows are a range is BLOCKED (tc-inventory sees no rows)")
+root = variant("range-dup", lambda r: write(r, "docs/design/phases/2/specs/x.md",
+                                            "| TC ID | Description | Priority |\n|---|---|---|\n| TC-API-10101 – TC-API-10102 | range | HIGH |\n"))
+rc, gw_, _ = gate(root, 1)
+rcs, gs_, _ = gate(root, 1, env=STRICT)
+check("E10", (0, ["range_ids"], 1, ["TC-API-10101", "TC-API-10102"]), (rc, [w["check"] for w in gw_["warnings"]], rcs, sorted(gs_["duplicate_ids"])),
+      "a cross-phase duplicate that exists only through another phase's range: warning by default, BLOCKING when strict")
+root = variant("range-fail", lambda r: (NEW["range_ids"](r), sidecar(r, OK_XML + '<testcase classname="src" name="TestV/TC-VAL-10102 v">'
+                                                                         '<failure message="x"/></testcase>', "1")))
+rc, gw_, sow_ = gate(root, 1)
+check("E11", (1, True), (rc, "BLOCKING: TC: TC-VAL-10102 failing" in sow_), "warn: a range-defined ID whose test RAN and FAILED still BLOCKs")
+
+# ─── policy: file, per-check granularity, env override, broken file, commands ──────────────────────────
+root = variant("policy", lambda r: (NEW["malformed_ids"](r), NEW["range_ids"](r)))
+rc, out, _ = sg(root, "policy", "--strict-check", "malformed_ids")
+pol = json.load(open(os.path.join(root, "agent_state/config/gate-policy.json")))
+check("PO01", (0, {"strict": False, "strict_checks": ["malformed_ids"]}), (rc, pol["tc_gate"]), "policy --strict-check writes gate-policy.json")
+rc, gp_, sop = gate(root, 1)
+check("PO02", (1, ["range_ids"], True), (rc, [w["check"] for w in gp_["warnings"]], "BLOCKING: TC: malformed TC ID" in sop),
+      "one check enforced: malformed IDs BLOCK, range IDs stay a warning")
+rc, gp_, _ = gate(root, 1, env=dict(WARN, SDLC_TC_GATE="warn"))
+check("PO03", (0, 2), (rc, len(gp_["warnings"])), "env SDLC_TC_GATE=warn overrides the file for one run")
+sg(root, "policy", "--strict")
+rc, gp_, _ = gate(root, 1)
+check("PO04", (1, [], ["base_sha_required", "malformed_ids", "range_ids", "results_required"]),
+      (rc, gp_["warnings"], gp_["policy"]["strict_checks"]), "policy --strict: every check enforced, no warnings")
+rc, out, _ = sg(root, "policy", "--warn-check", "range_ids")
+check("PO05", ["base_sha_required", "malformed_ids", "results_required"],
+      json.load(open(os.path.join(root, "agent_state/config/gate-policy.json")))["tc_gate"]["strict_checks"], "policy --warn-check relaxes one check")
+sg(root, "policy", "--warn")
+rc, gp_, _ = gate(root, 1)
+check("PO06", (0, 2), (rc, len(gp_["warnings"])), "policy --warn: back to warnings")
+write(root, "agent_state/config/gate-policy.json", "{broken")
+rc, gp_, sop = gate(root, 1)
+check("PO07", (1, True, True), (rc, "gate policy:" in sop and "unreadable" in sop, "BLOCKING: TC: malformed TC ID" in sop),
+      "an unreadable gate-policy.json BLOCKs and enforces every check (someone meant to tighten)")
+write(root, "agent_state/config/gate-policy.json", '{"tc_gate": {"strict_checks": ["malformed"]}}')
+rc, gp_, sop = gate(root, 1)
+check("PO08", (1, True), (rc, "unknown check(s) malformed" in sop), "a typo'd check name BLOCKs with the known names")
+os.remove(os.path.join(root, "agent_state/config/gate-policy.json"))
+rc, sh = sgj(root, "policy")
+check("PO09", (0, "WARN"), (rc, sh["checks"]["malformed_ids"][:4]), "policy (show): defaults to WARN with no file")
+rc, wn = sgj(root, "warnings")
+p1 = next(p for p in wn["phases"] if p["phase"] == 1)
+check("PO10", (0, {"malformed_ids": 2, "range_ids": 3}, False, 5), (rc, p1["warnings"], p1["ready_for_strict"], wn["total_warnings"]),
+      "warnings: per-phase counts by check + ready_for_strict (the alignment tracker)")
+rc, out, _ = sg(B, "warnings", "--phase", "1")
+check("PO11", (0, True), (rc, "ready_for_strict: true" in out or '"ready_for_strict":true' in out), "warnings: a clean phase is ready for strict")
+rc, out, _ = sg(root, "gate", "--phase", "1", "--summary")
+check("PO12", True, "WARNING: TC: [malformed_ids]" in out and "warnings 5" in out, "gate --summary surfaces the warnings and their count")
+rc, tcj = sgj(root, "tc", "--phase", "1")
+check("PO13", True, any("[range_ids]" in w for w in tcj["warnings"]), "tc (query) surfaces the warnings too")
 
 # ─── incremental == full ───────────────────────────────────────────────────────────────────────────
 def jsonl(root, gd):
@@ -423,6 +601,8 @@ check("T03", True, all(k in tj for k in ("missing", "failing", "skipped_only", "
       "tc --out keeps every key the jq summaries in test.md/accept.md read")
 rc, out, err = sg(A, "tc", "--phase", "2", "--diff-base", "", "--out", OUTJ)
 check("T04", (2, True), (rc, "--diff-base is empty" in err), "tc --diff-base '' is an error, like tc-inventory (the weakening check would silently not run)")
+rc, out, err = sg(A, "gate", "--phase", "2", "--tc-only", "--diff-base", "")
+check("T05", (2, True), (rc, "--diff-base is empty" in err), "gate --diff-base '' is an error too, in any policy: a caller passing $(cat base_sha) still blocks")
 
 # ═══ fixture D: role profiles (developers, verifiers, auditors, spec_impl_reconciler) ═════════════════
 D = new_repo("d")
@@ -634,9 +814,9 @@ with open(os.path.join(P1, "execution.jsonl"), "w") as f:
         f.write(json.dumps({"agent": a, "phase": 1, "status": "completed", "report": rep, "ts": "t"}) + "\n")
 
 
-def verify_gate():
+def verify_gate(env=None):
     p = subprocess.run(["bash", os.path.join(H, "verify-gate.sh"), "1"], capture_output=True, text=True,
-                       env=dict(os.environ, CLAUDE_PROJECT_DIR=B))
+                       env=dict(env or WARN, CLAUDE_PROJECT_DIR=B))
     return p.returncode, p.stdout + p.stderr
 
 
@@ -646,14 +826,24 @@ spec = os.path.join(B, "docs/design/phases/1/specs/orders.md")
 orig = open(spec).read()
 open(spec, "w").write(orig + "| TC-SEC-REG-001 | SEC | hidden row | HIGH | integration |\n")
 rc, log = verify_gate()
-check("H02", (2, True), (rc, "tc: malformed TC ID" in log), "verify-gate (h) BLOCKs on a malformed ID row tc-inventory can't see")
+check("H02", (0, True, False), (rc, "tc warning (D-002, not blocking): [malformed_ids]" in log and "TC-SEC-REG-001" in log, "tc: malformed TC ID" in log),
+      "verify-gate (h), default policy: a malformed ID row is a visible warning, the gate passes")
+rc, log = verify_gate(STRICT)
+check("H02s", (2, True), (rc, "tc: malformed TC ID" in log), "verify-gate (h), strict: BLOCKs on a malformed ID row tc-inventory can't see")
 open(spec, "w").write(orig.replace("| TC-UI-10101 |", "| TC-API-10103 – TC-API-10104 | API | range rows | HIGH | integration |\n| TC-UI-10101 |"))
+rc, log = verify_gate(STRICT)
+check("H03", (2, True), (rc, "TC-API-10103" in log and "defined by a range" in log), "verify-gate (h), strict: BLOCKs on uncovered range-defined IDs")
 rc, log = verify_gate()
-check("H03", (2, True), (rc, "TC-API-10103" in log and "defined by a range" in log), "verify-gate (h) BLOCKs on uncovered range-defined IDs")
+check("H03w", (True, False), ("tc warning (D-002, not blocking): [range_ids]" in log and "TC-API-10103" in log,
+                              any(l.strip().startswith("✗ tc:") and "TC-API-10103" in l for l in log.splitlines())),
+      "verify-gate (h), default: uncovered range-defined IDs are a warning, not a ✗")
 open(spec, "w").write(orig)
 os.remove(os.path.join(P1, "base_sha"))
+rc, log = verify_gate(STRICT)
+check("H04", (2, True), (rc, "tc: no base commit" in log), "verify-gate (h), strict: BLOCKs when base_sha is missing (weakening check can't run)")
 rc, log = verify_gate()
-check("H04", (2, True), (rc, "no base commit" in log), "verify-gate (h) BLOCKs when base_sha is missing (weakening check can't run)")
+check("H04w", (0, True, True), (rc, "[base_sha_required]" in log, "1 D-002 warning(s)" in log),
+      "verify-gate (h), default: missing base_sha is a warning; the ok line counts the warnings and names the commands")
 
 print(f"\nsdlc-graph: {total - fails}/{total} passed")
 shutil.rmtree(W, ignore_errors=True)

@@ -133,6 +133,14 @@ With `--confirm_each_phase`, the same checkpoint is repeated before each later p
 - A catastrophic failure (won't build, infra won't start after retries) that blocks later phases.
 - The hook marking the run `stalled`.
 
+**What does NOT pause a run: TC gate warnings (D-002).** The graph TC gate's four stricter checks —
+malformed TC ID cells, range-defined IDs, and the gate's own runner-results and `base_sha` requirements —
+are warnings until the project enforces them. An autonomous run never force-gates over them, because they
+don't fail the gate; they appear as `⚠ tc warning` lines in `verify-gate.sh` (h) and in each phase's gate
+summary. Track them with `python3 .claude/hooks/sdlc-graph.py warnings` and enforce with
+`python3 .claude/hooks/sdlc-graph.py policy --strict` (or `--strict-check <check>`) when the project is
+aligned. Everything the TC inventory blocked on before still blocks.
+
 Anything else — a failing test, a blocking review finding, a design-gate BLOCK — is handled inside
 the run by fix loops, with the outcome logged.
 

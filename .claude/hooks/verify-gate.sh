@@ -40,7 +40,9 @@
 #                             stitch_deviations[] entry in those manifests was fixed or accepted and synced
 #                             back (stitch-state.py gate; skills/ui/stitch-design.md §6).
 #   (h)  TC inventory        — when docs/design/phases/N/ exists: sdlc-graph.py gate --tc-only (the one TC gate:
-#                             tc-inventory.py's rules in results mode + range-expanded and malformed IDs).
+#                             tc-inventory.py's rules, which always block, + four stricter checks — malformed ID
+#                             cells, range-defined IDs, results mode and base_sha required — that are WARNINGS
+#                             until agent_state/config/gate-policy.json enforces them; D-002).
 #   (d)  gate.passed honesty — if manifest.json has gate.passed==true, (a)-(c) must STILL hold
 #                             (this catches the known "gate.passed written without reports" bug).
 #
@@ -560,6 +562,9 @@ fi
 #      Same rules as tc-inventory.py (it imports tc-inventory's test-name parsers and weakening check) plus:
 #      definition ranges expanded, malformed ID cells flagged, results mode required (every runner sidecar in
 #      reports/), base_sha required. Applies when the phase has docs/design/phases/N/. A finding, like (b).
+#      D-002 (warning-first): those four stricter checks print WARNING: lines and do not fail the gate until
+#      the project enforces them (`sdlc-graph.py policy --strict` or --strict-check CHECK, which writes
+#      agent_state/config/gate-policy.json). Everything tc-inventory.py blocks on blocks here regardless.
 # ---------------------------------------------------------------------------
 echo "── (h) TC inventory (sdlc-graph gate) ──"
 SDLC_GRAPH="${HOOK_DIR:-.claude/hooks}/sdlc-graph.py"
@@ -574,9 +579,15 @@ elif [ ! -f "$SDLC_GRAPH" ] || ! command -v python3 >/dev/null 2>&1; then
   fail "docs/design/phases/$PHASE exists but sdlc-graph.py (or python3) is unavailable — can't compute the TC inventory (copy sdlc-graph.py + tc-inventory.py from ~/.claude/hooks/startup/)."
 else
   TC_OUT="$(python3 "$SDLC_GRAPH" --root "$PWD" gate --phase "$PHASE" --tc-only --max-tokens 1500 2>&1)"; TC_RC=$?
-  printf '%s\n' "$TC_OUT" | grep -v '^BLOCKING: ' | sed 's/^/    /'
+  printf '%s\n' "$TC_OUT" | grep -v -e '^BLOCKING: ' -e '^WARNING: ' | sed 's/^/    /'
+  TC_WARN="$(printf '%s\n' "$TC_OUT" | grep -c '^WARNING: ')"
+  while IFS= read -r w; do [ -n "$w" ] && echo "  ⚠ tc warning (D-002, not blocking): ${w#WARNING: TC: }"; done < <(printf '%s\n' "$TC_OUT" | grep '^WARNING: ')
   if [ "$TC_RC" -eq 0 ]; then
-    ok "every HIGH/MEDIUM TC ID of phase $PHASE has a test named with it that ran and passed (sdlc-graph gate)"
+    if [ "$TC_WARN" -gt 0 ]; then
+      ok "TC inventory passes tc-inventory's rules for phase $PHASE, with $TC_WARN D-002 warning(s) above — list them: python3 $SDLC_GRAPH warnings --phase $PHASE; enforce: python3 $SDLC_GRAPH policy --strict"
+    else
+      ok "every HIGH/MEDIUM TC ID of phase $PHASE has a test named with it that ran and passed (sdlc-graph gate)"
+    fi
   else
     while IFS= read -r b; do [ -n "$b" ] && fail "tc: ${b#BLOCKING: TC: }"; done < <(printf '%s\n' "$TC_OUT" | grep '^BLOCKING: ')
     printf '%s\n' "$TC_OUT" | grep -q '^BLOCKING: ' || fail "sdlc-graph.py gate failed (exit $TC_RC) — run it by hand: python3 $SDLC_GRAPH gate --phase $PHASE --tc-only"

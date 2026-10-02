@@ -253,6 +253,9 @@ python3 .claude/hooks/sdlc-graph.py build >/dev/null \
 #    included, so a sidecar never gives one a default priority). tc-inventory.py only when the graph is unavailable.
 python3 .claude/hooks/sdlc-graph.py --no-refresh tc --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"; RC=$?
 [ "$RC" -eq 4 ] && python3 .claude/hooks/tc-inventory.py --phase "${PHASE}" --spec-only --out "$P/tc_priorities.json"
+# 5. D-002: spec-side TC warnings this phase starts with (malformed ID cells, range-defined IDs). Not blocking until
+#    agent_state/config/gate-policy.json enforces them; pass them to the test writers so they're fixed, not carried.
+python3 .claude/hooks/sdlc-graph.py --no-refresh --json tc --phase "${PHASE}" 2>/dev/null | jq -r '.warnings[]? | "⚠ " + .' || true
 ```
 
 Evidence rules for every test tier are in `~/.claude/skills/testing/test-results-sidecar.md`: JUnit XML
@@ -958,7 +961,9 @@ spec_test_reconciler: FIRST run the deterministic TC gate — it is your evidenc
     --diff-base $(cat agent_state/phases/${PHASE}/base_sha) --out agent_state/reconciliation/phase-${PHASE}/specs_vs_tests.json
   (tc-inventory.py with the same flags only if the graph is unavailable — say so in the report)
   (an ID counts only when a test NAMED with it ran and passed; skipped/comment-only/duplicate IDs and
-  unacknowledged test weakening fail it). Then write specs_vs_tests.md around that JSON.
+  unacknowledged test weakening fail it; malformed and range-defined IDs are WARNINGS unless the project's
+  gate-policy.json enforces them — D-002: report each as a WARNING, never drop it). Then write
+  specs_vs_tests.md around that JSON.
 spec_impl_reconciler: start from python3 .claude/hooks/sdlc-graph.py context --agent spec_impl_reconciler --phase ${PHASE}
   (+ orphans --phase ${PHASE}): the endpoint/type/FR inventory and every non-test spec section as file:start-end
   — your checklist; open each span as you verify it (whole specs only if the graph is unavailable — say so).
@@ -1137,7 +1142,9 @@ Anti-rationalization: "the fix looks right, no need to re-run" is WRONG — alwa
 
 The PARENT session (not an agent) builds the feedback document. Start from the one-screen summary,
 `python3 .claude/hooks/sdlc-graph.py gate --phase ${PHASE} --summary` (TC gate + roster + evidence
-sidecars + reconciler counts, every blocker on one line), then open only the reports it names. If it is
+sidecars + reconciler counts, every blocker on one line, and one `WARNING:` line per D-002 check that is not
+enforced yet), then open only the reports it names. Warnings go into the feedback document as WARNINGS
+(owners may fix them now); they are not blockers. If it is
 unavailable, read all Wave 3+4 reports:
 
 1. Read `unit_tests.md` — any failures?
@@ -1280,8 +1287,11 @@ score → Layer 3 for security/tenant-isolation/"fixed" claims → write `gate_s
       latest revision whose render still matches its sha256; nothing is `pending_approval`,
       `sync_back_pending` or `drift`; every `stitch_deviations[]` entry is fixed or accepted + synced.
     - **TC inventory (check h):** `sdlc-graph.py gate --tc-only` — every HIGH/MEDIUM TC ID has a test named
-      with it that ran and passed (results mode, every sidecar in reports/), no duplicate/malformed IDs,
-      range-defined IDs included, no unacknowledged test weakening since `base_sha`. It is the only TC gate.
+      with it that ran and passed (results mode, every sidecar in reports/), no duplicate IDs, no
+      unacknowledged test weakening since `base_sha`. It is the only TC gate. Malformed ID cells,
+      uncovered range-defined IDs, and running without sidecars or `base_sha` are WARNINGS until
+      `agent_state/config/gate-policy.json` enforces them (D-002; `sdlc-graph.py policy --strict`): the
+      gate prints them as `⚠ tc warning` lines and passes; carry them into the phase summary.
 
 0b. **Agent-roster completeness (execution guarantee) — run FIRST, via the shared hook.** The single
     source of truth for this check is `.claude/hooks/verify-gate.sh`. It passes iff (1) every

@@ -44,6 +44,11 @@ Usage: sdlc-graph.py [--root DIR] [--graph-dir DIR] [--json] [--max-tokens N] [-
                                          the deterministic TC gate (a superset of tc-inventory.py, see
                                          below) + roster/execution/evidence summary. Exit 0 = PASS, 1 = FAIL.
   repomap [--focus PATH,...]             deterministic personalized PageRank over import/call edges
+  warnings [--phase N]                   D-002 alignment tracker: per phase, the warn-mode findings (by check)
+                                         that would block under strict, and ready_for_strict
+  policy [--strict | --warn] [--strict-check C] [--warn-check C]
+                                         show / set agent_state/config/gate-policy.json (which of the four
+                                         stricter checks below block; the rest warn)
 
 Output is capped (--max-tokens, default 2000 ≈ 8 KB; --limit rows per list); --full lifts the caps.
 Every query first refreshes the graph incrementally (seconds) unless --no-refresh.
@@ -61,6 +66,15 @@ parsers and test-weakening check, so a test counts the same way in both — and 
   4. It always runs the test-weakening check (base: --diff-base, else agent_state/phases/N/base_sha) and
      BLOCKs when there is no base to diff against.
 Cross-phase duplicate detection also covers expanded range IDs. Everything else is tc-inventory.py's rule.
+
+WARNING-FIRST (D-002). Those four stricter checks — malformed_ids (2), range_ids (1, incl. range-only
+cross-phase duplicates), results_required (3), base_sha_required (4) — are WARNINGS until the project enforces
+them in agent_state/config/gate-policy.json ({"tc_gate": {"strict": true}} or "strict_checks": [...]; set with
+`policy`; env SDLC_TC_GATE=strict|warn|<checks> for one run). A warning is reported (sidecar warnings[] +
+warning_count, a WARNING: line per check with the count, first examples and the fix) and never fails the gate.
+In warn mode the gate runs in source mode when there are no sidecars and skips the weakening check when there is
+no base. What tc-inventory.py blocks on ALWAYS blocks, and so does a range-defined ID whose test RAN and FAILED,
+a phase whose only rows are ranges (BLOCKED), and an unreadable policy file or unknown check name.
 
 Code layer = rung 1 (regex per stack: Go, TS/JS, Python, Java/Kotlin, Rust; routes for gin/echo/chi/
 net-http/express/Nest/Next/FastAPI/Flask/Django/Spring/axum/actix). Symbols are qualified by receiver/class
@@ -139,6 +153,64 @@ ROLE_TIERS = {
 }
 DEV_ROLES = {"backend_developer", "api_developer", "ui_developer", "mobile_developer", "database_agent",
              "migration_agent", "backend_audit_agent", "ui_audit_agent"}
+
+
+# ─── TC gate policy (D-002: warning-first rollout of the four stricter checks) ───────────────────
+# Everything tc-inventory.py blocks on ALWAYS blocks. The four checks below are the graph gate's additions;
+# a project gets them as WARNINGS until it opts into enforcement in agent_state/config/gate-policy.json:
+#   { "tc_gate": { "strict": true } }                                   all four block
+#   { "tc_gate": { "strict": false, "strict_checks": ["malformed_ids"] } }  tighten one at a time
+# Resolution: env SDLC_TC_GATE (one run: "strict" | "warn" | comma list of checks) > the project file >
+# warn. A file that exists but can't be read, or names an unknown check, BLOCKS (someone meant to tighten).
+GATE_POLICY_FILE = os.path.join("agent_state", "config", "gate-policy.json")
+TC_GATE_CHECKS = {   # check: (what it finds, the one fix)
+    "malformed_ids": ("malformed TC ID cell(s) in an inventory table (the row is invisible to the inventory)",
+                      "renumber each cell to an unused TC-<CAT>-<digits> ID (TC-SEC-012a → the next free TC-SEC-NNN, "
+                      "TC-E2E-ING-001 → TC-E2EING-001) and rename the tests that carry it; list them with "
+                      "`sdlc-graph.py warnings --phase N --full`"),
+    "range_ids": ("range-defined TC ID(s) uncovered (or defined by another phase too)",
+                  "write one inventory row per ID instead of a range, or name a test with every ID in the range"),
+    "results_required": ("no runner results: the TC inventory ran in SOURCE mode (a named test, not one that ran and passed)",
+                         "run the tiers through test_runner (Wave 3v) so sdlc.test-results/v1 sidecars land in "
+                         "agent_state/phases/N/reports/, or pass --results"),
+    "base_sha_required": ("no base commit: the test-weakening check did not run",
+                          "write the commit the phase started from: git rev-parse <sha> > agent_state/phases/N/base_sha "
+                          "(Wave 0c does this), or pass --diff-base"),
+}
+WARN_EXAMPLES = 5
+
+
+def load_gate_policy(root):
+    """{"strict": set of enforced checks, "source": where that came from, "error": str|None}."""
+    env = (os.environ.get("SDLC_TC_GATE") or "").strip()
+    if env:
+        if env.lower() == "strict":
+            return {"strict": set(TC_GATE_CHECKS), "source": "env SDLC_TC_GATE=strict", "error": None}
+        if env.lower() == "warn":
+            return {"strict": set(), "source": "env SDLC_TC_GATE=warn", "error": None}
+        names = {x.strip() for x in env.split(",") if x.strip()}
+        bad = sorted(names - set(TC_GATE_CHECKS))
+        return {"strict": names & set(TC_GATE_CHECKS), "source": f"env SDLC_TC_GATE={env}",
+                "error": f"SDLC_TC_GATE names unknown check(s) {', '.join(bad)} (known: {', '.join(TC_GATE_CHECKS)})" if bad else None}
+    path = os.path.join(root, GATE_POLICY_FILE)
+    if not os.path.exists(path):
+        return {"strict": set(), "source": "default (warn: no agent_state/config/gate-policy.json)", "error": None}
+    try:
+        with open(path) as f:
+            tc = (json.load(f) or {}).get("tc_gate") or {}
+        if not isinstance(tc, dict):
+            raise ValueError("tc_gate must be an object")
+        checks = tc.get("strict_checks") or []
+        if not isinstance(checks, list):
+            raise ValueError("tc_gate.strict_checks must be a list")
+    except (OSError, ValueError, AttributeError) as e:
+        return {"strict": set(TC_GATE_CHECKS), "source": GATE_POLICY_FILE,
+                "error": f"{GATE_POLICY_FILE} is unreadable ({e}) — fix it; until then every check is enforced"}
+    if tc.get("strict") is True:
+        return {"strict": set(TC_GATE_CHECKS), "source": f"{GATE_POLICY_FILE} (strict: true)", "error": None}
+    bad = sorted(set(map(str, checks)) - set(TC_GATE_CHECKS))
+    return {"strict": set(checks) & set(TC_GATE_CHECKS), "source": GATE_POLICY_FILE,
+            "error": f"{GATE_POLICY_FILE} names unknown check(s) {', '.join(bad)} (known: {', '.join(TC_GATE_CHECKS)})" if bad else None}
 
 
 def now_iso():
@@ -1286,18 +1358,35 @@ def discover_results(g, phase):
     return out
 
 
-def tc_inventory(g, phase, results=None, diff_base=None, gate_mode=False):
-    """The same computation as tc-inventory.py main(), over the graph, plus the graph-only checks."""
+def tc_inventory(g, phase, results=None, diff_base=None, gate_mode=False, policy=None):
+    """The same computation as tc-inventory.py main(), over the graph, plus the graph-only checks.
+
+    D-002: the graph-only checks (TC_GATE_CHECKS) block only when the gate policy enforces them; otherwise each
+    is a WARNING (inv["warnings"]), never counted in `failed`. Everything tc-inventory.py counts always blocks."""
     phase = int(phase)
+    policy = policy or load_gate_policy(g.root)
+    strict = policy["strict"]
     spec, dup_in_phase, expanded = spec_inventory(g, phase)
-    others = {}
+    # cross-phase duplicates: tc-inventory's (both rows real) always block; one that exists only because a range
+    # was expanded (here or in the other phase) is the range_ids check
+    others, others_range = {}, {}
     for p in g.phases():
         if p == phase:
             continue
-        ids = {r[0] for r in g.q("SELECT DISTINCT name FROM nodes WHERE kind='tc' AND phase=?", p)}
-        for k in set(spec) & ids:
-            others.setdefault(k, []).append(str(p))
-    dups = {k: sorted(v, key=lambda x: int(x)) for k, v in others.items()}
+        for r in g.nodes("kind='tc' AND phase=?", p):
+            if r["name"] in spec:
+                (others_range if r.get("from_range") else others).setdefault(r["name"], set()).add(str(p))
+    dups, range_dups = {}, {}
+    for k in set(others) | set(others_range):
+        ps_real = others.get(k, set()) if not spec[k].get("from_range") else set()
+        ps_all = others.get(k, set()) | others_range.get(k, set())
+        if ps_real:
+            dups[k] = sorted(ps_real, key=int)
+        if ps_all - ps_real:
+            range_dups[k] = sorted(ps_all - ps_real, key=int)
+    if "range_ids" in strict:
+        for k, ps in range_dups.items():
+            dups[k] = sorted(set(dups.get(k, [])) | set(ps), key=int)
     named = {}
     for t in g.nodes("kind='test' ORDER BY file, line"):
         for i in t.get("ids") or []:
@@ -1317,7 +1406,8 @@ def tc_inventory(g, phase, results=None, diff_base=None, gate_mode=False):
                 for i in c.get("ids", []) or []:
                     res_by_id.setdefault(i, []).append(c.get("verdict", ""))
     results_mode = results is not None and bool(results)
-    cases, missing, failing, skipped_only, comment_only = [], [], [], [], []
+    range_strict = "range_ids" in strict
+    cases, missing, failing, skipped_only, comment_only, range_uncovered = [], [], [], [], [], []
     for tid, meta in sorted(spec.items()):
         blocking = meta["priority"] in ("HIGH", "MEDIUM")
         live = [c for c in named.get(tid, []) if not c.get("skipped")]
@@ -1325,7 +1415,7 @@ def tc_inventory(g, phase, results=None, diff_base=None, gate_mode=False):
             vs = res_by_id.get(tid, [])
             if any(v in ("FAIL", "FLAKY") for v in vs):
                 v = "FAIL"
-                failing.append(tid)
+                failing.append(tid)          # a test that RAN and FAILED blocks, range-defined or not
             elif "PASS" in vs:
                 v = "PASS"
             else:
@@ -1338,7 +1428,7 @@ def tc_inventory(g, phase, results=None, diff_base=None, gate_mode=False):
             elif tid in anywhere:
                 comment_only.append(tid)
             if blocking:
-                missing.append(tid)
+                (missing if range_strict or not meta.get("from_range") else range_uncovered).append(tid)
         cases.append({"name": tid, "ids": [tid], "priority": meta["priority"], "tier": meta.get("tier", ""),
                       "verdict": v, "tests": [f"{c['file']}:{c['line']}" for c in live][:5],
                       "spec": meta["where"], "section": meta.get("section", ""),
@@ -1356,29 +1446,57 @@ def tc_inventory(g, phase, results=None, diff_base=None, gate_mode=False):
     spec_ranges = [{"where": f"{r['file']}:{r['line']}", "range": r["name"], "expanded": bool(r.get("expanded")),
                     **({"reason": r["reason"]} if r.get("reason") else {})}
                    for r in g.nodes("kind='spec_range' AND phase=? ORDER BY file, line", phase)]
-    blocking_ids = [k for k, m in spec.items() if m["priority"] in ("HIGH", "MEDIUM")]
-    gate_blockers = []
+    # in warn mode, uncovered range-defined IDs are neither required nor counted (tc-inventory's total)
+    blocking_ids = [k for k, m in spec.items() if m["priority"] in ("HIGH", "MEDIUM") and (range_strict or not m.get("from_range"))]
+    gate_blockers, found = [], {}
     if gate_mode and not results_mode:
-        gate_blockers.append(f"no runner results: no sdlc.test-results/v1 sidecar in agent_state/phases/{phase}/reports/ "
-                             "(an ID counts only when a test named with it RAN and PASSED)")
+        found["results_required"] = [f"no runner results: no sdlc.test-results/v1 sidecar in agent_state/phases/{phase}/reports/ "
+                                     "(an ID counts only when a test named with it RAN and PASSED)"]
     if results_err:
         gate_blockers += [f"unreadable results sidecar {e}" for e in results_err]
     if base_err:
-        gate_blockers.append(base_err)
+        found["base_sha_required"] = [base_err]
+    if malformed:
+        found["malformed_ids"] = malformed
+    if not range_strict and (range_uncovered or range_dups):
+        by = {c["name"]: c for c in cases}
+        found["range_ids"] = ([f"{t} ({by[t]['priority']}, {by[t]['tier'] or 'no tier'}) uncovered — {by[t]['spec']} [defined by a range]"
+                               for t in range_uncovered]
+                              + [f"{t} (from a range) is also defined by phase(s) {', '.join(ps)}" for t, ps in sorted(range_dups.items())])
+    if policy.get("error"):
+        gate_blockers.append("gate policy: " + policy["error"])
+    warnings = []
+    for chk in TC_GATE_CHECKS:
+        items = found.get(chk)
+        if not items:
+            continue
+        if chk in strict:
+            if chk in ("results_required", "base_sha_required"):
+                gate_blockers += items
+            # malformed_ids: blocking_lines lists inv["graph"]["malformed_ids"]; range_ids: already in missing/dups
+        else:
+            warnings.append({"check": chk, "count": len(items), "what": TC_GATE_CHECKS[chk][0],
+                             "examples": items[:WARN_EXAMPLES], "items": items, "fix": TC_GATE_CHECKS[chk][1],
+                             "enforce": f"sdlc-graph.py policy --strict-check {chk}"})
     failed = (len(set(missing) | set(failing)) + len(dups) + len(dup_in_phase) + len(ranges) + len(unack)
-              + len(malformed) + len(gate_blockers))
+              + (len(malformed) if "malformed_ids" in strict else 0) + len(gate_blockers))
     sha, dirty = tci.code_state(g.root)
-    verdict = "PASS" if spec and failed == 0 else ("BLOCKED" if not spec else "FAIL")
+    has_rows = bool(spec) if range_strict else any(not m.get("from_range") for m in spec.values())
+    verdict = "PASS" if has_rows and failed == 0 else ("BLOCKED" if not has_rows else "FAIL")
     return {
         "schema": "sdlc.test-results/v1", "tier": "tc-inventory", "source": "sdlc-graph", "verdict": verdict,
-        "phase": phase, "total": len(blocking_ids), "passed": len(blocking_ids) - len(set(missing) | set(failing)),
+        "phase": phase, "total": len(blocking_ids),
+        "passed": len(blocking_ids) - len({x for x in set(missing) | set(failing) if x in set(blocking_ids)}),
         "failed": failed, "skipped": len(skipped_only), "flaky": 0, "code_sha": sha, "dirty": dirty,
         "mode": "results" if results_mode else "source", "results": results_used,
         "missing": missing, "failing": failing, "skipped_only": skipped_only, "comment_only": comment_only,
         "duplicate_ids": dups, "duplicate_in_phase": dup_in_phase, "range_annotations": ranges,
         "weakening": weak, "weakening_unacknowledged": unack, "test_changes": changes, "test_change_invalid": invalid,
-        "graph": {"range_expanded_ids": expanded, "spec_ranges": spec_ranges, "malformed_ids": malformed,
-                  "gate_blockers": gate_blockers, "diff_base": diff_base, "graph_head": g.meta("head")},
+        "warning_count": sum(w["count"] for w in warnings), "warnings": warnings,
+        "policy": {"strict_checks": sorted(strict), "warn_checks": sorted(set(TC_GATE_CHECKS) - strict),
+                   "source": policy["source"], "decision": "D-002"},
+        "graph": {"range_expanded_ids": expanded, "range_uncovered_ids": range_uncovered, "spec_ranges": spec_ranges,
+                  "malformed_ids": malformed, "gate_blockers": gate_blockers, "diff_base": diff_base, "graph_head": g.meta("head")},
         "cases": cases, "ts": now_iso(),
     }
 
@@ -1405,9 +1523,22 @@ def blocking_lines(inv):
         out.append(f"range annotation in a test covers nothing: {r}")
     for w in inv["weakening_unacknowledged"]:
         out.append(f"test weakening {w['kind']} at {w['file']}:{w['line']} — needs {w.get('needs', 'an acknowledgement')}")
-    for m in inv["graph"]["malformed_ids"]:
-        out.append(f"malformed TC ID in an inventory table (row is invisible to the inventory): {m}")
+    if "malformed_ids" in inv.get("policy", {}).get("strict_checks", TC_GATE_CHECKS):
+        for m in inv["graph"]["malformed_ids"]:
+            out.append(f"malformed TC ID in an inventory table (row is invisible to the inventory): {m}")
     out += inv["graph"]["gate_blockers"]
+    return out
+
+
+def warning_lines(inv):
+    """One `WARNING: …` line per warn-mode check (D-002): count, first examples, the fix, how to enforce it."""
+    out = []
+    for w in inv.get("warnings", []):
+        more = f" (+{w['count'] - len(w['examples'])} more)" if w["count"] > len(w["examples"]) else ""
+        body = w["examples"][0] if w["check"] in ("results_required", "base_sha_required") else \
+            f"{w['count']} {w['what']}: {'; '.join(w['examples'])}{more}"
+        out.append(f"[{w['check']}] {body} — fix: {w['fix']} "
+                   f"— a warning under D-002 until `{w['enforce']}`")
     return out
 
 
@@ -1495,7 +1626,9 @@ def cmd_tc(g, a):
         return {"_line": f"sdlc-graph tc phase {phase}: {inv['verdict']} {inv['passed']}/{inv['total']} HIGH+MEDIUM "
                          f"({inv['mode']} mode, {len(inv['results'])} sidecar(s)); missing {len(inv['missing'])}, failing "
                          f"{len(inv['failing'])}, range-expanded IDs {len(inv['graph']['range_expanded_ids'])}, malformed "
-                         f"{len(inv['graph']['malformed_ids'])}; detail {a.out}", "_rc": 0 if inv["verdict"] == "PASS" else 1}
+                         f"{len(inv['graph']['malformed_ids'])}; warnings {inv['warning_count']} (D-002 warn mode: "
+                         f"{', '.join(inv['policy']['warn_checks']) or 'none'}); detail {a.out}",
+                "_rc": 0 if inv["verdict"] == "PASS" else 1}
     tiers = [t.strip().lower() for t in (a.tier or "").split(",") if t.strip()]
     prios = [p.strip().upper() for p in (a.priority or "").split(",") if p.strip()]
     rows = []
@@ -1523,7 +1656,8 @@ def cmd_tc(g, a):
             "problems": {"duplicate_ids": {k: v for k, v in inv["duplicate_ids"].items() if k in ids},
                          "duplicate_in_phase": {k: v for k, v in inv["duplicate_in_phase"].items() if k in ids},
                          "malformed_ids": inv["graph"]["malformed_ids"] if not (tiers or prios) else len(inv["graph"]["malformed_ids"]),
-                         "range_expanded_ids": len(inv["graph"]["range_expanded_ids"])}}
+                         "range_expanded_ids": len(inv["graph"]["range_expanded_ids"])},
+            "warnings": warning_lines(inv), "policy": inv["policy"]}
 
 
 def section_rows(g, sids):
@@ -2461,6 +2595,9 @@ def cmd_gate(g, a):
             elif r["blocking"] > 0:
                 blk.append(f"RECONCILE: {r['file']} BLOCKING:{r['blocking']}")
     out["blocking"] = blk
+    out["warnings"] = ["TC: " + w for w in warning_lines(inv)]
+    out["warning_count"] = inv["warning_count"]
+    out["policy"] = inv["policy"]
     out["verdict"] = "PASS" if not blk else "FAIL"
     dest = a.out or os.path.join(g.dir, f"tc-gate-phase-{phase}.json")
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
@@ -2468,11 +2605,73 @@ def cmd_gate(g, a):
         json.dump(inv if a.tc_only else out, f, indent=1)
     summ = {"phase": phase, "verdict": out["verdict"], "tc": {"verdict": inv["verdict"], "covered": f"{inv['passed']}/{inv['total']}",
             "mode": inv["mode"], "missing": len(inv["missing"]), "failing": len(inv["failing"]),
-            "range_expanded": len(inv["graph"]["range_expanded_ids"])}, "blocking": blk, "detail": dest}
+            "range_expanded": len(inv["graph"]["range_expanded_ids"]), "warning_count": inv["warning_count"],
+            "warnings": {w["check"]: w["count"] for w in inv["warnings"]}}, "blocking": blk,
+            "warnings": out["warnings"], "policy": inv["policy"], "detail": dest}
     with open(os.path.join(g.dir, f"summary-phase-{phase}.json"), "w") as f:
         json.dump(summ, f, indent=1)
     out["detail"] = os.path.relpath(dest, g.root) if dest.startswith(g.root) else dest
     return out
+
+
+def cmd_warnings(g, a):
+    """D-002 alignment tracker: per phase, the warn-mode findings that would block under strict, and whether the
+    phase is ready for `policy --strict`. Reads the same inputs the gate does (reports/ sidecars, base_sha)."""
+    pol = load_gate_policy(g.root)
+    # every phase the TC gate applies to (verify-gate (h) skips a phase with no docs/design/phases/N/)
+    phases = [int(a.phase)] if a.phase else \
+        [p for p in g.phases() if os.path.isdir(os.path.join(g.root, "docs", "design", "phases", str(p)))]
+    rows, total = [], 0
+    for p in phases:
+        inv = tc_inventory(g, p, results=discover_results(g, p), gate_mode=True, policy=pol)
+        n_blk = len(blocking_lines(inv))
+        total += inv["warning_count"]
+        rows.append({"phase": p, "tc_verdict": inv["verdict"], "blocking_now": n_blk, "warning_count": inv["warning_count"],
+                     "warnings": {w["check"]: w["count"] for w in inv["warnings"]},
+                     "ready_for_strict": inv["warning_count"] == 0,
+                     "items": {w["check"]: w["items"] for w in inv["warnings"]}})
+    return {"policy": {"strict_checks": sorted(pol["strict"]), "source": pol["source"], **({"error": pol["error"]} if pol["error"] else {})},
+            "total_warnings": total, "phases": rows,
+            "fixes": {k: v[1] for k, v in TC_GATE_CHECKS.items()},
+            "enforce": "sdlc-graph.py policy --strict (all) | --strict-check CHECK (one at a time) — writes " + GATE_POLICY_FILE}
+
+
+def cmd_policy(root, a):
+    """Show or set the project's TC gate policy (agent_state/config/gate-policy.json, D-002)."""
+    path = os.path.join(root, GATE_POLICY_FILE)
+    if a.strict or a.warn or a.strict_check or a.warn_check:
+        try:
+            doc = json.load(open(path)) if os.path.exists(path) else {}
+            if not isinstance(doc, dict):
+                raise ValueError("top level must be an object")
+        except (OSError, ValueError) as e:
+            return {"_line": f"sdlc-graph policy: {path} is unreadable ({e}) — fix or delete it first", "_rc": 2}
+        tc = doc.get("tc_gate") if isinstance(doc.get("tc_gate"), dict) else {}
+        checks = set(tc.get("strict_checks") or []) & set(TC_GATE_CHECKS)
+        for c in (a.strict_check or []) + (a.warn_check or []):
+            if c not in TC_GATE_CHECKS:
+                return {"_line": f"sdlc-graph policy: unknown check {c} (known: {', '.join(TC_GATE_CHECKS)})", "_rc": 2}
+        if a.strict:
+            tc = {"strict": True, "strict_checks": sorted(TC_GATE_CHECKS)}
+        elif a.warn:
+            tc = {"strict": False, "strict_checks": []}
+        else:
+            if tc.get("strict") is True:
+                checks = set(TC_GATE_CHECKS)
+            checks = (checks | set(a.strict_check or [])) - set(a.warn_check or [])
+            tc = {"strict": checks == set(TC_GATE_CHECKS), "strict_checks": sorted(checks)}
+        doc["tc_gate"] = tc
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(doc, f, indent=2)
+            f.write("\n")
+    pol = load_gate_policy(root)
+    return {"file": GATE_POLICY_FILE, "source": pol["source"], **({"error": pol["error"]} if pol["error"] else {}),
+            "checks": {k: ("BLOCK" if k in pol["strict"] else "WARN") + " — " + v[0] for k, v in TC_GATE_CHECKS.items()},
+            "always_blocks": "everything tc-inventory.py blocks on: uncovered/failing HIGH+MEDIUM IDs, comment-only and "
+                             "skipped-only coverage, cross-phase and in-phase duplicates, range annotations in tests, "
+                             "unacknowledged test weakening, unreadable sidecars, a phase with no TC rows",
+            "decision": "D-002 (docs/DECISIONS.md)"}
 
 
 def cmd_repomap(g, a):
@@ -2650,12 +2849,25 @@ def main(argv=None):
     gt.add_argument("--tc-only", action="store_true"); gt.add_argument("--results", nargs="*"); gt.add_argument("--diff-base")
     gt.add_argument("--out")
     r = sub("repomap"); r.add_argument("--focus")
+    wn = sub("warnings"); wn.add_argument("--phase")
+    po = sub("policy"); pm = po.add_mutually_exclusive_group()
+    pm.add_argument("--strict", action="store_true", help="enforce all four D-002 checks")
+    pm.add_argument("--warn", action="store_true", help="all four back to warnings")
+    po.add_argument("--strict-check", action="append", choices=sorted(TC_GATE_CHECKS), help="enforce one check (repeatable)")
+    po.add_argument("--warn-check", action="append", choices=sorted(TC_GATE_CHECKS), help="one check back to a warning")
     a = ap.parse_args(argv)
     if a.max_tokens is None:
         a.max_tokens = {"context": 5000, "diff-context": 4000}.get(a.cmd, 2000)
     if not os.path.isdir(a.root):
         print(f"sdlc-graph: no such root {a.root}", file=sys.stderr)
         return 3
+    if a.cmd == "policy":                       # no graph needed
+        res = cmd_policy(os.path.abspath(a.root), a)
+        if "_line" in res:
+            print(res["_line"], file=sys.stderr)
+            return res["_rc"]
+        emit(res, a)
+        return 2 if res.get("error") else 0
     try:
         g = Graph(a.root, a.graph_dir)
         if a.cmd == "build":
@@ -2672,8 +2884,8 @@ def main(argv=None):
         return 4
     fn = {"stats": cmd_stats, "tc": cmd_tc, "context": cmd_context, "diff-context": cmd_diff_context, "impact": cmd_impact,
           "consumers": cmd_consumers, "trace": cmd_trace, "orphans": cmd_orphans, "unlocked": cmd_unlocked,
-          "gate": cmd_gate, "repomap": cmd_repomap}[a.cmd]
-    if a.cmd == "tc" and a.diff_base is not None and not a.diff_base.strip():
+          "gate": cmd_gate, "repomap": cmd_repomap, "warnings": cmd_warnings}[a.cmd]
+    if a.cmd in ("tc", "gate") and a.diff_base is not None and not a.diff_base.strip():
         print("sdlc-graph: --diff-base is empty (agent_state/phases/N/base_sha missing?) — the weakening check needs "
               "the commit the phase started from; leave the flag out only for a source-mode inventory", file=sys.stderr)
         return 2
@@ -2686,9 +2898,16 @@ def main(argv=None):
             tc = res["tc"]
             print(f"sdlc-graph gate phase {res['phase']}: {res['verdict']} — TC {tc['verdict']} {tc['passed']}/{tc['total']} "
                   f"HIGH+MEDIUM ({tc['mode']} mode, {len(tc['results'])} sidecar(s)); missing {len(tc['missing'])}, "
-                  f"failing {len(tc['failing'])}, range-expanded IDs {len(tc['graph']['range_expanded_ids'])}; detail {res['detail']}")
+                  f"failing {len(tc['failing'])}, range-expanded IDs {len(tc['graph']['range_expanded_ids'])}; "
+                  f"warnings {tc['warning_count']} (D-002 warn: {', '.join(tc['policy']['warn_checks']) or 'none'}; "
+                  f"policy from {tc['policy']['source']}); detail {res['detail']}")
             budget = a.max_tokens * 4
-            used = 0
+            for w in res["warnings"]:             # warnings first, one line per check, so they are never cut
+                s = "WARNING: " + w
+                if not a.full and len(s) > 600:
+                    s = s[:560] + " … (see " + res["detail"] + ")"
+                print(s)
+            used = 0                              # the budget is for BLOCKING lines; warnings are <= 4 short lines
             for k, line in enumerate(res["blocking"]):
                 s = "BLOCKING: " + line
                 if not a.full and used + len(s) > budget:
