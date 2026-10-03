@@ -1,7 +1,7 @@
 # Agent identity for the sdlc lab cluster (human bootstrap, admin kubeconfig).
 # ServiceAccount sdlc-agent: read-only across the cluster (ClusterRole "view" excludes Secrets),
 # and "admin" only inside each app's <app>-dev / <app>-qa namespaces (RoleBindings created by
-# app-namespaces.sh). It can never create/delete namespaces, touch cluster-scoped objects, change
+# app-namespaces.sh). <app>-prod gets no binding: agents can read prod, never write it. It can never create/delete namespaces, touch cluster-scoped objects, change
 # quotas/RBAC outside its namespaces, or read kube-system secrets.
 apiVersion: v1
 kind: ServiceAccount

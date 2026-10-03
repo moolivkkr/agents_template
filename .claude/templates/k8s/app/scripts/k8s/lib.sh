@@ -1,7 +1,9 @@
 # lib.sh — sourced by scripts/k8s/*.sh. Resolves the project, env, namespace and tools.
 # Env model: <app>-dev is built from the working tree; <app>-qa only ever receives digests that
-# passed in dev (promotion), so what qa tests is byte-identical to what dev verified. The same holds on
-# up: <app>-staging (EKS) gets qa's digests copied into ECR, <app>-prod gets staging's (promote-eks.sh).
+# passed in dev (promotion), and <app>-prod only digests that passed in qa, so what each env runs is
+# byte-identical to what the env before it verified. dev, qa and prod are namespaces on the lab cluster.
+# A project with deploy/k8s/overlays/prod/eks.env runs prod on Amazon EKS instead: <app>-staging (EKS)
+# gets qa's digests copied into ECR, <app>-prod gets staging's (promote-eks.sh).
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/../.." && pwd)"
@@ -16,18 +18,46 @@ DL="$HERE/deploylib.py"
 die() { echo "$(basename "$0"): $*" >&2; exit 1; }
 log() { printf '== %s\n' "$*" >&2; }
 
-env_setup() {  # $1 = dev|qa (lab cluster) | staging|prod (Amazon EKS, after instantiate.sh --eks)
+env_setup() {  # $1 = dev|qa|prod (lab cluster namespaces) | staging, or prod with eks.env (Amazon EKS)
   ENV_NAME="${1:-}"
+  # ENV_KIND: lab | eks.   PROMOTE_FROM: the env whose newest HEALTHY digests this env receives (none = built here)
+  PROMOTE_FROM=""
   case "$ENV_NAME" in
-    dev|qa) ;;
-    staging|prod) [ -f "$K8S_DIR/overlays/$ENV_NAME/eks.env" ] || die "no deploy/k8s/overlays/$ENV_NAME/eks.env — instantiate the EKS layer first (instantiate.sh <project> <app> --eks)" ;;
-    *) die "usage: $(basename "$0") <dev|qa|staging|prod> — got '${ENV_NAME}'" ;;
+    dev) ENV_KIND=lab ;;
+    qa) ENV_KIND=lab; PROMOTE_FROM=dev ;;
+    prod) if [ -f "$K8S_DIR/overlays/prod/eks.env" ]; then ENV_KIND=eks; else ENV_KIND=lab; PROMOTE_FROM=qa; fi ;;
+    staging) [ -f "$K8S_DIR/overlays/staging/eks.env" ] || die "no deploy/k8s/overlays/staging/eks.env — instantiate the EKS layer first (instantiate.sh <project> <app> --eks)"
+      ENV_KIND=eks ;;
+    *) die "usage: $(basename "$0") <dev|qa|prod|staging> — got '${ENV_NAME}'" ;;
   esac
   NS="$APP-$ENV_NAME"
   OVERLAY="$K8S_DIR/overlays/$ENV_NAME"
   BASE_URL="http://$APP-$ENV_NAME.localhost:$INGRESS_PORT"
   HIST="$ROOT/agent_state/deploy/$ENV_NAME/history.jsonl"
-  case "$ENV_NAME" in staging|prod) eks_setup ;; esac
+  [ "$ENV_KIND" = eks ] && eks_setup
+  [ "$ENV_NAME:$ENV_KIND" = prod:lab ] && lab_prod_setup
+  return 0
+}
+
+# ── lab prod (<app>-prod on the lab cluster) ──────────────────────────────────────────────────────
+# HUMAN-ONLY. The agent's ServiceAccount has no write access in <app>-prod (app-namespaces.sh binds it
+# "admin" in dev/qa only) and the guard denies agents `deploy.sh prod` and any write to *-prod. A human
+# deploys with the admin kubeconfig (or PROD_KUBECONFIG); the agent's kubeconfig is refused outright.
+lab_prod_setup() {
+  export KUBECONFIG="${PROD_KUBECONFIG:-$HOME/.kube/sdlc-lab-admin.yaml}"
+  [ -f "$KUBECONFIG" ] || die "prod needs the admin kubeconfig: $KUBECONFIG not found (set PROD_KUBECONFIG)"
+  local agent
+  agent="$(cd "$HOME/.kube" 2>/dev/null && pwd -P)/sdlc-lab.json"
+  [ "$(cd "$(dirname "$KUBECONFIG")" && pwd -P)/$(basename "$KUBECONFIG")" != "$agent" ] \
+    || die "prod is never deployed with the agent kubeconfig (sdlc-lab.json); use the admin kubeconfig"
+}
+prod_confirm() {  # $1 = what is about to happen. CI sets CONFIRM_PROD=<app>-prod; a human types it.
+  [ "${CONFIRM_PROD:-}" = "$NS" ] && return 0
+  [ -t 0 ] || die "refusing to $1 without confirmation: set CONFIRM_PROD=$NS (CI) or run it from a terminal"
+  local answer
+  printf 'About to %s in %s. Type the namespace to confirm: ' "$1" "$NS" >&2
+  read -r answer
+  [ "$answer" = "$NS" ] || die "not confirmed"
 }
 
 # ── Amazon EKS (staging, prod) ────────────────────────────────────────────────────────────────────
@@ -68,7 +98,7 @@ code_sha() { git -C "$ROOT" log -1 --format=%H -- . "${CODE_EXCL[@]}" 2>/dev/nul
 
 # The real kubectl behind sdlc-guard's PATH shim. Used ONLY by env-reset.sh for its namespaced bulk
 # delete, which the shim refuses (as it should at the prompt). RBAC still confines it to this app's
-# namespaces, and env_setup has already pinned NS to <app>-dev|qa.
+# namespaces, and env-reset.sh refuses anything but <app>-dev|qa.
 real_kubectl() {
   local self d IFS=:
   self="$(cd "${SDLC_GUARD_SHIMS:-$HOME/.claude/hooks/sdlc-guard-shims}" 2>/dev/null && pwd -P || true)"

@@ -56,7 +56,7 @@ grep -qxF 'deploy/k8s/overlays/*/secrets.env' "$W/.gitignore" && ok "secrets.env
 again="$(bash "$K8S/app/instantiate.sh" "$W" demo)"   # (not piped into grep -q: SIGPIPE + pipefail)
 echo "$again" | grep -q "kept" && ! echo "$again" | grep -q "created" && ok "instantiate.sh never overwrites" || bad "instantiate.sh overwrote files"
 KUBECTL="$(command -v kubectl || ls /Applications/Docker.app/Contents/Resources/bin/kubectl 2>/dev/null)"
-for e in dev qa; do
+for e in dev qa prod; do
   python3 "$W/scripts/k8s/deploylib.py" db-secrets "$W/deploy/k8s/overlays/$e/secrets.env" 2>/dev/null
   if [ -n "$KUBECTL" ] && "$KUBECTL" kustomize "$W/deploy/k8s/overlays/$e" > "$W/$e.yaml" 2>"$W/$e.err"; then
     grep -q "namespace: demo-$e" "$W/$e.yaml" && grep -q "host: demo-$e.localhost" "$W/$e.yaml" \
@@ -126,7 +126,7 @@ to_json() {  # rendered multi-document YAML -> {"items": [...]}: PyYAML, else yq
   else yq ea -o=json -I=0 '[.] | {"items": .}' "$1"; fi
 }
 if python3 -c 'import yaml' 2>/dev/null || command -v yq >/dev/null; then
-  for e in dev qa; do
+  for e in dev qa prod; do
     [ -s "$W/$e.yaml" ] || continue
     to_json "$W/$e.yaml" > "$W/$e.json"
     python3 "$DL" db-access < "$W/$e.json" 2>"$W/$e.access" && ok "db-access: overlay $e passes the role policy" || bad "db-access $e: $(cat "$W/$e.access")"
@@ -210,6 +210,58 @@ sd="$(grep -n 'run_job db-seed' "$DS" | head -1 | cut -d: -f1)"; rl="$(grep -n '
 [ -n "$sd" ] && [ -n "$rl" ] && [ -n "$ro" ] && [ "$sd" -lt "$rl" ] && [ "$rl" -lt "$ro" ] && ok "deploy.sh runs db-rls-check after seed and before the rollout (D-001)" || bad "deploy.sh: db-rls-check missing or out of order"
 grep -q 'python3 "$DL" db-access' "$DS" && grep -q 'check-ignore -q "$SECRETS"' "$DS" \
   && ok "deploy.sh checks every render with db-access and refuses a secrets.env git would track" || bad "deploy.sh lacks the db-access or gitignore guard"
+
+# ── dev / qa / prod namespaces: routing, promotion chain, prod is human-only ─────────────────────────
+grep -q "namespace: demo-prod" "$W/deploy/k8s/overlays/prod/kustomization.yaml" && grep -q "APP_ENV=prod" "$W/deploy/k8s/overlays/prod/kustomization.yaml" \
+  && ok "instantiate.sh creates the lab prod overlay (namespace demo-prod, APP_ENV=prod)" || bad "lab prod overlay missing or wrong"
+FH="$W/home"; mkdir -p "$FH/.kube"; echo '{}' > "$FH/.kube/sdlc-lab-admin.yaml"; echo '{}' > "$FH/.kube/sdlc-lab.json"
+envinfo() {  # $1 project, $2 env -> "kind promote_from ns kubeconfig" (or the die message)
+  HOME="$FH" bash -c '. "$1/scripts/k8s/lib.sh"; env_setup "$2"; echo "$ENV_KIND ${PROMOTE_FROM:-none} $NS $(basename "$KUBECONFIG")"' _ "$1" "$2" 2>&1 </dev/null
+}
+[ "$(envinfo "$W" dev)" = "lab none demo-dev sdlc-lab.json" ] && ok "dev: lab, built here, agent kubeconfig" || bad "dev routing: $(envinfo "$W" dev)"
+[ "$(envinfo "$W" qa)" = "lab dev demo-qa sdlc-lab.json" ] && ok "qa: lab, promoted from dev" || bad "qa routing: $(envinfo "$W" qa)"
+[ "$(envinfo "$W" prod)" = "lab qa demo-prod sdlc-lab-admin.yaml" ] && ok "prod: lab namespace demo-prod, promoted from qa, admin kubeconfig" || bad "prod routing: $(envinfo "$W" prod)"
+out="$(PROD_KUBECONFIG="$FH/.kube/sdlc-lab.json" envinfo "$W" prod)"
+echo "$out" | grep -q "never deployed with the agent kubeconfig" && ok "prod refuses the agent kubeconfig" || bad "prod accepted the agent kubeconfig: $out"
+out="$(PROD_KUBECONFIG="$FH/.kube/missing.yaml" envinfo "$W" prod)"
+echo "$out" | grep -q "admin kubeconfig" && ok "prod refuses to run without the admin kubeconfig" || bad "prod without kubeconfig: $out"
+confirm() { HOME="$FH" bash -c '. "$1/scripts/k8s/lib.sh"; env_setup prod; prod_confirm "deploy" && echo confirmed' _ "$W" 2>&1 </dev/null; }
+out="$(confirm)"; echo "$out" | grep -q "without confirmation" && ok "prod_confirm refuses a non-interactive run without CONFIRM_PROD" || bad "prod_confirm let an unconfirmed run through"
+out="$(CONFIRM_PROD=demo-qa confirm)"; echo "$out" | grep -q confirmed && bad "prod_confirm accepted the wrong namespace" || ok "prod_confirm refuses CONFIRM_PROD for another namespace"
+[ "$(CONFIRM_PROD=demo-prod confirm)" = confirmed ] && ok "prod_confirm accepts CONFIRM_PROD=demo-prod (CI)" || bad "prod_confirm refused the right CONFIRM_PROD"
+out="$(HOME="$FH" bash "$W/scripts/k8s/env-reset.sh" prod 2>&1 </dev/null)"
+echo "$out" | grep -q "prod is never reset" && ok "env-reset.sh refuses prod" || bad "env-reset.sh prod: $out"
+grep -q 'MODE=build; \[ -n "$PROMOTE_FROM" \] && MODE=promote' "$W/scripts/k8s/deploy.sh" && grep -q 'agent_state/deploy/$PROMOTE_FROM/history.jsonl' "$W/scripts/k8s/deploy.sh" \
+  && grep -q 'prod_confirm' "$W/scripts/k8s/deploy.sh" && ok "deploy.sh promotes from PROMOTE_FROM and confirms prod" || bad "deploy.sh promotion/confirmation wiring"
+[ "$(grep -c 'for e in dev qa prod; do' "$W/scripts/k8s/registry-prune.sh")" -ge 2 ] && grep -q 'refusing to prune images it may be running' "$W/scripts/k8s/registry-prune.sh" \
+  && ok "registry-prune.sh keeps prod's digests and refuses when a namespace can't be read" || bad "registry-prune.sh could delete prod images"
+# instantiate --eks: prod comes from the EKS layer, never the lab overlay
+WE="$(mktemp -d)"; bash "$K8S/app/instantiate.sh" "$WE" demo --eks >/dev/null 2>&1
+[ -f "$WE/deploy/k8s/overlays/prod/eks.env" ] && grep -q 'components/eks' "$WE/deploy/k8s/overlays/prod/kustomization.yaml" \
+  && ok "instantiate.sh --eks: overlays/prod is the EKS overlay" || bad "instantiate.sh --eks copied the lab prod overlay"
+[ "$(envinfo "$WE" prod | cut -d' ' -f1)" = eks ] && ok "prod with eks.env routes to EKS" || bad "prod with eks.env: $(envinfo "$WE" prod)"
+rm -rf "$WE"
+# app-namespaces.sh: prod gets no agent RoleBinding (a fake kubectl captures what would be applied)
+FB="$W/fakebin"; mkdir -p "$FB"; NSLOG="$W/ns.log"
+cat > "$FB/kubectl" <<FAKE
+#!/bin/bash
+echo "ARGS \$*" >> "$NSLOG"
+case "\$*" in *" apply -f -"*) cat >> "$NSLOG" ;; *"auth can-i"*) exit 1 ;; esac
+exit 0
+FAKE
+chmod +x "$FB/kubectl"
+PATH="$FB:$PATH" ADMIN_KC="$FH/.kube/sdlc-lab-admin.yaml" bash -c 'export PATH; f="$1"; sed "s#^export PATH=.*##" "$f" > "$2" && bash "$2" demo' _ "$K8S/scripts/app-namespaces.sh" "$W/appns.sh" >/dev/null 2>"$W/appns.err" \
+  && ok "app-namespaces.sh demo (default dev qa prod) runs" || bad "app-namespaces.sh failed: $(head -3 "$W/appns.err")"
+python3 - "$NSLOG" <<'PY2' && ok "app-namespaces.sh: dev/qa bind the agent admin, prod does not (and removes any stale binding)" || bad "app-namespaces.sh prod RBAC wrong"
+import re, sys
+log = open(sys.argv[1]).read()
+docs = {m.group(1): m.group(0) for m in re.finditer(r"name: (demo-(?:dev|qa|prod))\n  labels.*?(?=\nARGS|\Z)", log, re.S)}
+assert set(docs) == {"demo-dev", "demo-qa", "demo-prod"}, docs.keys()
+assert "sdlc-agent-admin" in docs["demo-dev"] and "sdlc-agent-admin" in docs["demo-qa"]
+assert "sdlc-agent-admin" not in docs["demo-prod"]
+assert 'requests.cpu: "8"' in docs["demo-prod"] and 'requests.cpu: "4"' in docs["demo-dev"]
+assert re.search(r"ARGS .* -n demo-prod delete rolebinding sdlc-agent-admin", log)
+PY2
 
 echo "────────────────────────────────────────────"
 echo "k8s-templates.test.sh: $PASS passed, $FAIL failed, $SKIP skipped"

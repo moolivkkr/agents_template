@@ -7,7 +7,7 @@
 # deployers' RBAC for ExternalSecrets. Idempotent. sdlc-guard refuses agents.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
-case "$ENV_NAME" in staging|prod) ;; *) die "usage: eks-bootstrap.sh <staging|prod>" ;; esac
+[ "$ENV_KIND" = eks ] || die "usage: eks-bootstrap.sh <staging|prod> (prod runs on EKS only with deploy/k8s/overlays/prod/eks.env)"
 ESO_CHART_VERSION="${ESO_CHART_VERSION:-2.11.0}"   # charts.external-secrets.io index, 2026-09-21 (app v2.11.0)
 eks_kube_check
 command -v helm >/dev/null || die "helm not installed"

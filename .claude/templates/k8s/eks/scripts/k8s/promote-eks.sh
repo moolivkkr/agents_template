@@ -10,7 +10,7 @@
 # HUMAN OR CI ONLY (writes to ECR): sdlc-guard refuses agents. Never builds, never deploys.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
-case "$ENV_NAME" in staging|prod) ;; *) die "usage: promote-eks.sh <staging|prod>" ;; esac
+[ "$ENV_KIND" = eks ] || die "usage: promote-eks.sh <staging|prod> (prod runs on EKS only with deploy/k8s/overlays/prod/eks.env)"
 [ "$EKS_PLACEHOLDERS" = 0 ] || die "$OVERLAY/eks.env still has placeholder values (scripts/k8s/eks-outputs.sh $ENV_NAME)"
 command -v crane >/dev/null || die "crane not installed"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

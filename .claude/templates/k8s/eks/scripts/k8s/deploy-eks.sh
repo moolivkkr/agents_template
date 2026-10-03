@@ -19,7 +19,7 @@
 # `aws ecr get-login-password | crane auth login <registry> -u AWS --password-stdin` for a human).
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
-case "$ENV_NAME" in staging|prod) ;; *) die "deploy-eks.sh deploys staging|prod; dev/qa use deploy.sh" ;; esac
+[ "$ENV_KIND" = eks ] || die "deploy-eks.sh deploys staging|prod; dev/qa use deploy.sh (prod runs on EKS only with deploy/k8s/overlays/prod/eks.env)"
 MODE=deploy
 case "${2:-}" in --rollback) MODE=rollback ;; "") ;; *) die "unknown option $2" ;; esac
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT

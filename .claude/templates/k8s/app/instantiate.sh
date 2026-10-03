@@ -1,7 +1,8 @@
 #!/bin/bash
 # instantiate.sh <project-dir> <app> [--eks] — copy the k8s deploy layer into a project (deployment_agent
 # runs this, then adapts deploy/k8s/base/*.yaml and images.txt to the project's services).
-#   deploy/k8s/{app.env,images.txt,base/,overlays/dev,overlays/qa}   (__APP__ -> <app>)
+#   deploy/k8s/{app.env,images.txt,base/,overlays/dev,overlays/qa,overlays/prod}   (__APP__ -> <app>)
+#   (overlays/prod is the lab prod namespace <app>-prod; with --eks it comes from the EKS layer instead)
 #   scripts/k8s/{deploy,smoke,seed,env-reset}.sh + lib.sh + deploylib.py
 # --eks also copies the Amazon EKS layer (../eks/, skill infrastructure/eks.md):
 #   deploy/k8s/{components/eks,overlays/staging,overlays/prod,eks-cluster.yaml}
@@ -14,9 +15,10 @@ EKS=false; case "${3:-}" in --eks) EKS=true ;; "") ;; *) echo "unknown option ${
 [[ "$APP" =~ ^[a-z][a-z0-9-]{0,40}[a-z0-9]$ ]] || { echo "app must be a DNS label" >&2; exit 1; }
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 mkdir -p "$PROJECT"; PROJECT="$(cd "$PROJECT" && pwd)"   # absolute: `instantiate.sh . app` means the caller's cwd
-copy_tree() {  # $1 template root, then the top-level paths to copy from it
+copy_tree() {  # $1 template root, then the top-level paths to copy from it (SKIP_PREFIX: a path prefix to leave out)
   local root="$1"; shift
   (cd "$root" && find "$@" -type f -not -path '*/__pycache__/*' -not -path '*/.terraform/*' -not -name '.terraform.lock.hcl' | sort) | while read -r f; do
+    case "$f" in "${SKIP_PREFIX:-//none}"*) continue ;; esac
     dest="$PROJECT/$f"
     if [ -e "$dest" ]; then echo "  kept    $f"; continue; fi
     mkdir -p "$(dirname "$dest")"
@@ -25,11 +27,17 @@ copy_tree() {  # $1 template root, then the top-level paths to copy from it
     echo "  created $f"
   done
 }
-copy_tree "$SRC" deploy scripts
 if [ "$EKS" = true ]; then
+  SKIP_PREFIX=deploy/k8s/overlays/prod/ copy_tree "$SRC" deploy scripts   # prod is EKS's, not the lab's
+  if [ -f "$PROJECT/deploy/k8s/overlays/prod/kustomization.yaml" ] && [ ! -f "$PROJECT/deploy/k8s/overlays/prod/eks.env" ] \
+     && ! grep -q 'components/eks' "$PROJECT/deploy/k8s/overlays/prod/kustomization.yaml"; then
+    echo "  WARNING deploy/k8s/overlays/prod is the LAB prod overlay; move it aside so the EKS prod overlay can be copied" >&2
+  fi
   copy_tree "$SRC/../eks" deploy scripts infra .github
   GI="$PROJECT/.gitignore"
   for p in '.terraform/' '*.tfstate' '*.tfstate.*' '*.tfplan' 'tf.plan'; do grep -qxF "$p" "$GI" 2>/dev/null || echo "$p" >> "$GI"; done
+else
+  copy_tree "$SRC" deploy scripts
 fi
 GI="$PROJECT/.gitignore"
 grep -qxF 'deploy/k8s/overlays/*/secrets.env' "$GI" 2>/dev/null || echo 'deploy/k8s/overlays/*/secrets.env' >> "$GI"

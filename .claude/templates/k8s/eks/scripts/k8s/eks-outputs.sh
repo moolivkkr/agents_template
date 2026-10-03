@@ -4,7 +4,7 @@
 # a human or CI runs it; sdlc-guard asks before an agent touches real state). Only non-secret values.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
-case "$ENV_NAME" in staging|prod) ;; *) die "usage: eks-outputs.sh <staging|prod>" ;; esac
+[ "$ENV_KIND" = eks ] || die "usage: eks-outputs.sh <staging|prod> (prod runs on EKS only with deploy/k8s/overlays/prod/eks.env)"
 TF_DIR="$ROOT/infra/terraform/envs/$ENV_NAME"
 [ -d "$TF_DIR" ] || die "no $TF_DIR"
 terraform -chdir="$TF_DIR" output -json eks_env | python3 - "$OVERLAY/eks.env" "$ENV_NAME" <<'PY'

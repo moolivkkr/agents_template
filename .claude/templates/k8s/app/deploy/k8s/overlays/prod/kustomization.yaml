@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Lab prod: <app>-prod on the lab cluster. Receives only digests that passed qa; deployed by a human
+# (scripts/k8s/deploy.sh prod with the admin kubeconfig), never by an agent. A project that runs prod on
+# Amazon EKS uses the EKS layer's overlays/prod instead (instantiate.sh --eks).
+namespace: __APP__-prod
+resources: [../../base]
+labels:
+- pairs: {sdlc.io/env: prod}
+configMapGenerator:
+- name: app-config
+  literals: [APP_ENV=prod]
+secretGenerator:
+# One secret, three Postgres roles (DB_SUPERUSER_*, DB_MIGRATOR_*, DB_APP_* user/password pairs); each
+# workload reads only its own role's keys. secrets.env is gitignored; scripts/k8s/deploy.sh creates it,
+# recovers it from the namespace on a fresh checkout, or upgrades the old DB_USER/DB_PASSWORD layout.
+- name: db-credentials
+  envs: [secrets.env]
+replicas:
+- {name: api, count: 2}
+patches:
+- target: {kind: Ingress, name: web}
+  patch: |-
+    - {op: replace, path: /spec/rules/0/host, value: __APP__-prod.localhost}
+# BEGIN images (managed by scripts/k8s/deploy.sh: digests only, never edit by hand)
+images:
+- {name: api, newName: localhost:5001/__APP__/api, newTag: not-deployed}
+# END images

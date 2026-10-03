@@ -1,5 +1,5 @@
 #!/bin/bash
-# smoke.sh <dev|qa> [expected-git-sha] — post-rollout checks against http://<app>-<env>.localhost:<port>.
+# smoke.sh <dev|qa|prod> [expected-git-sha] — post-rollout checks against http://<app>-<env>.localhost:<port>.
 # Every SMOKE_PATHS entry must return 200 (retried briefly while the ingress picks up new endpoints);
 # VERSION_PATH, when set, must report the expected git sha. Prints one JSON object on stdout:
 #   {"url", "total", "passed", "failed", "failures": [{"path", "got"}]}     exit 0 only if failed == 0

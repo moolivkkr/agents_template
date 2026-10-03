@@ -8,8 +8,8 @@
 # <app>-dev|qa, and the agent's RBAC confines it to this app's namespaces regardless.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
+[[ "$NS" =~ ^[a-z0-9-]+-(dev|qa)$ ]] || die "refusing to reset '$NS': only dev and qa data is disposable (prod is never reset)"
 K="$(real_kubectl)" || die "kubectl not found"
-[[ "$NS" =~ ^[a-z0-9-]+-(dev|qa)$ ]] || die "refusing to reset '$NS'"
 
 log "reset $NS: deleting workloads, jobs, config, secrets and volumes (namespace kept)"
 "$K" -n "$NS" delete deployments,statefulsets,cronjobs,jobs,services,ingresses,secrets --all --wait=true --timeout=180s >/dev/null

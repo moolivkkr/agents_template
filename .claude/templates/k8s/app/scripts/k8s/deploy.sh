@@ -1,6 +1,7 @@
 #!/bin/bash
-# deploy.sh <dev|qa> [--reuse | --rollback]  — deploy this project to the sdlc lab cluster.
-# deploy.sh <staging|prod> [--rollback]      — hands over to deploy-eks.sh (Amazon EKS; human or CI only).
+# deploy.sh <dev|qa|prod> [--reuse | --rollback]  — deploy this project to the sdlc lab cluster.
+# deploy.sh <staging|prod> [--rollback]           — with overlays/<env>/eks.env: hands over to deploy-eks.sh
+#                                                    (Amazon EKS; human or CI only).
 #
 #   dev             build every image in deploy/k8s/images.txt from the working tree, push to the
 #                   in-cluster registry, pin the overlay to the pushed DIGESTS, apply, migrate, seed,
@@ -8,6 +9,9 @@
 #   qa              PROMOTE: take the newest HEALTHY dev deploy's digests (never rebuild), then the same
 #                   apply/migrate/seed/rollout/smoke, plus a check that the running pods' image IDs
 #                   are exactly those digests
+#   prod            PROMOTE from qa (the newest HEALTHY qa deploy's digests), same steps and checks as qa.
+#                   HUMAN-ONLY: admin kubeconfig (lib.sh lab_prod_setup), and a typed confirmation or
+#                   CONFIRM_PROD=<app>-prod. Agents are refused by RBAC and by the guard.
 #   --reuse         redeploy the digests already pinned in the overlay (no build; used by env-reset.sh)
 #   --rollback      redeploy the newest earlier HEALTHY deploy of this env whose digests differ.
 #                   Migrations are forward-only: rollback redeploys code, it does not undo schema.
@@ -19,11 +23,11 @@
 # phase's execution.jsonl — the evidence verify-gate.sh requires on k8s projects.
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib.sh"
 env_setup "${1:-}"
-case "$ENV_NAME" in staging|prod)   # Amazon EKS: promoted digests only, never built here
+if [ "$ENV_KIND" = eks ]; then   # Amazon EKS: promoted digests only, never built here
   [ -x "$HERE/deploy-eks.sh" ] || die "no scripts/k8s/deploy-eks.sh — instantiate the EKS layer (instantiate.sh <project> <app> --eks)"
-  exec "$HERE/deploy-eks.sh" "$@" ;;
-esac
-MODE=build; [ "$ENV_NAME" = qa ] && MODE=promote
+  exec "$HERE/deploy-eks.sh" "$@"
+fi
+MODE=build; [ -n "$PROMOTE_FROM" ] && MODE=promote
 case "${2:-}" in --reuse) MODE=reuse ;; --rollback) MODE=rollback ;; "") ;; *) die "unknown option $2" ;; esac
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 STEPS=""   # JSON fragments: "step":"ok|fail"
@@ -34,6 +38,7 @@ IMAGES=()
 log "preflight ($NS via $KUBECONFIG)"
 kubectl get --raw /readyz >/dev/null 2>&1 || die "cluster API not reachable — is the lab cluster up? (limactl list)"
 kc get serviceaccount default >/dev/null 2>&1 || die "namespace $NS missing — a human runs: app-namespaces.sh $APP"
+[ "$ENV_NAME" = prod ] && prod_confirm "$MODE $APP"
 # Database credentials: three Postgres roles in one gitignored secrets.env -> secret db-credentials
 # (superuser for Postgres and db-roles only; migrator for migrate/seed; app for the services).
 SECRETS="$OVERLAY/secrets.env"
@@ -71,13 +76,14 @@ case "$MODE" in
     done < "$K8S_DIR/images.txt"
     ;;
   promote)
-    DEV_HIST="$ROOT/agent_state/deploy/dev/history.jsonl"
-    SRC="$(python3 "$DL" pick "$DEV_HIST")" || die "no HEALTHY dev deploy to promote (run deploy.sh dev first)"
+    SRC_HIST="$ROOT/agent_state/deploy/$PROMOTE_FROM/history.jsonl"
+    SRC="$(python3 "$DL" pick "$SRC_HIST")" || die "no HEALTHY $PROMOTE_FROM deploy to promote (run deploy.sh $PROMOTE_FROM first)"
     SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(json.load(sys.stdin)["git_sha"])')"
     CODE_SHA="$(printf '%s' "$SRC" | python3 -c 'import json,sys; e=json.load(sys.stdin); print(e.get("code_sha") or "")')"
     DIRTY="$(printf '%s' "$SRC" | python3 -c 'import json,sys; print(str(json.load(sys.stdin).get("dirty", False)).lower())')"
     while IFS= read -r l; do IMAGES+=("$l"); done < <(printf '%s' "$SRC" | python3 -c 'import json,sys; [print(f"{k}={v}") for k,v in json.load(sys.stdin)["images"].items()]')
-    [ "$SHA" = "$(git_sha)" ] || log "note: promoting dev-verified $SHA (HEAD is $(git_sha)) — the gate will call this stale until dev is rebuilt"
+    [ "$SHA" = "$(git_sha)" ] || log "note: promoting $PROMOTE_FROM-verified $SHA (HEAD is $(git_sha)) — the gate will call this stale until dev is rebuilt"
+    log "promoting $PROMOTE_FROM -> $ENV_NAME: $SHA"
     ;;
   reuse)
     while IFS= read -r l; do IMAGES+=("$l"); done < <(python3 "$DL" get-images "$OVERLAY/kustomization.yaml")

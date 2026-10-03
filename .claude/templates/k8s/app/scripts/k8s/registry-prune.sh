@@ -4,7 +4,7 @@
 #
 # Kept (by digest):
 #   - everything referenced right now by Deployments, StatefulSets and CronJob templates in
-#     <app>-dev and <app>-qa (what is running, and what the next migrate/seed Job will use)
+#     <app>-dev, <app>-qa and <app>-prod (what is running, and what the next migrate/seed Job will use)
 #   - the newest N HEALTHY deploys of each env in agent_state/deploy/<env>/history.jsonl — the
 #     rollback targets and qa's promotion source (default N=5)
 # Everything else under <registry>/<app>/ is deleted: failed, dirty and superseded builds.
@@ -17,8 +17,15 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# A namespace that exists but can't be read would silently drop its running digests from the keep list
+# (prod's in particular may be deployed from another checkout, so its history file can be absent): refuse.
+for e in dev qa prod; do
+  kubectl get namespace "$APP-$e" >/dev/null 2>&1 || continue
+  kubectl -n "$APP-$e" get deployments,statefulsets,cronjobs -o name >/dev/null 2>&1 \
+    || die "cannot read workloads in $APP-$e — refusing to prune images it may be running"
+done
 keep="$(
-  for e in dev qa; do
+  for e in dev qa prod; do
     kubectl -n "$APP-$e" get deployments,statefulsets,cronjobs -o jsonpath='{..image}' 2>/dev/null | tr ' ' '\n'
     python3 "$DL" keep "$ROOT/agent_state/deploy/$e/history.jsonl" --n "$KEEP"
   done | grep -oE 'sha256:[0-9a-f]{64}' | sort -u

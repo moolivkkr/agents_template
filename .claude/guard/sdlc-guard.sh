@@ -397,9 +397,15 @@ def check_kubectl(argv, env):
         deny(f"kubectl config {sub} mutates kubeconfig identity; only the human bootstrap may do that")
     ctx, want, ctx_ns = kube_identity(flags, env, tool)
     read = verb in KUBE_READ or (verb == "rollout" and sub in ("status", "history"))
-    if read:
-        return
     ns = fget(flags, "-n", "--namespace")
+    if read:
+        # Secrets are readable only where agents may write (RBAC "view" excludes them elsewhere; say so here)
+        kinds = [k for t in pos[1:] for k in str(t).lower().split(",")]
+        if verb in ("get", "describe") and any(re.match(r"^secrets?([./].*)?$", k) for k in kinds):
+            where = ns or ctx_ns or "default"
+            if "-A" in flags or "--all-namespaces" in flags or not ns_writable(where, want):
+                deny(f"reading Secrets in '{'all namespaces' if '-A' in flags or '--all-namespaces' in flags else where}' is not allowed (only {ns_hint(want)}; prod credentials stay with humans)")
+        return
     if "-A" in flags or "--all-namespaces" in flags:
         deny(f"kubectl {verb} across all namespaces is not allowed")
     if verb in ("drain", "cordon", "uncordon", "taint", "certificate", "proxy"):
