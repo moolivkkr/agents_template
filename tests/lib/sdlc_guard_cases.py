@@ -355,6 +355,163 @@ fails = 0
 total = 0
 
 
+def aws_cases(env):
+    """aws.projects: the real AWS CLI inside listed projects. Policies are made by make-policy.py --update
+    on copies of the test policy, so the generator's merge mode is exercised too."""
+    rera = os.path.join(W, "dev", "rera"); os.makedirs(os.path.join(rera, "infra"))
+    other = os.path.join(W, "dev", "other"); os.makedirs(other)
+    link = os.path.join(W, "rera-link"); os.symlink(rera, link)
+    awscfg = os.path.join(W, "aws-config")
+    with open(awscfg, "w") as f:
+        f.write("[profile rera]\nsso_account_id = 111122223333\nregion = ap-south-1\n"
+                "[profile other]\nrole_arn = arn:aws:iam::999988887777:role/x\n[profile static]\nregion = us-east-1\n[default]\n")
+    base = {k: v for k, v in env.items() if not k.startswith("AWS_")}
+    base["AWS_CONFIG_FILE"] = awscfg
+
+    def mkpol(name, *flags):
+        dst = os.path.join(W, name); shutil.copy(POLICY, dst)
+        p = subprocess.run([sys.executable, MAKE_POLICY, "--update", "--out", dst, *flags], capture_output=True, text=True)
+        if p.returncode != 0:
+            print(f"FAIL make-policy --update for {name}: {p.stderr}"); sys.exit(1)
+        return dst, p
+    pol, mp = mkpol("aws-default.json", "--aws-project", rera, "--aws-ask-actions", "ec2:delete-vpc")
+    open_pol, _ = mkpol("aws-open.json", "--aws-project", rera, "--aws-ask-services", "none", "--aws-prod-names", "off",
+                        "--aws-allow-credential-actions", "sts:assume-role")
+    prof_pol, _ = mkpol("aws-profile.json", "--aws-project", rera, "--aws-profile", "rera")
+    reg_pol, _ = mkpol("aws-region.json", "--aws-project", rera, "--aws-region", "ap-south-1", "--aws-region", "ap-northeast-*")
+    acct_pol, _ = mkpol("aws-account.json", "--aws-project", rera, "--aws-account", "111122223333")
+    run_ = "aws ec2 run-instances --image-id ami-0abc --instance-type g5.xlarge --count 1"
+    out = CWD
+    T = [  # (id, want, policy, cwd, command, extra env)
+     ("A01", "allow", pol, rera, f"{run_} --region us-west-2", {}),
+     ("A02", "allow", pol, rera, f"{run_} --region ap-south-1", {}),
+     ("A03", "allow", pol, os.path.join(rera, "infra"), "aws ec2 terminate-instances --region ap-northeast-2 --instance-ids i-0123", {}),
+     ("A04", "allow", pol, rera, "aws s3 rb s3://rera-scratch-bucket --force", {}),
+     ("A05", "allow", pol, rera, "aws s3 rm s3://rera-models/old/ --recursive && aws ec2 delete-security-group --group-id sg-1 --region eu-west-1", {}),
+     ("A06", "ask",   pol, rera, "aws iam create-access-key --user-name ci", {}),
+     ("A07", "allow", open_pol, rera, "aws iam create-access-key --user-name ci", {}),
+     ("A08", "deny",  open_pol, rera, "aws configure export-credentials --profile rera", {}),
+     ("A09", "deny",  open_pol, rera, "aws configure get aws_secret_access_key", {}),
+     ("A10", "deny",  open_pol, rera, "aws configure get profile.rera.aws_session_token", {}),
+     ("A11", "allow", pol, rera, "aws configure get region", {}),
+     ("A12", "deny",  pol, out, f"{run_} --region us-west-2", {}),                         # outside any project
+     ("A13", "deny",  pol, other, "aws sts get-caller-identity", {}),
+     ("A14", "allow", pol, link, "aws ec2 describe-instances --region us-east-1", {}),     # symlink to the project
+     ("A15", "allow", pol, out, f"cd {link} && aws ec2 describe-instances --region us-east-1", {}),
+     ("A16", "allow", pol, out, f"cd {rera}/infra && ./x.sh && aws s3 ls", {}),
+     ("A17", "deny",  pol, out, f"cd {rera}; aws s3 ls", {}),                              # cd may have failed
+     ("A18", "deny",  pol, out, f"(cd {rera} && true); aws s3 ls", {}),                    # subshell cd
+     ("A19", "deny",  pol, rera, "cd /tmp && aws s3 ls", {}),                              # cd out of the project
+     ("A20", "allow", pol, out, f"bash -c 'cd {rera} && aws s3 ls'", {}),
+     ("A21", "deny",  pol, out, "cd $PROJ && aws s3 ls", {}),                              # unresolved cd target
+     ("A22", "deny",  prof_pol, rera, "aws --profile default ec2 describe-instances --region us-east-1", {}),
+     ("A23", "allow", prof_pol, rera, "aws --profile rera ec2 describe-instances --region us-east-1", {}),
+     ("A24", "allow", prof_pol, rera, "AWS_PROFILE=rera aws s3 ls", {}),
+     ("A25", "deny",  prof_pol, rera, "aws s3 ls", {}),                                    # effective profile: default
+     ("A26", "allow", prof_pol, rera, "aws s3 ls", {"AWS_PROFILE": "rera"}),                # session env
+     ("A27", "allow", prof_pol, rera, "export AWS_PROFILE=rera; aws s3 ls", {}),
+     ("A28", "deny",  prof_pol, rera, "AWS_PROFILE=rera; aws s3 ls", {}),                  # not exported
+     ("A29", "deny",  prof_pol, rera, "AWS_ACCESS_KEY_ID=AKIAX AWS_SECRET_ACCESS_KEY=y aws --profile rera s3 ls", {}),
+     ("A30", "deny",  prof_pol, rera, "AWS_PROFILE=rera aws s3 ls", {"AWS_DEFAULT_PROFILE": "other"}),
+     ("A31", "allow", pol, out, "aws --endpoint-url http://localhost:4566 s3 rb s3://scratch --force", {}),
+     ("A32", "deny",  pol, out, "aws --endpoint-url http://localhost.evil.example s3 ls", {}),
+     ("A33", "deny",  pol, rera, "aws sts get-session-token", {}),
+     ("A34", "deny",  pol, rera, "aws sts assume-role --role-arn arn:aws:iam::111122223333:role/x --role-session-name s", {}),
+     ("A35", "allow", open_pol, rera, "aws sts assume-role --role-arn arn:aws:iam::111122223333:role/x --role-session-name s", {}),
+     ("A36", "allow", pol, rera, "ACCT=\"$(aws sts get-caller-identity --query Account --output text)\"; echo $ACCT", {}),
+     ("A37", "allow", pol, rera, "URL=\"$(aws s3 presign s3://landos-models/x.gguf --region ap-south-2 --expires-in 43200)\"", {}),
+     ("A38", "allow", pol, rera, "aws ecr get-login-password --region us-east-1 | oras login --username AWS --password-stdin 1.dkr.ecr.us-east-1.amazonaws.com", {}),
+     ("A39", "ask",   pol, rera, "aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 1.dkr.ecr.us-east-1.amazonaws.com", {}),
+     ("A40", "deny",  pol, rera, "aws ecr get-login-password --region us-east-1", {}),
+     ("A41", "deny",  pol, rera, "aws ecr get-login-password > /tmp/pw.txt", {}),
+     ("A42", "deny",  pol, rera, "aws ecr get-login-password | cat", {}),
+     ("A43", "deny",  open_pol, rera, "aws eks update-kubeconfig --name shop-staging", {}),
+     ("A44", "deny",  open_pol, rera, "aws eks get-token --cluster-name shop-staging", {}),
+     ("A45", "ask",   pol, rera, "aws eks describe-cluster --name shop-staging --region us-east-1", {}),
+     ("A46", "deny",  pol, rera, "aws --debug s3 ls", {}),
+     ("A47", "ask",   pol, rera, "aws rds delete-db-instance --db-instance-identifier shop-prod --region us-east-1", {}),
+     ("A48", "allow", open_pol, rera, "aws rds delete-db-instance --db-instance-identifier shop-prod --region us-east-1", {}),
+     ("A49", "ask",   pol, rera, "aws ec2 delete-vpc --vpc-id vpc-1 --region us-east-1", {}),        # ask_actions
+     ("A50", "deny",  reg_pol, rera, f"{run_} --region us-west-2", {}),
+     ("A51", "allow", reg_pol, rera, f"{run_} --region ap-northeast-2", {}),
+     ("A52", "allow", reg_pol, rera, f"AWS_REGION=ap-south-1 {run_}", {}),
+     ("A53", "allow", reg_pol, rera, f"{run_} --profile rera", {}),                          # region from ~/.aws/config
+     ("A54", "deny",  reg_pol, rera, run_, {}),                                             # default profile: no region
+     ("A55", "allow", acct_pol, rera, "aws --profile rera s3 ls", {}),
+     ("A56", "deny",  acct_pol, rera, "aws --profile other s3 ls", {}),
+     ("A57", "deny",  acct_pol, rera, "aws --profile static s3 ls", {}),                    # account unknown offline
+     ("A58", "allow", pol, rera, f"python3 -m awscli {run_[4:]} --region us-west-2", {}),
+     ("A59", "deny",  pol, out, f"python3 -m awscli {run_[4:]} --region us-west-2", {}),
+     ("A60", "deny",  pol, rera, f"{run_} --region us-east-1 --user-data file://~/.aws/credentials", {}),
+     ("A61", "deny",  pol, rera, "aws s3 cp s3://b/settings.json ~/.claude/settings.json", {}),
+     ("A62", "ask",   pol, rera, "X=$(aws iam list-users)", {}),
+     ("A63", "ask",   pol, rera, "aws configure set region us-west-2", {}),
+     ("A64", "allow", pol, rera, "aws configure list", {}),
+     ("A65", "deny",  pol, rera, "scripts/k8s/deploy-eks.sh staging", {}),                  # EKS release scripts stay denied
+     ("A66", "ask",   pol, rera, "aws --foo bar ec2 describe-instances", {}),
+     ("A67", "deny",  pol, rera, "aws sso get-role-credentials --role-name r --account-id 111122223333 --access-token t", {}),
+     ("A68", "allow", pol, rera, "aws ec2 wait instance-running --region ap-south-1 --instance-ids i-1 i-2", {}),
+     ("A69", "allow", pol, rera, "aws --version && aws ec2 run-instances help", {}),
+     ("A70", "deny",  pol, out, "aws configure export-credentials", {}),
+     ("A71", "ask",   pol, rera, "aws --profile prod s3 ls", {}),                            # prod-looking profile
+     ("A72", "allow", pol, rera, "aws autoscaling set-instance-health --region ap-northeast-2 --instance-id i-1 --health-status Unhealthy", {}),
+     ("A73", "deny",  pol, rera, f"cd {other} && aws s3 ls", {}),
+     ("A74", "deny",  prof_pol, rera, f"AWS_CONFIG_FILE=/tmp/evil aws --profile rera s3 ls", {}),     # config swapped in the command
+     ("A75", "ask",   pol, rera, "aws_() { (unset AWS_PROFILE; aws \"$@\"); }; aws ec2 describe-instances --region ap-northeast-2", {}),
+     ("A77", "deny",  pol, rera, f"{run_} --region us-east-1 --user-data=file://$HOME/.aws/config", {}),
+     ("A78", "ask",   pol, rera, "aws s3 ls", {"AWS_PROFILE": "acme-prod"}),                  # prod-looking session profile
+     ("A76", "deny",  pol, out, "aws $SVC delete-bucket", {}),                                 # outside: deny wins
+    ]
+    for cid, want, policy, cwd, cmd, extra in T:
+        e = dict(base, SDLC_GUARD_POLICY=policy, **extra)
+        got, why = run("Bash", {"command": cmd, "description": cid}, e, cwd=cwd)
+        check(cid, want, got, f"[{os.path.basename(policy)} @{os.path.relpath(cwd, W) if cwd.startswith(W) else 'outside'}] {cmd}", why)
+
+    # make-policy merge mode: kube/lima/hosts untouched, aws section printed; a full run keeps aws
+    p0, p1 = json.load(open(POLICY)), json.load(open(pol))
+    check("MP8", True, all(p0[k] == p1[k] for k in p0) and p1["aws"]["projects"][0]["regions"] == "*"
+          and p1["aws"]["ask_services"] == ["iam", "organizations", "account", "sso-admin", "identitystore", "eks"]
+          and "aws section:" in mp.stdout, "make-policy --update adds aws, keeps kube/lima/local_hosts/paths, prints the section", mp.stdout)
+    o = json.load(open(open_pol))["aws"]
+    check("MP9", ([], False, ["sts:assume-role"]), (o["ask_services"], o["ask_prod_names"], o["allow_credential_actions"]),
+          "make-policy --aws-ask-services none / --aws-prod-names off / credential allow")
+    regen = subprocess.run([sys.executable, MAKE_POLICY, "--kubeconfig", AGENT_KC, "--pin", PIN, "--namespaces", "*-dev,*-qa",
+                            "--lima-instance", "sdlc-agent", "--lab-host", "10.10.10.20", "--out", prof_pol], capture_output=True, text=True)
+    rp = json.load(open(prof_pol))
+    check("MP10", True, regen.returncode == 0 and rp["aws"]["projects"][0]["profiles"] == ["rera"] and "kube" in rp,
+          "full make-policy run (cluster-up.sh) keeps the existing aws section", regen.stderr)
+    for cid, args, label in [
+        ("MP11", ["--update", "--out", pol, "--aws-project", HOME], "refuses an aws project of $HOME"),
+        ("MP12", ["--update", "--out", pol, "--aws-project", rera, "--aws-profile", "acme-prod"], "refuses a prod-looking profile"),
+        ("MP13", ["--update", "--out", os.path.join(W, "missing.json"), "--aws-project", rera], "--update needs an existing policy"),
+        ("MP14", ["--update", "--out", pol, "--aws-allow-credential-actions", "eks:get-token"], "refuses allowing eks:get-token"),
+        ("MP15", ["--update", "--out", pol, "--aws-account", "12345"], "refuses a malformed account id"),
+    ]:
+        p = subprocess.run([sys.executable, MAKE_POLICY] + args, capture_output=True, text=True)
+        check(cid, "refused", "refused" if p.returncode != 0 else "accepted", label, p.stderr.strip())
+    rm = subprocess.run([sys.executable, MAKE_POLICY, "--update", "--out", reg_pol, "--aws-remove-project", link],
+                        capture_output=True, text=True)
+    check("MP16", [], json.load(open(reg_pol))["aws"]["projects"], "make-policy --aws-remove-project (path given via a symlink)", rm.stderr)
+
+    # the aws shim inside the project: real call passes, ask (iam) blocks, ecr password only into a pipe
+    realdir = os.path.join(W, "realbin")
+    shims = os.path.join(GUARD_DIR, "shims")
+    senv = dict(base, SDLC_GUARD_POLICY=pol, SDLC_GUARD_HOOK=HOOK, PATH=f"{shims}:{realdir}:/usr/bin:/bin")
+    sh = lambda *a, **k: subprocess.run([os.path.join(shims, "aws"), *a], text=True, env=senv, cwd=rera, **k)
+    p = sh("ec2", "terminate-instances", "--region", "ap-south-1", "--instance-ids", "i-1", capture_output=True)
+    check("SH7", "REAL-AWS ec2 terminate-instances --region ap-south-1 --instance-ids i-1", p.stdout.strip(), "aws shim in the project passes terminate-instances", p.stderr)
+    p = sh("iam", "create-user", "--user-name", "x", capture_output=True)
+    check("SH8", 126, p.returncode, "aws shim: ask_services (iam) blocks in a script (ask = deny there)", p.stderr)
+    p = sh("ecr", "get-login-password", capture_output=True)                     # stdout is a pipe
+    check("SH9", 0, p.returncode, "aws shim: ecr get-login-password with stdout into a pipe passes", p.stderr)
+    with open(os.path.join(W, "pw.txt"), "w") as f:
+        p = sh("ecr", "get-login-password", stdout=f, stderr=subprocess.PIPE)
+    check("SHA", 126, p.returncode, "aws shim: ecr get-login-password to a file is blocked", p.stderr)
+    p = subprocess.run([os.path.join(shims, "aws"), "s3", "ls"], capture_output=True, text=True, env=senv, cwd=other)
+    check("SHB", 126, p.returncode, "aws shim outside the project still blocks", p.stderr)
+
+
+
 def check(cid, want, got, label, why=""):
     global fails, total
     total += 1
@@ -465,6 +622,8 @@ def main():
     check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")
     check("AS4", True, len(pm["allow"]) == len(set(pm["allow"])) and any(f.startswith("settings.json.bak-") for f in os.listdir(os.path.join(fh, ".claude"))),
           "apply-user-settings: no duplicate rules, backup written")
+
+    aws_cases(env)
 
     # vet-package.py (SEC-02): offline fixtures only — these tests never touch the network
     VP = os.path.join(GUARD_DIR, "vet-package.py")

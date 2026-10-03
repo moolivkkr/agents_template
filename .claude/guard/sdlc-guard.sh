@@ -743,7 +743,11 @@ class ShellState:
         c.cands, c.stack, c.pending = self.cands, list(self.stack), None
         c.exported, c.unset = dict(self.exported), set(self.unset)
         return c
-    def on_sep(self, sep):
+    def on_sep(self, tok):
+        # shlex glues adjacent operators into one token (");", "&&(" …): apply them one at a time
+        for sep in re.findall(r"&&|\|\||\|&|;;|[;&|()\n]", tok):
+            self._on_sep(sep)
+    def _on_sep(self, sep):
         if sep == "(":
             self.stack.append(self.cands); self.pending = None
         elif sep == ")":
@@ -837,6 +841,8 @@ def aws_parse(argv, env):
                 opts[k] = True
             elif len(pos) < 2 and not (pos[:1] == ["configure"] or pos[:1] == ["help"]):
                 ask(f"aws: cannot tell the service/operation apart from option {k} (put global options after the operation)")
+            elif eq:
+                pos.append(v)                    # --user-data=file://… : the value is an argument like any other
         else:
             pos.append(a)
         i += 1
@@ -910,12 +916,17 @@ def check_aws(argv, env, st, prefix, redirected, pipe_next):
                 "is not running inside one)" if AWS.get("projects") else "")
         deny("aws without --endpoint-url http://localhost:* (LocalStack) is blocked; prod is unreachable by policy" + hint)
     where = f"project {pr.get('path')}"
+    if any(c in svc + op for c in "$`*?["):
+        ask(f"aws {svc} {op}: the service/operation is an unresolved variable or glob, so the guard can't check it")
     # -- identity: profile pin, then (optional) account pin, then region list
     profiles = [str(p) for p in pr.get("profiles", []) or []]
     accounts = [str(a) for a in pr.get("accounts", []) or []]
     if profiles or accounts:
         for k in AWS_CRED_ENV:
-            if st.var(k, prefix):
+            # config-file locations count only when the command sets them; the session's own are the owner's
+            v = st.var(k, prefix) if k not in ("AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE") else \
+                (prefix.get(k) or st.exported.get(k))
+            if v:
                 deny(f"aws in {where}: {k} is set, which overrides the profile's credentials or config; the policy pins "
                      f"{'profiles ' + ', '.join(profiles) if profiles else 'accounts'}, so unset it and use --profile")
     if opts.get("--profile"):
@@ -936,6 +947,7 @@ def check_aws(argv, env, st, prefix, redirected, pipe_next):
             if acct not in accounts:
                 deny(f"aws in {where}: profile '{p}' acts in account {acct}; the policy allows only {', '.join(accounts)}")
     regions = aws_setting(pr, "regions", "*")
+    if isinstance(regions, str) and regions != "*": regions = [regions]
     if regions not in ("*", ["*"], None):
         reg = opts.get("--region") or st.var("AWS_REGION", prefix) or st.var("AWS_DEFAULT_REGION", prefix)
         if not reg:
@@ -969,7 +981,7 @@ def check_aws(argv, env, st, prefix, redirected, pipe_next):
                  f"(the owner can list '{action}' in aws.allow_credential_actions)")
     # -- prompts: prod-looking names, the ask list, CLI config changes
     if aws_setting(pr, "ask_prod_names", True):
-        for v in [opts.get("--profile") or ""] + pos[2:]:
+        for v in sorted(eff) + pos[2:]:
             if v and PROD_RE.search(v):
                 ask(f"aws {svc} {op} names '{v}', which looks like a production resource (policy: aws.ask_prod_names)")
     ask_services = aws_setting(pr, "ask_services", DEFAULT_AWS_ASK_SERVICES) or []
