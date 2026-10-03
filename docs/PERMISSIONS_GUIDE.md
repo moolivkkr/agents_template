@@ -62,7 +62,8 @@ or waits for you. No single mechanism does this; each layer below catches what t
   - `terraform apply` and publishing packages.
 - **Denied outright:**
   - `sudo`;
-  - cloud CLIs, and `aws` without a LocalStack endpoint;
+  - cloud CLIs, and `aws` without a LocalStack endpoint, except inside a project you listed for AWS
+    (see [AWS for your projects](#aws-for-your-projects));
   - remote Docker daemons;
   - deleting or creating Lima VMs;
   - `claude --dangerously-skip-permissions`;
@@ -79,7 +80,128 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (260 cases, including 13 offline `vet-package.py` cases).
+test table is `tests/sdlc-guard.test.sh` (383 cases, including 13 offline `vet-package.py` cases and
+92 AWS-project cases).
+
+## AWS for your projects
+
+By default `aws` is denied unless it targets LocalStack. For a project whose own infrastructure lives
+in AWS (rera's `infra/aws-inference/*.sh` launch, tag and terminate EC2 inference boxes and copy
+models through S3, across regions), you can list the project in the guard policy. Agents then use the
+real AWS CLI there, in every region, with no prompt for ordinary work.
+
+**A command counts as inside the project** when every directory it can run in is under the project
+path, after symlinks are resolved. That is the session's working directory, followed through any
+`cd`/`pushd` in the command:
+- `cd ~/development/rera && aws …` counts;
+- `cd ~/development/rera; aws …` doesn't, because the `cd` may have failed;
+- `(cd rera && x); aws …` doesn't either, because the `cd` ran in a subshell;
+- a `cd` to an unresolved `$VAR` makes the directory unknown, and that never counts.
+
+| Inside a listed project | Decision |
+|---|---|
+| Any service, any operation, any region: `ec2 run-instances`, `terminate-instances`, `create-security-group`, `authorize-security-group-ingress`, `create-tags`, `wait`, `s3 cp/ls/presign/rm/rb`, `autoscaling …`, `delete-*`, `sts get-caller-identity` | allow |
+| A service in `ask_services`. Default: `iam`, `organizations`, `account`, `sso-admin`, `identitystore`, `eks` | ask |
+| An action in `ask_actions` (`service:operation` globs, e.g. `ec2:delete-vpc`; default none) | ask |
+| An argument or the profile that looks like prod (`shop-prod`, `--profile prod`; same pattern as everywhere else) | ask (switch off with `--aws-prod-names off`) |
+| `aws configure set\|import\|sso\|…`, `aws sso login\|logout`: they change which credentials the CLI uses | ask |
+| A service or operation that is an unresolved `$VAR` | ask |
+| Commands that print credentials: `sts get-session-token`, `sts assume-role*`, `sts get-federation-token`, `sso get-role-credentials`, `ecr get-authorization-token`, `codeartifact get-authorization-token`, `rds generate-db-auth-token`, `redshift get-cluster-credentials*` | deny, unless you list the action in `allow_credential_actions` |
+| `ecr get-login-password` | allow only when piped straight into a `--password-stdin` login (`docker`, `podman`, `oras`, `crane auth`, `helm registry`). The login itself keeps its own rule: `docker login` still asks. Printed or redirected to a file, it's denied |
+| `aws configure export-credentials`, `aws configure get <any secret/token key>`, `eks get-token`, `eks update-kubeconfig`, `--debug` (it logs the session token) | deny, always, in every project; the policy can't allow them |
+| `file://~/.aws/…` and other secret paths as inputs; `s3 cp` downloads onto protected paths (`~/.claude/settings.json`, …) | deny |
+| Profile, account or region outside the project's pins (below) | deny |
+| **Outside every listed project** | unchanged: deny unless `--endpoint-url` is LocalStack |
+
+Nothing else changes. Reading `~/.aws` stays denied everywhere, and the EKS release scripts
+(`deploy-eks.sh`, `promote-eks.sh`, `eks-bootstrap.sh`) stay human or CI only. The guard still never
+answers *allow*: inside a project it simply has no objection, so your permission rules and auto mode
+apply as before. `apply-user-settings.py` writes the project paths into `autoMode` (environment and
+allow), so the auto-mode classifier knows EC2, S3 and security-group work there is approved.
+
+**Why `ask_services` defaults to those six.** IAM, Organizations, account settings and Identity Center
+(`sso-admin`, `identitystore`) change who can do what across the whole account, not just the
+project's own resources, and an IAM key or role an agent makes outlives the session. `eks` is on the
+list because the framework's staging and prod clusters run on EKS, and those are human or CI only. To
+allow everything, set `--aws-ask-services none`. The credential and kube-credential denies above still
+apply.
+
+### Policy shape
+
+```json
+"aws": {
+  "projects": [
+    {"path": "~/development/rera", "profiles": [], "accounts": [], "regions": "*"}
+  ],
+  "ask_services": ["iam", "organizations", "account", "sso-admin", "identitystore", "eks"],
+  "ask_actions": [],
+  "allow_credential_actions": [],
+  "ask_prod_names": true
+}
+```
+
+- **`profiles`**: empty means any. If profiles are listed, the effective profile must be one of them.
+  The effective profile is `--profile`, else `AWS_PROFILE`/`AWS_DEFAULT_PROFILE` from the command
+  prefix, an `export` in the same command, or the session environment, else `default`. Pinning also
+  denies a command (or a session) that sets `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
+  `AWS_SESSION_TOKEN`, `AWS_ROLE_ARN`, `AWS_WEB_IDENTITY_TOKEN_FILE` or the container-credential
+  URIs, because those replace the profile's credentials. The same goes for a command that points
+  `AWS_CONFIG_FILE` or `AWS_SHARED_CREDENTIALS_FILE` somewhere else.
+- **`accounts`**: checked offline only. The guard reads `sso_account_id`, or the account in
+  `role_arn`, for the effective profile from the CLI config file (`~/.aws/config`, never the
+  credentials file). It makes no `sts` call. A profile with static keys has no account written
+  down, so with `accounts` set it is denied. **Profile pinning is the reliable mechanism; treat
+  `accounts` as a check on SSO/role profiles only.**
+- **`regions`**: `"*"` (default) or a list of names/globs (`["ap-south-1", "ap-northeast-*"]`). The
+  region is `--region`, `AWS_REGION`, `AWS_DEFAULT_REGION` or the profile's `region` in the config.
+  With a list, a command whose region can't be determined is denied.
+- `ask_services`, `ask_actions`, `allow_credential_actions` and `ask_prod_names` can also be set on a
+  single project entry, which overrides the top-level value for that project.
+
+### Turning it on (rera)
+
+The policy is human-owned, so you run these, not an agent. `--update` changes only the `aws` section
+and keeps the kube pin, Lima instances and lab hosts as they are. A later full `make-policy` run (for
+example `cluster-up.sh` rebuilding the cluster) keeps an existing `aws` section.
+
+```bash
+cd ~/development/startup-agents
+./install.sh --guard                                   # the new guard, shim and make-policy
+
+python3 ~/.claude/hooks/sdlc-guard-make-policy.py --update --out ~/.config/sdlc-guard/policy.json \
+    --aws-project ~/development/rera                   # prints the resulting aws section
+#   optional: --aws-profile <name> (repeatable) to pin profiles
+#             --aws-ask-services none to drop the ask list
+#             --aws-allow-credential-actions sts:assume-role
+
+python3 .claude/guard/apply-user-settings.py --github <your-github-owner>   # autoMode learns the project
+
+# only if you use the managed layer (step 4 above): re-copy the guard and the policy
+sudo install -m 755 -o root -g wheel .claude/guard/sdlc-guard.sh       "/Library/Application Support/ClaudeCode/sdlc-guard/sdlc-guard.sh"
+sudo install -m 644 -o root -g wheel ~/.config/sdlc-guard/policy.json "/Library/Application Support/ClaudeCode/sdlc-guard/policy.json"
+```
+
+Then start a new Claude Code session in `~/development/rera`. To remove a project, run
+`--update --out … --aws-remove-project ~/development/rera`.
+
+### Limits
+
+- **SDK programs are invisible.** `python3 launch.py` using boto3, a Node script using the AWS SDK,
+  or Terraform's AWS provider make AWS calls the guard never sees: it checks command lines, not
+  programs. Those calls run with whatever credentials the process finds, inside or outside a listed
+  project. `python -m awscli` is recognised as `aws`.
+- **Scripts go through the `aws` PATH shim**, which re-checks each call with the script's working
+  directory and environment. There an *ask* counts as deny, so a script calling `iam …` stops with
+  exit 126. A script calling `/usr/local/bin/aws` by absolute path bypasses the shim.
+- **The pipe check is exact at the prompt only.** For `ecr get-login-password` inside a script, the
+  shim can see that stdout is a pipe but not what reads it.
+- **Allowed means allowed.** Inside a listed project an agent can terminate any instance or empty
+  any bucket the profile can reach, in any region, including resources that aren't the project's.
+  Use a profile scoped to the project's account, or IAM permissions, if that matters. The guard
+  can't tell one EC2 instance from another.
+- **Output isn't filtered.** `secretsmanager get-secret-value` or `ssm get-parameter
+  --with-decryption` print application secrets. They are allowed in a listed project unless you add
+  them to `ask_actions` (`secretsmanager:get-secret-value`, `ssm:get-parameter*`).
 
 ## Set up once per machine
 
@@ -105,7 +227,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 260/260
+bash tests/sdlc-guard.test.sh     # 383/383
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own
