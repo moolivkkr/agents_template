@@ -15,7 +15,7 @@ What it changes (everything else in the file is kept):
                       the admin kubeconfig / ~/.ssh / ~/.aws, editing ~/.kube, the guard policy, hooks
   permissions.defaultMode = "auto"
   autoMode            environment / allow / hard_deny describing the lab cluster (filled from the
-                      guard policy: API server, context, lab hosts)
+                      guard policy: API server, context, lab hosts, and the aws.projects directories)
   hooks               PreToolUse -> sdlc-guard.sh; SessionStart -> sdlc-guard-env.sh
 It does NOT set disableBypassPermissionsMode (that lives in the optional managed settings).
 Revert: the backup path is printed; `cp <backup> ~/.claude/settings.json`.
@@ -62,9 +62,9 @@ DENY = [
 ]
 
 
-def auto_mode(github, server, context, lab_hosts):
+def auto_mode(github, server, context, lab_hosts, aws_projects=()):
     hosts = ", ".join(lab_hosts) or "none"
-    return {
+    am = {
         "environment": [
             "$defaults",
             "Organization: solo developer building products with the startup-agents SDLC framework; agents run unattended for hours.",
@@ -89,6 +89,19 @@ def auto_mode(github, server, context, lab_hosts):
             "Never read, copy, print or modify credentials: the admin kubeconfig ~/.kube/sdlc-lab-admin.yaml, ~/.ssh, cloud credentials, ~/.claude/settings*.json, ~/.claude/hooks/, managed settings, or ~/.config/sdlc-guard/.",
         ],
     }
+    if aws_projects:
+        # mirrors the guard policy's aws.projects (docs/PERMISSIONS_GUIDE.md "AWS for your projects")
+        where = ", ".join(aws_projects)
+        am["environment"].append(
+            f"Owner's AWS projects: {where}. Inside these directories the owner has approved the real AWS CLI in any region: "
+            "EC2 instances, security groups and their ingress rules, tags, S3 objects and buckets, autoscaling and the "
+            "like are the project's own disposable inference infrastructure, launched and terminated routinely to iterate "
+            "and test. IAM, Organizations, account and identity-center changes, and EKS, still need the owner.")
+        am["allow"].append(
+            f"AWS in the owner's projects ({where}): running the project's infra scripts and aws CLI commands that create, "
+            "describe, tag, modify or delete EC2 instances, security groups, S3 objects/buckets and other resources, in any "
+            "region, is allowed (the sdlc-guard hook enforces the project scope, profile pins and credential rules).")
+    return am
 
 
 def add(lst, items):
@@ -108,6 +121,7 @@ def main():
         ctx, spec = next(iter(pol["kube"]["contexts"].items()))
         server = spec["server"]
         lab = [h for h in pol.get("local_hosts", []) if h[:1].isdigit() and not h.startswith(("127.", "0.", "10.0.2.2"))]
+        aws_projects = [str(p.get("path")) for p in (pol.get("aws") or {}).get("projects", []) if p.get("path")]
     except Exception as e:
         sys.exit(f"read the guard policy first ({POLICY}): {e} — run cluster-up.sh / make-policy.py")
     for f in ("sdlc-guard.sh", "sdlc-guard-env.sh"):
@@ -121,7 +135,7 @@ def main():
     add(perm.setdefault("ask", []), ASK)
     add(perm.setdefault("deny", []), DENY)
     perm["defaultMode"] = "auto"
-    s["autoMode"] = auto_mode(a.github, server, ctx, lab)
+    s["autoMode"] = auto_mode(a.github, server, ctx, lab, aws_projects)
     hooks = s.setdefault("hooks", {})
     pre = hooks.setdefault("PreToolUse", [])
     if not any("sdlc-guard.sh" in json.dumps(e) for e in pre):

@@ -622,6 +622,13 @@ def main():
     check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")
     check("AS4", True, len(pm["allow"]) == len(set(pm["allow"])) and any(f.startswith("settings.json.bak-") for f in os.listdir(os.path.join(fh, ".claude"))),
           "apply-user-settings: no duplicate rules, backup written")
+    check("AS5", False, "AWS projects" in json.dumps(s["autoMode"]), "apply-user-settings: no AWS autoMode text without aws.projects")
+    pol_aws = json.load(open(POLICY)); pol_aws["aws"] = {"projects": [{"path": "~/development/rera", "regions": "*"}]}
+    json.dump(pol_aws, open(os.path.join(fh, ".config", "sdlc-guard", "policy.json"), "w"))
+    p = subprocess.run([sys.executable, AUS, "--github", "someone", "--dry-run"], capture_output=True, text=True, env=aenv)
+    am = json.loads(p.stdout)["autoMode"] if p.returncode == 0 else {}
+    check("AS6", True, any("~/development/rera" in x for x in am.get("allow", [])) and any("AWS projects" in x for x in am.get("environment", [])),
+          "apply-user-settings: autoMode allow/environment name the aws.projects directories", p.stderr)
 
     aws_cases(env)
 
