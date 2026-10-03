@@ -85,25 +85,30 @@ def tokenize(s):
         ask("command could not be parsed (unbalanced quotes)")
 
 def segments(s, env):
-    """Split into simple commands; also yield nested $(..)/backtick/-c bodies."""
+    """Split into simple commands. Returns items in order: ("seg", argv, stdout_redirected) for a
+    command and ("sep", token) for each separator (;, &&, ||, |, &, (, ), newline), so callers can
+    follow `cd` and pipes between commands."""
     toks = tokenize(s)
-    cur, out = [], []
+    cur, out, redir = [], [], False
     i = 0
     while i < len(toks):
         t = toks[i]
         if t and all(c in SEP_CHARS for c in t):
-            if cur: out.append(cur)
-            cur = []
+            if cur: out.append(("seg", cur, redir))
+            out.append(("sep", t))
+            cur, redir = [], False
         elif t and all(c in "<>&" for c in t):
             # redirection operator: the next token is its target (or an fd number)
             tgt = toks[i + 1] if i + 1 < len(toks) else ""
             if ">" in t and tgt and not tgt.isdigit() and tgt != "-":
                 check_write_target(expand(tgt, env))
+            if ">" in t and not (cur and cur[-1] == "2"):
+                redir = True                       # stdout goes to a file (or another fd), not down a pipe
             i += 1
         else:
             cur.append(t)
         i += 1
-    if cur: out.append(cur)
+    if cur: out.append(("seg", cur, redir))
     return out
 
 VAR_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::?-([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)")
@@ -671,14 +676,6 @@ def check_cloud(argv, env):
     a0 = os.path.basename(argv[0])
     if a0 in CLOUD_DENY and not (argv[1:2] in (["--version"], ["version"], ["help"], ["--help"])):
         deny(f"{a0} reaches real cloud accounts; prod is unreachable by policy")
-    if a0 == "aws":
-        ep = None
-        for i, a in enumerate(argv):
-            if a.startswith("--endpoint-url="): ep = a.split("=", 1)[1]
-            elif a == "--endpoint-url" and i + 1 < len(argv): ep = argv[i + 1]
-        if ep and re.match(r"^https?://(localhost|127\.0\.0\.1|localstack)(:\d+)?", ep): return
-        if argv[1:2] in (["--version"], ["help"]): return
-        deny("aws without --endpoint-url http://localhost:* (LocalStack) is blocked; prod is unreachable by policy")
     if a0 in ("terraform", "tofu", "pulumi", "cdk", "terragrunt"):
         words = [a for a in argv[1:] if not a.startswith("-")]
         if words[:1] and words[0] in ("apply", "destroy", "import", "up", "deploy", "taint") or words[:2] == ["state", "rm"]:
@@ -731,11 +728,268 @@ def check_chmod(argv):
     if os.path.basename(argv[0]) == "chmod" and any(a in ("777", "a+rwx", "ugo+rwx", "0777") for a in argv[1:]):
         ask("chmod 777 (user rule: ask first)")
 
+# ---------------------------------------------------------------- shell state: cwd (cd) and exported vars
+class ShellState:
+    """What a command line does to its own environment, followed segment by segment: the directory
+    later commands run in (`cd`/`pushd`) and the variables it exports or unsets. `cands` is every
+    directory a segment could be running in (None = unknown); anything decided by cwd needs ALL of
+    them to qualify, so a `cd` that may have failed, ran in a subshell or a pipeline only widens it."""
+    def __init__(self, cwd):
+        self.cands = frozenset([os.path.realpath(cwd)])
+        self.stack, self.pending = [], None
+        self.exported, self.unset = {}, set()
+    def copy(self):
+        c = ShellState.__new__(ShellState)
+        c.cands, c.stack, c.pending = self.cands, list(self.stack), None
+        c.exported, c.unset = dict(self.exported), set(self.unset)
+        return c
+    def on_sep(self, sep):
+        if sep == "(":
+            self.stack.append(self.cands); self.pending = None
+        elif sep == ")":
+            outer = self.stack.pop() if self.stack else self.cands
+            self.cands = outer | self.cands; self.pending = None   # a subshell's cd may or may not have run
+        elif self.pending is not None:
+            # `cd X && cmd`: cmd runs in X. After ; || | & or a newline, the cd may have failed (or ran
+            # in a pipeline subshell), so both the old and the new directory remain possible.
+            self.cands = self.pending if sep == "&&" else (self.cands | self.pending)
+            self.pending = None
+    def var(self, name, prefix=None):
+        if prefix and name in prefix: return prefix[name]
+        if name in self.exported: return self.exported[name]
+        if name in self.unset: return None
+        return os.environ.get(name)
+    def after_segment(self, seg, argv, env):
+        a0 = os.path.basename(argv[0]) if argv else ""
+        if seg[:1] in (["export"],) or (seg[:1] in (["declare"], ["typeset"]) and "-x" in seg):
+            for a in seg[1:]:
+                if "=" in a and not a.startswith("-"):
+                    k, v = a.split("=", 1); self.exported[k] = expand(v, env); self.unset.discard(k)
+        if a0 == "unset":
+            for a in argv[1:]:
+                if not a.startswith("-"): self.unset.add(a); self.exported.pop(a, None)
+        if a0 in ("cd", "pushd", "popd"):
+            args = [expand(a, env) for a in argv[1:] if a not in ("-L", "-P", "-e", "-@", "--")]
+            if a0 == "popd" or (args and (args[0] == "-" or any(c in args[0] for c in "$`*?["))):
+                new = frozenset([None])
+            else:
+                tgt = args[0] if args else HOME
+                if not tgt.startswith(("/", "~", ".")) and os.environ.get("CDPATH"):
+                    new = frozenset([None])                                  # CDPATH could send it anywhere
+                else:
+                    tgt = os.path.expanduser(tgt)
+                    new = frozenset(None if c is None else os.path.realpath(os.path.join(c, tgt)) for c in self.cands)
+            self.pending = new
+
+def leading_assignments(seg, env):
+    """VAR=value words that apply to this command only (`AWS_PROFILE=x aws …`, `env AWS_PROFILE=x aws …`)."""
+    out = {}
+    for t in seg:
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", t):
+            k, v = t.split("=", 1); out[k] = expand(v, env)
+        elif os.path.basename(t) in WRAPPERS or t == "env" or t.startswith("-") or re.match(r"^\d+[smhd]?$", t):
+            continue
+        else:
+            break
+    return out
+
+# ---------------------------------------------------------------- aws
+# Default: aws is denied unless it targets LocalStack. A project listed under "aws.projects" in the
+# policy gets the real AWS CLI, every service and region, when the command runs inside that project
+# (hook cwd + any cd in the command). Credential-printing calls stay denied everywhere; services in
+# ask_services and actions in ask_actions prompt. See docs/PERMISSIONS_GUIDE.md "AWS for your projects".
+AWS = (POLICY or {}).get("aws") or {}
+DEFAULT_AWS_ASK_SERVICES = ["iam", "organizations", "account", "sso-admin", "identitystore", "eks"]
+AWS_VALUE_OPTS = {"--profile", "--region", "--endpoint-url", "--output", "--query", "--cli-read-timeout",
+                  "--cli-connect-timeout", "--color", "--ca-bundle", "--cli-binary-format"}
+AWS_BOOL_OPTS = {"--no-verify-ssl", "--no-paginate", "--no-sign-request", "--no-cli-pager", "--cli-auto-prompt",
+                 "--no-cli-auto-prompt", "--version", "--debug"}
+# calls whose output IS a credential (keys, session tokens, registry/db passwords): denied in every
+# project unless the policy lists them in allow_credential_actions
+AWS_CRED_ACTIONS = {"sts:get-session-token", "sts:assume-role", "sts:assume-role-with-saml",
+    "sts:assume-role-with-web-identity", "sts:get-federation-token", "sts:assume-root", "sso:get-role-credentials",
+    "ecr:get-authorization-token", "ecr-public:get-authorization-token", "ecr:get-login", "codeartifact:get-authorization-token",
+    "rds:generate-db-auth-token", "redshift:get-cluster-credentials", "redshift:get-cluster-credentials-with-iam",
+    "cognito-identity:get-credentials-for-identity", "ecr:get-login-password", "ecr-public:get-login-password"}
+# never, whatever the policy says: the CLI's own credential dumps, and EKS kube credentials (the agent
+# kubeconfig is pinned to the lab; staging/prod EKS is human/CI only)
+AWS_NEVER = {"configure:export-credentials", "eks:get-token", "eks:update-kubeconfig"}
+AWS_SECRET_KEY_RE = re.compile(r"(^|\.)(aws_secret_access_key|aws_session_token|aws_security_token|credential_process|[a-z_]*secret[a-z_]*|[a-z_]*token[a-z_]*)$", re.I)
+# variables that replace the profile's credentials or config, so a profile pin could not hold
+AWS_CRED_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_SECURITY_TOKEN",
+                "AWS_CONFIG_FILE", "AWS_SHARED_CREDENTIALS_FILE", "AWS_WEB_IDENTITY_TOKEN_FILE", "AWS_ROLE_ARN",
+                "AWS_CONTAINER_CREDENTIALS_FULL_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
+LOGIN_STDIN = {("docker", "login"), ("podman", "login"), ("nerdctl", "login"), ("finch", "login"), ("oras", "login"),
+               ("skopeo", "login"), ("crane", "auth"), ("helm", "registry")}
+
+def aws_parse(argv, env):
+    """-> (global options, [service, operation, args...]) or ask when the service can't be told apart."""
+    opts, pos, i = {}, [], 1
+    while i < len(argv):
+        a = expand(argv[i], env)
+        if a.startswith("--"):
+            k, eq, v = a.partition("=")
+            if k in AWS_VALUE_OPTS:
+                if not eq:
+                    v = expand(argv[i + 1], env) if i + 1 < len(argv) else ""; i += 1
+                opts[k] = v
+            elif k in AWS_BOOL_OPTS:
+                opts[k] = True
+            elif len(pos) < 2 and not (pos[:1] == ["configure"] or pos[:1] == ["help"]):
+                ask(f"aws: cannot tell the service/operation apart from option {k} (put global options after the operation)")
+        else:
+            pos.append(a)
+        i += 1
+    return opts, pos
+
+def aws_project(st):
+    """The policy project every directory this command may run in lies inside, else None."""
+    if not st.cands or None in st.cands: return None
+    for pr in AWS.get("projects", []) or []:
+        root = os.path.realpath(os.path.expanduser(str(pr.get("path", ""))))
+        if root in ("/", os.path.realpath(HOME)) or not pr.get("path"): continue
+        if all(under(c, root) for c in st.cands): return pr
+    return None
+
+def aws_setting(pr, key, default):
+    if key in pr: return pr[key]
+    if key in AWS: return AWS[key]
+    return default
+
+def aws_config_section(profile, cfg_path):
+    import configparser
+    cp = configparser.RawConfigParser(strict=False)
+    try: cp.read(cfg_path)
+    except Exception: return {}
+    name = "default" if profile == "default" else f"profile {profile}"
+    if cp.has_section(name): return dict(cp.items(name))
+    if profile == "default" and cp.has_section("profile default"): return dict(cp.items("profile default"))
+    return {}
+
+def aws_account_of(profile, cfg_path):
+    """The account a profile acts in, from the CLI config file only (never credentials, never a network
+    call): sso_account_id, or the account in role_arn. None when it isn't written down there."""
+    sec = aws_config_section(profile, cfg_path)
+    if sec.get("sso_account_id"): return sec["sso_account_id"].strip()
+    m = re.match(r"^arn:aws[a-z-]*:iam::(\d{12}):", sec.get("role_arn", "").strip())
+    return m.group(1) if m else None
+
+def piped_to_login(nxt):
+    """True when the next pipeline stage is a registry login reading the password from stdin."""
+    if not nxt: return False
+    argv = [a for a in nxt if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", a)]
+    while argv and os.path.basename(argv[0]) in WRAPPERS: argv = argv[1:]
+    if len(argv) < 2: return False
+    words = [a for a in argv[1:] if not a.startswith("-")]
+    tool = os.path.basename(argv[0])
+    sub = (tool, words[0]) if words else (tool, "")
+    if sub not in LOGIN_STDIN: return False
+    if tool in ("crane", "helm") and words[1:2] != ["login"]: return False
+    return "--password-stdin" in argv
+
+def check_aws(argv, env, st, prefix, redirected, pipe_next):
+    opts, pos = aws_parse(argv, env)
+    if not pos or pos[0] == "help" or (len(pos) <= 3 and pos[-1] == "help"):
+        return                                                           # local help/version output
+    svc, op = pos[0], (pos[1] if len(pos) > 1 else "")
+    action = f"{svc}:{op}"
+    if opts.get("--debug"):
+        deny("aws --debug logs signed request headers (session token included); run without --debug")
+    if action in AWS_NEVER:
+        why = ("prints the CLI's credentials" if svc == "configure" else
+               "creates EKS kube credentials; the agent kubeconfig is pinned to the lab and EKS staging/prod is human/CI only")
+        deny(f"aws {svc} {op} {why}; agents never run it")
+    if svc == "configure" and op == "get" and len(pos) > 2 and AWS_SECRET_KEY_RE.search(pos[2]):
+        deny(f"aws configure get {pos[2]} prints a credential; agents never read AWS secrets")
+    ep = opts.get("--endpoint-url")
+    if ep and re.match(r"^https?://(localhost|127\.0\.0\.1|localstack)(:\d+)?(/|$)", ep):
+        return                                                           # LocalStack: allowed everywhere
+    pr = aws_project(st)
+    if pr is None:
+        hint = (" (aws.projects in the guard policy lists the projects where the real CLI is allowed; this command "
+                "is not running inside one)" if AWS.get("projects") else "")
+        deny("aws without --endpoint-url http://localhost:* (LocalStack) is blocked; prod is unreachable by policy" + hint)
+    where = f"project {pr.get('path')}"
+    # -- identity: profile pin, then (optional) account pin, then region list
+    profiles = [str(p) for p in pr.get("profiles", []) or []]
+    accounts = [str(a) for a in pr.get("accounts", []) or []]
+    if profiles or accounts:
+        for k in AWS_CRED_ENV:
+            if st.var(k, prefix):
+                deny(f"aws in {where}: {k} is set, which overrides the profile's credentials or config; the policy pins "
+                     f"{'profiles ' + ', '.join(profiles) if profiles else 'accounts'}, so unset it and use --profile")
+    if opts.get("--profile"):
+        eff = {opts["--profile"]}
+    else:
+        eff = {v for v in (st.var("AWS_PROFILE", prefix), st.var("AWS_DEFAULT_PROFILE", prefix)) if v} or {"default"}
+    if profiles:
+        bad = sorted(p for p in eff if p not in profiles)
+        if bad:
+            deny(f"aws in {where} uses profile '{bad[0]}'; the policy allows only {', '.join(profiles)} (pass --profile)")
+    if accounts:
+        cfg = os.path.expanduser(os.environ.get("AWS_CONFIG_FILE") or "~/.aws/config")
+        for p in sorted(eff):
+            acct = aws_account_of(p, cfg)
+            if acct is None:
+                deny(f"aws in {where}: the account of profile '{p}' is not in the AWS config file (no sso_account_id or "
+                     "role_arn), so the account pin can't be checked offline; pin profiles instead of accounts")
+            if acct not in accounts:
+                deny(f"aws in {where}: profile '{p}' acts in account {acct}; the policy allows only {', '.join(accounts)}")
+    regions = aws_setting(pr, "regions", "*")
+    if regions not in ("*", ["*"], None):
+        reg = opts.get("--region") or st.var("AWS_REGION", prefix) or st.var("AWS_DEFAULT_REGION", prefix)
+        if not reg:
+            cfg = os.path.expanduser(os.environ.get("AWS_CONFIG_FILE") or "~/.aws/config")
+            reg = aws_config_section(sorted(eff)[0], cfg).get("region") if len(eff) == 1 else None
+        if not reg:
+            deny(f"aws in {where}: no region given and the policy limits regions to {', '.join(regions)} (pass --region)")
+        if not any(fnmatch.fnmatchcase(reg, r) for r in regions):
+            deny(f"aws in {where}: region {reg} is outside the policy's regions ({', '.join(regions)})")
+    # -- files: file:// inputs that are secrets, s3 downloads onto protected paths
+    for a in pos[2:] + [v for k, v in opts.items() if isinstance(v, str)]:
+        m = re.match(r"^fileb?://(.+)$", a)
+        if m and secret_hit(m.group(1), CWD):
+            deny(f"{a} is a secret path; agents never read or upload it")
+    if svc == "s3" and op in ("cp", "mv", "sync"):
+        locs = [a for a in pos[2:] if not a.startswith("s3://") and not a.startswith("-")]
+        if locs and len(pos) >= 4 and not pos[-1].startswith("s3://"):
+            check_write_target(pos[-1])
+    # -- credentials printed to stdout
+    allow_cred = set(aws_setting(pr, "allow_credential_actions", []) or [])
+    if action in AWS_CRED_ACTIONS and action not in allow_cred:
+        if op == "get-login-password" and not redirected and piped_to_login(pipe_next):
+            pass                                  # `aws ecr get-login-password | docker login --password-stdin …`
+        elif op == "get-login-password" and SHIM_STDOUT_PIPE and pipe_next is None and not redirected:
+            pass                                  # exec-time shim inside a script: stdout is a pipe (consumer unseen)
+        elif op == "get-login-password":
+            deny(f"aws {svc} {op} prints a registry password; allowed only piped straight into "
+                 "`docker login --password-stdin` (or crane/helm/oras/podman login --password-stdin)")
+        else:
+            deny(f"aws {svc} {op} prints temporary credentials to the transcript; agents don't run it "
+                 f"(the owner can list '{action}' in aws.allow_credential_actions)")
+    # -- prompts: prod-looking names, the ask list, CLI config changes
+    if aws_setting(pr, "ask_prod_names", True):
+        for v in [opts.get("--profile") or ""] + pos[2:]:
+            if v and PROD_RE.search(v):
+                ask(f"aws {svc} {op} names '{v}', which looks like a production resource (policy: aws.ask_prod_names)")
+    ask_services = aws_setting(pr, "ask_services", DEFAULT_AWS_ASK_SERVICES) or []
+    if any(fnmatch.fnmatchcase(svc, s) for s in ask_services):
+        ask(f"aws {svc} {op}: {svc} is in the policy's ask_services (account-wide identity/permission changes); "
+            "the owner can empty aws.ask_services to allow it")
+    for pat in aws_setting(pr, "ask_actions", []) or []:
+        if fnmatch.fnmatchcase(action, pat):
+            ask(f"aws {svc} {op} matches '{pat}' in the policy's ask_actions")
+    if svc == "configure" and op not in ("list", "list-profiles", "get"):
+        ask(f"aws configure {op or ''} changes which credentials/profiles the CLI uses (human step)".replace("  ", " "))
+    if svc == "sso" and op in ("login", "logout"):
+        ask(f"aws sso {op} is an interactive sign-in (human step)")
+
 # ---------------------------------------------------------------- driver
 KUBE_TOOLS = {"kubectl", "kubecolor", "oc", "stern"}
-def check_command(cmd, cwd, scratch, depth=0, env=None):
+def check_command(cmd, cwd, scratch, depth=0, env=None, st=None):
     if depth > 4: ask("command nesting too deep to analyse")
     env = dict(env or {})
+    st = st.copy() if st else ShellState(cwd)
     seen = len(INTERP_BODIES)
     cmd, shell_bodies, subst_bodies = split_heredocs(cmd)
     for consumer, body in INTERP_BODIES[seen:]:
@@ -743,25 +997,31 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
         if why:
             ask(f"{consumer} script from a heredoc does network I/O ({why}); network egress from inline code needs approval")
     for b in shell_bodies:
-        check_command(b, cwd, scratch, depth + 1, env)
+        check_command(b, cwd, scratch, depth + 1, env, st)
     for b in subst_bodies:
         for body in nested_bodies(b):
-            check_command(body, cwd, scratch, depth + 1, env)
-    for seg in segments(cmd, env):
+            check_command(body, cwd, scratch, depth + 1, env, st)
+    items = segments(cmd, env)
+    for idx, item in enumerate(items):
+        if item[0] == "sep":
+            st.on_sep(item[1]); continue
+        seg, redirected = item[1], item[2]
         for tok in seg:
             for body in nested_bodies(tok):
-                check_command(body, cwd, scratch, depth + 1, env)
+                check_command(body, cwd, scratch, depth + 1, env, st)
+        prefix = leading_assignments(seg, env)
         argv = strip_wrappers(list(seg), env)   # consumes VAR=value prefixes / standalone assignments into env
-        if not argv: continue
+        if not argv:
+            st.after_segment(seg, argv, env); continue
         argv[0] = expand(argv[0], env)
         if "$" in argv[0]: ask(f"command name is an unresolved variable ({argv[0]})")
         a0 = os.path.basename(argv[0])
         if a0 in ("bash", "sh", "zsh", "dash") and "-c" in argv:
             i = argv.index("-c")
-            if i + 1 < len(argv): check_command(argv[i + 1], cwd, scratch, depth + 1, env)
+            if i + 1 < len(argv): check_command(argv[i + 1], cwd, scratch, depth + 1, env, st)
             continue
         if a0 == "eval":
-            check_command(" ".join(argv[1:]), cwd, scratch, depth + 1, env); continue
+            check_command(" ".join(argv[1:]), cwd, scratch, depth + 1, env, st); continue
         check_protected_args(a0, argv, env)
         check_secret_args(argv, env, cwd)
         check_keychain(argv)
@@ -774,6 +1034,12 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
         elif a0 == "git": check_git(argv, env)
         elif a0 == "rm": check_rm(argv, env, cwd, scratch)
         elif a0 == "find" and ("-delete" in argv or ("-exec" in argv and "rm" in argv)): ask("find -delete/-exec rm (user rule: ask before bulk deletion)")
+        aws_argv = argv if a0 == "aws" else (["aws"] + argv[3:] if interpreter_name(a0) == "python" and argv[1:3] == ["-m", "awscli"] else None)
+        if aws_argv:
+            nxt = None
+            if idx + 2 < len(items) and items[idx + 1] == ("sep", "|") or idx + 2 < len(items) and items[idx + 1] == ("sep", "|&"):
+                nxt = items[idx + 2][1] if items[idx + 2][0] == "seg" else None
+            check_aws(aws_argv, env, st, prefix, redirected, nxt)
         check_sql(argv)
         check_network(argv, env)
         check_cloud(argv, env)
@@ -781,6 +1047,7 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
         check_release_scripts(argv)
         check_kind_k3d(argv)
         check_chmod(argv)
+        st.after_segment(seg, argv, env)
 
 def check_skill(ti):
     name = str(ti.get("skill", "")); args = str(ti.get("args", ""))
@@ -804,9 +1071,11 @@ def check_read(ti, tool=""):
     if tool == "Glob" and pat.startswith(("/", "~", "$HOME")) and secret_hit(expand(pat, {}), CWD):   # absolute Glob pattern
         deny(f"glob {pat} reaches a secret path; agents never read it")
 
+SHIM_STDOUT_PIPE = False
 def main():
-    global CWD
+    global CWD, SHIM_STDOUT_PIPE
     data = json.load(sys.stdin)
+    SHIM_STDOUT_PIPE = data.get("stdout_is_pipe") is True
     tool = data.get("tool_name", ""); ti = data.get("tool_input", {}) or {}
     cwd = data.get("cwd") or os.getcwd(); scratch = data.get("scratchpad_dir")
     CWD = cwd

@@ -17,6 +17,18 @@ The input kubeconfig may be JSON or YAML (YAML is converted with `kubectl config
 --flatten -o json`); CA data must be inline. It refuses kubeconfigs that authenticate with a client
 certificate (k3s's admin kubeconfig does) unless --allow-admin is given: agents get the ServiceAccount
 token, never cluster-admin.
+
+AWS for your projects (docs/PERMISSIONS_GUIDE.md "AWS for your projects"): agents may use the real AWS
+CLI, every service and region, inside the listed project directories. Add or change one without
+touching the kube/lab settings:
+
+  python3 ~/.claude/hooks/sdlc-guard-make-policy.py --update --out ~/.config/sdlc-guard/policy.json \
+      --aws-project ~/development/rera [--aws-profile NAME]... [--aws-region ap-south-1]... \
+      [--aws-ask-services iam,organizations,account,sso-admin,identitystore,eks | none]
+
+--update edits the aws section of the existing --out file and keeps everything else. A full run (with
+--kubeconfig/--pin, as cluster-up.sh does) also keeps an existing aws section from --out, so rebuilding
+the cluster never drops the AWS projects.
 """
 import argparse, base64, hashlib, json, os, re, subprocess, sys
 from typing import NoReturn
@@ -62,14 +74,119 @@ def load_kubeconfig(path):
     return json.loads(out)
 
 
+# aws.ask_services default: account-wide identity, permission and org changes prompt, and so does EKS
+# (the framework's staging/prod clusters; their deploys are human/CI only). `--aws-ask-services none`
+# empties it. Kept in step with DEFAULT_AWS_ASK_SERVICES in sdlc-guard.sh.
+DEFAULT_AWS_ASK_SERVICES = ["iam", "organizations", "account", "sso-admin", "identitystore", "eks"]
+REGION_RE = re.compile(r"^(\*|[a-z]{2}(-gov|-iso[a-z]*)?-[a-z]+-\d+|[a-z0-9*?-]+)$")
+
+
+def csv_or_none(v):
+    if v is None:
+        return None
+    return [] if v.strip().lower() in ("none", "") else [x.strip() for x in v.split(",") if x.strip()]
+
+
+def apply_aws(policy, a):
+    """Merge the --aws-* flags into policy["aws"]; returns True if anything was asked to change."""
+    asked = any([a.aws_project, a.aws_remove_project, a.aws_ask_services is not None, a.aws_ask_actions is not None,
+                 a.aws_allow_credential_actions is not None, a.aws_prod_names is not None])
+    if (a.aws_profile or a.aws_account or a.aws_region) and not a.aws_project:
+        die("--aws-profile/--aws-account/--aws-region apply to the --aws-project(s) named in the same run")
+    if not asked:
+        return False
+    aws = policy.setdefault("aws", {})
+    aws.setdefault("projects", [])
+    aws.setdefault("ask_services", list(DEFAULT_AWS_ASK_SERVICES))
+    aws.setdefault("ask_actions", [])
+    aws.setdefault("allow_credential_actions", [])
+    aws.setdefault("ask_prod_names", True)
+
+    def norm(pth):
+        full = os.path.realpath(os.path.expanduser(pth))
+        if full in ("/", os.path.realpath(os.path.expanduser("~"))):
+            die(f"aws project path '{pth}' would cover every project; name the project directory")
+        return full
+
+    for rm in a.aws_remove_project:
+        full = norm(rm)
+        aws["projects"] = [p for p in aws["projects"] if norm(p["path"]) != full]
+    for prof in a.aws_profile:
+        if PROD_RE.search(prof):
+            die(f"profile '{prof}' looks like prod; agents must never hold it")
+    for acct in a.aws_account:
+        if not re.match(r"^\d{12}$", acct):
+            die(f"account '{acct}' is not a 12-digit AWS account id")
+    for r in a.aws_region:
+        if not REGION_RE.match(r):
+            die(f"region '{r}' is not a region name or glob")
+    for pth in a.aws_project:
+        full = norm(pth)
+        if not os.path.isdir(full):
+            sys.stderr.write(f"make-policy: note: {pth} does not exist yet\n")
+        shown = "~/" + os.path.relpath(full, os.path.realpath(os.path.expanduser("~"))) \
+            if full.startswith(os.path.realpath(os.path.expanduser("~")) + "/") else full
+        entry = {"path": shown, "profiles": list(a.aws_profile), "accounts": list(a.aws_account),
+                 "regions": "*" if not a.aws_region or "*" in a.aws_region else list(a.aws_region)}
+        aws["projects"] = [p for p in aws["projects"] if norm(p["path"]) != full] + [entry]
+    for key, val in (("ask_services", csv_or_none(a.aws_ask_services)), ("ask_actions", csv_or_none(a.aws_ask_actions)),
+                     ("allow_credential_actions", csv_or_none(a.aws_allow_credential_actions))):
+        if val is not None:
+            aws[key] = val
+    for act in aws["ask_actions"] + aws["allow_credential_actions"]:
+        if ":" not in act:
+            die(f"'{act}' is not service:operation (e.g. ec2:delete-vpc, sts:assume-role)")
+    never = {"configure:export-credentials", "eks:get-token", "eks:update-kubeconfig"}
+    if never & set(aws["allow_credential_actions"]):
+        die(f"{', '.join(sorted(never & set(aws['allow_credential_actions'])))} can't be allowed (always denied)")
+    if a.aws_prod_names is not None:
+        aws["ask_prod_names"] = a.aws_prod_names == "ask"
+    return True
+
+
+def write_policy(policy, a, summary):
+    text = json.dumps(policy, indent=1) + "\n"
+    if a.out:
+        out = os.path.expanduser(a.out)
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        tmp = out + ".tmp"
+        with open(tmp, "w") as f:
+            f.write(text)
+        os.replace(tmp, out)
+        sys.stderr.write(f"make-policy: wrote {out} ({summary})\n")
+        if "aws" in policy:
+            sys.stdout.write("aws section:\n" + json.dumps(policy["aws"], indent=1) + "\n")
+    else:
+        sys.stdout.write(text)
+        if "aws" in policy:
+            sys.stderr.write("make-policy: aws section: " + json.dumps(policy["aws"]) + "\n")
+
+
 def by_name(items, name):
     return next((x for x in items or [] if x.get("name") == name), None)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--kubeconfig", required=True, help="agent kubeconfig (ServiceAccount token), JSON or YAML")
-    ap.add_argument("--pin", required=True, help="where the JSON copy agents use lives, e.g. ~/.kube/sdlc-lab.json")
+    ap.add_argument("--kubeconfig", help="agent kubeconfig (ServiceAccount token), JSON or YAML (full run)")
+    ap.add_argument("--pin", help="where the JSON copy agents use lives, e.g. ~/.kube/sdlc-lab.json (full run)")
+    ap.add_argument("--update", action="store_true",
+                    help="edit only the aws section of the existing --out policy; kube/lima/hosts are kept as they are")
+    ap.add_argument("--aws-project", action="append", default=[], metavar="DIR",
+                    help="project directory where agents may use the real AWS CLI (all services, all regions)")
+    ap.add_argument("--aws-profile", action="append", default=[], metavar="NAME",
+                    help="pin the --aws-project(s) of this run to these AWS profiles (default: any)")
+    ap.add_argument("--aws-account", action="append", default=[], metavar="ID",
+                    help="pin to accounts; checked offline from sso_account_id/role_arn in ~/.aws/config only")
+    ap.add_argument("--aws-region", action="append", default=[], metavar="REGION",
+                    help="limit the --aws-project(s) of this run to these regions/globs (default: all, '*')")
+    ap.add_argument("--aws-remove-project", action="append", default=[], metavar="DIR", help="drop a project from aws.projects")
+    ap.add_argument("--aws-ask-services", metavar="LIST|none",
+                    help="services that prompt (default iam,organizations,account,sso-admin,identitystore,eks); 'none' allows all")
+    ap.add_argument("--aws-ask-actions", metavar="LIST|none", help="service:operation globs that prompt, e.g. ec2:delete-vpc,s3:rb")
+    ap.add_argument("--aws-allow-credential-actions", metavar="LIST|none",
+                    help="credential-printing calls to allow, e.g. sts:assume-role (default none)")
+    ap.add_argument("--aws-prod-names", choices=["ask", "off"], help="prompt when an aws argument looks like prod (default ask)")
     ap.add_argument("--namespaces", default="*-dev,*-qa", help="comma-separated names/globs agents may write")
     ap.add_argument("--context", action="append", help="context(s) to allow (default: every non-prod context)")
     ap.add_argument("--lima-instance", action="append", default=[], help="Lima instance(s) agents may start/stop/shell")
@@ -78,6 +195,26 @@ def main():
     ap.add_argument("--out", help="write the policy here (default: stdout)")
     ap.add_argument("--write-pin", action="store_true", help="also write the JSON kubeconfig to --pin (mode 600)")
     a = ap.parse_args()
+
+    existing = None
+    if a.out and os.path.exists(os.path.expanduser(a.out)):
+        try:
+            with open(os.path.expanduser(a.out)) as f:
+                existing = json.load(f)
+        except (OSError, ValueError) as e:
+            if a.update:
+                die(f"cannot read the existing policy {a.out}: {e}")
+    if a.update:
+        if not a.out:
+            die("--update needs --out <existing policy.json>")
+        if existing is None:
+            die(f"--update: {a.out} does not exist; run the full make-policy first (cluster-up.sh does)")
+        if not apply_aws(existing, a):
+            die("--update with no --aws-* flags changes nothing")
+        write_policy(existing, a, "aws section updated; kube/lima/hosts unchanged")
+        return
+    if not a.kubeconfig or not a.pin:
+        die("--kubeconfig and --pin are required (or use --update --out <policy> to change only the aws section)")
 
     cfg = load_kubeconfig(a.kubeconfig)
     names = a.context or [c["name"] for c in cfg.get("contexts", [])]
@@ -133,15 +270,10 @@ def main():
         "protected_paths": DEFAULT_PROTECTED,
         "secret_paths": DEFAULT_SECRET,
     }
-    text = json.dumps(policy, indent=1) + "\n"
-    if a.out:
-        out = os.path.expanduser(a.out)
-        os.makedirs(os.path.dirname(out), exist_ok=True)
-        with open(out, "w") as f:
-            f.write(text)
-        sys.stderr.write(f"make-policy: wrote {out} ({', '.join(contexts)}; namespaces {', '.join(patterns)})\n")
-    else:
-        sys.stdout.write(text)
+    if existing and isinstance(existing.get("aws"), dict):
+        policy["aws"] = existing["aws"]          # regenerating the cluster pins never drops the AWS projects
+    apply_aws(policy, a)
+    write_policy(policy, a, f"{', '.join(contexts)}; namespaces {', '.join(patterns)}")
 
 
 if __name__ == "__main__":
