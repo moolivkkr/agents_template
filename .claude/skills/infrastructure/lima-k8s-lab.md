@@ -1,10 +1,20 @@
-# Lima k8s lab cluster — non-prod dev/qa environments for every project
+# Lima k8s lab cluster — dev, qa and prod namespaces for every project
 
-The framework's non-prod Kubernetes target: k3s in Lima VMs on one or two Macs, one namespace per
-app per environment (`<app>-dev`, `<app>-qa`). Agents deploy to it unattended; humans own the cluster.
-Templates live in `~/.claude/templates/k8s/` (repo: `.claude/templates/k8s/`).
-Staging and prod run the same base on Amazon EKS, promoted from qa by digest. Humans or CI deploy
-them, never agents: see `eks.md`.
+The framework's Kubernetes target: k3s in Lima VMs on one or two Macs, one namespace per app per
+environment: `<app>-dev`, `<app>-qa` and `<app>-prod`. Agents deploy dev and qa unattended. **prod is
+human-only**: it receives qa's digests, never a build, and agents can read it but not write it. Humans
+own the cluster. Templates live in `~/.claude/templates/k8s/` (repo: `.claude/templates/k8s/`).
+
+```text
+dev  (agent: build from working tree) ──digests──▶ qa  (agent: promote) ──digests──▶ prod  (human: promote + confirm)
+```
+
+**Know what lab prod is.** Namespaces separate names, RBAC, quotas and network traffic. They don't
+isolate failures: prod shares nodes, the registry, Traefik and the control plane with dev and qa, and a
+laptop that sleeps takes a node `NotReady`, so pods move about 5 minutes later. Fine for a pilot or an
+internal tool. For anything with an availability promise, run prod on Amazon EKS: put
+`deploy/k8s/overlays/prod/eks.env` in place (`instantiate.sh --eks`) and `prod` then routes to EKS,
+promoted via staging. Humans or CI deploy it, never agents: see `eks.md`.
 
 ## Topology (two Macs over a Thunderbolt bridge)
 
@@ -37,8 +47,9 @@ Lima VM sdlc-server: k3s server, Traefik, registry        Lima VM sdlc-agent: k3
 | Human (admin kubeconfig `~/.kube/sdlc-lab-admin.yaml`) | Agent (`~/.kube/sdlc-lab.json`, ServiceAccount `sdlc-system/sdlc-agent`) |
 |---|---|
 | `scripts/cluster-up.sh`: VMs, registry, RBAC, agent kubeconfig, guard policy | read anything except Secrets outside its namespaces |
-| `scripts/app-namespaces.sh <app>`: namespaces, quota, RBAC, NetworkPolicy | `admin` inside `<app>-dev` / `<app>-qa` only |
-| `scripts/cluster-check.sh`: end-to-end proof | `scripts/k8s/deploy.sh`, `env-reset.sh`, `seed.sh`, `smoke.sh` |
+| `scripts/app-namespaces.sh <app>`: namespaces dev, qa and prod, quota, RBAC, NetworkPolicy | `admin` inside `<app>-dev` / `<app>-qa` only; `<app>-prod` read-only (no Secrets) |
+| `scripts/cluster-check.sh`: end-to-end proof | `scripts/k8s/deploy.sh`, `env-reset.sh`, `seed.sh`, `smoke.sh` for dev/qa |
+| `scripts/k8s/deploy.sh prod [--rollback]`: promote qa's digests, typed `<app>-prod` confirmation (CI: `PROD_KUBECONFIG` + `CONFIRM_PROD=<app>-prod`) | — (RBAC and the guard refuse) |
 
 The agent can't create or delete namespaces, change quotas, write cluster-scoped objects, or touch
 kube-system. The sdlc-guard hook and PATH shims repeat these limits at the command line, with clearer
@@ -51,13 +62,14 @@ errors.
 - `deploy/k8s/base/`: one `<service>.yaml` per stateless service, plus `postgres.yaml`, `jobs.yaml`
   (the `db-roles`, `db-migrate`, `db-seed` and `db-rls-check` Job templates), `ingress.yaml`,
   `db-roles.sh` (rule 10) and `db-rls-check.sh` (rule 7, decision D-001).
-- `deploy/k8s/overlays/{dev,qa}/kustomization.yaml`: namespace, host, `APP_ENV`, replicas, and the
+- `deploy/k8s/overlays/{dev,qa,prod}/kustomization.yaml`: namespace, host, `APP_ENV`, replicas, and the
   **managed images block**. Only `deploylib.py set-images` writes that block, and only with digests.
 - `scripts/k8s/*`: identical in every project. Don't fork them; fix the template instead.
 
 ## Rules (each learned on the live cluster)
 
-1. **Digests, never tags.** qa is promoted from the newest HEALTHY dev deploy's digests. deploy.sh
+1. **Digests, never tags.** qa is promoted from the newest HEALTHY dev deploy's digests, and prod from
+   the newest HEALTHY qa deploy's. deploy.sh
    checks that the running pods' `imageID`s end with those digests.
 2. **Numeric `USER` in every image** (e.g. `USER 65532:65532`). With `runAsNonRoot: true`, a named
    user fails with `CreateContainerConfigError: image has non-numeric user`.
@@ -116,7 +128,7 @@ errors.
      can't go the other way).
 8. **No NodePort or LoadBalancer Services in app namespaces** (quota 0). Traffic enters through the
    Traefik ingress, host `<app>-<env>.localhost`.
-9. **dev and qa are isolated** by the `env-isolation` NetworkPolicy, which allows ingress only from
+9. **dev, qa and prod are isolated** by the `env-isolation` NetworkPolicy, which allows ingress only from
    the same namespace and from kube-system. Don't delete it, even though `admin` technically can.
 10. **The roles converge on every deploy; no reset needed.** (Proven on throwaway Postgres 17
     containers by `tests/k8s-db-roles.sh`; `tests/k8s-e2e.sh` checks it on the cluster.) One script,
@@ -148,7 +160,7 @@ errors.
 | What accumulates | Who cleans it | When |
 |---|---|---|
 | Local Docker copies of pushed images | `deploy.sh` removes each tag right after `crane push` (build cache stays, so rebuilds stay fast) | every build |
-| Registry images for the app | `scripts/k8s/registry-prune.sh`. Keeps digests in use in `<app>-dev`/`<app>-qa` plus the newest 5 HEALTHY deploys per env (rollback targets), and deletes failed, dirty and superseded builds | after every HEALTHY deploy; by hand with `--dry-run` / `--keep N` |
+| Registry images for the app | `scripts/k8s/registry-prune.sh`. Keeps digests in use in `<app>-dev`/`<app>-qa`/`<app>-prod` plus the newest 5 HEALTHY deploys per env (rollback targets), and deletes failed, dirty and superseded builds | after every HEALTHY deploy; by hand with `--dry-run` / `--keep N` |
 | Registry disk (layers of deleted images) | CronJob `sdlc-system/registry-gc` (`registry garbage-collect --delete-untagged`) | nightly 04:30 |
 | Old generated ConfigMaps/Secrets (`<name>-<hash>`) | `deploy.sh` deletes those of its own generators that the current render doesn't reference | after every HEALTHY deploy |
 | Finished roles/migrate/seed Jobs and their pods | `ttlSecondsAfterFinished: 3600` (results are in `history.jsonl`) | 1 h after finishing |
@@ -160,11 +172,11 @@ Nothing ever deletes a namespace or a database volume except `env-reset.sh`.
 
 ## Endpoints
 
-| | dev | qa |
-|---|---|---|
-| Web/API from the dev Mac (curl, Playwright/Chromium, iOS simulator via Safari*) | `http://<app>-dev.localhost:18080` | `http://<app>-qa.localhost:18080` |
-| From the server Mac | `curl -H 'Host: <app>-dev.localhost' http://10.10.10.20:18080` | same with `-qa` |
-| Postgres (debugging) | `kubectl -n <app>-dev port-forward svc/postgres 15432:5432` | `… -n <app>-qa … 25432:5432` |
+| | dev | qa | prod |
+|---|---|---|---|
+| Web/API from the dev Mac (curl, Playwright/Chromium, iOS simulator via Safari*) | `http://<app>-dev.localhost:18080` | `http://<app>-qa.localhost:18080` | `http://<app>-prod.localhost:18080` |
+| From the server Mac | `curl -H 'Host: <app>-dev.localhost' http://10.10.10.20:18080` | same with `-qa` | same with `-prod` |
+| Postgres (debugging) | `kubectl -n <app>-dev port-forward svc/postgres 15432:5432` | `… -n <app>-qa … 25432:5432` | human only (admin kubeconfig), `35432` |
 
 \*Safari and native apps may not resolve `*.localhost`. Use `http://127.0.0.1:18080` with a Host
 header, or `port-forward` to a fixed local port.

@@ -224,10 +224,13 @@ Auto-generated from discovered services:
 4. Verify OTEL traces from all regions
 5. Summary with pass/fail count
 
-### 3g: Kubernetes deploy layer (targets `dev` / `qa` on the lab cluster)
+### 3g: Kubernetes deploy layer (namespaces `dev` / `qa` / `prod` on the lab cluster)
 
-When `deploy/k8s/app.env` is missing and the target is dev/qa (or the guidelines name Kubernetes for
-non-prod), create the layer from the framework template, then adapt it. Skill: `lima-k8s-lab.md`.
+When `deploy/k8s/app.env` is missing and the target is dev/qa (or the guidelines name Kubernetes),
+create the layer from the framework template, then adapt it. Skill: `lima-k8s-lab.md`. It includes
+`overlays/prod` (the lab `<app>-prod` namespace): adapt it alongside dev and qa, but never deploy it,
+because prod is human-only. If the guidelines put prod on EKS, use `--eks` (3h); EKS then supplies
+`overlays/prod`.
 
 ```bash
 APP="<project slug: a DNS label, e.g. from the repo name>"
@@ -342,8 +345,9 @@ Adapt:
 | `--failover-test` | `./scripts/failover-test.sh` — validate HA failover |
 | `--target=dev` | `scripts/k8s/deploy.sh dev` — build, push by digest, migrate, seed, rollout, smoke on `<app>-dev` (lab cluster) |
 | `--target=qa` | `scripts/k8s/deploy.sh qa` — promote dev's HEALTHY digests to `<app>-qa`, same checks + digest parity |
+| `--target=prod` (lab) | `<app>-prod` on the lab cluster, **human only**: `scripts/k8s/deploy.sh prod` promotes qa's HEALTHY digests with the admin kubeconfig and a typed `<app>-prod` confirmation. You make sure `overlays/prod` renders and print the steps; you never run them |
 | `--target=staging` | Amazon EKS, **human or CI only**: `promote-eks.sh staging` (qa digests → ECR) + `scripts/k8s/deploy.sh staging`. You author and validate the layer (3h) and print the steps; you never run them |
-| `--target=prod` | Amazon EKS, **human or CI only**, confirmed every time (typed `<app>-prod@<sha>` or the approved protected `prod` GitHub Environment); only digests staging ran HEALTHY |
+| `--target=prod` (EKS, `overlays/prod/eks.env`) | Amazon EKS, **human or CI only**, confirmed every time (typed `<app>-prod@<sha>` or the approved protected `prod` GitHub Environment); only digests staging ran HEALTHY |
 
 ### Execution Flow
 
@@ -484,7 +488,7 @@ Keep it short; the detail belongs in the artifact.
 - [ ] The app actually deploys AND passes a health check on the target — I verified `/healthz` and `/readyz` return 200, not just that containers started.
 - [ ] Every image tag and toolchain version I wrote matches `## Commands and versions`; every Dockerfile has a numeric `USER` on its own line (no trailing comment) and `ARG GIT_SHA`.
 - [ ] For HA targets, the failover-test script was run and failover was observed — I did not claim HA without exercising it.
-- [ ] For dev/qa targets: both overlays render, `scripts/k8s/deploy.sh <env>` exited 0, and `agent_state/deploy/last-deploy-status.json` says HEALTHY for that env (the script's verdict, not mine).
+- [ ] For dev/qa targets: the dev, qa and prod overlays all render, `scripts/k8s/deploy.sh <env>` exited 0, and `agent_state/deploy/last-deploy-status.json` says HEALTHY for that env (the script's verdict, not mine).
 - [ ] For staging/prod (EKS) I only authored and validated offline. With a dummy digest pinned in a scratch copy, both overlays pass `db-access`, `eks-policy --allow-placeholders` and kubeconform. Terraform `fmt -check` and `init -backend=false` + `validate` pass. I ran no deploy, no `terraform plan/apply` and no `aws` command, and my report lists the human's next steps.
 - [ ] Every config value (ports, env, region) matches IMPLEMENTATION_GUIDELINES; no hardcoded placeholder that would break a real deploy.
 - [ ] If the deploy or health check failed, I report NOT READY with the specific failure — I do NOT emit a green report over an unhealthy deploy.

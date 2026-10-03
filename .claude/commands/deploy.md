@@ -1,11 +1,11 @@
 ---
 command: deploy
-description: Deploy the application. Reads IMPLEMENTATION_GUIDELINES for infra config. Supports local (compose), dev/qa (lab Kubernetes cluster), and staging/prod (Amazon EKS, human or CI only).
+description: Deploy the application. Reads IMPLEMENTATION_GUIDELINES for infra config. Supports local (compose), dev/qa/prod (namespaces on the lab Kubernetes cluster; prod human-only), and staging/prod (Amazon EKS, human or CI only).
 arguments:
   - name: target
     required: false
     default: local
-    description: "Deployment target: local | ha-local | dev | qa | staging | prod  (dev/qa = the Lima k3s lab cluster; staging/prod = Amazon EKS, human or CI only)"
+    description: "Deployment target: local | ha-local | dev | qa | staging | prod  (dev/qa/prod = namespaces on the Lima k3s lab cluster, prod human-only; staging, and prod when overlays/prod/eks.env exists = Amazon EKS, human or CI only)"
   - name: failover_test
     required: false
     default: false
@@ -29,12 +29,14 @@ Deploys the application to the specified target using the infrastructure configu
 
 ---
 
-## Targets `dev` and `qa` — the Kubernetes lab cluster
+## Targets `dev`, `qa` and `prod` — namespaces on the Kubernetes lab cluster
 
-For projects with `deploy/k8s/app.env`, `--target=dev|qa` deploys to the namespaces `<app>-dev` and
-`<app>-qa` on the lab cluster (skill: `infrastructure/lima-k8s-lab.md`). One script does build,
+For projects with `deploy/k8s/app.env`, each environment is a namespace on the lab cluster (skill:
+`infrastructure/lima-k8s-lab.md`): `<app>-dev`, `<app>-qa` and `<app>-prod`. One script does build,
 push, migrate, seed, rollout, smoke and evidence, so **Steps 1–5 below do not apply** to these
-targets. Agents run it unattended; the permission guard and RBAC confine it to the app's namespaces.
+targets. Agents run dev and qa unattended; the permission guard and RBAC confine them to those two
+namespaces. **prod is human-only** (below). A project with `deploy/k8s/overlays/prod/eks.env` runs prod on
+Amazon EKS instead (next section).
 
 ```bash
 TARGET=${ARG_TARGET:-local}
@@ -46,35 +48,63 @@ case "$TARGET" in dev|qa)
 esac
 ```
 
-| | `dev` | `qa` |
-|---|---|---|
-| Images | built from the working tree, pushed to `localhost:5001`, pinned **by digest** | **promoted**: the newest HEALTHY dev deploy's digests, never rebuilt |
-| Data | own Postgres (PVC) per env; migrate Job then seed Job (static reference data, idempotent) on every deploy | same, separate database |
-| URL | `http://<app>-dev.localhost:18080` | `http://<app>-qa.localhost:18080` |
-| Verdict | HEALTHY / DEGRADED / FAILED; exit 0 only when HEALTHY | + running pods' image IDs must equal the promoted digests |
+| | `dev` | `qa` | `prod` |
+|---|---|---|---|
+| Who deploys | agents, unattended | agents, unattended | **a human only** (admin kubeconfig; agents have read-only access) |
+| Images | built from the working tree, pushed to `localhost:5001`, pinned **by digest** | **promoted**: the newest HEALTHY dev deploy's digests, never rebuilt | **promoted**: the newest HEALTHY qa deploy's digests, never rebuilt |
+| Data | own Postgres (PVC) per env; migrate Job then seed Job (static reference data, idempotent) on every deploy | same, separate database | same, separate database; **never reset** |
+| URL | `http://<app>-dev.localhost:18080` | `http://<app>-qa.localhost:18080` | `http://<app>-prod.localhost:18080` |
+| Verdict | HEALTHY / DEGRADED / FAILED; exit 0 only when HEALTHY | + running pods' image IDs must equal the promoted digests | same as qa |
+| Confirmation | none | none | typed `<app>-prod` on a terminal, or `CONFIRM_PROD=<app>-prod` in CI |
 
 - **Evidence (written by the script, not by prose):** `agent_state/deploy/<env>/history.jsonl`,
   `agent_state/deploy/last-deploy-status.json` (read by `/accept` and `/status`), and with `--phase=N`
   `agent_state/phases/N/reports/deploy_<env>.{json,md}` plus a `deploy_<env>` line in that phase's
   `execution.jsonl`. On k8s projects the gate requires both `deploy_dev` and `deploy_qa`, bound to the
   current code commit.
-- **Reset** (approved, no prompt): `scripts/k8s/env-reset.sh <env>` wipes workloads and volumes, keeps
-  the namespace, redeploys (dev: same digests; qa: re-promote) and re-seeds.
+- **Reset** (approved, no prompt): `scripts/k8s/env-reset.sh <dev|qa>` wipes workloads and volumes,
+  keeps the namespace, redeploys (dev: same digests; qa: re-promote) and re-seeds. It refuses prod.
 - **Rollback:** `scripts/k8s/deploy.sh <env> --rollback` (newest earlier HEALTHY digests; schema is
-  forward-only). `/rollback --target=dev|qa` calls it.
+  forward-only). `/rollback --target=dev|qa` calls it; a prod rollback is the human's
+  `scripts/k8s/deploy.sh prod --rollback`.
 - **Human-only (the guard denies agents):** creating the cluster (`cluster-up.sh`), creating an app's
   namespaces (`app-namespaces.sh <app>`), anything with the admin kubeconfig. If the namespace is
   missing, stop and ask for `app-namespaces.sh <app>`; do not try to create it.
 - **Failure handling:** read the log lines the script prints (it fails fast with the pod's exact
   reason, e.g. `CreateContainerConfigError`, `ImagePullBackOff`, a migrate error); fix the cause;
-  re-run. A DEGRADED dev deploy blocks promotion to qa.
+  re-run. A DEGRADED dev deploy blocks promotion to qa, and only a HEALTHY qa deploy can be promoted
+  to prod.
+
+### Lab `prod` — human-only
+
+Agents never deploy prod. RBAC gives the agent's ServiceAccount no write access in `<app>-prod`
+(`app-namespaces.sh` binds it `admin` in dev/qa only), and the guard denies `/deploy --target=prod`,
+`deploy.sh prod`, `seed.sh prod` and any write to a `*-prod` namespace. Agents can still read prod's
+pods, logs and events, but not its Secrets. So for lab prod this command prints the human's steps and
+stops:
+
+```bash
+case "$TARGET" in prod)
+  if [ -f deploy/k8s/app.env ] && [ ! -f deploy/k8s/overlays/prod/eks.env ]; then
+    APP="$(sed -n 's/^APP=//p' deploy/k8s/app.env)"
+    echo "⛔ /deploy --target=prod is a human step. Run, outside Claude:"
+    echo "  0. once: .claude/templates/k8s/scripts/app-namespaces.sh $APP      # dev, qa and prod namespaces"
+    echo "  1. check the qa deploy you are promoting is HEALTHY: tail -1 agent_state/deploy/qa/history.jsonl"
+    echo "  2. scripts/k8s/deploy.sh prod      # admin kubeconfig; type $APP-prod to confirm"
+    echo "     (CI: PROD_KUBECONFIG=<file> CONFIRM_PROD=$APP-prod scripts/k8s/deploy.sh prod)"
+    echo "  3. commit deploy/k8s/overlays/prod/kustomization.yaml   # the release record (pinned digests)"
+    exit 0
+  fi ;;
+esac
+```
 
 ---
 
 ## Targets `staging` and `prod` — Amazon EKS (human or CI only)
 
 For projects with `deploy/k8s/overlays/<env>/eks.env` (skill: `infrastructure/eks.md`), staging and
-prod run the same kustomize base on EKS:
+prod run the same kustomize base on EKS. With `overlays/prod/eks.env` present, `prod` means EKS and the
+lab `<app>-prod` namespace is not used:
 - **Images:** promoted by digest from qa, never rebuilt.
 - **Database:** RDS PostgreSQL with the same two roles.
 - **Credentials:** from AWS Secrets Manager (External Secrets Operator, Pod Identity).

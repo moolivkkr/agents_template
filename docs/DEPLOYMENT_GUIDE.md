@@ -1,4 +1,4 @@
-# Deployment Guide: local, lab dev/qa, EKS staging/prod
+# Deployment Guide: local, lab dev/qa/prod, EKS staging/prod
 
 This guide covers where a project built with the framework runs, how a build moves from one environment to the
 next, who is allowed to run each step, how the database roles work, and how to roll back. It summarises; the
@@ -7,7 +7,7 @@ sources of truth are:
 | Topic | Source |
 |---|---|
 | `/deploy` and `/rollback` | `.claude/commands/deploy.md`, `.claude/commands/rollback.md` |
-| Lab cluster (dev/qa) | `.claude/skills/infrastructure/lima-k8s-lab.md`, templates in `.claude/templates/k8s/` |
+| Lab cluster (dev/qa/prod namespaces) | `.claude/skills/infrastructure/lima-k8s-lab.md`, templates in `.claude/templates/k8s/` |
 | EKS (staging/prod) | `.claude/skills/infrastructure/eks.md`, templates in `.claude/templates/k8s/eks/` |
 | Migrator policy (D-001) | `docs/DECISIONS.md` D-001, `.claude/skills/databases/postgres.md` "The migrator policy" |
 | EKS compute (D-003) | `docs/DECISIONS.md` D-003 (EKS Auto Mode) |
@@ -20,12 +20,18 @@ sources of truth are:
 | `local` (`ha-local`) | Docker Compose on your machine | agent or you | built locally | the compose Postgres | `http://localhost:<port>` |
 | `dev` | lab k3s cluster, namespace `<app>-dev` | agent (unattended) | built from the working tree, pushed to `localhost:5001` by digest | own Postgres StatefulSet | `http://<app>-dev.localhost:18080` |
 | `qa` | lab cluster, namespace `<app>-qa` | agent (unattended) | **promoted**: the newest HEALTHY dev digests, never rebuilt | own Postgres, separate from dev | `http://<app>-qa.localhost:18080` |
+| `prod` (lab, the default) | lab cluster, namespace `<app>-prod` | **human only**, typed `<app>-prod` confirmation; agents read-only | **promoted**: the newest HEALTHY qa digests, never rebuilt | own Postgres, never reset | `http://<app>-prod.localhost:18080` |
 | `staging` | Amazon EKS (Auto Mode), one cluster per env | **human or CI only** | qa's digests copied into ECR (same digest) | RDS for PostgreSQL, single-AZ | `https://<APP_HOST>` (ALB + ACM) |
-| `prod` | Amazon EKS, its own cluster/VPC/database | **human or CI only**, confirmed every time | only digests ECR tagged `staging-healthy-<sha>` | RDS Multi-AZ, deletion protection | `https://<APP_HOST>` |
+| `prod` (EKS, when `overlays/prod/eks.env` exists) | Amazon EKS, its own cluster/VPC/database | **human or CI only**, confirmed every time | only digests ECR tagged `staging-healthy-<sha>` | RDS Multi-AZ, deletion protection | `https://<APP_HOST>` |
 
 `/startup:deploy --target=<target>` (default `local`). For `dev`/`qa` it runs `scripts/k8s/deploy.sh <env>`. For
-`staging`/`prod` it does not deploy: it prints the human steps and stops (`deploy.md`, "Targets `staging` and
-`prod`").
+`prod` and `staging` it does not deploy: it prints the human steps and stops (`deploy.md`, "Lab `prod`" and
+"Targets `staging` and `prod`").
+
+**Which prod?** `prod` is the lab namespace `<app>-prod` unless `deploy/k8s/overlays/prod/eks.env` exists, in
+which case it is EKS (`lib.sh env_setup`). Lab prod shares nodes, registry and control plane with dev and qa:
+namespaces isolate names, RBAC, quota and traffic, not failures. Use EKS for anything with an availability
+promise.
 
 ## 2. What each target needs
 
@@ -46,6 +52,9 @@ The cluster scripts live in `~/.claude/templates/k8s/scripts/` after `install.sh
 ```text
 dev      deploy.sh dev       build from the working tree → localhost:5001/<app>/<svc>@sha256:D   (agent)
 qa       deploy.sh qa        same digest D, never rebuilt; pods' imageIDs must equal D           (agent)
+prod     deploy.sh prod      lab prod: same digest D from the newest HEALTHY qa deploy;           (human, admin kubeconfig,
+                             pods' imageIDs must equal D                                           typed <app>-prod)
+── or, with overlays/prod/eks.env, EKS: ──
 staging  promote-eks.sh staging   crane copy D into ECR (digest unchanged, checked)              (human, on the dev Mac:
                                   → commit overlays/staging/ → CI deploys                         it needs the lab registry)
          deploy-eks.sh: HEALTHY → ECR tag staging-healthy-<sha> on D
@@ -70,7 +79,9 @@ prod     promote-eks.sh prod      only digests carrying staging-healthy-<sha>   
 |---|---|---|
 | `/deploy --target=local\|dev\|qa`, `deploy.sh dev\|qa`, `env-reset.sh dev\|qa`, `seed.sh`, `smoke.sh` | yes | yes |
 | `/rollback --target=dev\|qa` (`deploy.sh <env> --rollback`) | yes | yes |
-| Create the cluster (`cluster-up.sh`), app namespaces (`app-namespaces.sh`), anything with the admin kubeconfig | no | yes |
+| Read lab prod: `kubectl -n <app>-prod get/describe/logs` (not Secrets) | yes | yes |
+| Lab prod: `deploy.sh prod [--rollback]`, `seed.sh prod`, any write to `<app>-prod` | **denied** | yes (admin kubeconfig) |
+| Create the cluster (`cluster-up.sh`), app namespaces (`app-namespaces.sh`, default dev qa prod), anything with the admin kubeconfig | no | yes |
 | Write and validate the EKS layer offline: `kubectl kustomize`, `deploylib.py db-access` / `eks-policy --allow-placeholders`, kubeconform, `terraform fmt -check`, `init -backend=false`, `validate`, tflint, actionlint | yes | yes |
 | `terraform plan/output/state/test`, `init` with a backend | asks first | yes |
 | `terraform apply/destroy/import` | asks first | yes |
@@ -82,10 +93,13 @@ prod     promote-eks.sh prod      only digests carrying staging-healthy-<sha>   
 These rules are enforced by `sdlc-guard.sh` (a PreToolUse hook plus PATH shims for `kubectl`, `helm`,
 `limactl`, `aws` and `crane`) once you install it with `./install.sh --guard` and apply the settings in
 `docs/PERMISSIONS_GUIDE.md`. Without the guard, these rules are only instructions to the agents.
-Inside the lab cluster, RBAC limits the agent's ServiceAccount to `admin` in `<app>-dev` and `<app>-qa`.
+Inside the lab cluster, RBAC limits the agent's ServiceAccount to `admin` in `<app>-dev` and `<app>-qa`;
+`<app>-prod` gets no binding, so the agent keeps only cluster-wide `view` there (no Secrets).
+`app-namespaces.sh` deletes any stale agent binding in prod and checks `auth can-i` afterwards.
 `tests/sdlc-guard.test.sh` is the guard's table test.
 
-**Prod confirmation.** `deploy-eks.sh prod` accepts a typed `<app>-prod@<sha>` on a terminal, or, in GitHub
+**Prod confirmation.** Lab prod: `deploy.sh prod` asks you to type `<app>-prod`; CI sets
+`CONFIRM_PROD=<app>-prod` and `PROD_KUBECONFIG`. It refuses the agent kubeconfig outright. EKS prod: `deploy-eks.sh prod` accepts a typed `<app>-prod@<sha>` on a terminal, or, in GitHub
 Actions, `SDLC_PROD_CONFIRM` equal to that string inside a job in the protected `prod` Environment. GitHub
 withholds that job and its OIDC token until a required reviewer approves. Without required reviewers on that
 Environment, CI has no human gate.
@@ -160,9 +174,10 @@ forward-only and N-1 compatible (expand/contract), so the previous build runs on
 |---|---|---|
 | `local` | `/rollback --target=local`, from `agent_state/deploy/local/history.jsonl`; `--reverse_schema` offers the DOWN migrations afterwards, shown first and run only after you confirm | none (schema reversal: yes) |
 | `dev`, `qa` | `/rollback --target=dev\|qa` → `deploy.sh <env> --rollback` (the newest earlier HEALTHY deploy whose digests differ), then migrate/seed, rollout, smoke, digest parity | none |
+| `prod` (lab) | human: `scripts/k8s/deploy.sh prod --rollback`, same mechanics | typed `<app>-prod` |
 | `staging`, `prod` | CI: revert the promotion commit, and the workflow redeploys the previous digests (prod: a reviewer approves the run). By hand: `EKS_KUBECONFIG=… scripts/k8s/deploy.sh <env> --rollback` | prod asks again |
 
-If the old code can't run on the new schema, fix forward. On dev/qa you can also run `env-reset.sh <env>` for a
+If the old code can't run on the new schema, fix forward. On dev/qa (never prod) you can also run `env-reset.sh <env>` for a
 clean database (wipes workloads and volumes, keeps the namespace, redeploys, re-seeds). Restoring staging/prod
 data from a backup is a human operation.
 

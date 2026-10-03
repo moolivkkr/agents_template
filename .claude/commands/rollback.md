@@ -4,7 +4,7 @@ description: "Roll back a deployment to the previous known-good build and valida
 arguments:
   - name: target
     required: true
-    description: "Deployment target to roll back: local | dev | qa | staging | prod  (dev/qa = lab Kubernetes cluster; staging/prod = Amazon EKS, human or CI only)"
+    description: "Deployment target to roll back: local | dev | qa | staging | prod  (dev/qa/prod = namespaces on the lab Kubernetes cluster, prod human-only; staging, and prod with overlays/prod/eks.env = Amazon EKS, human or CI only)"
   - name: confirm
     required: false
     default: false
@@ -46,6 +46,11 @@ It redeploys the newest earlier HEALTHY deploy of that env whose digests differ 
 parity, and records the result with `mode: rollback`. **Schema is not reversed.** Migrations are
 forward-only. If the old code can't run on the new schema, fix forward, or `env-reset.sh <env>`
 for a clean database. Steps 0–5 below are for local/staging/prod.
+
+**Lab prod (`<app>-prod`, no `overlays/prod/eks.env`) is human-only.** The guard denies agents
+`/rollback --target=prod` and `deploy.sh prod`. The human runs `scripts/k8s/deploy.sh prod --rollback`
+(admin kubeconfig, typed `<app>-prod` confirmation), which works the same way as for dev/qa. prod is
+never reset with `env-reset.sh`.
 
 ---
 
