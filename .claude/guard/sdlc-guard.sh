@@ -719,7 +719,11 @@ def check_crane(argv, env):
 # is not LocalStack); this says why up front.
 EKS_SCRIPTS = re.compile(r"(^|/)(deploy-eks|promote-eks|eks-bootstrap|eks-outputs)\.sh$")
 ENV_SCRIPTS = {"deploy.sh", "seed.sh", "env-reset.sh", "smoke.sh"}
-def check_release_scripts(argv):
+# Any other project script may change dev/qa infra; one handed a staging/prod environment is not.
+# Matches a whole argument (`prod`, `shop-prod`, `--env=staging`), so prose like `--fact "prod is ..."` passes.
+ENV_ARG = re.compile(r"^(?:--?[a-z_-]*(?:env|target|environment|namespace|ns|stage)=)?(?:[a-z0-9_]+-)?(?:prod|production|prd|live|staging)$", re.I)
+ENV_VARS = {"ENV", "ENV_KIND", "TARGET", "TARGET_ENV", "DEPLOY_ENV", "ENVIRONMENT", "STAGE", "NAMESPACE", "NS", "APP_ENV"}
+def check_release_scripts(argv, env):
     a = argv
     if os.path.basename(a[0]) in ("bash", "sh", "zsh", "dash") and len(a) > 1 and not a[1].startswith("-"):
         a = a[1:]
@@ -727,6 +731,45 @@ def check_release_scripts(argv):
         deny(f"{os.path.basename(a[0])} acts on the EKS staging/prod environments: a human (or the CI deploy workflow) runs it, never an agent")
     if os.path.basename(a[0]) in ENV_SCRIPTS and any(PROD_RE.search(x) or x == "staging" for x in a[1:]):
         deny(f"{os.path.basename(a[0])} {' '.join(a[1:])}: staging/prod deploys are human-only (agents deploy dev and qa)")
+    if a[0].endswith(".sh"):
+        hit = [x for x in a[1:] if ENV_ARG.match(x)] + [f"{k}={v}" for k, v in env.items() if k in ENV_VARS and ENV_ARG.match(str(v))]
+        if hit:
+            deny(f"{os.path.basename(a[0])} with {hit[0]}: scripts act on dev/qa only; staging/prod changes are human-only")
+
+# gh: GitHub Actions and PRs for dev/qa are routine; anything that mints/prints credentials, writes repo
+# secrets/settings, publishes, or dispatches a staging/prod workflow is not. GitHub environment protection
+# rules (required reviewers on staging/prod) are the real boundary; this catches the agent's own attempt.
+GH_ASK = {"secret": {"set", "delete", "remove"}, "variable": {"set", "delete", "remove"},
+          "repo": {"delete", "archive", "unarchive", "rename", "edit", "create", "fork", "deploy-key"},
+          "release": {"create", "delete", "upload", "edit"}, "extension": {"install", "upgrade", "exec"},
+          "ssh-key": {"add", "delete"}, "gpg-key": {"add", "delete"}, "ruleset": {"create", "delete"},
+          "auth": {"login", "logout", "refresh", "setup-git", "switch"}}
+GH_ENV_RE = re.compile(r"(^|[^a-z])(staging)([^a-z]|$)", re.I)
+def check_gh(argv, env):
+    if os.path.basename(argv[0]) != "gh": return
+    args = argv[1:]
+    while args and args[0] in ("-R", "--repo"): args = args[2:]
+    words = [x for x in args if not x.startswith("-")]
+    grp, sub = (words + ["", ""])[:2]
+    if grp == "auth" and (sub == "token" or (sub == "status" and any(x in ("-t", "--show-token") for x in args))):
+        deny("gh auth token / --show-token prints the GitHub credential; agents never read it")
+    if sub in GH_ASK.get(grp, ()):
+        ask(f"gh {grp} {sub} changes credentials, repo settings or published artifacts (human approves)")
+    if grp == "workflow" and sub == "run":
+        for x in args[2:]:
+            v = x.split("=", 1)[-1]
+            if PROD_RE.search(x) or GH_ENV_RE.search(x) or ENV_ARG.match(v):
+                deny(f"gh workflow run with '{x}': staging/prod workflows are dispatched by a human, never an agent")
+    if grp == "api":
+        method = None
+        for i, x in enumerate(args):
+            if x in ("-X", "--method") and i + 1 < len(args): method = args[i + 1]
+            elif x.startswith("--method="): method = x.split("=", 1)[1]
+            elif re.match(r"^-X[A-Za-z]+$", x): method = x[2:]
+        has_body = any(x in ("-f", "-F", "--field", "--raw-field", "--input") or x.startswith(("--field=", "--raw-field=", "--input="))
+                       for x in args)
+        if (method and method.upper() != "GET") or (has_body and not method) or any("mutation" in x for x in args):
+            ask("gh api write call (POST/PUT/PATCH/DELETE or GraphQL mutation) changes GitHub state (human approves)")
 
 def check_kind_k3d(argv):
     a0 = os.path.basename(argv[0]); words = [a for a in argv[1:] if not a.startswith("-")]
@@ -784,7 +827,8 @@ def check_command(cmd, cwd, scratch, depth=0, env=None):
         check_network(argv, env)
         check_cloud(argv, env)
         check_crane(argv, env)
-        check_release_scripts(argv)
+        check_release_scripts(argv, env)
+        check_gh(argv, env)
         check_kind_k3d(argv)
         check_chmod(argv)
 

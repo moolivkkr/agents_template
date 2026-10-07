@@ -45,6 +45,14 @@ or waits for you. No single mechanism does this; each layer below catches what t
   (`/init`) is allowed.
 - **Tamper protection.** Writes to `~/.claude/settings*.json`, `~/.claude/hooks`, the guard policy
   and `~/.kube` are denied, as is adding `disableAllHooks`.
+- **Infra scripts act on dev/qa only.** Any `*.sh` run with a staging/prod argument (`prod`,
+  `shop-prod`, `--env=staging`) or a staging/prod `ENV`/`ENV_KIND`/`TARGET`/`NAMESPACE` variable is
+  denied; the same script against dev or qa has no guard opinion.
+- **GitHub Actions for dev/qa is routine; the rest is not.** `gh run`, `gh pr`, read-only `gh api` and
+  `gh workflow run` for dev/qa pass. `gh workflow run` naming staging/prod is denied, as are
+  `gh auth token` and `--show-token`. Writing secrets or variables, repo settings, releases,
+  extensions, and `gh api` write calls are asks. Protect the staging/prod GitHub environments with
+  required reviewers: that, not the guard, is the boundary for `gh run rerun` of a prod deploy.
 - **Your CLAUDE.md "ask first" list becomes an ask.** In an unattended run with no one to ask, that
   means deny. It covers:
   - `git reset --hard`, force-push, `clean -f`, and checkout over changes;
@@ -79,7 +87,7 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (260 cases, including 13 offline `vet-package.py` cases).
+test table is `tests/sdlc-guard.test.sh` (328 cases, including 13 offline `vet-package.py` cases).
 
 ## Set up once per machine
 
@@ -105,7 +113,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 260/260
+bash tests/sdlc-guard.test.sh     # 328/328
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own
