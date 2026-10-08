@@ -317,6 +317,37 @@ CASES = [
  ("SK2", "deny", "Skill", {"skill": "deploy", "args": "--target=staging --phase=3"}),
  ("SK3", "allow","Skill", {"skill": "startup:deploy", "args": "--target=qa"}),
  ("SK4", "deny", "Skill", {"skill": "startup:rollback", "args": "--target=prod --confirm"}),
+ # --- 2026-10-07: deletes beyond pods/jobs, helm uninstall and destructive remote commands confirm
+ ("KD1", "ask",  "Bash", "kubectl delete deploy api -n shop-dev"),
+ ("KD2", "ask",  "Bash", "kubectl delete pvc data-postgres-0 -n shop-qa"),
+ ("KD3", "ask",  "Bash", "kubectl delete -f deploy/k8s/base/api.yaml -n shop-dev"),
+ ("KD4", "allow","Bash", "kubectl delete job migrate-1a2b -n shop-dev"),
+ ("KD5", "allow","Bash", "kubectl delete pod/api-1 pod/api-2 -n shop-qa"),
+ ("KD6", "ask",  "Bash", "kubectl delete pod/api-1 svc/api -n shop-qa"),
+ ("KD7", "ask",  "Bash", "helm uninstall pg -n shop-dev"),
+ ("KD8", "allow","Bash", "kubectl -n shop-dev rollout restart deploy/api && kubectl -n shop-dev set image deploy/api api=localhost:5001/shop/api:abc"),
+ ("KD9", "allow","Bash", "kubectl create configmap app-cfg --from-literal=a=b -n shop-qa"),
+ ("SR1", "ask",  "Bash", "ssh tb2 'rm -rf ~/development/rera/data'"),
+ ("SR2", "ask",  "Bash", "ssh -i k -p 2222 ops@10.10.10.30 sudo k3s kubectl delete ns shop-qa"),
+]
+
+# Default mode (no SDLC_GUARD_ASK): soft asks fall through to the normal permission flow (logged only);
+# confirm() verdicts — destructive actions — still prompt.
+PASSTHROUGH_CASES = [
+ ("PT1", "allow","Bash", "ssh tb2 limactl list"),
+ ("PT2", "allow","Bash", "curl -s https://api.github.com/repos/x/y"),
+ ("PT3", "allow","Bash", "python3 - <<'EOF'\nimport requests\nprint(requests.get('http://localhost:8080').status_code)\nEOF"),
+ ("PT4", "allow","Bash", "terraform plan -out=tf.plan"),
+ ("PT5", "allow","Bash", "bash infra/scripts/install-ocr-doc.sh && find . -name '*.go' | xargs grep -n TODO | awk -F: '{print $1}'"),
+ ("PT6", "ask",  "Bash", "rm -rf src"),
+ ("PT7", "ask",  "Bash", "git reset --hard HEAD~1"),
+ ("PT8", "ask",  "Bash", "kubectl delete deploy api -n shop-dev"),
+ ("PT9", "ask",  "Bash", "docker compose down -v"),
+ ("PTA", "ask",  "Bash", "psql -c 'DROP TABLE users'"),
+ ("PTB", "ask",  "Bash", "ssh tb2 'docker volume rm pg'"),
+ ("PTC", "deny", "Bash", "kubectl delete ns shop-qa"),
+ ("PTD", "deny", "Bash", "cat ~/.ssh/id_rsa"),
+ ("PTE", "allow","Bash", "kubectl -n shop-qa rollout undo deploy/api"),
 ]
 
 # Tier-0/0.5 ledgers: run with cwd = a temp project that HAS both ledgers (creating one is allowed).
@@ -377,6 +408,8 @@ def aws_cases(env):
     pol, mp = mkpol("aws-default.json", "--aws-project", rera, "--aws-ask-actions", "ec2:delete-vpc")
     open_pol, _ = mkpol("aws-open.json", "--aws-project", rera, "--aws-ask-services", "none", "--aws-prod-names", "off",
                         "--aws-allow-credential-actions", "sts:assume-role")
+    unatt_pol, _ = mkpol("aws-unattended.json", "--aws-project", rera, "--aws-confirm-destructive", "off")
+    any_pol, _ = mkpol("aws-anywhere.json", "--aws-project", rera, "--aws-anywhere", "on")
     prof_pol, _ = mkpol("aws-profile.json", "--aws-project", rera, "--aws-profile", "rera")
     reg_pol, _ = mkpol("aws-region.json", "--aws-project", rera, "--aws-region", "ap-south-1", "--aws-region", "ap-northeast-*")
     acct_pol, _ = mkpol("aws-account.json", "--aws-project", rera, "--aws-account", "111122223333")
@@ -385,9 +418,9 @@ def aws_cases(env):
     T = [  # (id, want, policy, cwd, command, extra env)
      ("A01", "allow", pol, rera, f"{run_} --region us-west-2", {}),
      ("A02", "allow", pol, rera, f"{run_} --region ap-south-1", {}),
-     ("A03", "allow", pol, os.path.join(rera, "infra"), "aws ec2 terminate-instances --region ap-northeast-2 --instance-ids i-0123", {}),
-     ("A04", "allow", pol, rera, "aws s3 rb s3://rera-scratch-bucket --force", {}),
-     ("A05", "allow", pol, rera, "aws s3 rm s3://rera-models/old/ --recursive && aws ec2 delete-security-group --group-id sg-1 --region eu-west-1", {}),
+     ("A03", "ask",   pol, os.path.join(rera, "infra"), "aws ec2 terminate-instances --region ap-northeast-2 --instance-ids i-0123", {}),
+     ("A04", "ask",   pol, rera, "aws s3 rb s3://rera-scratch-bucket --force", {}),
+     ("A05", "ask",   pol, rera, "aws s3 rm s3://rera-models/old/ --recursive && aws ec2 delete-security-group --group-id sg-1 --region eu-west-1", {}),
      ("A06", "ask",   pol, rera, "aws iam create-access-key --user-name ci", {}),
      ("A07", "allow", open_pol, rera, "aws iam create-access-key --user-name ci", {}),
      ("A08", "deny",  open_pol, rera, "aws configure export-credentials --profile rera", {}),
@@ -427,10 +460,10 @@ def aws_cases(env):
      ("A42", "deny",  pol, rera, "aws ecr get-login-password | cat", {}),
      ("A43", "deny",  open_pol, rera, "aws eks update-kubeconfig --name shop-staging", {}),
      ("A44", "deny",  open_pol, rera, "aws eks get-token --cluster-name shop-staging", {}),
-     ("A45", "ask",   pol, rera, "aws eks describe-cluster --name shop-staging --region us-east-1", {}),
+     ("A45", "allow", pol, rera, "aws eks describe-cluster --name shop-staging --region us-east-1", {}),
      ("A46", "deny",  pol, rera, "aws --debug s3 ls", {}),
      ("A47", "ask",   pol, rera, "aws rds delete-db-instance --db-instance-identifier shop-prod --region us-east-1", {}),
-     ("A48", "allow", open_pol, rera, "aws rds delete-db-instance --db-instance-identifier shop-prod --region us-east-1", {}),
+     ("A48", "ask",   open_pol, rera, "aws rds delete-db-instance --db-instance-identifier shop-prod --region us-east-1", {}),
      ("A49", "ask",   pol, rera, "aws ec2 delete-vpc --vpc-id vpc-1 --region us-east-1", {}),        # ask_actions
      ("A50", "deny",  reg_pol, rera, f"{run_} --region us-west-2", {}),
      ("A51", "allow", reg_pol, rera, f"{run_} --region ap-northeast-2", {}),
@@ -444,7 +477,7 @@ def aws_cases(env):
      ("A59", "deny",  pol, out, f"python3 -m awscli {run_[4:]} --region us-west-2", {}),
      ("A60", "deny",  pol, rera, f"{run_} --region us-east-1 --user-data file://~/.aws/credentials", {}),
      ("A61", "deny",  pol, rera, "aws s3 cp s3://b/settings.json ~/.claude/settings.json", {}),
-     ("A62", "ask",   pol, rera, "X=$(aws iam list-users)", {}),
+     ("A62", "allow", pol, rera, "X=$(aws iam list-users)", {}),
      ("A63", "ask",   pol, rera, "aws configure set region us-west-2", {}),
      ("A64", "allow", pol, rera, "aws configure list", {}),
      ("A65", "deny",  pol, rera, "scripts/k8s/deploy-eks.sh staging", {}),                  # EKS release scripts stay denied
@@ -461,6 +494,21 @@ def aws_cases(env):
      ("A77", "deny",  pol, rera, f"{run_} --region us-east-1 --user-data=file://$HOME/.aws/config", {}),
      ("A78", "ask",   pol, rera, "aws s3 ls", {"AWS_PROFILE": "acme-prod"}),                  # prod-looking session profile
      ("A76", "deny",  pol, out, "aws $SVC delete-bucket", {}),                                 # outside: deny wins
+     # --- 2026-10-07: confirm on destructive, aws.anywhere, per-project unattended opt-out
+     ("A79", "allow", unatt_pol, rera, "aws ec2 terminate-instances --region ap-south-1 --instance-ids i-1", {}),
+     ("A80", "allow", unatt_pol, rera, "aws s3 rm s3://rera-models/old/ --recursive", {}),
+     ("A81", "deny",  unatt_pol, out, "aws s3 rm s3://x/y", {}),                              # outside rera, no aws.anywhere
+     ("A82", "allow", any_pol, out, f"{run_} --region us-west-2", {}),                         # anywhere
+     ("A83", "allow", any_pol, other, "aws lambda update-function-code --function-name f --zip-file fileb://f.zip --region us-east-1", {}),
+     ("A84", "ask",   any_pol, other, "aws cloudformation delete-stack --stack-name s --region us-east-1", {}),
+     ("A85", "ask",   any_pol, other, "aws s3 sync ./out s3://b/site --delete", {}),
+     ("A86", "allow", any_pol, other, "aws s3 sync ./out s3://b/site", {}),
+     ("A87", "ask",   any_pol, other, "aws iam attach-role-policy --role-name r --policy-arn arn:aws:iam::aws:policy/X", {}),
+     ("A88", "allow", any_pol, other, "aws iam get-role --role-name r", {}),
+     ("A89", "deny",  any_pol, other, "aws sts get-session-token", {}),                         # credentials stay denied
+     ("A90", "deny",  any_pol, other, "aws eks update-kubeconfig --name x", {}),
+     ("A91", "ask",   any_pol, other, "aws ec2 describe-instances --profile acme-prod", {}),     # prod names still confirm
+     ("A92", "allow", any_pol, other, "O='--profile default --region ap-south-2'; aws $O ec2 describe-instances", {}),
     ]
     for cid, want, policy, cwd, cmd, extra in T:
         e = dict(base, SDLC_GUARD_POLICY=policy, **extra)
@@ -499,7 +547,11 @@ def aws_cases(env):
     senv = dict(base, SDLC_GUARD_POLICY=pol, SDLC_GUARD_HOOK=HOOK, PATH=f"{shims}:{realdir}:/usr/bin:/bin")
     sh = lambda *a, **k: subprocess.run([os.path.join(shims, "aws"), *a], text=True, env=senv, cwd=rera, **k)
     p = sh("ec2", "terminate-instances", "--region", "ap-south-1", "--instance-ids", "i-1", capture_output=True)
-    check("SH7", "REAL-AWS ec2 terminate-instances --region ap-south-1 --instance-ids i-1", p.stdout.strip(), "aws shim in the project passes terminate-instances", p.stderr)
+    check("SH7", 126, p.returncode, "aws shim blocks terminate-instances in a script (destructive = confirm)", p.stderr)
+    p = subprocess.run([os.path.join(shims, "aws"), "ec2", "terminate-instances", "--region", "ap-south-1", "--instance-ids", "i-1"],
+                       capture_output=True, text=True, env=dict(senv, SDLC_GUARD_POLICY=unatt_pol), cwd=rera)
+    check("SHC", "REAL-AWS ec2 terminate-instances --region ap-south-1 --instance-ids i-1", p.stdout.strip(),
+          "aws shim passes terminate-instances in a project with confirm_destructive off", p.stderr)
     p = sh("iam", "create-user", "--user-name", "x", capture_output=True)
     check("SH8", 126, p.returncode, "aws shim: ask_services (iam) blocks in a script (ask = deny there)", p.stderr)
     p = sh("ecr", "get-login-password", capture_output=True)                     # stdout is a pipe
@@ -521,13 +573,23 @@ def check(cid, want, got, label, why=""):
 
 
 def main():
-    env = dict(os.environ, SDLC_GUARD_POLICY=POLICY, KUBECONFIG=PIN)
+    # SDLC_GUARD_ASK=prompt: soft asks surface as "ask" so the tables below test what the guard DETECTS;
+    # PASSTHROUGH_CASES tests the default, where only confirm() verdicts prompt.
+    env = dict(os.environ, SDLC_GUARD_POLICY=POLICY, KUBECONFIG=PIN, SDLC_GUARD_ASK="prompt",
+               SDLC_GUARD_ASK_LOG=os.path.join(W, "asks.log"))
     # before anything below copies over the pinned file
     check("MP3", True, oct(os.stat(PIN).st_mode & 0o777) == "0o600", "make-policy writes the pinned kubeconfig mode 600")
     for cid, want, tool, inp in CASES:
         ti = {"command": inp, "description": cid} if isinstance(inp, str) else inp
         got, why = run(tool, ti, env)
         check(cid, want, got, inp if isinstance(inp, str) else json.dumps(inp), why)
+    penv = {k: v for k, v in env.items() if k != "SDLC_GUARD_ASK"}
+    for cid, want, tool, inp in PASSTHROUGH_CASES:
+        got, why = run(tool, {"command": inp, "description": cid}, penv)
+        check(cid, want, got, "[passthrough] " + inp, why)
+    log = open(os.path.join(W, "asks.log")).read() if os.path.exists(os.path.join(W, "asks.log")) else ""
+    check("PTL", True, "ssh leaves this machine" in log and "rm -rf src" not in log,
+          "passthrough logs soft asks to SDLC_GUARD_ASK_LOG, never confirm verdicts", log[-300:])
     for cid, want, tool, inp in LEDGER_CASES:
         ti = {"command": inp, "description": cid} if isinstance(inp, str) else inp
         got, why = run(tool, ti, env, cwd=LEDGER_DIR)
@@ -615,8 +677,9 @@ def main():
     for _ in range(2):  # second run must be a no-op apart from the backup
         p = subprocess.run([sys.executable, AUS, "--github", "someone"], capture_output=True, text=True, env=aenv)
     s = json.load(open(sp)); pm = s["permissions"]
-    check("AS1", True, p.returncode == 0 and "Bash" not in pm["allow"] and "Bash(git push*)" in pm["allow"]
-          and "Bash(git push* --force*)" in pm["deny"] and s["model"] == "opus", "apply-user-settings: drops bare Bash, keeps existing keys/rules", p.stderr)
+    check("AS1", True, p.returncode == 0 and "Bash" in pm["allow"] and "Bash(git push*)" in pm["allow"]
+          and "Bash(git push* --force*)" in pm["deny"] and s["model"] == "opus" and "Bash(ssh *)" not in pm["ask"]
+          and "Bash(helm uninstall *)" in pm["ask"], "apply-user-settings: bare Bash allow, destructive asks, keeps existing keys/rules", p.stderr)
     check("AS2", True, pm["defaultMode"] == "auto" and "Bash(sudo *)" in pm["deny"] and "Bash(git reset --hard*)" in pm["ask"]
           and "https://10.10.10.20:6443" in json.dumps(s["autoMode"]), "apply-user-settings: mode, deny/ask lists, autoMode from policy")
     check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")
@@ -627,6 +690,14 @@ def main():
     json.dump(pol_aws, open(os.path.join(fh, ".config", "sdlc-guard", "policy.json"), "w"))
     p = subprocess.run([sys.executable, AUS, "--github", "someone", "--dry-run"], capture_output=True, text=True, env=aenv)
     am = json.loads(p.stdout)["autoMode"] if p.returncode == 0 else {}
+    p = subprocess.run([sys.executable, AUS, "--github", "someone", "--dry-run", "--narrow"], capture_output=True, text=True, env=aenv)
+    pn = json.loads(p.stdout)["permissions"] if p.returncode == 0 else {}
+    check("AS7", True, "Bash" not in pn.get("allow", []) and "Bash(ssh *)" in pn.get("ask", []), "apply-user-settings --narrow: no bare Bash, ssh asks", p.stderr)
+    pol_aws["aws"]["anywhere"] = True
+    json.dump(pol_aws, open(os.path.join(fh, ".config", "sdlc-guard", "policy.json"), "w"))
+    p2 = subprocess.run([sys.executable, AUS, "--github", "someone", "--dry-run"], capture_output=True, text=True, env=aenv)
+    am2 = json.loads(p2.stdout)["autoMode"] if p2.returncode == 0 else {}
+    check("AS8", True, any("AWS anywhere" in x for x in am2.get("allow", [])), "apply-user-settings: aws.anywhere adds the AWS-anywhere autoMode rule", p2.stderr)
     check("AS6", True, any("~/development/rera" in x for x in am.get("allow", [])) and any("AWS projects" in x for x in am.get("environment", [])),
           "apply-user-settings: autoMode allow/environment name the aws.projects directories", p.stderr)
 

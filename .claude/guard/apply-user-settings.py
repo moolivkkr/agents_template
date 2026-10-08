@@ -7,9 +7,11 @@ HUMAN-RUN (Claude Code's auto mode rightly refuses to let an agent rewrite its o
   python3 .claude/guard/apply-user-settings.py --github <your-github-owner>             # backup + write
 
 What it changes (everything else in the file is kept):
-  permissions.allow   removes the bare "Bash" allow (it approves every command outside auto mode);
-                      adds narrow allows: git, kubectl/helm/crane/trivy, the project's scripts/k8s/*,
-                      local docker, localhost curl, package managers for builds
+  permissions.allow   adds a bare "Bash" allow (owner decision 2026-10-07: scripts, find/grep/awk/sed and the
+                      rest run without prompts; the sdlc-guard hook and the ask/deny rules below still stop
+                      destructive and prod/credential commands). --narrow keeps the old narrow list instead
+                      (git, kubectl/helm/crane/trivy, scripts/k8s/*, local docker, localhost curl, builds)
+                      and drops the bare "Bash"
   permissions.ask     the ~/.claude/CLAUDE.md "ask first" list, so it holds even if hooks are disabled
   permissions.deny    sudo, context switching, namespace deletion, VM deletion, cloud CLIs, reading
                       the admin kubeconfig / ~/.ssh / ~/.aws, editing ~/.kube, the guard policy, hooks
@@ -49,8 +51,11 @@ ASK = [
     "Bash(docker compose down -v*)", "Bash(docker compose * down -v*)", "Bash(docker compose down --volumes*)",
     "Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)",
     "Bash(dropdb *)", "Bash(chmod 777 *)", "Bash(chmod -R 777 *)",
-    "Bash(terraform apply*)", "Bash(terraform destroy*)", "Bash(npm publish*)", "Bash(ssh *)", "Bash(scp *)",
+    "Bash(terraform apply*)", "Bash(terraform destroy*)", "Bash(npm publish*)",
+    "Bash(helm uninstall *)", "Bash(helm delete *)",
 ]
+# prompted under --narrow only; in the default broad mode the guard checks the remote command instead
+NARROW_ASK = ["Bash(ssh *)", "Bash(scp *)"]
 DENY = [
     "Bash(sudo *)", "Bash(kubectx*)", "Bash(kubens*)",
     "Bash(kubectl config use-context *)", "Bash(kubectl config set-context *)", "Bash(kubectl config set-cluster *)",
@@ -62,7 +67,7 @@ DENY = [
 ]
 
 
-def auto_mode(github, server, context, lab_hosts, aws_projects=()):
+def auto_mode(github, server, context, lab_hosts, aws_projects=(), aws_anywhere=False):
     hosts = ", ".join(lab_hosts) or "none"
     am = {
         "environment": [
@@ -81,6 +86,8 @@ def auto_mode(github, server, context, lab_hosts, aws_projects=()):
             "Local non-prod deploys: building images, pushing them to localhost:5001, and running a project's scripts/k8s/deploy.sh, seed.sh, smoke.sh and env-reset.sh (which apply kustomize overlays, run migration/seed Jobs, and wipe and re-seed <app>-dev/<app>-qa) is allowed.",
             "Package downloads for builds and tests (npm, pnpm, yarn, pip, uv, go modules, cargo, Homebrew formulae for dev tools) are allowed.",
             "Disposable environments: deleting, restarting, scaling or resetting workloads, jobs, PVCs and databases in <app>-dev/<app>-qa of the lab cluster and in local compose stacks via the project's reset scripts is allowed.",
+            "Scripts and code search: running any project or scratch script (bash/sh/zsh, ./x.sh, python, node, make targets) and read/search tools (find, grep, rg, awk, sed without -i on protected files, xargs, jq, yq) is allowed.",
+            "Kubernetes management in <app>-dev/<app>-qa of the lab cluster: kubectl/helm create, apply, patch, set image, scale, rollout restart/undo/pause/resume, exec, port-forward, and deleting pods or jobs is allowed. Deleting other resources and helm uninstall need the owner (the guard prompts).",
         ],
         "soft_deny": ["$defaults"],
         "hard_deny": [
@@ -101,6 +108,15 @@ def auto_mode(github, server, context, lab_hosts, aws_projects=()):
             f"AWS in the owner's projects ({where}): running the project's infra scripts and aws CLI commands that create, "
             "describe, tag, modify or delete EC2 instances, security groups, S3 objects/buckets and other resources, in any "
             "region, is allowed (the sdlc-guard hook enforces the project scope, profile pins and credential rules).")
+    if aws_anywhere:
+        am["environment"].append(
+            "AWS (owner decision 2026-10-07): agents manage the owner's AWS services from any directory as the owner "
+            "instructs: create, describe, update, tag, deploy and scale resources in any service and region. Deleting, "
+            "terminating or purging resources, IAM/Organizations/identity changes and EKS changes need the owner (the "
+            "sdlc-guard hook prompts for them); credential-printing calls are always denied.")
+        am["allow"].append(
+            "AWS anywhere: aws CLI commands that create, describe, update, tag, deploy or scale resources in any service "
+            "and region are allowed (the sdlc-guard hook prompts for destructive and IAM calls and denies credential dumps).")
     return am
 
 
@@ -114,6 +130,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--github", required=True, help="GitHub owner your repos live under (for autoMode)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--narrow", action="store_true", help="old behaviour: narrow Bash allow list, no bare \"Bash\"")
     a = ap.parse_args()
 
     try:
@@ -122,6 +139,7 @@ def main():
         server = spec["server"]
         lab = [h for h in pol.get("local_hosts", []) if h[:1].isdigit() and not h.startswith(("127.", "0.", "10.0.2.2"))]
         aws_projects = [str(p.get("path")) for p in (pol.get("aws") or {}).get("projects", []) if p.get("path")]
+        aws_anywhere = bool((pol.get("aws") or {}).get("anywhere"))
     except Exception as e:
         sys.exit(f"read the guard policy first ({POLICY}): {e} — run cluster-up.sh / make-policy.py")
     for f in ("sdlc-guard.sh", "sdlc-guard-env.sh"):
@@ -130,12 +148,17 @@ def main():
 
     s = json.load(open(SETTINGS)) if os.path.exists(SETTINGS) else {}
     perm = s.setdefault("permissions", {})
-    perm["allow"] = [x for x in perm.get("allow", []) if x != "Bash"]
-    add(perm["allow"], ALLOW)
-    add(perm.setdefault("ask", []), ASK)
+    if a.narrow:
+        perm["allow"] = [x for x in perm.get("allow", []) if x != "Bash"]
+        add(perm["allow"], ALLOW)
+        add(perm.setdefault("ask", []), ASK + NARROW_ASK)
+    else:
+        add(perm.setdefault("allow", []), ["Bash"] + ALLOW)
+        perm["ask"] = [x for x in perm.get("ask", []) if x not in NARROW_ASK]
+        add(perm["ask"], ASK)
     add(perm.setdefault("deny", []), DENY)
     perm["defaultMode"] = "auto"
-    s["autoMode"] = auto_mode(a.github, server, ctx, lab, aws_projects)
+    s["autoMode"] = auto_mode(a.github, server, ctx, lab, aws_projects, aws_anywhere)
     hooks = s.setdefault("hooks", {})
     pre = hooks.setdefault("PreToolUse", [])
     if not any("sdlc-guard.sh" in json.dumps(e) for e in pre):

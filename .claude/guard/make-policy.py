@@ -25,6 +25,11 @@ touching the kube/lab settings:
   python3 ~/.claude/hooks/sdlc-guard-make-policy.py --update --out ~/.config/sdlc-guard/policy.json \
       --aws-project ~/development/rera [--aws-profile NAME]... [--aws-region ap-south-1]... \
       [--aws-ask-services iam,organizations,account,sso-admin,identitystore,eks | none]
+      [--aws-anywhere on|off] [--aws-confirm-destructive on|off]
+
+--aws-anywhere on allows the real CLI from any directory (global settings apply). Destructive calls
+(delete-*, terminate-*, deregister-*, s3 rm/rb, s3 sync --delete) and writes to ask_services always prompt
+unless --aws-confirm-destructive off (globally, or per --aws-project for unattended project scripts).
 
 --update edits the aws section of the existing --out file and keeps everything else. A full run (with
 --kubeconfig/--pin, as cluster-up.sh does) also keeps an existing aws section from --out, so rebuilding
@@ -90,7 +95,8 @@ def csv_or_none(v):
 def apply_aws(policy, a):
     """Merge the --aws-* flags into policy["aws"]; returns True if anything was asked to change."""
     asked = any([a.aws_project, a.aws_remove_project, a.aws_ask_services is not None, a.aws_ask_actions is not None,
-                 a.aws_allow_credential_actions is not None, a.aws_prod_names is not None])
+                 a.aws_allow_credential_actions is not None, a.aws_prod_names is not None,
+                 a.aws_anywhere is not None, a.aws_confirm_destructive is not None])
     if (a.aws_profile or a.aws_account or a.aws_region) and not a.aws_project:
         die("--aws-profile/--aws-account/--aws-region apply to the --aws-project(s) named in the same run")
     if not asked:
@@ -141,6 +147,17 @@ def apply_aws(policy, a):
         die(f"{', '.join(sorted(never & set(aws['allow_credential_actions'])))} can't be allowed (always denied)")
     if a.aws_prod_names is not None:
         aws["ask_prod_names"] = a.aws_prod_names == "ask"
+    if a.aws_anywhere is not None:
+        aws["anywhere"] = a.aws_anywhere == "on"
+    if a.aws_confirm_destructive is not None:
+        on = a.aws_confirm_destructive == "on"
+        if a.aws_project:                         # per project (e.g. rera's scripts terminate instances)
+            for pth in a.aws_project:
+                full = norm(pth)
+                for p in aws["projects"]:
+                    if norm(p["path"]) == full: p["confirm_destructive"] = on
+        else:
+            aws["confirm_destructive"] = on
     return True
 
 
@@ -187,6 +204,10 @@ def main():
     ap.add_argument("--aws-allow-credential-actions", metavar="LIST|none",
                     help="credential-printing calls to allow, e.g. sts:assume-role (default none)")
     ap.add_argument("--aws-prod-names", choices=["ask", "off"], help="prompt when an aws argument looks like prod (default ask)")
+    ap.add_argument("--aws-anywhere", choices=["on", "off"],
+                    help="on: the real AWS CLI from any directory with the global aws settings, not only inside --aws-project dirs")
+    ap.add_argument("--aws-confirm-destructive", choices=["on", "off"],
+                    help="prompt on delete-*/terminate-*/s3 rm|rb (default on); with --aws-project it sets that project only")
     ap.add_argument("--namespaces", default="*-dev,*-qa", help="comma-separated names/globs agents may write")
     ap.add_argument("--context", action="append", help="context(s) to allow (default: every non-prod context)")
     ap.add_argument("--lima-instance", action="append", default=[], help="Lima instance(s) agents may start/stop/shell")

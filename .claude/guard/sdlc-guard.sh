@@ -69,9 +69,17 @@ RESERVED_NS = {"default", "kube-system", "kube-public", "kube-node-lease"}
 
 class Deny(Exception): pass
 class Ask(Exception): pass
+class Confirm(Ask): pass
 
 def deny(msg): raise Deny(msg)
+# Two kinds of "ask" (owner decisions 2026-10-06 and 2026-10-07):
+#   ask()     soft: unusual but not destructive (network egress, unparseable command, ...). By default it
+#             is logged to ASK_LOG and falls through to the normal permission flow; SDLC_GUARD_ASK=prompt
+#             makes it prompt again.
+#   confirm() destructive or irreversible (deletes, force pushes, volume/DB drops, IAM changes, real-infra
+#             apply/destroy). Always prompts, and the exec-time shims block it in scripts.
 def ask(msg): raise Ask(msg)
+def confirm(msg): raise Confirm(msg)
 
 # ---------------------------------------------------------------- tokenising
 SEP_CHARS = set(";&|()\n")
@@ -386,6 +394,7 @@ KUBE_READ = {"get", "describe", "logs", "top", "explain", "api-resources", "api-
              "diff", "kustomize", "wait", "events", "completion", "plugin", "options", "help", "auth"}
 CLUSTER_SCOPED = re.compile(r"^(ns|namespaces?|nodes?|no|clusterroles?|clusterrolebindings?|crds?|customresourcedefinitions?|pv|persistentvolumes?|storageclass(es)?|sc|mutatingwebhookconfigurations?|validatingwebhookconfigurations?|apiservices?|priorityclass(es)?|pc|csidrivers?|runtimeclass(es)?)([./].*)?$", re.I)
 
+EPHEMERAL_KINDS = re.compile(r"^(po|pods?|jobs?(\.batch)?)$", re.I)
 KUBE_LOCAL_ONLY = {"completion", "kustomize", "plugin", "options", "help"}
 def check_kubectl(argv, env):
     tool = os.path.basename(argv[0])
@@ -397,7 +406,7 @@ def check_kubectl(argv, env):
     if verb == "config":
         if sub in ("view", "get-contexts", "current-context", "get-clusters", "get-users", ""):
             if "--raw" in flags or "--flatten" in flags:
-                ask("kubectl config view --raw prints live credentials")
+                confirm("kubectl config view --raw prints live credentials")
             return
         deny(f"kubectl config {sub} mutates kubeconfig identity; only the human bootstrap may do that")
     ctx, want, ctx_ns = kube_identity(flags, env, tool)
@@ -420,6 +429,18 @@ def check_kubectl(argv, env):
         deny(f"namespace '{ns}' is not writable by agents (allowed: {ns_hint(want)}; never system or prod namespaces)")
     for f in flags.get("-f", []) + flags.get("--filename", []):
         if re.match(r"^https?://", str(f)): ask("applying a manifest fetched from the network")
+    if verb == "delete":
+        # pods and jobs are recreated by their controllers / re-run by the deploy scripts (system_test_agent
+        # kills pods unattended); deleting anything else (deployments, services, PVCs, secrets, ...) is
+        # destructive and needs the owner (decision 2026-10-07)
+        if not targets:
+            kinds = [""]                                         # delete -f/-k: the manifest decides; ask
+        elif "/" in targets[0]:
+            kinds = [t.split("/", 1)[0] for t in targets]        # delete pod/a job/b
+        else:
+            kinds = targets[0].split(",")                        # delete pod,job a b
+        if not all(EPHEMERAL_KINDS.match(k) for k in kinds):
+            confirm(f"kubectl delete {' '.join(targets)} -n {ns}: deleting anything but a pod or job needs the owner")
 
 HELM_READ = {"list", "ls", "status", "get", "history", "hist", "show", "inspect", "template", "lint", "search",
              "repo", "version", "env", "dependency", "dep", "help", "completion", "verify", "pull", "fetch", "plugin"}
@@ -435,6 +456,8 @@ def check_helm(argv, env):
     ns = fget(flags, "-n", "--namespace")
     if not ns_writable(ns, want):
         deny(f"helm {verb} must target a writable namespace explicitly (-n {ns_hint(want)})")
+    if verb in ("uninstall", "delete", "del", "un"):
+        confirm(f"helm {verb} removes a release and its resources from {ns}; needs the owner")
 
 LIMA_ALLOW_SUB = {"list", "ls", "info", "validate", "help", "--version", "-v", "version", "watch", "completion"}
 def check_limactl(argv, env):
@@ -499,11 +522,11 @@ def check_docker(argv, env):
     if a0 == "docker-compose": rest = ["compose"] + rest
     words = [r for r in rest if not r.startswith("-")]
     if rest[:1] == ["compose"] and "down" in rest and ("-v" in rest or "--volumes" in rest):
-        ask("docker compose down -v deletes volumes (user rule: ask first)")
+        confirm("docker compose down -v deletes volumes (user rule: ask first)")
     if words[:2] in (["volume", "rm"], ["volume", "prune"], ["volume", "remove"]):
-        ask("docker volume deletion (user rule: ask first)")
+        confirm("docker volume deletion (user rule: ask first)")
     if words[:2] == ["system", "prune"] and "--volumes" in rest:
-        ask("docker system prune --volumes (user rule: ask first)")
+        confirm("docker system prune --volumes (user rule: ask first)")
     if words[:1] in (["login"], ["logout"]) or words[:2] in (["context", "use"], ["context", "create"], ["context", "rm"], ["context", "update"]):
         ask(f"docker {' '.join(words[:2])} changes where images/credentials go")
     if words[:1] == ["push"]:
@@ -546,16 +569,16 @@ def check_git(argv, env):
         if dest is not None and dest != "origin":
             ask(f"git push to '{dest}', not origin (a new or URL remote is an exfiltration path; user rule: ask first)")
         if any(r in ("--force", "-f", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d", "--prune") or r.startswith(("--force-with-lease=", "+", ":")) for r in rest):
-            ask("git push rewriting/deleting remote refs (user rule: ask first)")
-    elif sub == "reset" and "--hard" in rest: ask("git reset --hard discards work (user rule)")
+            confirm("git push rewriting/deleting remote refs (user rule: ask first)")
+    elif sub == "reset" and "--hard" in rest: confirm("git reset --hard discards work (user rule)")
     elif sub == "clean" and ("--force" in rest or any(r.startswith("-") and not r.startswith("--") and "f" in r for r in rest)):
-        ask("git clean -f deletes untracked files (user rule)")
-    elif sub == "checkout" and ("--" in rest or "." in rest or "-f" in rest or "--force" in rest): ask("git checkout over working-tree changes (user rule)")
-    elif sub == "restore" and "--staged" not in rest: ask("git restore discards working-tree changes (user rule)")
-    elif sub == "stash" and rest[:1] in (["drop"], ["clear"]): ask("git stash drop/clear (user rule)")
-    elif sub == "branch" and ("-D" in rest or ("-d" in rest and "--force" in rest)): ask("git branch -D")
+        confirm("git clean -f deletes untracked files (user rule)")
+    elif sub == "checkout" and ("--" in rest or "." in rest or "-f" in rest or "--force" in rest): confirm("git checkout over working-tree changes (user rule)")
+    elif sub == "restore" and "--staged" not in rest: confirm("git restore discards working-tree changes (user rule)")
+    elif sub == "stash" and rest[:1] in (["drop"], ["clear"]): confirm("git stash drop/clear (user rule)")
+    elif sub == "branch" and ("-D" in rest or ("-d" in rest and "--force" in rest)): confirm("git branch -D")
     elif sub in ("filter-branch", "filter-repo") or (sub == "update-ref" and "-d" in rest) or (sub == "reflog" and rest[:1] == ["expire"]):
-        ask(f"git {sub} rewrites history")
+        confirm(f"git {sub} rewrites history")
 
 def check_rm(argv, env, cwd, scratch):
     flags = [a for a in argv[1:] if a.startswith("-") and a != "-"]
@@ -566,22 +589,22 @@ def check_rm(argv, env, cwd, scratch):
     safe_roots = [os.path.realpath(p) for p in ["/tmp", "/private/tmp", "/var/folders", os.environ.get("TMPDIR", "/tmp")] + ([scratch] if scratch else [])]
     for t in targets:
         if "$" in t or "*" in t or "?" in t or "`" in t:
-            ask(f"rm -r with an unresolved/glob target '{t}' (user rule: ask before rm -rf outside /tmp and build artifacts)")
+            confirm(f"rm -r with an unresolved/glob target '{t}' (user rule: ask before rm -rf outside /tmp and build artifacts)")
         p = os.path.realpath(os.path.join(cwd, os.path.expanduser(t)))
         if any(under(p, r) for r in safe_roots): continue
         inside_repo = under(p, os.path.realpath(cwd))
         comps = set(os.path.relpath(p, os.path.realpath(cwd)).split(os.sep)) if inside_repo else set()
         if inside_repo and p != os.path.realpath(cwd) and comps & ARTIFACT_DIRS: continue
-        ask(f"rm -r {t} is outside /tmp and build artifacts (user rule: ask first)")
+        confirm(f"rm -r {t} is outside /tmp and build artifacts (user rule: ask first)")
 
 SQL_CLIENTS = {"psql", "mysql", "mariadb", "sqlite3", "mongosh", "mongo", "redis-cli", "cockroach", "clickhouse-client", "dropdb"}
 SQL_DESTRUCTIVE = re.compile(r"\bDROP\s+(DATABASE|SCHEMA|TABLE|OWNED|ROLE|USER)\b|\bTRUNCATE\b|\bFLUSH(ALL|DB)\b|dropDatabase\(|\bDELETE\s+FROM\s+[\w.\"]+\s*(;|$|\"|')", re.I)
 def check_sql(argv):
     names = {os.path.basename(a) for a in argv}
     if names & SQL_CLIENTS:
-        if "dropdb" in names: ask("dropdb (user rule: ask before DROP DATABASE)")
+        if "dropdb" in names: confirm("dropdb (user rule: ask before DROP DATABASE)")
         text = " ".join(argv)
-        if SQL_DESTRUCTIVE.search(text): ask("destructive SQL (DROP/TRUNCATE/DELETE without WHERE) — user rule: ask first")
+        if SQL_DESTRUCTIVE.search(text): confirm("destructive SQL (DROP/TRUNCATE/DELETE without WHERE) — user rule: ask first")
 
 NET_TOOLS = {"curl", "wget", "http", "https", "xh", "httpie", "nc", "ncat", "telnet", "ssh", "scp", "sftp", "ftp", "rsync"}
 HTTP_VALUE_FLAGS = {"-o", "--output", "-H", "--header", "-d", "--data", "--data-raw", "--data-binary", "--data-urlencode",
@@ -607,10 +630,34 @@ def url_hosts(argv, env, a0):
             m = re.match(r"^(\[[^\]]+\]|[\w.-]+)(:\d+)?(/|$)", a)
             if m and ("." in m.group(1) or m.group(1) in LOCAL_HOSTS or m.group(2) or m.group(3)): hosts.append(m.group(1))
     return hosts
+SSH_VALUE_FLAGS = set("BbcDEeFIiJLlmOoPpQRSWw")
+def ssh_remote_command(argv):
+    """The command an `ssh [opts] host cmd...` runs remotely ('' for an interactive login)."""
+    i = 1
+    while i < len(argv):
+        a = argv[i]
+        if a == "--": i += 1; break
+        if a.startswith("-") and len(a) > 1:
+            if a[-1] in SSH_VALUE_FLAGS and len(a) == 2: i += 1     # -i key, -p 22, -o X=Y …
+            i += 1; continue
+        break
+    return " ".join(argv[i + 1:])
+# Remote commands are opaque to the guard; the destructive ones are spotted by name.
+REMOTE_DESTRUCTIVE = re.compile(
+    r"\brm\s+(-[a-zA-Z]*[rR]|--recursive)|\b(mkfs|wipefs|shred|fdisk|parted)\b|\bdd\s+[^|;&]*\bof=|"
+    r"\b(shutdown|reboot|halt|poweroff)\b|\bkubectl\s+[^|;&]*\bdelete\b|\bhelm\s+(uninstall|delete)\b|"
+    r"\bdocker\s+(volume\s+(rm|prune)|system\s+prune)|\bcompose\s+[^|;&]*down\s+[^|;&]*(-v\b|--volumes)|"
+    r"\bDROP\s+(DATABASE|SCHEMA|TABLE)\b|\bTRUNCATE\b|\bdropdb\b|\blimactl\s+(delete|rm|factory-reset)\b|"
+    r"\bgit\s+(reset\s+--hard|clean\s+-[a-z]*f|push\s+[^|;&]*(--force|-f\b))", re.I)
+
 def check_network(argv, env):
     a0 = os.path.basename(argv[0])
     if a0 not in NET_TOOLS: return
     if a0 in ("ssh",):
+        remote = ssh_remote_command(argv)
+        m = REMOTE_DESTRUCTIVE.search(remote)
+        if m:
+            confirm(f"ssh runs a destructive command on the remote host ('{m.group(0).strip()}'); needs the owner")
         ask("ssh leaves this machine unless proven otherwise (user rule)")
     hosts = url_hosts(argv, env, a0)
     if not hosts and a0 in ("curl", "wget", "http", "https", "xh", "httpie") and any("$" in expand(a, env) for a in argv[1:] if not a.startswith("-")):
@@ -679,7 +726,7 @@ def check_cloud(argv, env):
     if a0 in ("terraform", "tofu", "pulumi", "cdk", "terragrunt"):
         words = [a for a in argv[1:] if not a.startswith("-")]
         if words[:1] and words[0] in ("apply", "destroy", "import", "up", "deploy", "taint") or words[:2] == ["state", "rm"]:
-            ask(f"{a0} {words[0]} changes real infrastructure")
+            confirm(f"{a0} {words[0]} changes real infrastructure")
         if a0 in ("terraform", "tofu") and words:
             if words[0] == "init":
                 if not any(a in ("-backend=false", "--backend=false") for a in argv[1:]):
@@ -687,7 +734,7 @@ def check_cloud(argv, env):
             elif words[0] not in TF_OFFLINE:
                 ask(f"{a0} {words[0]} reads or changes real state/infrastructure with cloud credentials (agents run fmt, validate, init -backend=false)")
     if a0 in ("npm", "pnpm", "yarn") and argv[1:2] == ["publish"] or a0 in ("twine",) or (a0 == "cargo" and argv[1:2] == ["publish"]):
-        ask("publishing a package leaves this machine")
+        confirm("publishing a package leaves this machine (irreversible)")
     if a0 == "claude" and any(a in ("--dangerously-skip-permissions", "--allow-dangerously-skip-permissions") for a in argv):
         deny("agents may not launch unguarded Claude sessions")
 
@@ -721,12 +768,12 @@ def check_release_scripts(argv):
 
 def check_kind_k3d(argv):
     a0 = os.path.basename(argv[0]); words = [a for a in argv[1:] if not a.startswith("-")]
-    if a0 == "kind" and (words[:1] == ["delete"] or words[:2] == ["export", "kubeconfig"]): ask(f"kind {' '.join(words[:2])}")
-    if a0 == "k3d" and (words[:2] in (["cluster", "delete"], ["cluster", "stop"]) or words[:2] == ["kubeconfig", "merge"]): ask(f"k3d {' '.join(words[:2])}")
+    if a0 == "kind" and (words[:1] == ["delete"] or words[:2] == ["export", "kubeconfig"]): confirm(f"kind {' '.join(words[:2])}")
+    if a0 == "k3d" and (words[:2] in (["cluster", "delete"], ["cluster", "stop"]) or words[:2] == ["kubeconfig", "merge"]): confirm(f"k3d {' '.join(words[:2])}")
 
 def check_chmod(argv):
     if os.path.basename(argv[0]) == "chmod" and any(a in ("777", "a+rwx", "ugo+rwx", "0777") for a in argv[1:]):
-        ask("chmod 777 (user rule: ask first)")
+        confirm("chmod 777 (user rule: ask first)")
 
 # ---------------------------------------------------------------- shell state: cwd (cd) and exported vars
 class ShellState:
@@ -826,8 +873,25 @@ AWS_CRED_ENV = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN
 LOGIN_STDIN = {("docker", "login"), ("podman", "login"), ("nerdctl", "login"), ("finch", "login"), ("oras", "login"),
                ("skopeo", "login"), ("crane", "auth"), ("helm", "registry")}
 
+AWS_READ_OP = re.compile(r"^(describe|list|get|wait|help|batch-get|lookup|search|simulate|generate-credential-report)(-|$)")
+AWS_DESTRUCTIVE_OP = re.compile(r"^(delete|terminate|remove|deregister|purge|destroy|release|schedule-key-deletion)(-|$)")
+def aws_destructive(svc, op, pos):
+    if AWS_DESTRUCTIVE_OP.match(op): return True
+    if svc == "s3" and op in ("rm", "rb"): return True
+    if svc == "s3" and op == "sync" and "--delete" in pos: return True
+    return False
+
 def aws_parse(argv, env):
     """-> (global options, [service, operation, args...]) or ask when the service can't be told apart."""
+    # `aws $AWSOPTS ec2 …` with AWSOPTS="--profile p --region r": an unquoted variable word-splits
+    flat = [argv[0]]
+    for a in argv[1:]:
+        e = expand(a, env)
+        try:
+            flat += shlex.split(e) if ("$" in a and e != a and " " in e) else [a]
+        except ValueError:
+            flat.append(a)
+    argv = flat
     opts, pos, i = {}, [], 1
     while i < len(argv):
         a = expand(argv[i], env)
@@ -911,11 +975,13 @@ def check_aws(argv, env, st, prefix, redirected, pipe_next):
     if ep and re.match(r"^https?://(localhost|127\.0\.0\.1|localstack)(:\d+)?(/|$)", ep):
         return                                                           # LocalStack: allowed everywhere
     pr = aws_project(st)
+    if pr is None and AWS.get("anywhere"):
+        pr = {}                                   # aws.anywhere: the real CLI from any directory, global settings
     if pr is None:
         hint = (" (aws.projects in the guard policy lists the projects where the real CLI is allowed; this command "
-                "is not running inside one)" if AWS.get("projects") else "")
+                "is not running inside one; aws.anywhere allows it everywhere)" if AWS.get("projects") else "")
         deny("aws without --endpoint-url http://localhost:* (LocalStack) is blocked; prod is unreachable by policy" + hint)
-    where = f"project {pr.get('path')}"
+    where = f"project {pr.get('path')}" if pr.get("path") else "any directory (aws.anywhere)"
     if any(c in svc + op for c in "$`*?["):
         ask(f"aws {svc} {op}: the service/operation is an unresolved variable or glob, so the guard can't check it")
     # -- identity: profile pin, then (optional) account pin, then region list
@@ -983,16 +1049,19 @@ def check_aws(argv, env, st, prefix, redirected, pipe_next):
     if aws_setting(pr, "ask_prod_names", True):
         for v in sorted(eff) + pos[2:]:
             if v and PROD_RE.search(v):
-                ask(f"aws {svc} {op} names '{v}', which looks like a production resource (policy: aws.ask_prod_names)")
+                confirm(f"aws {svc} {op} names '{v}', which looks like a production resource (policy: aws.ask_prod_names)")
     ask_services = aws_setting(pr, "ask_services", DEFAULT_AWS_ASK_SERVICES) or []
-    if any(fnmatch.fnmatchcase(svc, s) for s in ask_services):
-        ask(f"aws {svc} {op}: {svc} is in the policy's ask_services (account-wide identity/permission changes); "
-            "the owner can empty aws.ask_services to allow it")
+    if any(fnmatch.fnmatchcase(svc, s) for s in ask_services) and not AWS_READ_OP.match(op):
+        confirm(f"aws {svc} {op}: {svc} is in the policy's ask_services (account-wide identity/permission changes); "
+                "reads pass, changes need the owner; the owner can empty aws.ask_services to allow them")
+    if aws_setting(pr, "confirm_destructive", True) and aws_destructive(svc, op, [expand(a, env) for a in argv]):
+        confirm(f"aws {svc} {op} deletes or terminates resources; needs the owner "
+                "(aws.confirm_destructive: false in the policy lets a project's scripts do it unattended)")
     for pat in aws_setting(pr, "ask_actions", []) or []:
         if fnmatch.fnmatchcase(action, pat):
-            ask(f"aws {svc} {op} matches '{pat}' in the policy's ask_actions")
+            confirm(f"aws {svc} {op} matches '{pat}' in the policy's ask_actions")
     if svc == "configure" and op not in ("list", "list-profiles", "get"):
-        ask(f"aws configure {op or ''} changes which credentials/profiles the CLI uses (human step)".replace("  ", " "))
+        confirm(f"aws configure {op or ''} changes which credentials/profiles the CLI uses (human step)".replace("  ", " "))
     if svc == "sso" and op in ("login", "logout"):
         ask(f"aws sso {op} is an interactive sign-in (human step)")
 
@@ -1045,7 +1114,7 @@ def check_command(cmd, cwd, scratch, depth=0, env=None, st=None):
         elif a0 in ("docker", "docker-compose"): check_docker(argv, env)
         elif a0 == "git": check_git(argv, env)
         elif a0 == "rm": check_rm(argv, env, cwd, scratch)
-        elif a0 == "find" and ("-delete" in argv or ("-exec" in argv and "rm" in argv)): ask("find -delete/-exec rm (user rule: ask before bulk deletion)")
+        elif a0 == "find" and ("-delete" in argv or ("-exec" in argv and "rm" in argv)): confirm("find -delete/-exec rm (user rule: ask before bulk deletion)")
         aws_argv = argv if a0 == "aws" else (["aws"] + argv[3:] if interpreter_name(a0) == "python" and argv[1:3] == ["-m", "awscli"] else None)
         if aws_argv:
             nxt = None
@@ -1083,6 +1152,18 @@ def check_read(ti, tool=""):
     if tool == "Glob" and pat.startswith(("/", "~", "$HOME")) and secret_hit(expand(pat, {}), CWD):   # absolute Glob pattern
         deny(f"glob {pat} reaches a secret path; agents never read it")
 
+ASK_PASSTHROUGH = os.environ.get("SDLC_GUARD_ASK", "passthrough") != "prompt"
+ASK_LOG = os.environ.get("SDLC_GUARD_ASK_LOG", os.path.expanduser("~/.claude/sdlc-guard-asks.log"))
+def log_ask(tool, ti, reason):
+    try:
+        import datetime
+        what = ti.get("command") or ti.get("file_path") or ti.get("skill") or ""
+        with open(ASK_LOG, "a") as f:
+            f.write(json.dumps({"ts": datetime.datetime.now().isoformat(timespec="seconds"), "tool": tool,
+                                "reason": reason, "input": str(what)[:2000], "cwd": CWD}) + "\n")
+    except Exception:
+        pass
+
 SHIM_STDOUT_PIPE = False
 def main():
     global CWD, SHIM_STDOUT_PIPE
@@ -1101,6 +1182,9 @@ def main():
                           "permissionDecisionReason": "sdlc-guard: " + str(e)}}))
         sys.stderr.write("sdlc-guard: " + str(e) + "\n"); sys.exit(2)
     except Ask as e:
+        if ASK_PASSTHROUGH and not isinstance(e, Confirm):
+            log_ask(tool, ti, str(e))
+            sys.exit(0)                     # no opinion: the normal permission flow decides
         print(json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "ask",
                           "permissionDecisionReason": "sdlc-guard: " + str(e)}}))
         sys.exit(0)
