@@ -2,7 +2,7 @@
 """startup-project-update.py — bring a project's framework files up to date (run via startup-project-update.sh,
 which runs graph-preflight.sh first). Python 3.9+ standard library only.
 
-  update [--project DIR] [--source DIR] [--settings FILE] [--dry-run] [--force] [--hooks-only]
+  update [--project DIR] [--source DIR] [--settings FILE] [--dry-run] [--force] [--hooks-only | --ledger-only]
          [--graph-interactive on|off] [--no-build] [--quiet]
   manifest --hooks-dir DIR [--repo DIR] --out FILE        (install.sh: the staged manifest)
 
@@ -18,6 +18,12 @@ What `update` touches in the project (and nothing else; it runs no git command t
   agent_state/config/graph-policy.json  only with --graph-interactive (absent = interactive find/status OFF)
   agent_state/graph/                    the initial `sdlc-graph.py build` (skipped by --dry-run/--no-build/--hooks-only)
 
+--ledger-only installs the phase ledger and NOTHING else (docs/PHASE_LEDGER.md): .claude/hooks/ledger.py, its
+entry in the hooks manifest, only the ledger's hook entries in .claude/settings.json (created with just those when
+absent — the framework's other hooks such as the Stop gate check are NOT enabled), and `agent_state/ledger/` in
+.gitignore. No graph build, no env keys, no other hook file. Same guarantees: merge-only, idempotent, --dry-run,
+a locally modified ledger.py is kept unless --force.
+
 Exit: 0 up to date, 1 a locally modified hook was kept (re-run with --force to replace it), 2 usage / unreadable
 input (e.g. settings.json is not valid JSON), 4 the graph build failed (files were still updated).
 """
@@ -28,6 +34,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MANIFEST = ".framework-manifest.json"
 HOOK_EXT = (".sh", ".py", ".mjs")
 GRAPH_IGNORE = "agent_state/graph/"
+LEDGER_IGNORE = "agent_state/ledger/"
+LEDGER_HOOK = "ledger.py"
 
 
 def sha256_bytes(b):
@@ -152,15 +160,48 @@ def merge_settings(project, framework):
 
 
 # ─── .gitignore ────────────────────────────────────────────────────────────────────────────────────
-def graph_ignored(project):
+def dir_ignored(project, rel, probes):
     path = os.path.join(project, ".gitignore")
     lines = open(path).read().splitlines() if os.path.exists(path) else []
-    if any(l.strip().rstrip("/").lstrip("/") in ("agent_state/graph", "agent_state") for l in lines):
+    if any(l.strip().rstrip("/").lstrip("/") in (rel.rstrip("/"), "agent_state") for l in lines):
         return True
-    # some other rule (a global excludes file, a broader pattern) already ignores what the graph writes?
-    probes = ["agent_state/graph/graph.sqlite", "agent_state/graph/tc-gate-phase-1.json"]
+    # some other rule (a global excludes file, a broader pattern) already ignores what the dir holds?
     out = git(project, "check-ignore", "--no-index", *probes)
     return out is not None and len(out.splitlines()) == len(probes)
+
+
+def graph_ignored(project):
+    return dir_ignored(project, GRAPH_IGNORE, ["agent_state/graph/graph.sqlite", "agent_state/graph/tc-gate-phase-1.json"])
+
+
+def ledger_ignored(project):
+    return dir_ignored(project, LEDGER_IGNORE, ["agent_state/ledger/events-2026-01-01.jsonl", "agent_state/ledger/.lock"])
+
+
+def ensure_ignored(project, rel, comment, dry, say, touched):
+    if (graph_ignored if rel == GRAPH_IGNORE else ledger_ignored)(project):
+        say(f"  .gitignore: {rel} already ignored")
+        return
+    say(f"  .gitignore: + {rel}")
+    touched.append(".gitignore")
+    if not dry:
+        gi = os.path.join(project, ".gitignore")
+        cur = open(gi).read() if os.path.exists(gi) else ""
+        sep = "" if not cur or cur.endswith("\n") else "\n"
+        write_atomic(gi, cur + sep + comment + "\n" + rel + "\n")
+
+
+def only_ledger(framework):
+    """The framework settings reduced to the hook entries that run ledger.py (no env, no other hooks)."""
+    hooks = {}
+    for event, groups in (framework.get("hooks") or {}).items():
+        for g in groups:
+            hs = [h for h in g.get("hooks", []) if isinstance(h, dict) and _script_of(h.get("command", "")) == LEDGER_HOOK]
+            if hs:
+                ng = {k: v for k, v in g.items() if k != "hooks"}
+                ng["hooks"] = hs
+                hooks.setdefault(event, []).append(ng)
+    return {"hooks": hooks}
 
 
 def main_update(a):
@@ -209,6 +250,12 @@ def main_update(a):
     actions = {"added": [], "updated": [], "current": [], "modified-kept": [], "forced": []}
     new_record = dict(recorded)
     files = framework_files(src)
+    if a.ledger_only:
+        if LEDGER_HOOK not in files:
+            print(f"⛔ BLOCKED: {LEDGER_HOOK} is not in {src} (re-run ./install.sh from a framework checkout that has it)",
+                  file=sys.stderr)
+            return 2
+        files = [LEDGER_HOOK]
     if not dry:
         os.makedirs(dst, exist_ok=True)
     for name in files:
@@ -268,12 +315,19 @@ def main_update(a):
         sp_ = os.path.join(project, ".claude", "settings.json")
         if settings_src:
             fw = load_json(settings_src)
+            if a.ledger_only:
+                fw = only_ledger(fw)
+                if not fw["hooks"]:
+                    print(f"  ⛔ the framework settings ({settings_src}) have no {LEDGER_HOOK} hook entries — "
+                          "settings left untouched", file=sys.stderr)
+                    return 2
             if not os.path.exists(sp_):
-                say("  settings.json: created from the framework settings")
+                say("  settings.json: created with " + ("the phase-ledger hooks only" if a.ledger_only
+                                                         else "the framework settings"))
                 touched.append(".claude/settings.json")
                 if not dry:
                     os.makedirs(os.path.dirname(sp_), exist_ok=True)
-                    write_atomic(sp_, open(settings_src).read())
+                    write_atomic(sp_, (json.dumps(fw, indent=2) + "\n") if a.ledger_only else open(settings_src).read())
             else:
                 try:
                     cur = load_json(sp_)
@@ -294,17 +348,15 @@ def main_update(a):
         else:
             say("  settings.json: no framework settings found next to the hooks — skipped")
         # .gitignore
-        if graph_ignored(project):
-            say(f"  .gitignore: {GRAPH_IGNORE} already ignored")
-        else:
-            say(f"  .gitignore: + {GRAPH_IGNORE}")
-            touched.append(".gitignore")
-            if not dry:
-                gi = os.path.join(project, ".gitignore")
-                cur = open(gi).read() if os.path.exists(gi) else ""
-                sep = "" if not cur or cur.endswith("\n") else "\n"
-                write_atomic(gi, cur + sep + "# sdlc-graph store + gate outputs (rebuildable: python3 .claude/hooks/sdlc-graph.py build)\n"
-                             + GRAPH_IGNORE + "\n")
+        ensure_ignored(project, LEDGER_IGNORE, "# phase ledger: hook-written observation log (docs/PHASE_LEDGER.md; "
+                       "remove this line to commit it at phase end)", dry, say, touched)
+        if a.ledger_only:
+            say(f"{tag}files {'that would change' if dry else 'written'}: " + (", ".join(dict.fromkeys(touched)) if touched else "none"))
+            say("  phase ledger enabled — report: python3 .claude/hooks/ledger.py report --phase N; "
+                "off: SDLC_LEDGER=0 or agent_state/config/ledger-policy.json {\"enabled\": false}")
+            return rc
+        ensure_ignored(project, GRAPH_IGNORE, "# sdlc-graph store + gate outputs (rebuildable: python3 .claude/hooks/sdlc-graph.py build)",
+                       dry, say, touched)
         graph = os.path.join(dst, "sdlc-graph.py")
         if a.graph_interactive:
             touched.append("agent_state/config/graph-policy.json")
@@ -340,7 +392,7 @@ def main_update(a):
                         + (f" ({top})" if top else "") + f"; {os.path.relpath(s['graph'], project)}")
                 except (ValueError, KeyError, TypeError):
                     say(f"  graph: built in {dt:.1f}s (stats unreadable: {st.stderr.strip()[:200]})")
-    say(f"{tag}files {'that would change' if dry else 'written'}: " + (", ".join(touched) if touched else "none"))
+    say(f"{tag}files {'that would change' if dry else 'written'}: " + (", ".join(dict.fromkeys(touched)) if touched else "none"))
     return rc or build_rc
 
 
@@ -356,6 +408,8 @@ def main(argv=None):
     u.add_argument("--dry-run", action="store_true")
     u.add_argument("--force", action="store_true", help="overwrite locally modified framework hooks")
     u.add_argument("--hooks-only", action="store_true", help="refresh hooks + manifest only (no settings/.gitignore/build)")
+    u.add_argument("--ledger-only", action="store_true",
+                   help="install ONLY the phase ledger: ledger.py + its settings hook entries + .gitignore line")
     u.add_argument("--graph-interactive", choices=("on", "off"))
     u.add_argument("--no-build", action="store_true")
     u.add_argument("--quiet", action="store_true")
@@ -372,6 +426,10 @@ def main(argv=None):
         return 0
     if a.cmd != "update":
         ap.print_help()
+        return 2
+    if a.ledger_only and (a.hooks_only or a.graph_interactive):
+        print("startup-project-update: --ledger-only cannot be combined with --hooks-only or --graph-interactive",
+              file=sys.stderr)
         return 2
     return main_update(a)
 

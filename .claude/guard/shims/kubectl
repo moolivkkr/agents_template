@@ -20,7 +20,10 @@ IFS="$OLD_IFS"
 [ -n "$REAL" ] || { echo "sdlc-guard shim: no real $TOOL on PATH" >&2; exit 127; }
 
 CMD="$TOOL$(printf ' %q' "$@")"
-PAYLOAD="$(/usr/bin/python3 -c 'import json,os,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":os.getcwd()}))' "$CMD")"
+# stdout_is_pipe: lets `aws ecr get-login-password | docker login --password-stdin` in a script through
+# (the hook can see the consumer of a top-level pipe; a subprocess shim can only see that there is one)
+PIPE=0; [ -p /dev/stdout ] && PIPE=1
+PAYLOAD="$(/usr/bin/python3 -c 'import json,os,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":os.getcwd(),"stdout_is_pipe":sys.argv[2]=="1"}))' "$CMD" "$PIPE")"
 OUT="$(printf '%s' "$PAYLOAD" | bash "$GUARD" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] || printf '%s' "$OUT" | grep -q '"permissionDecision": "ask"'; then
   echo "sdlc-guard (exec-time): blocked: $CMD" >&2
