@@ -569,6 +569,13 @@ def check_git(argv, env):
         if any(r in ("--force", "-f", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d", "--prune") or r.startswith(("--force-with-lease=", "+", ":")) for r in rest):
             confirm("git push rewriting/deleting remote refs (user rule: ask first)")
     elif sub == "reset" and "--hard" in rest: confirm("git reset --hard discards work (user rule)")
+    # rollbacks and rebases ask (owner decision 2026-10-12); `git reset` / `git reset <path>` (unstage) does not
+    elif sub == "reset" and any(r in ("--soft", "--mixed", "--keep", "--merge") or re.match(r"^(HEAD[~^]|ORIG_HEAD|@\{|[0-9a-f]{7,40}$|origin/)", r) for r in rest):
+        confirm(f"git reset {' '.join(rest)} moves HEAD (a rollback; owner approves)")
+    elif sub == "revert" and not any(r in ("--abort", "--quit", "--continue", "--skip") for r in rest):
+        confirm(f"git revert {' '.join(rest)} rolls back commits (owner approves)")
+    elif sub == "rebase" and not any(r in ("--abort", "--quit", "--continue", "--skip", "--show-current-patch") for r in rest):
+        confirm(f"git rebase {' '.join(rest)} rewrites history (owner approves)")
     elif sub == "clean" and ("--force" in rest or any(r.startswith("-") and not r.startswith("--") and "f" in r for r in rest)):
         confirm("git clean -f deletes untracked files (user rule)")
     elif sub == "checkout" and ("--" in rest or "." in rest or "-f" in rest or "--force" in rest): confirm("git checkout over working-tree changes (user rule)")

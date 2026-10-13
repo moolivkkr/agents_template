@@ -377,6 +377,16 @@ CASES = [
  ("KD7p","deny", "Bash", "helm uninstall pg -n shop-prod"),
  ("KD8", "allow","Bash", "kubectl -n shop-dev rollout restart deploy/api && kubectl -n shop-dev set image deploy/api api=localhost:5001/shop/api:abc"),
  ("KD9", "allow","Bash", "kubectl create configmap app-cfg --from-literal=a=b -n shop-qa"),
+ # --- 2026-10-12: git rollbacks and rebase ask; everything else in git runs
+ ("GR1", "ask",  "Bash", "git rebase main"),
+ ("GR2", "ask",  "Bash", "git -C repo rebase -i HEAD~3"),
+ ("GR3", "allow","Bash", "git rebase --abort"),
+ ("GR4", "ask",  "Bash", "git revert abc1234"),
+ ("GR5", "ask",  "Bash", "git reset HEAD~1"),
+ ("GR6", "ask",  "Bash", "git reset --soft origin/main"),
+ ("GR7", "allow","Bash", "git reset src/app.py"),
+ ("GR8", "allow","Bash", "git reset"),
+ ("GR9", "allow","Bash", "git commit -m wip && git merge --no-ff feature && git cherry-pick abc1234"),
  ("SR1", "ask",  "Bash", "ssh tb2 'rm -rf ~/development/rera/data'"),
  ("SR2", "ask",  "Bash", "ssh -i k -p 2222 ops@10.10.10.30 sudo k3s kubectl delete ns shop-qa"),
 ]
