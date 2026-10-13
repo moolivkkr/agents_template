@@ -1,7 +1,7 @@
 ---
 name: demo_validator
 description: "Walks every step of the demo script end to end and verifies each produces the expected result. Use before a stakeholder demonstration, after demo_executor."
-model: opus
+model: sonnet
 effort: medium
 category: documentation
 input:

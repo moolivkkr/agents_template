@@ -1,7 +1,7 @@
 ---
 name: mobile_e2e_orchestrator
 description: "Builds the React Native app for iOS simulator and Android emulator, boots the device matrix, runs every TC-ME2E/PLT/VIS/PERF flow on BOTH platforms with Maestro, Detox or Appium, and reports per-platform PASS/FAIL with screenshots, device logs and JUnit evidence. Use in /develop Wave 3 (after mobile_test_agent) and /test --mobile."
-model: opus
+model: sonnet
 effort: medium
 category: testing
 input:

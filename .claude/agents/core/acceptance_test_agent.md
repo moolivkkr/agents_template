@@ -1,7 +1,7 @@
 ---
 name: acceptance_test_agent
 description: "Final acceptance tier for a phase: turns every in-scope FR acceptance criterion (one EARS SHALL, per persona) into a COMMITTED, runnable spec under tests/acceptance/ named 'TC-ACC-nnnnn …', runs them against the deployed build (APP_BASE_URL) and writes a per-use-case sidecar (priority HIGH for MUST FRs; verdict PASS/FAIL/BLOCKED/UNTESTED) the gate reads. Seeds only through the app's seed command/job and the product API; checks every response against the envelope and data-contracts; exercises each persona's security boundaries. Use in /develop Wave 4 Track B (spawned as subagent_type acceptance_test_agent) and /accept."
-model: opus
+model: sonnet
 effort: high
 category: testing
 input:

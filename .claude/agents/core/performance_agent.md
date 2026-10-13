@@ -1,7 +1,7 @@
 ---
 name: performance_agent
 description: "RUNS an open-model k6 load test (constant-arrival-rate) against the deployed qa build for every in-scope NFR-PERF target, at the NFR's rate with thresholds = the NFR's limits (plus dropped_iterations == 0), after a warm-up; records p50/p95/p99, error rate, achieved rate and pod resources; writes one HIGH case per NFR into performance_results.json (sdlc.test-results/v1). On a miss, finds the hot path (N+1, missing index, pool exhaustion) for the owning developer. Use in /develop Wave 4 Track D when NFR-PERF targets are in scope, and /test --performance."
-model: opus
+model: sonnet
 effort: medium
 category: testing
 invoked_by: develop (Wave 4 Track D, when the roster lists it) and test (--performance flag)

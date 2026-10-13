@@ -1,7 +1,7 @@
 ---
 name: manual_test_agent
 description: "Writes structured manual and exploratory test scripts for scenarios that need human judgment or external systems, plus game-day, DR-restore and failover drill scripts; every script records environment, URL and code sha, and never contains credentials. Use with /test --manual."
-model: opus
+model: sonnet
 effort: medium
 category: testing
 invoked_by: test (--manual flag)

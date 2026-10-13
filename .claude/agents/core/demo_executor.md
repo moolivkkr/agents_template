@@ -1,7 +1,7 @@
 ---
 name: demo_executor
 description: "Executes a demo script's setup - starts services, seeds data, confirms the environment is ready. Use after demo_documenter, before demo_validator."
-model: opus
+model: sonnet
 effort: low
 category: documentation
 input:

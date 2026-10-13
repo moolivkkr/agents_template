@@ -1,7 +1,7 @@
 ---
 name: documentation_agent
 description: "Updates API docs, README, and developer guides to match the implemented code and specs. OPTIONAL: runs in /develop Step 6b only when the docs policy has developer_docs on (off in the lean profile), or on demand via /docs developer; non-blocking."
-model: opus
+model: sonnet
 effort: medium
 category: documentation
 invoked_by: develop (Step 6b, non-blocking)

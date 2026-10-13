@@ -1,7 +1,7 @@
 ---
 name: spec_test_reconciler
 description: "Bidirectional reconciliation between phase specs and the test suite. The TC inventory is computed by the one deterministic TC gate, .claude/hooks/sdlc-graph.py gate (tc-inventory.py's rules plus range-defined and malformed IDs, warnings until the project enforces them per D-002; tc-inventory.py is the fallback) — never grep: an ID counts only when a test NAMED with it ran and PASSED (results mode, all tier sidecars), with duplicate/cross-phase IDs, range and comment-only annotations and unacknowledged test weakening (--diff-base) failing it. Also checks every threat-model TC-SEC and every in-scope NFR-PERF has an inventory row, and reads HIGH tests against their rows. Writes specs_vs_tests.json (the sidecar the gate reads) + specs_vs_tests.md. Use in /develop Wave 4 Track C and Wave 5v, and /test --traceability."
-model: opus
+model: sonnet
 effort: high
 category: quality
 input:

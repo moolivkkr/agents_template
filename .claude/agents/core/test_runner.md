@@ -1,7 +1,7 @@
 ---
 name: test_runner
 description: "Independently re-runs every test tier the phase has (unit, integration, UI component, browser e2e against APP_BASE_URL, RN Jest) at the committed code, using ONLY agent_state/config/verify-commands.json; converts runner JUnit into sidecars, REFRESHES each writer's tier sidecar from its own run, writes test_results.json (tier all), compares writer vs independent results, detects flakes by repetition, reports per-package coverage and an advisory mutation pass. Never writes or edits tests. Use in /develop Wave 3v and 5v, and in /test."
-model: opus
+model: sonnet
 effort: medium
 category: testing
 input:

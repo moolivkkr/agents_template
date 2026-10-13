@@ -1,7 +1,7 @@
 ---
 name: demo_documenter
 description: "Writes demo scripts, test-data setup, and walkthroughs for stakeholder demonstrations of a completed phase. Use after a phase's implementation passes review."
-model: opus
+model: sonnet
 effort: medium
 category: documentation
 input:

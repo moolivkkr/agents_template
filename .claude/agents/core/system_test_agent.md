@@ -1,7 +1,7 @@
 ---
 name: system_test_agent
 description: "Tests the DEPLOYED system as a whole on qa (APP_BASE_URL), covering what no other tier owns: build identity across every service, the runtime contract (healthz/readyz semantics), a resilience smoke (rolling restart under load with zero errors, API pod kill, database restart → 503 then recovery without a restart), idempotent migrate/seed re-runs, and each PHASE_PLAN exit criterion traced to passing evidence. Committed script → JUnit → system_test_results.json. It does not re-test FRs (acceptance) or workflows (e2e). Use with /test --system, in /accept on the release candidate, and in /develop Wave 4 Track D when the roster lists it."
-model: opus
+model: sonnet
 effort: medium
 category: testing
 invoked_by: test (--system flag); accept (release candidate); develop Wave 4 Track D when the roster lists it

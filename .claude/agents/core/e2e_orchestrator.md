@@ -1,7 +1,7 @@
 ---
 name: e2e_orchestrator
 description: "Runs the end-to-end tier against the DEPLOYED build (APP_BASE_URL, after Wave 3.5): this phase's TC-E2E inventory plus every earlier phase's committed e2e specs as regression. Web: runs ui_test_agent's committed browser specs; CLI/library/pipeline: writes and runs process-level e2e tests. /healthz and deployed-sha preflight (BLOCKED if down or stale), retries 0, traces/screenshots on failure, sidecar e2e_results.json. Fixes only TESTS under the guardrails; app failures go to the owning role. Use in /develop Wave 3c and /test --e2e."
-model: opus
+model: sonnet
 effort: medium
 category: testing
 input:
