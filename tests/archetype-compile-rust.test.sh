@@ -15,4 +15,9 @@
 # Run: bash tests/archetype-compile-rust.test.sh   (exit 0 = pass)
 set -uo pipefail
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-python3 "$TEST_DIR/archetype-compile/rust/harness.py" --coverage-only
+# harness.py reads Cargo.toml with tomllib (Python 3.11+); macOS's python3 is 3.9, so take the first newer one
+PY=python3
+for c in python3.14 python3.13 python3.12 python3.11 python3; do
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import tomllib' 2>/dev/null; then PY="$c"; break; fi
+done
+"$PY" "$TEST_DIR/archetype-compile/rust/harness.py" --coverage-only

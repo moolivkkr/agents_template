@@ -43,7 +43,7 @@ context.
 
 Put one line in the spawn prompt, after the ground-truth line:
 
-```
+```text
 BUDGET: calls=60 minutes=30 no_progress=30
 ```
 

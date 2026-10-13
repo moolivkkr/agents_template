@@ -68,6 +68,7 @@ EXPECTED = {
     "core/develop-steps/step-7-report.md": {"sh": 1},
     "core/develop-steps/step-7b-phase-post-mortem.md": {"json": 1, "sh": 5},
     "core/dual-ledger-replan.md": {"json": 1},
+    "core/subagent-supervision.md": {"json": 2, "sh": 2},
     "core/edit-validation.md": {"sh": 3},
     "core/eval-harness.md": {"json": 4},
     "core/gate-verification.md": {"sh": 1},
@@ -194,6 +195,12 @@ BLOCKS = {
     "review/board-review/protocol.md#json2": dict(anchor='{', check="json"),
     # ── core/child-returns.md
     "core/child-returns.md#sh1": dict(anchor='python3 .claude/hooks/debate-status.py --phase "${PHASE}" --check', check="sh", sc_exclude=FRAGMENT_VARS),
+    # ── core/subagent-supervision.md
+    "core/subagent-supervision.md#json1": dict(anchor='{"enabled": true,', check="json"),
+    "core/subagent-supervision.md#json2": dict(anchor='{"wave": "3a", "agents": 4, "est_calls": 180, "actual_calls": 205, "subagent_tokens": 1240000, "minutes": 38, "overrun_pct": 14}', check="json"),
+    "core/subagent-supervision.md#sh1": dict(anchor='python3 .claude/hooks/agent-budget.py status        # running agents: calls, minutes, no-progress, refusals, flag', check="sh"),
+    "core/subagent-supervision.md#sh2": dict(anchor='python3 .claude/hooks/sdlc-graph.py diff-context --base <sha>   # changed symbols → endpoints, tables, TCs, FRs',
+        check="sh", subst=[("<sha>", "HEAD"), ("<file|symbol>", "src/app.py")]),
     # ── core/dual-ledger-replan.md
     "core/dual-ledger-replan.md#json1": dict(anchor='{', check="json"),
     # ── core/edit-validation.md

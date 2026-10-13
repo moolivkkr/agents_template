@@ -34,7 +34,7 @@ together into a system that works? You judge boundaries, contracts and flow, not
 3. **Hand-offs exist.**
    - Every **input** a target reads must have a producer that writes that exact path.
    - Every **output** must have a consumer, or be a deliverable.
-   - Check names letter by letter: `<topic>-verdict.json` vs `<topic>.verdict.json` is a broken
+   - Check names letter by letter: `<topic>-report.md` vs `<topic>.report.md` is a broken
      hand-off.
    - Run `bash tests/dependency-graph.test.sh` and read its IO findings, but don't stop there: the
      test only sees frontmatter.
