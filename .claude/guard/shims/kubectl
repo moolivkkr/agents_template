@@ -6,8 +6,21 @@
 # A seatbelt against accidents, not the security boundary (RBAC is): a script can still call the real
 # binary by absolute path, which is how scripts/k8s/env-reset.sh runs its namespaced bulk deletes.
 TOOL="$(basename "$0")"
-GUARD="${SDLC_GUARD_HOOK:-$HOME/.claude/hooks/sdlc-guard.sh}"
 SELF_DIR="$(cd "$(dirname "$0")" && pwd -P)"
+# Test harnesses often point HOME at a temp dir. The guard, its policy and the paths it protects belong to
+# the real user, so find the hook next to this shim and run it with the account's real home, not $HOME.
+REAL_HOME="$(/usr/bin/python3 -c 'import os,pwd;print(pwd.getpwuid(os.getuid()).pw_dir)' 2>/dev/null)"
+[ -n "$REAL_HOME" ] || REAL_HOME="$HOME"
+if [ -n "${SDLC_GUARD_HOOK:-}" ]; then
+  GUARD="$SDLC_GUARD_HOOK"                    # named explicitly: use it or fail, never fall back
+else
+  GUARD="$(dirname "$SELF_DIR")/sdlc-guard.sh"
+  [ -f "$GUARD" ] || GUARD="$REAL_HOME/.claude/hooks/sdlc-guard.sh"
+fi
+if [ ! -f "$GUARD" ]; then
+  echo "sdlc-guard (exec-time): blocked: the guard hook is missing ($GUARD); reinstall with ./install.sh --guard" >&2
+  exit 126
+fi
 
 REAL=""
 OLD_IFS="$IFS"; IFS=:
@@ -24,10 +37,12 @@ CMD="$TOOL$(printf ' %q' "$@")"
 # (the hook can see the consumer of a top-level pipe; a subprocess shim can only see that there is one)
 PIPE=0; [ -p /dev/stdout ] && PIPE=1
 PAYLOAD="$(/usr/bin/python3 -c 'import json,os,sys;print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]},"cwd":os.getcwd(),"stdout_is_pipe":sys.argv[2]=="1"}))' "$CMD" "$PIPE")"
-OUT="$(printf '%s' "$PAYLOAD" | bash "$GUARD" 2>&1)"; RC=$?
+OUT="$(printf '%s' "$PAYLOAD" | HOME="$REAL_HOME" bash "$GUARD" 2>&1)"; RC=$?
 if [ $RC -ne 0 ] || printf '%s' "$OUT" | grep -q '"permissionDecision": "ask"'; then
   echo "sdlc-guard (exec-time): blocked: $CMD" >&2
-  printf '%s\n' "$OUT" | sed -n 's/.*"permissionDecisionReason": "\([^"]*\)".*/  \1/p' >&2
+  WHY="$(printf '%s\n' "$OUT" | sed -n 's/.*"permissionDecisionReason": "\([^"]*\)".*/  \1/p')"
+  [ -n "$WHY" ] || WHY="  $(printf '%s' "$OUT" | tail -1)"            # an engine failure: say what it was
+  printf '%s\n' "$WHY" >&2
   exit 126
 fi
 exec "$REAL" "$@"

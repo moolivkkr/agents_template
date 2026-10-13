@@ -457,6 +457,31 @@ def check_helm(argv, env):
     if not ns_writable(ns, want):
         deny(f"helm {verb} must target a writable namespace explicitly (-n {ns_hint(want)})")
 
+# Build + checks in the lab VMs without a policy entry (owner decision 2026-10-12): BuildKit as root (image
+# builds, worker/cache diagnostics, cache prune), and a few non-root file checks. Non-root can't read the k3s
+# admin kubeconfig or the containerd socket, so these don't reach prod. `sudo sh -c`, `sudo kubectl`, `sudo
+# k3s ...` and the rest stay with the policy's shell_allow list or the human.
+LIMA_USER_CMDS = {"test", "ls", "stat", "cat", "head", "tail", "wc", "sha256sum", "du", "df", "uptime", "free"}
+LIMA_SECRET_RE = re.compile(r"(^|/)(etc/rancher|var/lib/rancher|\.kube)(/|$)|k3s\.yaml|token|\.key$|\.pem$")
+LIMA_TMP_RE = re.compile(r"^/tmp/|/staging[^/]*(/|$)|^/var/tmp/")
+def lima_shell_builtin(inner, as_root):
+    if not inner: return False
+    cmd = os.path.basename(inner[0])
+    if as_root:
+        return cmd == "buildctl"
+    if any(LIMA_SECRET_RE.search(a) for a in inner[1:]):
+        return False            # k3s writes its admin kubeconfig 0644 (sdlc-server.yaml): never read it from the VM
+    if cmd in LIMA_USER_CMDS:
+        return not any(re.search(r"[;&|`$<>]", a) for a in inner[1:])   # one plain command, no chaining
+    if cmd == "install" and "-d" in inner:
+        return True
+    if cmd == "rm":
+        targets = [a for a in inner[1:] if not a.startswith("-")]
+        return bool(targets) and all(LIMA_TMP_RE.search(t) for t in targets if t != "--")
+    if cmd == "mkdir":
+        return True
+    return False
+
 LIMA_ALLOW_SUB = {"list", "ls", "info", "validate", "help", "--version", "-v", "version", "watch", "completion"}
 def check_limactl(argv, env):
     insts = LIMA_INSTANCES
@@ -490,10 +515,12 @@ def check_limactl(argv, env):
         if not rest or rest[0] not in insts: deny(f"limactl shell only into '{names}'")
         inner = rest[1:]
         if inner[:1] == ["--"]: inner = inner[1:]
-        if inner[:1] == ["sudo"]: inner = inner[1:]
+        as_root = inner[:1] == ["sudo"]
+        if as_root: inner = inner[1:]
         line = " ".join(inner)
         allow = LIMA.get("shell_allow", [])
         if any(line == a or line.startswith(a + " ") for a in allow): return
+        if lima_shell_builtin(inner, as_root): return
         deny(f"limactl shell {rest[0]} '{line}' is not in the allowlist (root in the VM = cluster-admin)")
     ask(f"limactl {sub} is not a routine agent action")
 

@@ -147,6 +147,17 @@ CASES = [
  ("L15", "deny", "Bash", "limactl shell sdlc-server sudo cat /etc/rancher/k3s/k3s.yaml"),     # admin kubeconfig
  ("L16", "deny", "Bash", "limactl copy sdlc-agent:/etc/hosts ./ && limactl copy x other:/tmp"),
  ("L17", "allow","Bash", "limactl shell sdlc-server sudo systemctl status k3s"),
+ # 2026-10-12 build + checks in the lab VMs (owner choice): BuildKit as root, plain non-root file checks
+ ("LB1", "allow","Bash", "limactl shell sdlc-server sudo buildctl debug workers"),
+ ("LB2", "allow","Bash", "limactl shell sdlc-server sudo buildctl build --frontend dockerfile.v0 --local context=/Users/x/zoneos --local dockerfile=/Users/x/zoneos/deploy/docker --opt filename=Dockerfile --output type=image,name=localhost:5001/zoneos/api:abc,push=true"),
+ ("LB3", "allow","Bash", "limactl shell sdlc-server test -r /Users/x/zoneos/pyproject.toml"),
+ ("LB4", "allow","Bash", "limactl shell sdlc-server install -d -m 0700 /tmp/sheets-staging"),
+ ("LB5", "allow","Bash", "limactl shell sdlc-server rm -rf -- /tmp/sheets-staging"),
+ ("LB6", "deny", "Bash", "limactl shell sdlc-server cat /etc/rancher/k3s/k3s.yaml"),     # 0644 admin kubeconfig, no sudo needed
+ ("LB7", "deny", "Bash", "limactl shell sdlc-server sudo sh -c 'kubectl get secrets -A'"),
+ ("LB8", "deny", "Bash", "limactl shell sdlc-server rm -rf /var/lib/rancher"),
+ ("LB9", "deny", "Bash", "limactl shell sdlc-server sudo k3s ctr images rm x"),
+ ("LBa", "deny", "Bash", "limactl shell sdlc-server ls /var/lib/rancher/k3s/server/token"),
  ("L18", "deny", "Bash", "limactl start other"),
  # --- docker / compose
  ("D01", "allow","Bash", "docker compose up -d --build"),
@@ -707,6 +718,28 @@ def main():
     check("SH1", 126, p.returncode, "shim blocks `kubectl delete ns shop-qa` from a subprocess (exit 126)", p.stderr)
     p = subprocess.run([os.path.join(shims, "kubectl"), "get", "pods", "-n", "shop-dev"], capture_output=True, text=True, env=senv)
     check("SH2", "REAL-KUBECTL get pods -n shop-dev", p.stdout.strip(), "shim passes an allowed call to the real kubectl", p.stderr)
+    # a test harness that points HOME at a temp dir (ZoneOS harness conftest, 2026-10-12): the shim finds the hook
+    # next to itself and runs it with the real home, so offline renders pass and refusals still give a reason
+    fake_home = os.path.join(W, "fake-home"); os.makedirs(fake_home, exist_ok=True)
+    henv = {k: v for k, v in senv.items() if k != "SDLC_GUARD_HOOK"}; henv["HOME"] = fake_home
+    p = subprocess.run([os.path.join(shims, "kubectl"), "kustomize", os.path.join(W, "deploy/k8s/overlays/qa")], capture_output=True, text=True, env=henv)
+    check("SH2h", True, p.returncode == 0 and p.stdout.startswith("REAL-KUBECTL kustomize"), "shim under a fake HOME: offline kustomize passes", p.stderr)
+    p = subprocess.run([os.path.join(shims, "kubectl"), "delete", "ns", "shop-qa"], capture_output=True, text=True, env=henv)
+    check("SH1h", True, p.returncode == 126 and "cluster-scoped" in p.stderr, "shim under a fake HOME: still blocks, and says why", p.stderr)
+    p = subprocess.run([os.path.join(shims, "kubectl"), "get", "pods"], capture_output=True, text=True,
+                       env=dict(senv, SDLC_GUARD_HOOK=os.path.join(W, "no-such-hook.sh")))
+    check("SH1m", True, p.returncode == 126 and "missing" in p.stderr, "shim with no guard hook: blocked with a reinstall hint", p.stderr)
+    # a test harness that points HOME at a temp dir (ZoneOS harness conftest, 2026-10-12): the shim finds the hook
+    # next to itself and runs it with the real home, so offline renders pass and refusals still give a reason
+    fake_home = os.path.join(W, "fake-home"); os.makedirs(fake_home, exist_ok=True)
+    henv = {k: v for k, v in senv.items() if k != "SDLC_GUARD_HOOK"}; henv["HOME"] = fake_home
+    p = subprocess.run([os.path.join(shims, "kubectl"), "kustomize", os.path.join(W, "deploy/k8s/overlays/qa")], capture_output=True, text=True, env=henv)
+    check("SH2h", True, p.returncode == 0 and p.stdout.startswith("REAL-KUBECTL kustomize"), "shim under a fake HOME: offline kustomize passes", p.stderr)
+    p = subprocess.run([os.path.join(shims, "kubectl"), "delete", "ns", "shop-qa"], capture_output=True, text=True, env=henv)
+    check("SH1h", True, p.returncode == 126 and "cluster-scoped" in p.stderr, "shim under a fake HOME: still blocks, and says why", p.stderr)
+    p = subprocess.run([os.path.join(shims, "kubectl"), "get", "pods"], capture_output=True, text=True,
+                       env=dict(senv, SDLC_GUARD_HOOK=os.path.join(W, "no-such-hook.sh")))
+    check("SH1m", True, p.returncode == 126 and "missing" in p.stderr, "shim with no guard hook: blocked with a reinstall hint", p.stderr)
     for tool in ("aws", "crane"):
         with open(os.path.join(realdir, tool), "w") as f:
             f.write(f"#!/bin/sh\necho REAL-{tool.upper()} \"$@\"\n")
