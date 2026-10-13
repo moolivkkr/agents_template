@@ -35,6 +35,7 @@ MANIFEST = ".framework-manifest.json"
 HOOK_EXT = (".sh", ".py", ".mjs")
 GRAPH_IGNORE = "agent_state/graph/"
 LEDGER_IGNORE = "agent_state/ledger/"
+BUDGET_IGNORE = "agent_state/budget/"
 LEDGER_HOOK = "ledger.py"
 
 
@@ -178,8 +179,12 @@ def ledger_ignored(project):
     return dir_ignored(project, LEDGER_IGNORE, ["agent_state/ledger/events-2026-01-01.jsonl", "agent_state/ledger/.lock"])
 
 
+def budget_ignored(project):
+    return dir_ignored(project, BUDGET_IGNORE, ["agent_state/budget/a1.json", "agent_state/budget/.lock"])
+
+
 def ensure_ignored(project, rel, comment, dry, say, touched):
-    if (graph_ignored if rel == GRAPH_IGNORE else ledger_ignored)(project):
+    if {GRAPH_IGNORE: graph_ignored, BUDGET_IGNORE: budget_ignored}.get(rel, ledger_ignored)(project):
         say(f"  .gitignore: {rel} already ignored")
         return
     say(f"  .gitignore: + {rel}")
@@ -355,6 +360,8 @@ def main_update(a):
             say("  phase ledger enabled — report: python3 .claude/hooks/ledger.py report --phase N; "
                 "off: SDLC_LEDGER=0 or agent_state/config/ledger-policy.json {\"enabled\": false}")
             return rc
+        ensure_ignored(project, BUDGET_IGNORE, "# agent-budget.py: per-subagent counters (skills/core/subagent-supervision.md)",
+                       dry, say, touched)
         ensure_ignored(project, GRAPH_IGNORE, "# sdlc-graph store + gate outputs (rebuildable: python3 .claude/hooks/sdlc-graph.py build)",
                        dry, say, touched)
         graph = os.path.join(dst, "sdlc-graph.py")

@@ -12,3 +12,5 @@ __pycache__/
 
 # Phase ledger (hook-written observation log; docs/PHASE_LEDGER.md)
 agent_state/ledger/
+# agent-budget.py: per-subagent counters (skills/core/subagent-supervision.md)
+agent_state/budget/
