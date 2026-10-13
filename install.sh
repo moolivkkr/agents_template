@@ -17,7 +17,7 @@ if [ "${1:-}" = "--rule-board" ]; then
   exit 0
 fi
 # ./install.sh --guard : install only the user-level permission guard (docs/PERMISSIONS_GUIDE.md).
-# Copies files; never edits settings.json or writes the policy (both are human steps in the guide).
+# Copies files; never writes the policy. With --settings it also merges ~/.claude/settings.json (human-run; see below).
 if [ "${1:-}" = "--guard" ]; then
   HOOKS="$HOME/.claude/hooks"; SHIMS="$HOOKS/sdlc-guard-shims"
   mkdir -p "$SHIMS"
@@ -31,6 +31,14 @@ if [ "${1:-}" = "--guard" ]; then
   [ -f "$HOME/.config/sdlc-guard/policy.json" ] \
     && echo "   policy: $HOME/.config/sdlc-guard/policy.json" \
     || echo "   ⚠ no policy yet: cluster commands are denied until you run sdlc-guard-make-policy.py (see docs/PERMISSIONS_GUIDE.md)"
+  # ./install.sh --guard --settings [github-owner] : also merge the permission model into ~/.claude/settings.json
+  # (apply-user-settings.py; it backs the file up first). The owner defaults to the one in this repo's origin URL.
+  if [ "${2:-}" = "--settings" ]; then
+    OWNER="${3:-$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null | sed -E 's#^.*github\.com[:/]([^/]+)/.*$#\1#')}"
+    [ -n "$OWNER" ] || { echo "   ⚠ no GitHub owner: ./install.sh --guard --settings <owner>"; exit 1; }
+    python3 "$REPO_DIR/.claude/guard/apply-user-settings.py" --github "$OWNER" || exit 1
+    echo "   settings merged for github owner '$OWNER' — start a NEW Claude Code session (settings load at start)"
+  fi
   exit 0
 fi
 # ./install.sh --project <dir> [updater flags] : the normal install below, then bring <dir> up to date from the

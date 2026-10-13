@@ -22,7 +22,7 @@ What it changes (everything else in the file is kept):
 It does NOT set disableBypassPermissionsMode (that lives in the optional managed settings).
 Revert: the backup path is printed; `cp <backup> ~/.claude/settings.json`.
 """
-import argparse, json, os, shutil, sys, time
+import argparse, json, os, re, shutil, sys, time
 
 H = os.path.expanduser("~")
 SETTINGS = os.path.join(H, ".claude", "settings.json")
@@ -52,8 +52,15 @@ ASK = [
     "Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)",
     "Bash(dropdb *)", "Bash(chmod 777 *)", "Bash(chmod -R 777 *)",
     "Bash(terraform apply*)", "Bash(terraform destroy*)", "Bash(npm publish*)",
-    "Bash(helm uninstall *)", "Bash(helm delete *)",
+    # git: history rewrites and rollbacks ask (owner decision 2026-10-12); everything else in git runs
+    "Bash(git rebase*)", "Bash(git revert *)", "Bash(git reset --soft*)", "Bash(git reset --mixed*)",
+    "Bash(git reset --keep*)", "Bash(git reset --merge*)", "Bash(git reset HEAD~*)", "Bash(git reset HEAD^*)",
+    "Bash(git push --force*)", "Bash(git push -f*)", "Bash(git push --force-with-lease*)",
 ]
+# Rules earlier versions added that the owner has since lifted: removed from settings on every run.
+# helm uninstall / delete in <app>-dev/<app>-qa is the agent's call (owner decision 2026-10-12); the guard
+# still refuses them in any namespace that isn't writable (prod, system).
+LIFTED_ASK = ["Bash(helm uninstall *)", "Bash(helm delete *)"]
 # prompted under --narrow only; in the default broad mode the guard checks the remote command instead
 NARROW_ASK = ["Bash(ssh *)", "Bash(scp *)"]
 DENY = [
@@ -87,7 +94,7 @@ def auto_mode(github, server, context, lab_hosts, aws_projects=(), aws_anywhere=
             "Package downloads for builds and tests (npm, pnpm, yarn, pip, uv, go modules, cargo, Homebrew formulae for dev tools) are allowed.",
             "Disposable environments: deleting, restarting, scaling or resetting workloads, jobs, PVCs and databases in <app>-dev/<app>-qa of the lab cluster and in local compose stacks via the project's reset scripts is allowed.",
             "Scripts and code search: running any project or scratch script (bash/sh/zsh, ./x.sh, python, node, make targets) and read/search tools (find, grep, rg, awk, sed without -i on protected files, xargs, jq, yq) is allowed.",
-            "Kubernetes management in <app>-dev/<app>-qa of the lab cluster: kubectl/helm create, apply, patch, set image, scale, rollout restart/undo/pause/resume, exec, port-forward, and deleting pods or jobs is allowed. Deleting other resources and helm uninstall need the owner (the guard prompts).",
+            "Kubernetes in <app>-dev/<app>-qa of the lab cluster is the agent's own environment with full control (owner decision 2026-10-12): every kubectl and helm action in those namespaces is allowed without asking, including create, apply, patch, replace, scale, rollout, exec, port-forward, cp, deleting any resource kind (deployments, statefulsets, services, ingresses, configmaps, secrets, PVCs, jobs, pods), bulk deletes (--all, -l, -k) and helm install/upgrade/rollback/uninstall. Only prod/staging namespaces and cluster-scoped changes (namespaces, nodes, cluster RBAC, CRDs) stay with the human.",
         ],
         "soft_deny": ["$defaults"],
         "hard_deny": [
@@ -138,6 +145,9 @@ def main():
         ctx, spec = next(iter(pol["kube"]["contexts"].items()))
         server = spec["server"]
         lab = [h for h in pol.get("local_hosts", []) if h[:1].isdigit() and not h.startswith(("127.", "0.", "10.0.2.2"))]
+        api_host = re.sub(r"^https?://|:\d+$", "", server)       # the cluster's current address is a lab host too
+        if api_host and api_host not in lab:
+            lab.append(api_host)
         aws_projects = [str(p.get("path")) for p in (pol.get("aws") or {}).get("projects", []) if p.get("path")]
         aws_anywhere = bool((pol.get("aws") or {}).get("anywhere"))
     except Exception as e:
@@ -157,6 +167,7 @@ def main():
         perm["ask"] = [x for x in perm.get("ask", []) if x not in NARROW_ASK]
         add(perm["ask"], ASK)
     add(perm.setdefault("deny", []), DENY)
+    perm["ask"] = [x for x in perm.get("ask", []) if x not in LIFTED_ASK]
     perm["defaultMode"] = "auto"
     s["autoMode"] = auto_mode(a.github, server, ctx, lab, aws_projects, aws_anywhere)
     hooks = s.setdefault("hooks", {})

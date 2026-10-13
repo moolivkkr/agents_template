@@ -53,6 +53,13 @@ or waits for you. No single mechanism does this; each layer below catches what t
   `gh auth token` and `--show-token`. Writing secrets or variables, repo settings, releases,
   extensions, and `gh api` write calls are asks. Protect the staging/prod GitHub environments with
   required reviewers: that, not the guard, is the boundary for `gh run rerun` of a prod deploy.
+- **dev and qa namespaces are the agent's, with full control** (owner decision 2026-10-12). In a
+  namespace the policy marks writable (`*-dev`, `*-qa`), every `kubectl` and `helm` action runs without
+  asking: deletes of any kind, bulk deletes (`--all`, `-l`, `-k`) and `helm uninstall` included. Prod,
+  staging and system namespaces are refused. Cluster-scoped kinds (namespaces, nodes, cluster RBAC, CRDs),
+  `-A` and `drain`/`cordon` stay refused too, because one cluster holds prod.
+- **The cluster is identified by its CA (and the agent credential), not its address.** With a CA pin, the
+  API server may move between networks (Thunderbolt bridge or LAN) without breaking `kubectl`.
 - **Destructive commands always prompt (*confirm*).** In an unattended run with no one to ask, that
   means deny, and the PATH shims block them inside scripts (exit 126). They cover:
   - `git reset --hard`, force or delete pushes, `clean -f`, checkout/restore over changes, `stash drop`,
@@ -60,7 +67,6 @@ or waits for you. No single mechanism does this; each layer below catches what t
   - `compose down -v`, volume deletion, `system prune --volumes`;
   - `rm -r` outside `/tmp`, the scratchpad and build-artifact dirs; `find -delete` / `-exec rm`;
   - destructive SQL and `dropdb`;
-  - `kubectl delete` of anything but pods and jobs (those are recreated or re-run), and `helm uninstall`;
   - `aws` deletes, terminations, deregistrations and purges (`delete-*`, `terminate-*`, `s3 rm|rb`,
     `s3 sync --delete`, …), writes to `ask_services` (IAM, Organizations, identity, EKS), `ask_actions`,
     prod-looking names, and `aws configure set`;
@@ -98,7 +104,7 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (465 cases, including 13 offline `vet-package.py` cases, 106
+test table is `tests/sdlc-guard.test.sh` (472 cases, including 13 offline `vet-package.py` cases, 106
 AWS cases and 15 default-mode passthrough cases).
 
 ## AWS for your projects
@@ -265,7 +271,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 465/465
+bash tests/sdlc-guard.test.sh     # 472/472
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own

@@ -74,9 +74,13 @@ CASES = [
  ("K21", "deny", "Bash", "kubectl apply -f x.yaml -n kube-system"),
  ("K22", "deny", "Bash", "kubectl delete namespace shop-qa"),
  ("K23", "deny", "Bash", "kubectl delete ns/shop-dev"),
- ("K24", "deny", "Bash", "kubectl delete pods --all -n shop-dev"),
- ("K25", "deny", "Bash", "kubectl delete deploy -l app=api -n shop-qa"),
- ("K26", "deny", "Bash", "kubectl delete -k deploy/k8s/overlays/qa -n shop-qa"),
+ # 2026-10-12: full control of dev/qa — bulk deletes there are the agent's call; elsewhere still refused
+ ("K24", "allow","Bash", "kubectl delete pods --all -n shop-dev"),
+ ("K25", "allow","Bash", "kubectl delete deploy -l app=api -n shop-qa"),
+ ("K26", "allow","Bash", "kubectl delete -k deploy/k8s/overlays/qa -n shop-qa"),
+ ("K24p","deny", "Bash", "kubectl delete pods --all -n shop-prod"),
+ ("K25p","deny", "Bash", "kubectl delete deploy --all -A"),
+ ("K26p","deny", "Bash", "kubectl delete ns shop-dev"),
  ("K27", "deny", "Bash", "kubectl --context prod-eks get pods"),
  ("K28", "deny", "Bash", "kubectl --kubeconfig ~/.kube/config get pods -n shop-dev"),
  ("K29", "deny", "Bash", "KUBECONFIG=~/.kube/config kubectl get pods"),
@@ -359,14 +363,18 @@ CASES = [
  ("SK2", "deny", "Skill", {"skill": "deploy", "args": "--target=staging --phase=3"}),
  ("SK3", "allow","Skill", {"skill": "startup:deploy", "args": "--target=qa"}),
  ("SK4", "deny", "Skill", {"skill": "startup:rollback", "args": "--target=prod --confirm"}),
- # --- 2026-10-07: deletes beyond pods/jobs, helm uninstall and destructive remote commands confirm
- ("KD1", "ask",  "Bash", "kubectl delete deploy api -n shop-dev"),
- ("KD2", "ask",  "Bash", "kubectl delete pvc data-postgres-0 -n shop-qa"),
- ("KD3", "ask",  "Bash", "kubectl delete -f deploy/k8s/base/api.yaml -n shop-dev"),
+ # --- 2026-10-12: any delete and helm uninstall in dev/qa run without asking (owner: full control of dev/qa);
+ #     prod and system namespaces stay refused. Destructive remote commands over ssh still confirm.
+ ("KD1", "allow","Bash", "kubectl delete deploy api -n shop-dev"),
+ ("KD2", "allow","Bash", "kubectl delete pvc data-postgres-0 -n shop-qa"),
+ ("KD3", "allow","Bash", "kubectl delete -f deploy/k8s/base/api.yaml -n shop-dev"),
+ ("KD1p","deny", "Bash", "kubectl delete deploy api -n shop-prod"),
+ ("KD2p","deny", "Bash", "kubectl delete secret db -n kube-system"),
  ("KD4", "allow","Bash", "kubectl delete job migrate-1a2b -n shop-dev"),
  ("KD5", "allow","Bash", "kubectl delete pod/api-1 pod/api-2 -n shop-qa"),
- ("KD6", "ask",  "Bash", "kubectl delete pod/api-1 svc/api -n shop-qa"),
- ("KD7", "ask",  "Bash", "helm uninstall pg -n shop-dev"),
+ ("KD6", "allow","Bash", "kubectl delete pod/api-1 svc/api -n shop-qa"),
+ ("KD7", "allow","Bash", "helm uninstall pg -n shop-dev"),
+ ("KD7p","deny", "Bash", "helm uninstall pg -n shop-prod"),
  ("KD8", "allow","Bash", "kubectl -n shop-dev rollout restart deploy/api && kubectl -n shop-dev set image deploy/api api=localhost:5001/shop/api:abc"),
  ("KD9", "allow","Bash", "kubectl create configmap app-cfg --from-literal=a=b -n shop-qa"),
  ("SR1", "ask",  "Bash", "ssh tb2 'rm -rf ~/development/rera/data'"),
@@ -383,7 +391,7 @@ PASSTHROUGH_CASES = [
  ("PT5", "allow","Bash", "bash infra/scripts/install-ocr-doc.sh && find . -name '*.go' | xargs grep -n TODO | awk -F: '{print $1}'"),
  ("PT6", "ask",  "Bash", "rm -rf src"),
  ("PT7", "ask",  "Bash", "git reset --hard HEAD~1"),
- ("PT8", "ask",  "Bash", "kubectl delete deploy api -n shop-dev"),
+ ("PT8", "allow","Bash", "kubectl delete deploy api -n shop-dev"),
  ("PT9", "ask",  "Bash", "docker compose down -v"),
  ("PTA", "ask",  "Bash", "psql -c 'DROP TABLE users'"),
  ("PTB", "ask",  "Bash", "ssh tb2 'docker volume rm pg'"),
@@ -638,10 +646,13 @@ def main():
         check(cid, want, got, inp if isinstance(inp, str) else json.dumps(inp), why)
 
     # identity pinning: same pinned path, content swapped (wrong CA / server moved under the same context name)
-    for cid, src, label in [("P01", WRONG_CA, "wrong CA at pinned path"), ("P02", TAMPERED, "server swapped, same context name")]:
+    # The CA (+ credential) hash is the identity: a server address change with the same CA is the same cluster on
+    # another network (2026-10-12), so it passes; a different CA does not.
+    for cid, want, src, label in [("P01", "deny", WRONG_CA, "wrong CA at pinned path"),
+                                  ("P02", "allow", TAMPERED, "server moved, same CA (network change)")]:
         shutil.copy(src, PIN)
         got, why = run("Bash", {"command": "kubectl get pods -n shop-dev"}, env)
-        check(cid, "deny", got, f"[{label}] kubectl get pods -n shop-dev", why)
+        check(cid, want, got, f"[{label}] kubectl get pods -n shop-dev", why)
     # credential swapped: same cluster (server + CA) but not the agent's token, e.g. admin creds copied in
     dump(kubeconfig(user={"token": "admin-token"}), "swapped.json"); shutil.copy(os.path.join(W, "swapped.json"), PIN)
     got, why = run("Bash", {"command": "kubectl get pods -n shop-dev"}, env)
@@ -721,7 +732,10 @@ def main():
     s = json.load(open(sp)); pm = s["permissions"]
     check("AS1", True, p.returncode == 0 and "Bash" in pm["allow"] and "Bash(git push*)" in pm["allow"]
           and "Bash(git push* --force*)" in pm["deny"] and s["model"] == "opus" and "Bash(ssh *)" not in pm["ask"]
-          and "Bash(helm uninstall *)" in pm["ask"], "apply-user-settings: bare Bash allow, destructive asks, keeps existing keys/rules", p.stderr)
+          and "Bash(helm uninstall *)" not in pm["ask"] and "Bash(git rebase*)" in pm["ask"] and "Bash(git revert *)" in pm["ask"],
+          "apply-user-settings: bare Bash allow, git rollback/rebase asks, helm uninstall lifted (dev/qa full control), keeps existing keys/rules", p.stderr)
+    check("AS1b", True, "full control" in json.dumps(s["autoMode"]) and "need the owner (the guard prompts)" not in json.dumps(s["autoMode"]),
+          "apply-user-settings: autoMode gives <app>-dev/<app>-qa full kubectl/helm control")
     check("AS2", True, pm["defaultMode"] == "auto" and "Bash(sudo *)" in pm["deny"] and "Bash(git reset --hard*)" in pm["ask"]
           and "https://10.10.10.20:6443" in json.dumps(s["autoMode"]), "apply-user-settings: mode, deny/ask lists, autoMode from policy")
     check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")

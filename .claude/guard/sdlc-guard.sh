@@ -371,7 +371,12 @@ def kube_identity(flags, env, tool):
     if not cl: deny(f"{tool}: cluster for context '{ctx}' missing")
     want = allowed[ctx]
     server = cl["cluster"].get("server", "")
-    if server != want["server"]: deny(f"{tool}: context '{ctx}' points at {server}, expected {want['server']}")
+    # The CA hash (and the agent credential hash) identify the cluster; its address can move between
+    # networks (Thunderbolt bridge vs LAN, owner decision 2026-10-12). With a CA pin any server passes;
+    # without one the server must be the pinned URL or one of the policy's "servers".
+    servers = [want.get("server")] + list(want.get("servers", []))
+    if server not in servers and not want.get("ca_sha256"):
+        deny(f"{tool}: context '{ctx}' points at {server}, expected one of {[x for x in servers if x]}")
     if want.get("ca_sha256") and ca_sha(cl["cluster"].get("certificate-authority-data", "")) != want["ca_sha256"]:
         deny(f"{tool}: cluster CA does not match the pinned Lima cluster CA (identity check failed)")
     if want.get("user_sha256"):
@@ -427,26 +432,15 @@ def check_kubectl(argv, env):
     targets = pos[1:]
     if any(CLUSTER_SCOPED.match(t) for t in targets):
         deny(f"kubectl {verb} on a cluster-scoped kind ({' '.join(targets)}); namespaces are created by the human bootstrap and reset with scripts/k8s/env-reset.sh")
-    if verb == "delete" and any(f in flags for f in ("--all", "-l", "--selector", "-k", "--kustomize")):
-        deny("bulk delete (--all / selector / -k) at the prompt is blocked; use scripts/k8s/env-reset.sh <env>")
     if not ns:
         deny(f"mutating kubectl {verb} must name the namespace explicitly (-n {ns_hint(want)})")
     if not ns_writable(ns, want):
         deny(f"namespace '{ns}' is not writable by agents (allowed: {ns_hint(want)}; never system or prod namespaces)")
     for f in flags.get("-f", []) + flags.get("--filename", []):
         if re.match(r"^https?://", str(f)): ask("applying a manifest fetched from the network")
-    if verb == "delete":
-        # pods and jobs are recreated by their controllers / re-run by the deploy scripts (system_test_agent
-        # kills pods unattended); deleting anything else (deployments, services, PVCs, secrets, ...) is
-        # destructive and needs the owner (decision 2026-10-07)
-        if not targets:
-            kinds = [""]                                         # delete -f/-k: the manifest decides; ask
-        elif "/" in targets[0]:
-            kinds = [t.split("/", 1)[0] for t in targets]        # delete pod/a job/b
-        else:
-            kinds = targets[0].split(",")                        # delete pod,job a b
-        if not all(EPHEMERAL_KINDS.match(k) for k in kinds):
-            confirm(f"kubectl delete {' '.join(targets)} -n {ns}: deleting anything but a pod or job needs the owner")
+    # Inside a writable namespace (<app>-dev/<app>-qa) every mutation is the agent's call, deletes of any kind
+    # and bulk deletes included (owner decision 2026-10-12: full control of dev and qa). Prod, staging and
+    # system namespaces are refused above; cluster-scoped kinds and -A stay refused (one cluster holds prod).
 
 HELM_READ = {"list", "ls", "status", "get", "history", "hist", "show", "inspect", "template", "lint", "search",
              "repo", "version", "env", "dependency", "dep", "help", "completion", "verify", "pull", "fetch", "plugin"}
@@ -462,8 +456,6 @@ def check_helm(argv, env):
     ns = fget(flags, "-n", "--namespace")
     if not ns_writable(ns, want):
         deny(f"helm {verb} must target a writable namespace explicitly (-n {ns_hint(want)})")
-    if verb in ("uninstall", "delete", "del", "un"):
-        confirm(f"helm {verb} removes a release and its resources from {ns}; needs the owner")
 
 LIMA_ALLOW_SUB = {"list", "ls", "info", "validate", "help", "--version", "-v", "version", "watch", "completion"}
 def check_limactl(argv, env):
