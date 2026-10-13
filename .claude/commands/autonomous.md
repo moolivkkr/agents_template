@@ -413,6 +413,19 @@ Fully autonomous — no more human prompts.
        again.
 - **Test failures:** Fix implementation, not tests (max 3 retries per test agent)
 
+### Runaway-subagent circuit breaker
+
+An unattended run has no one watching token counts, so the budgets are enforced, not advised
+(`~/.claude/skills/core/subagent-supervision.md`; the `agent-budget.py` hook):
+- **Every spawn carries a `BUDGET:` line, sized by estimate.** Split anything over about 60 tool calls.
+- **`BLOCKED <refusal>` from any agent** (guard, classifier, RBAC, quota): don't relaunch it, and don't
+  give the action to another agent or session. Set `run.json` `paused` with the refusal as `reason`.
+  A permission problem is the human's to fix, and retrying it is how ZoneOS lost three hours.
+- **At every wake-up while agents run:** `python3 .claude/hooks/agent-budget.py status`.
+  - `RUNAWAY`: `SendMessage` stop, then `TaskStop`, then relaunch a smaller task from the checkpoint.
+- **Wave cost overrun:** a wave more than 25% over its estimate (`agent_state/phases/N/budget.jsonl`)
+  is logged to `auto-resolved.jsonl`. A second overrun in the same phase sets `paused`.
+
 ### Escalation Circuit Breaker
 
 Prevent runaway escalation loops in autonomous mode:

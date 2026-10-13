@@ -42,6 +42,8 @@ others. It used to live only in `develop-orchestrator.md`. Agents raised `NEEDS_
 | First line | What you do |
 |---|---|
 | `COMPLETE` / `PARTIAL` / `BLOCKED` | Your command's own handling. |
+| `PARTIAL budget:<kind>` | The `agent-budget.py` hook capped it. Relaunch a SMALLER task from the checkpoint it names, never the same brief (`subagent-supervision.md` §5). |
+| `BLOCKED <permission refusal>` | An external blocker (guard, classifier, RBAC, quota). Don't relaunch it, and don't give it to another agent; surface it to the human (`/autonomous`: `paused`). |
 | `NEEDS_INPUT` | **Interactive:** ask the user (AskUserQuestion for choices), then relaunch the same agent with its original prompt plus the answers. **`--auto` / `/autonomous`:** take the agent's recommended default, record it in `agent_state/debates/unresolved.json` (with `phase`, `topic`, `auto_resolved_with`, `reason`) and the manifest's `known_issues[]`, then relaunch. |
 | `NEEDS_DECISION <topic>` | Run the debate (below), then relaunch the agent with the decision. |
 | anything else | A progress note ("I'll now…", a plan, an offer to continue) is not a result; the current model can end a long turn that way. Re-spawn the agent with its original prompt plus `Your previous run ended before finishing (it returned: "<first line>"). Files already written: <paths>. Finish the assignment in this run.` At most two re-spawns, then treat it as failed (`/develop`: log `failed` in `execution.jsonl`). Don't resume it with SendMessage: a resumed agent runs in the background. |

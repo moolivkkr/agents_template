@@ -306,6 +306,27 @@ Follow `~/.claude/skills/core/child-returns.md` for every spawn in this orchestr
   `from_agent: develop-orchestrator`, and then run the debate the same way.
 - **Run non-blocking requests at the end of the wave that raised them.**
 
+**Budgets — follow `~/.claude/skills/core/subagent-supervision.md` for every spawn.** In short:
+- **Size first:** estimate the tool calls (units × calls per unit). Split anything over about 60
+  calls (at most 10 TC rows per test agent, one spec section per implementation agent).
+- **Put a `BUDGET: calls=N minutes=M` line in every prompt,** right after the ground-truth line.
+  `.claude/hooks/agent-budget.py` enforces it:
+  - a warning at the soft limit;
+  - tools denied at the hard limit, apart from a short commit/checkpoint window;
+  - a stop after 2 permission refusals.
+- **Act on the returns:** `PARTIAL budget:<kind>` means relaunch a smaller task from its checkpoint.
+  `BLOCKED <refusal>` means send it to the human; never relaunch it, and never hand it to another agent.
+- **Check while agents run:** at every wake-up run `python3 .claude/hooks/agent-budget.py status`.
+  - `RUNAWAY`: `SendMessage` "stop, commit, checkpoint, return"; if it's still running at the next
+    wake-up, `TaskStop` it and relaunch smaller.
+  - Never report "still running" twice without reading `status`.
+- **Don't let agents babysit long jobs:** deploys and full sweeps run as background scripts, and an
+  agent only handles a failing slice. During fix loops, run only the affected tests
+  (`sdlc-graph.py diff-context`); full sweeps run at 3v, 5v and the gate.
+- **Keep a budget ledger:** after each wave, append estimate vs actual (the `<usage>` blocks) to
+  `agent_state/phases/${PHASE}/budget.jsonl`. A wave more than 25% over its estimate is reported, not
+  absorbed.
+
 The project settings cap nesting at two levels (`CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=2`):
 - this session → `debate_moderator` → researchers, advocates and arbitrators is the deepest a debate goes
 - a wave agent never spawns the moderator itself
