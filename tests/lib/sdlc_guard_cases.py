@@ -158,6 +158,16 @@ CASES = [
  ("LB8", "deny", "Bash", "limactl shell sdlc-server rm -rf /var/lib/rancher"),
  ("LB9", "deny", "Bash", "limactl shell sdlc-server sudo k3s ctr images rm x"),
  ("LBa", "deny", "Bash", "limactl shell sdlc-server ls /var/lib/rancher/k3s/server/token"),
+ # 2026-10-14 dev/qa PVC data scripts in the node (owner choice; ZoneOS sheets copy-in)
+ ("LP1", "allow","Bash", "limactl shell sdlc-server sudo sh -c '# copy-in:list\nbase=$1\nsha256sum -- \"$base\"/x' sh /var/lib/rancher/k3s/storage/pvc-7bf7a44b-73de-4600-b8ee-d442fa8bfb66_shop-dev_sheets-data"),
+ ("LP2", "allow","Bash", "limactl shell sdlc-server sudo sh -c '# copy-in:install\nset -e' sh /var/lib/rancher/k3s/storage/pvc-7bf7a44b-73de-4600-b8ee-d442fa8bfb66_shop-dev_sheets-data /tmp/zoneos-copy-in-ab12/0"),
+ ("LP3", "allow","Bash", "limactl shell sdlc-server sh -c '# copy-in:unpack\nset -e' sh /tmp/zoneos-copy-in-ab12/0"),
+ ("LP4", "deny", "Bash", "limactl shell sdlc-server sudo sh -c '# dirs' sh"),
+ ("LP5", "deny", "Bash", "limactl shell sdlc-server sudo sh -c 'x' sh /var/lib/rancher/k3s/storage/pvc-7bf7a44b-73de-4600-b8ee-d442fa8bfb66_shop-prod_sheets-data"),
+ ("LP6", "deny", "Bash", "limactl shell sdlc-server sudo sh -c 'x' sh /tmp/only-staging"),
+ ("LP7", "deny", "Bash", "limactl shell sdlc-server sudo sh -c 'x' sh /var/lib/rancher/k3s/storage/pvc-7bf7a44b-73de-4600-b8ee-d442fa8bfb66_shop-dev_sheets-data /etc/rancher/k3s/k3s.yaml"),
+ ("LP8", "deny", "Bash", "limactl shell sdlc-server sudo sh -c 'x' sh /var/lib/rancher/k3s/storage/pvc-7bf7a44b-73de-4600-b8ee-d442fa8bfb66_shop-dev_sheets-data/../../server/token"),
+ ("LP9", "deny", "Bash", "limactl shell sdlc-server sudo sh -c 'x' sh /var/lib/rancher/k3s/storage/pvc-7bf7a44b-73de-4600-b8ee-d442fa8bfb66_kube-system_x"),
  ("L18", "deny", "Bash", "limactl start other"),
  # --- docker / compose
  ("D01", "allow","Bash", "docker compose up -d --build"),

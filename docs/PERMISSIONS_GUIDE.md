@@ -65,6 +65,12 @@ or waits for you. No single mechanism does this; each layer below catches what t
   `/var/lib/rancher`, `.kube`, `k3s.yaml`, tokens or keys is refused, because k3s writes its admin
   kubeconfig 0644. Other root commands (`sudo sh -c`, `sudo k3s …`) still need a `lima.shell_allow`
   entry or the human, since root on the node reaches prod.
+- **Scripts on dev/qa PVC data in the node** (owner decision 2026-10-14, ZoneOS sheets copy-in).
+  `limactl shell <vm> [sudo] sh -c '<script>' sh <args>` passes when every argument is a local-path PVC host
+  dir of a writable namespace (`/var/lib/rancher/k3s/storage/pvc-<uid>_<ns>_<claim>`, with `<ns>` matching
+  `*-dev`/`*-qa`) or a `/tmp` staging dir. As root, at least one argument must be such a PVC dir. The script
+  text itself is not checked; the owner accepted that. Pass the target directory as an argument; a script
+  that reads its targets only from stdin is refused.
 - **The PATH shims use the real home.** A test harness that points `HOME` at a temp dir still gets the
   installed guard and policy. When the guard can't run, the shim says why instead of a bare "blocked".
 - **The cluster is identified by its CA (and the agent credential), not its address.** With a CA pin, the
@@ -113,7 +119,7 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (497 cases, including 13 offline `vet-package.py` cases, 106
+test table is `tests/sdlc-guard.test.sh` (506 cases, including 13 offline `vet-package.py` cases, 106
 AWS cases and 15 default-mode passthrough cases).
 
 ## AWS for your projects
@@ -280,7 +286,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 497/497
+bash tests/sdlc-guard.test.sh     # 506/506
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own

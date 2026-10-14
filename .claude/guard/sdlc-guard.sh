@@ -464,8 +464,32 @@ def check_helm(argv, env):
 LIMA_USER_CMDS = {"test", "ls", "stat", "cat", "head", "tail", "wc", "sha256sum", "du", "df", "uptime", "free"}
 LIMA_SECRET_RE = re.compile(r"(^|/)(etc/rancher|var/lib/rancher|\.kube)(/|$)|k3s\.yaml|token|\.key$|\.pem$")
 LIMA_TMP_RE = re.compile(r"^/tmp/|/staging[^/]*(/|$)|^/var/tmp/")
+# local-path PVC host directories: /var/lib/rancher/k3s/storage/pvc-<uid>_<namespace>_<claim>
+PVC_DIR_RE = re.compile(r"^/var/lib/rancher/k3s/storage/pvc-[0-9a-f-]{36}_([a-z0-9-]+)_[a-z0-9.-]+(/.*)?$")
+STAGING_RE = re.compile(r"^/(tmp|var/tmp)/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$")
+def pvc_dir_writable(path):
+    """A dev/qa PVC's host directory: the namespace in its name is one the policy lets agents write."""
+    m = PVC_DIR_RE.match(path)
+    if not m or ".." in path.split("/"): return False
+    contexts = ((POLICY or {}).get("kube") or {}).get("contexts") or {}
+    return any(ns_writable(m.group(1), want) for want in contexts.values())
+
+def lima_pvc_script(inner, as_root):
+    """`[sudo] sh -c '<script>' sh <args>` acting on dev/qa PVC data (owner decision 2026-10-14, ZoneOS sheets
+    copy-in). Every argument must be a dev/qa PVC host dir or a /tmp staging dir; as root, at least one must be
+    a PVC dir. The script text itself is not checked: the owner accepted that root on the node is trusted here."""
+    if len(inner) < 4 or os.path.basename(inner[0]) not in ("sh", "bash") or inner[1] != "-c":
+        return False
+    args = inner[4:]                                     # inner[3] is $0
+    if not args: return False
+    pvc = [a for a in args if pvc_dir_writable(a)]
+    if any(not (pvc_dir_writable(a) or (STAGING_RE.match(a) and ".." not in a.split("/"))) for a in args):
+        return False
+    return bool(pvc) or not as_root
+
 def lima_shell_builtin(inner, as_root):
     if not inner: return False
+    if lima_pvc_script(inner, as_root): return True
     cmd = os.path.basename(inner[0])
     if as_root:
         return cmd == "buildctl"
