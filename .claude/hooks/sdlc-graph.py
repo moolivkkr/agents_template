@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """sdlc-graph.py — the project's artifact + traceability graph, and the deterministic TC gate.
 
-Built by scripts, never by an LLM, from files the pipeline already writes: docs/BRD.md, PHASE_PLAN.md and
+Built by scripts, never by an LLM, from files the pipeline already writes: the requirements/ source documents
+(.md/.markdown/.txt/.rst; FR → source edges from the BRD's Source column or `Source:` lines), docs/BRD.md, PHASE_PLAN.md and
 every spec / wireframe / contract under docs/design/phases/N/, docs/design/stitch.json, migrations, source and
 test code, agent_state/phases/N/{roster.json,execution.jsonl,reports/*}, reconciliation reports,
 docs/DECISIONS.md and docs/PROJECT_FACTS.md. Stored in agent_state/graph/graph.sqlite with a deterministic
@@ -161,6 +162,9 @@ WALK_PRUNE = (set(tci.SKIP_DIRS) | {".git"}) - {"docs", "agent_state", ".maestro
 CODE_EXT = {".go": "go", ".ts": "ts", ".tsx": "ts", ".js": "js", ".jsx": "js", ".mjs": "js", ".cjs": "js",
             ".py": "py", ".java": "java", ".kt": "kt", ".rs": "rs"}
 MAX_FILE_BYTES = 2_000_000
+REQ_DOC_EXT = {".md", ".markdown", ".txt", ".rst"}   # requirements/ files the graph can read (PDF/DOCX: not indexed)
+SRC_REF_RE = re.compile(r"(?<![\w/.-])((?:\.{1,2}/)*[\w][\w./-]*\.(?:md|markdown|txt|rst))(?:\s*(§\s*[\w.]+))?", re.I)
+SRC_LINE_RE = re.compile(r"^\W*sources?\**\s*:\s*(.+)$", re.I)
 TIER_SIDECAR_EXCLUDE = {"tc-inventory"}
 
 ROLE_TIERS = {
@@ -345,6 +349,8 @@ def classify(rel):
         if rel.endswith(".md"):
             return "report_md", ph
         return None, None
+    if parts[0] == "requirements" and os.path.splitext(rel)[1].lower() in REQ_DOC_EXT:
+        return "requirement", None           # the BRD's source documents: a node per file + the find index
     if parts[0] == "docs" and rel.endswith(".md"):
         return "doc", None                   # any other doc: find index only, no graph nodes
     if parts[0] in ("docs", "agent_state", ".claude"):
@@ -379,8 +385,30 @@ def moscow_of(text):
     return m.group(1).lower().replace("'", "") if m else None
 
 
+def source_refs(cell):
+    """[(requirements/<path>, '§x' | None)] named in a BRD Source cell or `Source:` line ('user interview' → none)."""
+    out = []
+    for m in SRC_REF_RE.finditer(cell):
+        p = re.sub(r"^(?:\.{1,2}/)+", "", m.group(1))
+        if p.startswith("docs/"):
+            continue
+        out.append((p if p.startswith("requirements/") else f"requirements/{p}",
+                    re.sub(r"\s+", "", m.group(2)) if m.group(2) else None))
+    return out
+
+
+def derived_from(o, rid, cell, line):
+    for p, sec in source_refs(cell):
+        o.edge(rid, "derived_from", f"rdoc:{p}", line=line, section=sec)
+
+
+def ex_requirement(o, text):
+    first = next((strip_md(h.group(2)) for h in map(HEADING_RE.match, text.split("\n")) if h), None)
+    o.node(f"rdoc:{o.rel}", "requirement_doc", o.rel, line=1, title=(first or os.path.basename(o.rel))[:160])
+
+
 def ex_brd(o, text):
-    skip_level, lines = None, text.split("\n")
+    skip_level, lines, last = None, text.split("\n"), None
     trows = tci.table_rows(lines)           # tc-inventory.py's table parser: header = the row above a |---| line
     for i, line in enumerate(lines, 1):
         s = line.strip()
@@ -396,8 +424,9 @@ def ex_brd(o, text):
         if h:
             title = strip_md(h.group(2))
             m = REQ_RE.match(title)
+            last = f"req:{m.group(1)}" if m else None
             if m:
-                o.node(f"req:{m.group(1)}", "req", m.group(1), line=i, text=title[:200],
+                o.node(last, "req", m.group(1), line=i, text=title[:200],
                        category=m.group(1).rsplit("-", 1)[0], moscow=moscow_of(title))
             continue
         if s.startswith("|"):
@@ -411,13 +440,22 @@ def ex_brd(o, text):
                 continue
             pj = next((j for j, c in enumerate(row["header"] or []) if re.search(r"priority|moscow", c)), None)
             mo = moscow_of(cells[pj]) if pj is not None and pj < len(cells) else moscow_of(s)
-            o.node(f"req:{first}", "req", first, line=i, text=" | ".join(cells[1:])[:200],
+            last = f"req:{first}"
+            o.node(last, "req", first, line=i, text=" | ".join(cells[1:])[:200],
                    category=first.rsplit("-", 1)[0], moscow=mo)
+            sj = next((j for j, c in enumerate(row["header"] or []) if re.search(r"source", c)), None)
+            if sj is not None and sj < len(cells):
+                derived_from(o, last, cells[sj], i)
             continue
         m = re.match(r"^[-*+]?\s*\**((?:FR|NFR|OBJ)(?:-[A-Z]+)*-\d+[a-z]?)\**\s*[:—–-]", s)
         if m:
-            o.node(f"req:{m.group(1)}", "req", m.group(1), line=i, text=s[:200],
+            last = f"req:{m.group(1)}"
+            o.node(last, "req", m.group(1), line=i, text=s[:200],
                    category=m.group(1).rsplit("-", 1)[0], moscow=moscow_of(s))
+            continue
+        m = SRC_LINE_RE.match(s)
+        if m and last:                      # `- Source: requirements/brief.md §2` under a heading/bullet-style FR
+            derived_from(o, last, m.group(1), i)
 
 
 def ex_ledger(o, text):
@@ -1260,7 +1298,7 @@ def fts_extract(o, kind, phase, text):
     if kind == "phasedoc":
         dk = "screen" if re.search(r"\.(wireframe|ui-spec)\.md$", base) else "spec" if "/specs/" in rel else "phasedoc"
         md_rows(o, dk, phase, text)
-    elif kind in ("brd", "ledger", "doc", "phase_note", "report_md"):
+    elif kind in ("brd", "ledger", "doc", "phase_note", "report_md", "requirement"):
         md_rows(o, {"phase_note": "note", "report_md": "report"}.get(kind, kind), phase, text)
     elif kind in ("report_json", "manifest"):
         try:
@@ -1321,6 +1359,8 @@ def extract(rel, kind, phase, text):
         ex_phasedoc(o, text, phase)
     elif kind == "brd":
         ex_brd(o, text)
+    elif kind == "requirement":
+        ex_requirement(o, text)
     elif kind == "ledger":
         ex_ledger(o, text)
     elif kind == "stitch":
@@ -2735,7 +2775,10 @@ def cmd_trace(g, a):
         eps |= {e["dst"] for e in g.edges("rel='mentions_ep' AND file=? AND line>=? AND line<=?", sn["file"], sn["line"], sn["end_line"])}
     eps = sorted(eps)
     return {"req": t, "text": req[0].get("text") if req else None, "moscow": req[0].get("moscow") if req else None,
-            "defined_at": f"{req[0]['file']}:{req[0]['line']}" if req else None, "phases": phases,
+            "defined_at": f"{req[0]['file']}:{req[0]['line']}" if req else None,
+            "sources": [{"doc": e["dst"][5:], **({"section": e["section"]} if e.get("section") else {}),
+                         "exists": bool(g.nodes("id=?", e["dst"]))} for e in g.edges("src=? AND rel='derived_from'", rid)],
+            "phases": phases,
             "workflows": [e["src"] for e in g.edges("rel='exercises' AND dst=?", rid)],
             "spec_sections": section_rows(g, secs), "tc": tc_rows,
             "endpoints": [{"endpoint": e[3:], "handlers": [h.get("handler") for h in handlers_for(g, e)]} for e in eps]}
@@ -2779,8 +2822,18 @@ def cmd_orphans(g, a):
     scr_no_baseline = [f"{s['name']} ({s.get('route')})" for s in screens if pages and s.get("route") and norm_path(s["route"]) not in baselined]
     scr_no_route = [f"{s['name']} ({s.get('route') or 'no route in spec'})" for s in screens
                     if routes_ui and (not s.get("route") or norm_path(s["route"]) not in routes_ui)]
+    # requirements/ ↔ BRD, from the BRD's Source column / `Source:` lines (only once the BRD cites any source)
+    rdocs = {r["id"] for r in g.nodes("kind='requirement_doc'")}
+    derived = g.edges("rel='derived_from'")
+    cited = {e["dst"] for e in derived}
+    sourced = {e["src"][4:] for e in derived}
+    src_unused = sorted(d[5:] for d in rdocs - cited) if derived else []
+    fr_no_source = [r for r in req_ids if r.startswith("FR") and r not in sourced] if derived else []
+    src_missing = sorted({f"{e['dst'][5:]} (cited by {e['src'][4:]})" for e in derived if e["dst"] not in rdocs})
     return {"phase": phase, "endpoints_without_handler": no_handler, "handlers_without_contract": no_contract,
             "frs_without_spec": fr_no_spec, "frs_in_scope_without_tc": fr_no_tc,
+            "requirement_docs_no_fr_cites": src_unused, "frs_without_source": fr_no_source,
+            "sources_cited_but_missing": src_missing,
             "tests_naming_undefined_tc": [f"{i} @{f}" for i, f in unknown],
             "tc_mentioned_never_listed": sorted(set(unlisted)),
             "screens_without_stitch_baseline": scr_no_baseline, "screens_without_code_route": scr_no_route,

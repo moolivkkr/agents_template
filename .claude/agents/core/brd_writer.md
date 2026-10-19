@@ -81,6 +81,8 @@ Produces the canonical `docs/BRD.md` from the structured analysis and resolved d
 |--------|----------------------------------------------------|------------|--------|
 | FR-001 | <requirement text>                                 | Must/Should/Could | <file> |
 
+Source = the `requirements/` file path (plus `§section` when known), e.g. `requirements/brief.md §2`, or `user interview` when no file says it. sdlc-graph turns each cited file into an FR → source link that `trace` and `orphans` read.
+
 ## 5. Non-Functional Requirements
 | ID      | Category    | Requirement                         | Target      |
 |---------|-------------|-------------------------------------|-------------|

@@ -2,6 +2,7 @@
 
 `.claude/hooks/sdlc-graph.py` builds a graph of each project from the files the pipeline already writes:
 
+- the source documents in `requirements/` (`.md`, `.markdown`, `.txt`, `.rst`; PDF and DOCX are not read)
 - the BRD, PHASE_PLAN, specs, wireframes and contracts
 - migrations, source code and tests
 - rosters, execution logs and reports
@@ -78,6 +79,20 @@ shipped-versions check.
 | 3 | Preflight FAIL; nothing was changed |
 | 4 | The graph build failed; the files were still updated |
 
+## requirements/ → BRD links
+
+Each `requirements/` file is a `requirement_doc` node, and its text is in the full-text index. An FR is linked to
+its source (`derived_from`) when the BRD names the file in the FR table's **Source** column
+(`| FR-001 | … | Must | requirements/brief.md §2 |`) or on a `Source:` line under a heading- or bullet-style FR.
+A bare file name means `requirements/<name>`. A source like "user interview" has no file, so it gets no link.
+
+- `trace FR-001` lists the FR's `sources`, each with `exists` (false = the BRD cites a file that isn't there).
+- `orphans` reports `requirement_docs_no_fr_cites`, `frs_without_source` and `sources_cited_but_missing`. The
+  first two stay empty until the BRD cites at least one source, so a BRD without a Source column isn't flooded.
+
+Editing a requirements file re-indexes it on the next query, like every other file. Nothing marks the FRs
+derived from it as stale; `/recon` and `/accept` do that.
+
 ## Pipeline commands and who uses them
 
 | Command | Used by |
@@ -85,7 +100,7 @@ shipped-versions check.
 | `build [--incremental]` | `/develop` Wave 0c, `/accept`, `/map`. Every query also refreshes the graph incrementally first. |
 | `context --agent ROLE --phase N` | Developers, test writers, `code_quality_verifier`, `tenant_isolation_verifier`, `migration_safety_reviewer`, `accessibility_auditor`, `ui_standards_auditor`, `spec_impl_reconciler`: their TC rows and the only spec sections to read |
 | `diff-context [--base SHA]` | `code_reviewer_I`/`II`, `security_reviewer`: changed symbols and the endpoints, tables, TCs and FRs they touch |
-| `consumers` / `impact` / `trace` / `orphans` | `breaking_change_reviewer`, `code_reviewer_II`, `spec_impl_reconciler` |
+| `consumers` / `impact` / `trace` / `orphans` | `breaking_change_reviewer`, `code_reviewer_II`, `spec_impl_reconciler`; `requirements_brd_reconciler` (`trace` / `orphans` for requirements/ ↔ BRD) |
 | `tc --phase N` | `spec_writer`, `e2e_orchestrator`, Wave 0c (`--spec-only` TC priorities for the results converters) |
 | `unlocked --phase N` | `e2e_orchestrator`: the e2e scope |
 | `gate --phase N [--tc-only]` | `verify-gate.sh` check (h), `spec_test_reconciler`, Wave 6: the one deterministic TC gate |

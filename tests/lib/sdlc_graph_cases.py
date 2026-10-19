@@ -1126,6 +1126,55 @@ sv = c.execute("SELECT value FROM meta WHERE key='schema_version'").fetchone()[0
 c.close()
 check("FS11", (0, True, "2"), (rc, "docs/DECISIONS.md" in out, sv), "a schema-version change wipes and rebuilds (incl. the find index)")
 
+# ─── requirements/ source documents: nodes, FR → source edges, find index, incremental refresh ──────────
+R = new_repo("r")
+write(R, "requirements/brief.md", "# Customer brief\n## Orders\nBuyers must see their orders newest first.\n")
+write(R, "requirements/notes.txt", "Interview notes: buyers want CSV export of invoices.\n")
+write(R, "requirements/unused.md", "# Parking lot\nNothing cites this.\n")
+write(R, "requirements/scan.pdf", "%PDF-1.4 binary-ish\n")
+write(R, "docs/BRD.md", """# BRD
+## 4. Functional Requirements
+| ID | Requirement | Priority | Source |
+|---|---|---|---|
+| FR-001 | list orders newest first | Must | requirements/brief.md §2 |
+| FR-002 | CSV export | Should | notes.txt, user interview |
+| FR-003 | invented | Could | user interview |
+| FR-004 | ghost | Could | [gone](../requirements/gone.md) |
+
+### FR-005 — Cancel an order (SHOULD)
+- Source: requirements/brief.md
+""")
+git(R, "add", "-A")
+git(R, "commit", "-qm", "r")
+rc, tr = sgj(R, "trace", "FR-001")
+check("RQ01", (0, [{"doc": "requirements/brief.md", "section": "§2", "exists": True}]), (rc, tr.get("sources")),
+      "trace: an FR's Source cell becomes a derived_from link to the requirements file (with its § section)")
+check("RQ02", [{"doc": "requirements/notes.txt", "exists": True}], sgj(R, "trace", "FR-002")[1].get("sources"),
+      "a bare file name resolves to requirements/<name>; 'user interview' adds no link")
+check("RQ03", [{"doc": "requirements/brief.md", "exists": True}], sgj(R, "trace", "FR-005")[1].get("sources"),
+      "a `Source:` line under a heading-style FR links that FR")
+rc, orp = sgj(R, "orphans")
+check("RQ04", (["requirements/unused.md"], ["FR-003"], ["requirements/gone.md (cited by FR-004)"]),
+      (orp.get("requirement_docs_no_fr_cites"), orp.get("frs_without_source"), orp.get("sources_cited_but_missing")),
+      "orphans: uncited source doc, FRs with no source file, and a cited file that doesn't exist")
+check("RQ05", [], sgj(F, "orphans")[1].get("frs_without_source"),
+      "orphans: a BRD with no Source citations at all reports no frs_without_source (no flood)")
+rc, out, _ = sg(R, "find", "CSV export invoices", env=ON)
+check("RQ06", True, "requirements/notes.txt" in out, "find: requirements/ text is in the full-text index")
+rc, out, _ = sg(R, "find", "PDF-1.4", env=ON)
+check("RQ07", False, "scan.pdf" in out, "requirements/*.pdf is not indexed")
+write(R, "requirements/notes.txt", "Interview notes: buyers want XLSX export of invoices.\n")
+rc, out, _ = sg(R, "find", "XLSX export", env=ON)
+check("RQ08", (True, False), ("requirements/notes.txt" in out, "requirements/notes.txt" in sg(R, "--no-refresh", "find", "CSV", env=ON)[1]),
+      "an uncommitted edit to a requirements file is re-indexed by the next query; the old text is gone")
+GRI, GRF = os.path.join(W, "r-inc"), os.path.join(W, "r-full")
+sg(R, "--graph-dir", GRI, "build")
+write(R, "requirements/new.md", "# New ask\nRefunds within 14 days.\n")
+os.remove(os.path.join(R, "requirements/unused.md"))
+sg(R, "--graph-dir", GRI, "build", "--incremental")
+sg(R, "--graph-dir", GRF, "build")
+check("RQ09", True, index_dump(GRI) == index_dump(GRF), "requirements/: incremental re-index == full rebuild (added + deleted files)")
+
 print(f"\nsdlc-graph: {total - fails}/{total} passed")
 shutil.rmtree(W, ignore_errors=True)
 sys.exit(1 if fails else 0)

@@ -47,6 +47,14 @@ This is **link 1 of 6** in the reconciliation chain:
 
 ---
 
+## Graph seed (deterministic, run first)
+
+`python3 .claude/hooks/sdlc-graph.py orphans` lists `requirement_docs_no_fr_cites` (source files no FR cites),
+`frs_without_source` and `sources_cited_but_missing`; `python3 .claude/hooks/sdlc-graph.py trace FR-NNN` shows one
+FR's sources. These come from the BRD's Source column, so they seed the checks below; they don't replace reading
+the documents (a cited file can still be misrepresented, and an uncited one can still be covered). If the graph
+is unavailable (exit 4), say so and do both directions by reading.
+
 ## Direction A → B: Requirements → BRD
 
 For each key claim, feature, or constraint found in `./requirements/`:
