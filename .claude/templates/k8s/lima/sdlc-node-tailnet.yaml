@@ -1,0 +1,53 @@
+# sdlc-node-tailnet.yaml — Lima VM for one k3s node of the sdlc lab cluster in TAILNET mode
+# (cluster-up.sh TRANSPORT=tailnet). The same template serves the server (instance sdlc-server) and
+# every agent (instance sdlc-agent, one per Mac).
+#
+# Topology (any number of Macs on one Tailscale tailnet):
+#   each VM is its own tailnet device (tag:k8s), named sdlc-server / sdlc-agent-<mac>
+#   node IP = the VM's tailnet IPv4 (unique, so no dummy interface is needed)
+#   k3s --vpn-auth=tailscale: flannel's tailscale backend advertises each node's pod /24 as a subnet
+#     route, so pods, VMs and the lab Macs (with accept-routes) reach every pod IP directly
+#     (https://docs.k3s.io/networking/distributed-multicloud)
+#   no host port forwards for 6443 or WireGuard: the API is https://<sdlc-server tailnet IP>:6443
+#
+# Provisioning only installs Tailscale. Joining the tailnet and installing k3s need the auth key and
+# the cluster token, so cluster-up.sh runs scripts/tailnet-join.sh in the VM afterwards and passes
+# the secrets on stdin. Nothing secret is stored in this instance's lima.yaml.
+minimumLimaVersion: 2.0.0
+base: template:_images/ubuntu-lts
+vmType: vz
+cpus: 6
+memory: 24GiB
+disk: 100GiB
+mounts: []
+containerd:
+  system: false
+  user: false
+provision:
+- mode: system
+  script: |
+    #!/bin/bash
+    set -eux -o pipefail
+    command -v tailscale >/dev/null || curl -fsSL https://tailscale.com/install.sh | sh
+    # the VM routes its pod /24 for the tailnet
+    cat >/etc/sysctl.d/99-sdlc-tailnet.conf <<'EOF'
+    net.ipv4.ip_forward = 1
+    net.ipv6.conf.all.forwarding = 1
+    EOF
+    sysctl -p /etc/sysctl.d/99-sdlc-tailnet.conf
+portForwards:
+# STATIC (set up by the host agent at start), the same on every lab Mac: push images to
+# localhost:5001, reach apps at http://<app>-<env>.localhost:18080 — without leaving 127.0.0.1.
+- guestPort: 30501          # in-cluster registry NodePort
+  guestIP: "127.0.0.1"
+  hostPort: 5001
+  hostIP: "127.0.0.1"
+  static: true
+- guestPort: 80             # Traefik ingress (svclb hostPort on every node)
+  guestIP: "127.0.0.1"
+  hostPort: 18080
+  hostIP: "127.0.0.1"
+  static: true
+- guestIP: "0.0.0.0"
+  proto: any
+  ignore: true

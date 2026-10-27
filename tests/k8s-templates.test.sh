@@ -263,6 +263,45 @@ assert 'requests.cpu: "8"' in docs["demo-prod"] and 'requests.cpu: "4"' in docs[
 assert re.search(r"ARGS .* -n demo-prod delete rolebinding sdlc-agent-admin", log)
 PY2
 
+# ── tailnet mode (cluster-up.sh TRANSPORT=tailnet) ──────────────────────────────────────────────
+TJ="$K8S/scripts/tailnet-join.sh"; TL="$K8S/lima/sdlc-node-tailnet.yaml"; CU="$K8S/scripts/cluster-up.sh"
+grep -q -- '--snat-subnet-routes=false' "$TJ" && grep -q -- '--vpn-auth-file=' "$TJ" && ! grep -q -- '--vpn-auth=' "$TJ" \
+  && ok "tailnet-join: real source IPs on pod routes (NetworkPolicy works); auth key via vpn-auth-file, not argv" || bad "tailnet-join: SNAT or vpn-auth handling changed"
+tu="$(grep -n 'tailscale up' "$TJ" | head -1 | cut -d: -f1)"; ki="$(grep -n 'get.k3s.io' "$TJ" | head -1 | cut -d: -f1)"
+[ -n "$tu" ] && [ -n "$ki" ] && [ "$tu" -lt "$ki" ] && ok "tailnet-join joins the tailnet before k3s (so k3s skips its own 'tailscale up --reset')" || bad "tailnet-join: k3s installed before the tailnet join"
+grep -v '^ *#' "$TL" | grep -qiE '^param:|token|authkey' && bad "sdlc-node-tailnet.yaml carries params/secrets (they would persist in lima.yaml)" || ok "sdlc-node-tailnet.yaml holds no secrets; they arrive on stdin"
+grep -q 'TS_AUTHKEY=%q' "$CU" && grep -q 'limactl shell $inst sudo bash -s' "$CU" && ! grep -qE 'limactl (create|start|shell)[^|]*TS_AUTHKEY' "$CU" \
+  && ok "cluster-up tailnet: secrets reach the VM on stdin only" || bad "cluster-up tailnet: secrets on a command line"
+W2="$(mktemp -d)"; mkdir -p "$W2/bin"
+cat > "$W2/bin/kubectl" <<'SH'
+#!/bin/bash
+case "$*" in
+  *"get configmap lab-network"*) [ -n "${FAKE_MAC_IPS:-}" ] && printf '%s' "$FAKE_MAC_IPS" || exit 1 ;;
+  *apply*) cat >> "$FAKE_APPLY" ;;
+esac
+SH
+chmod +x "$W2/bin/kubectl"
+FAKE_APPLY="$W2/tail.yaml" FAKE_MAC_IPS="100.95.253.107 100.97.39.90" KUBECTL="$W2/bin/kubectl" \
+  bash "$K8S/scripts/app-namespaces.sh" demo dev >/dev/null 2>&1
+FAKE_APPLY="$W2/tb.yaml" KUBECTL="$W2/bin/kubectl" bash "$K8S/scripts/app-namespaces.sh" demo dev >/dev/null 2>&1
+python3 - "$W2/tail.yaml" "$W2/tb.yaml" <<'PY2' && ok "env-isolation: tailnet mode admits exactly the lab Macs (/32 each); thunderbolt mode unchanged" || bad "env-isolation ipBlock rendering"
+import sys
+try:
+    import yaml
+except ImportError:
+    sys.exit(0)
+def peers(f):
+    np = [d for d in yaml.safe_load_all(open(f)) if d and d["kind"] == "NetworkPolicy"][0]
+    return np["spec"]["ingress"][0]["from"]
+t, b = peers(sys.argv[1]), peers(sys.argv[2])
+assert [p["ipBlock"]["cidr"] for p in t if "ipBlock" in p] == ["100.95.253.107/32", "100.97.39.90/32"], t
+assert not any("ipBlock" in p for p in b) and len(b) == 2, b
+assert t[:2] == b
+PY2
+FAKE_APPLY="$W2/bad.yaml" FAKE_MAC_IPS="0.0.0.0/0" KUBECTL="$W2/bin/kubectl" bash "$K8S/scripts/app-namespaces.sh" demo dev >/dev/null 2>&1 \
+  && bad "app-namespaces accepted a CIDR as a lab Mac IP" || ok "app-namespaces refuses a malformed lab-network entry (no 0.0.0.0/0)"
+rm -rf "$W2"
+
 echo "────────────────────────────────────────────"
 echo "k8s-templates.test.sh: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

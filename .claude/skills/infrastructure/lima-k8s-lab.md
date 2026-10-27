@@ -42,6 +42,60 @@ Lima VM sdlc-server: k3s server, Traefik, registry        Lima VM sdlc-agent: k3
   host numbers out of the range other sites use. A routed site-to-site VPN would need a different
   subnet on one side. ssh tunnels, which resolve addresses on the far side, do not.
 
+## Tailnet mode (any number of Macs over Tailscale)
+
+`cluster-up.sh` with `TRANSPORT=tailnet` builds the same cluster (same namespaces, RBAC, registry,
+ingress, guard model) across Macs that share a Tailscale tailnet instead of a Thunderbolt link.
+
+```text
+Mac SERVER_MAC ── VM sdlc-server (tailnet device sdlc-server, tag:k8s) ─┐
+Mac A ── VM sdlc-agent (tailnet device sdlc-agent-A) ───────────────────┤  tailnet: WireGuard mesh,
+Mac B ── VM sdlc-agent (sdlc-agent-B) ──────────────────────────────────┤  pod /24s as subnet routes
+Mac C ── VM sdlc-agent (sdlc-agent-C) ──────────────────────────────────┘
+```
+
+- Every VM is its own tailnet device. Its tailnet IPv4 is its node IP, and k3s's `--vpn-auth`
+  integration switches flannel to the Tailscale backend, which advertises each node's pod /24
+  (https://docs.k3s.io/networking/distributed-multicloud). One template, `lima/sdlc-node-tailnet.yaml`,
+  serves all nodes; `scripts/tailnet-join.sh` joins the VM and installs k3s. Secrets go in on stdin.
+- The VM joins with `--snat-subnet-routes=false`. Routed packets keep their real source IP, so the
+  `env-isolation` NetworkPolicy still recognises same-namespace pods on other nodes.
+- **Every lab Mac reaches every pod IP directly.** `cluster-up.sh` stores the lab Macs' tailnet IPs
+  in ConfigMap `sdlc-system/lab-network`. `app-namespaces.sh` then adds one `ipBlock /32` per lab Mac
+  to `env-isolation`. Other tailnet devices and other namespaces are still refused.
+- Each Mac keeps the loopback conventions: `localhost:5001` (registry) and
+  `http://<app>-<env>.localhost:18080` (ingress). The API is `https://<sdlc-server tailnet IP>:6443`.
+- The guard's lab hosts are the lab Macs and node VMs only, by tailnet name and IP. Other devices on
+  the same tailnet (for example another site's Mac) stay non-local.
+
+**One-time, in the Tailscale admin console:**
+
+1. Merge this into the policy file:
+   ```hujson
+   "tagOwners":     {"tag:k8s": ["autogroup:admin"]},
+   "autoApprovers": {"routes": {"10.42.0.0/16": ["tag:k8s"]}},
+   "ssh": [{"action": "accept", "src": ["autogroup:member"], "dst": ["tag:k8s"],
+            "users": ["autogroup:nonroot", "root"]}],
+   ```
+   With a restricted policy (not the default allow-all), also grant the lab Macs and `tag:k8s`
+   access to `tag:k8s:*` and `10.42.0.0/16:*`. Grant nothing else to `10.42.0.0/16`.
+2. Settings › Keys: create an auth key that is reusable, pre-approved and tagged `tag:k8s`
+   (not ephemeral).
+
+**Each lab Mac:** Tailscale running, `brew install lima`, Remote Login on, and
+`ssh <mac> true` working from the Mac that runs `cluster-up.sh`. Tailscale's macOS app can't be a
+Tailscale SSH server, so Mac-to-Mac is plain ssh over MagicDNS. The VMs run Tailscale SSH
+(`ssh sdlc-agent-<mac>`).
+
+```bash
+TRANSPORT=tailnet SERVER_MAC=studio52 AGENT_MACS="macm4 macstudio51 studio256" \
+  TS_AUTHKEY=tskey-auth-... .claude/templates/k8s/scripts/cluster-up.sh
+```
+
+Switching an existing Thunderbolt cluster to tailnet rebuilds it. `limactl delete` the old
+`sdlc-server` and `sdlc-agent` VMs (this wipes every `<app>-<env>` namespace and its data), run the
+command above, then `app-namespaces.sh <app>` and each project's deploy.
+
 ## Who does what
 
 | Human (admin kubeconfig `~/.kube/sdlc-lab-admin.yaml`) | Agent (`~/.kube/sdlc-lab.json`, ServiceAccount `sdlc-system/sdlc-agent`) |

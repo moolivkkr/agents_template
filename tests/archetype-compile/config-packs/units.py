@@ -94,6 +94,7 @@ EXPECTED = {
     "infrastructure/docker.md": {"dockerfile": 2, "yaml": 1},
     "infrastructure/github-actions.md": {"yaml": 4},
     "infrastructure/kubernetes.md": {"yaml": 3},
+    "infrastructure/lima-k8s-lab.md": {"sh": 1},
     "infrastructure/localstack-aws-local.md": {"sh": 10, "yaml": 4},
     "infrastructure/saas-tenancy-models.md": {"sql": 2, "yaml": 1},
     "infrastructure/secrets-management.md": {"hcl": 1, "sh": 1, "yaml": 1},
@@ -649,6 +650,7 @@ BLOCKS = {
         wrap="apiVersion: apps/v1\nkind: Deployment\nmetadata: { name: api }\nspec:\n  selector: { matchLabels: { app: api } }\n"
              "  template:\n    metadata: { labels: { app: api } }\n    spec:\n      containers:\n        - name: api\n"
              "          image: registry.example/api:1.0.0\n{}\n"),
+    "infrastructure/lima-k8s-lab.md#sh1": dict(anchor='TRANSPORT=tailnet SERVER_MAC=studio52 AGENT_MACS="macm4 macstudio51 studio256" \\', check="sh"),
     "infrastructure/secrets-management.md#sh1": dict(anchor='gitleaks detect --source . --redact           # scan working tree + history', check="sh"),
     # ── infrastructure/terraform.md
     "infrastructure/terraform.md#hcl1": dict(anchor='# backend.tf', check="hcl"),

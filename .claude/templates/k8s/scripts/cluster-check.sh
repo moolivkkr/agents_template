@@ -5,8 +5,9 @@
 #   nodes     every node Ready
 #   push      an image copied into the in-cluster registry through localhost:5001 (crane)
 #   pull      one pod per node starts from localhost:5001/... (each node's containerd mirror)
-#   pod-ip    pod -> pod across nodes, both directions, ROUNDS times
+#   pod-ip    pod -> pod across nodes, both directions, ROUNDS times (first node <-> every other node)
 #   svc-dns   pod -> Service by DNS name across nodes, both directions, ROUNDS times
+#   mac-pod   tailnet mode only: this Mac -> every pod IP over the tailnet's pod routes
 #   ingress   http://sdlc-check.localhost:18080 from this Mac (Traefik via the Lima forward)
 # Everything it creates (pods, services, ingress in sdlc-system, and its registry image) is deleted at the end.
 set -uo pipefail
@@ -60,14 +61,23 @@ if "${K[@]}" wait --for=condition=Ready "${PODS[@]/#/pod/}" --timeout=180s >/dev
   ok "pods started from $REGISTRY on every node"
 else bad "pods did not start: $("${K[@]}" get pods -l sdlc-check=1 --no-headers 2>&1 | tr '\n' ';')"; fi
 
-if [ "${#PODS[@]}" -ge 2 ]; then
-  A="${PODS[0]}"; B="${PODS[1]}"
-  IPA="$("${K[@]}" get pod "$A" -o jsonpath='{.status.podIP}')"; IPB="$("${K[@]}" get pod "$B" -o jsonpath='{.status.podIP}')"
+[ "${#PODS[@]}" -ge 1 ] && A="${PODS[0]}" && IPA="$("${K[@]}" get pod "$A" -o jsonpath='{.status.podIP}')"
+for B in ${PODS[@]+"${PODS[@]:1}"}; do
+  IPB="$("${K[@]}" get pod "$B" -o jsonpath='{.status.podIP}')"
   echo "== cross-node traffic, $ROUNDS rounds ($A=$IPA, $B=$IPB)"
   e=0; for _ in $(seq 1 "$ROUNDS"); do fetch "$A" "http://$IPB/" || e=$((e+1)); fetch "$B" "http://$IPA/" || e=$((e+1)); done
-  [ "$e" = 0 ] && ok "pod-ip both directions ($((ROUNDS*2))/$((ROUNDS*2)))" || bad "pod-ip: $e/$((ROUNDS*2)) failed"
+  [ "$e" = 0 ] && ok "pod-ip $A<->$B ($((ROUNDS*2))/$((ROUNDS*2)))" || bad "pod-ip $A<->$B: $e/$((ROUNDS*2)) failed"
   e=0; for _ in $(seq 1 "$ROUNDS"); do fetch "$A" "http://$B/" || e=$((e+1)); fetch "$B" "http://$A.sdlc-system.svc.cluster.local/" || e=$((e+1)); done
-  [ "$e" = 0 ] && ok "svc-dns both directions ($((ROUNDS*2))/$((ROUNDS*2)))" || bad "svc-dns: $e/$((ROUNDS*2)) failed"
+  [ "$e" = 0 ] && ok "svc-dns $A<->$B ($((ROUNDS*2))/$((ROUNDS*2)))" || bad "svc-dns $A<->$B: $e/$((ROUNDS*2)) failed"
+done
+
+if [ "$("${K[@]}" get configmap lab-network -o jsonpath='{.data.transport}' 2>/dev/null)" = tailnet ]; then
+  echo "== this Mac -> pod IPs over the tailnet"
+  for P in ${PODS[@]+"${PODS[@]}"}; do
+    IP="$("${K[@]}" get pod "$P" -o jsonpath='{.status.podIP}')"
+    curl -s -m 5 "http://$IP/" | grep -q '<title>Welcome' && ok "mac-pod $P ($IP)" \
+      || bad "mac-pod $P ($IP): no route? (tailscale set --accept-routes; pod routes approved in the admin console?)"
+  done
 fi
 
 echo "== ingress ($INGRESS_URL)"
