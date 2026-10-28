@@ -650,7 +650,7 @@ BLOCKS = {
         wrap="apiVersion: apps/v1\nkind: Deployment\nmetadata: { name: api }\nspec:\n  selector: { matchLabels: { app: api } }\n"
              "  template:\n    metadata: { labels: { app: api } }\n    spec:\n      containers:\n        - name: api\n"
              "          image: registry.example/api:1.0.0\n{}\n"),
-    "infrastructure/lima-k8s-lab.md#sh1": dict(anchor='TRANSPORT=tailnet SERVER_MAC=studio52 AGENT_MACS="macm4 macstudio51 studio256" \\', check="sh"),
+    "infrastructure/lima-k8s-lab.md#sh1": dict(anchor='TRANSPORT=tailnet SERVER_MAC=macstudio51 AGENT_MACS="macm4 studio52 studio256" \\', check="sh"),
     "infrastructure/secrets-management.md#sh1": dict(anchor='gitleaks detect --source . --redact           # scan working tree + history', check="sh"),
     # ── infrastructure/terraform.md
     "infrastructure/terraform.md#hcl1": dict(anchor='# backend.tf', check="hcl"),

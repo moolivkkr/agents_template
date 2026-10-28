@@ -13,7 +13,7 @@
 #
 # TAILNET mode — any number of Macs on one Tailscale tailnet, every VM its own tailnet device:
 #
-#   TRANSPORT=tailnet SERVER_MAC=studio52 AGENT_MACS="macm4 macstudio51 studio256" \
+#   TRANSPORT=tailnet SERVER_MAC=macstudio51 AGENT_MACS="macm4 studio52 studio256" \
 #     TS_AUTHKEY=tskey-auth-... .claude/templates/k8s/scripts/cluster-up.sh
 #
 #   SERVER_MAC    tailnet name of the Mac that runs sdlc-server ("" = this Mac)

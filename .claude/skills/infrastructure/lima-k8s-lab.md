@@ -88,9 +88,17 @@ Tailscale SSH server, so Mac-to-Mac is plain ssh over MagicDNS. The VMs run Tail
 (`ssh sdlc-agent-<mac>`).
 
 ```bash
-TRANSPORT=tailnet SERVER_MAC=studio52 AGENT_MACS="macm4 macstudio51 studio256" \
+TRANSPORT=tailnet SERVER_MAC=macstudio51 AGENT_MACS="macm4 studio52 studio256" \
   TS_AUTHKEY=tskey-auth-... .claude/templates/k8s/scripts/cluster-up.sh
 ```
+
+**Sites and latency.** Node IPs are tailnet IPs. A Mac can move to another network or country and
+its node rejoins with the same IP, with no change to the cluster. The server is the exception:
+moving `sdlc-server` means rebuilding the cluster, so put it on the Mac that will be its permanent
+home. The registry, Traefik and CoreDNS are pinned to the server node. Agents on a distant site pay
+that round trip on image pulls, ingress and DNS lookups until they move close to it. Check each path
+with `tailscale ping sdlc-agent-<mac>`: "via <ip>:<port>" means a direct connection, "via DERP"
+means relayed.
 
 Switching an existing Thunderbolt cluster to tailnet rebuilds it. `limactl delete` the old
 `sdlc-server` and `sdlc-agent` VMs (this wipes every `<app>-<env>` namespace and its data), run the
