@@ -77,11 +77,17 @@ or waits for you. No single mechanism does this; each layer below catches what t
   API server may move between networks (Thunderbolt bridge or LAN) without breaking `kubectl`.
 - **Destructive commands always prompt (*confirm*).** In an unattended run with no one to ask, that
   means deny, and the PATH shims block them inside scripts (exit 126). They cover:
-  - `git reset --hard`, force or delete pushes, `clean -f`, checkout/restore over changes, `stash drop`,
-    `branch -D`, history rewrites;
-  - `compose down -v`, volume deletion, `system prune --volumes`;
+  - outside trusted repos: `git reset --hard`, HEAD-moving resets, rebase, revert, force or delete
+    pushes, `clean -f`, checkout/restore over changes, `stash drop`, `branch -D`, history rewrites. In a
+    **trusted repo** (this framework repo, found by its own `.claude/guard/` sources, plus any
+    `git.trusted_repos` path in the policy) every git operation runs, except force-pushing, deleting or
+    mirroring `main`/`master` (owner decision 2026-10-28). `git.trust_framework: false` turns off the
+    framework default;
+  - `system prune --volumes` (every project's data). `compose down -v` and `docker volume rm|prune` on
+    local stacks are dev and pass (2026-10-28);
   - `rm -r` outside `/tmp`, the scratchpad and build-artifact dirs; `find -delete` / `-exec rm`;
-  - destructive SQL and `dropdb`;
+  - destructive SQL and `dropdb`, except through `kubectl exec -n <app>-dev|<app>-qa` or
+    `docker compose exec` into a dev/qa database, which pass (2026-10-28);
   - `aws` deletes, terminations, deregistrations and purges (`delete-*`, `terminate-*`, `s3 rm|rb`,
     `s3 sync --delete`, …), writes to `ask_services` (IAM, Organizations, identity, EKS), `ask_actions`,
     prod-looking names, and `aws configure set`;
@@ -119,7 +125,7 @@ allows (`npm ci --ignore-scripts`). See `.claude/skills/security/secure-coding.m
 `dependency_scanner` re-vets every dependency the phase added.
 
 The guard only ever returns *deny* or *ask*, never *allow*, so every other layer still applies. Its
-test table is `tests/sdlc-guard.test.sh` (506 cases, including 13 offline `vet-package.py` cases, 106
+test table is `tests/sdlc-guard.test.sh` (522 cases, including 13 offline `vet-package.py` cases, 106
 AWS cases and 15 default-mode passthrough cases).
 
 ## AWS for your projects
@@ -286,7 +292,7 @@ sudo install -m 644 -o root -g wheel .claude/guard/managed-settings.json "/Libra
 # 5. Verify, then start a NEW Claude Code session (hooks load at session start)
 claude doctor
 claude auto-mode config          # your environment/allow/hard_deny entries appear merged with $defaults
-bash tests/sdlc-guard.test.sh     # 506/506
+bash tests/sdlc-guard.test.sh     # 522/522
 ```
 
 **Why steps 3 and 4 are yours.** Claude Code's auto mode refuses to let an agent rewrite its own

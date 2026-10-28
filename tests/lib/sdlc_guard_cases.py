@@ -48,6 +48,11 @@ gen = subprocess.run([sys.executable, MAKE_POLICY, "--kubeconfig", AGENT_KC, "--
 if gen.returncode != 0:
     print("FAIL make-policy could not generate the test policy:", gen.stderr)
     sys.exit(1)
+# The tables run from a dir inside this repo; the framework repo is git-trusted by default (2026-10-28), so
+# the main policy turns that off and GIT_TRUST_CASES exercise the trusted mode with a policy that keeps it.
+TRUST_POLICY = os.path.join(W, "policy-git-trust.json")
+shutil.copy(POLICY, TRUST_POLICY)
+_p = json.load(open(POLICY)); _p["git"] = {"trust_framework": False}; json.dump(_p, open(POLICY, "w"))
 
 K = f"--kubeconfig {PIN}"
 # (id, expected, tool, input)  input is a command string for Bash, or a dict for other tools
@@ -102,7 +107,7 @@ CASES = [
  ("K45", "deny", "Bash", "kubectl -n production apply -f x.yaml"),
  ("K46", "ask",  "Bash", "kubectl config view --raw"),
  ("K47", "ask",  "Bash", "kubectl apply -f https://example.com/x.yaml -n shop-dev"),
- ("K48", "ask",  "Bash", "kubectl exec -n shop-dev deploy/postgres -- psql -U app -c 'DROP DATABASE app'"),
+ ("K48", "allow","Bash", "kubectl exec -n shop-dev deploy/postgres -- psql -U app -c 'DROP DATABASE app'"),  # dev/qa DB: agent's call
  ("K49", "deny", "Bash", "helm install pg bitnami/postgresql"),                                 # no -n
  ("K50", "allow","Bash", "helm upgrade --install pg ./charts/pg -n shop-dev"),
  ("K51", "deny", "Bash", "helm --kube-context prod-eks list"),
@@ -173,9 +178,9 @@ CASES = [
  ("D01", "allow","Bash", "docker compose up -d --build"),
  ("D02", "allow","Bash", "docker build -t localhost:5001/shop/api:3f2a1c9 ."),
  ("D03", "allow","Bash", "docker push localhost:5001/shop/api:3f2a1c9"),
- ("D04", "ask",  "Bash", "docker compose down -v"),
- ("D05", "ask",  "Bash", "docker-compose -f compose.yml down --volumes"),
- ("D06", "ask",  "Bash", "docker volume rm app_pgdata"),
+ ("D04", "allow","Bash", "docker compose down -v"),
+ ("D05", "allow","Bash", "docker-compose -f compose.yml down --volumes"),
+ ("D06", "allow","Bash", "docker volume rm app_pgdata"),
  ("D07", "ask",  "Bash", "docker system prune -a --volumes -f"),
  ("D08", "ask",  "Bash", "docker push ghcr.io/acme/api:1.0"),
  ("D09", "deny", "Bash", "docker -H tcp://10.0.0.5:2376 ps"),
@@ -208,7 +213,7 @@ CASES = [
  ("S02", "ask",  "Bash", "psql -h localhost -U app -c 'TRUNCATE users'"),
  ("S03", "ask",  "Bash", "psql -c \"DELETE FROM sessions;\""),
  ("S04", "allow","Bash", "psql -c \"DELETE FROM sessions WHERE expires_at < now()\""),
- ("S05", "ask",  "Bash", "docker compose exec -T db psql -U app -c 'DROP SCHEMA public CASCADE'"),
+ ("S05", "allow","Bash", "docker compose exec -T db psql -U app -c 'DROP SCHEMA public CASCADE'"),
  ("S06", "ask",  "Bash", "dropdb app_dev"),
  # --- network
  ("N01", "allow","Bash", "curl -sf http://localhost:18080/api/health"),
@@ -423,7 +428,9 @@ PASSTHROUGH_CASES = [
  ("PT6", "ask",  "Bash", "rm -rf src"),
  ("PT7", "ask",  "Bash", "git reset --hard HEAD~1"),
  ("PT8", "allow","Bash", "kubectl delete deploy api -n shop-dev"),
- ("PT9", "ask",  "Bash", "docker compose down -v"),
+ ("PT9", "allow","Bash", "docker compose down -v"),
+ ("PTF", "ask",  "Bash", "psql -h db.internal -U app -c 'DROP TABLE users'"),          # not a dev/qa exec
+ ("PTG", "ask",  "Bash", "docker system prune -a --volumes -f"),
  ("PTA", "ask",  "Bash", "psql -c 'DROP TABLE users'"),
  ("PTB", "ask",  "Bash", "ssh tb2 'docker volume rm pg'"),
  ("PTC", "deny", "Bash", "kubectl delete ns shop-qa"),
@@ -645,6 +652,38 @@ def aws_cases(env):
 
 
 
+def git_trust_cases(env):
+    """Owner decision 2026-10-28: every git operation runs unprompted in the framework repo (and in
+    git.trusted_repos); only rewriting or deleting main/master on the remote still asks."""
+    tenv = {k: v for k, v in env.items() if k != "SDLC_GUARD_ASK"}
+    tenv["SDLC_GUARD_POLICY"] = TRUST_POLICY
+    other = os.path.join(W, "plain-repo"); os.makedirs(os.path.join(other, ".git"), exist_ok=True)
+    open(os.path.join(other, ".git", "HEAD"), "w").write("ref: refs/heads/feature-x\n")
+    feat = os.path.join(W, "feat-repo"); os.makedirs(os.path.join(feat, ".git"), exist_ok=True)
+    open(os.path.join(feat, ".git", "HEAD"), "w").write("ref: refs/heads/feature-x\n")
+    listed = os.path.join(W, "listed-pol.json"); _l = json.load(open(TRUST_POLICY))
+    _l["git"] = {"trusted_repos": [feat]}; json.dump(_l, open(listed, "w"))
+    T = [  # (id, want, cwd, command, policy)
+     ("GT1", "allow", REPO, "git reset --hard HEAD~1", TRUST_POLICY),
+     ("GT2", "allow", REPO, "git rebase -i HEAD~3 && git revert abc1234", TRUST_POLICY),
+     ("GT3", "allow", REPO, "git checkout -- . && git clean -fdx && git stash drop && git branch -D old", TRUST_POLICY),
+     ("GT4", "allow", REPO, "git push --force-with-lease origin feature-x", TRUST_POLICY),
+     ("GT5", "ask",   REPO, "git push --force origin main", TRUST_POLICY),
+     ("GT6", "ask",   REPO, "git push origin --delete master", TRUST_POLICY),
+     ("GT7", "ask",   REPO, "git push --mirror", TRUST_POLICY),
+     ("GT8", "allow", REPO, "git push origin main", TRUST_POLICY),
+     ("GT9", "ask",   other, "git reset --hard HEAD~1", TRUST_POLICY),               # an ordinary repo: unchanged
+     ("GTA", "allow", other, f"git -C {REPO} rebase main", TRUST_POLICY),             # -C into the framework
+     ("GTB", "ask",   REPO, f"git -C {other} clean -fdx", TRUST_POLICY),              # -C out of it
+     ("GTC", "allow", feat, "git reset --hard origin/feature-x && git push -f", listed),  # git.trusted_repos, feature branch
+     ("GTD", "allow", feat, "git push -f", listed),
+     ("GTE", "ask",   other, f"cd {REPO}; git reset --hard", TRUST_POLICY),          # cd may have failed
+    ]
+    for cid, want, cwd, cmd, pol in T:
+        got, why = run("Bash", {"command": cmd, "description": cid}, dict(tenv, SDLC_GUARD_POLICY=pol), cwd=cwd)
+        check(cid, want, got, f"[git trust @{os.path.basename(cwd)}] {cmd}", why)
+
+
 def check(cid, want, got, label, why=""):
     global fails, total
     total += 1
@@ -784,12 +823,13 @@ def main():
         p = subprocess.run([sys.executable, AUS, "--github", "someone"], capture_output=True, text=True, env=aenv)
     s = json.load(open(sp)); pm = s["permissions"]
     check("AS1", True, p.returncode == 0 and "Bash" in pm["allow"] and "Bash(git push*)" in pm["allow"]
-          and "Bash(git push* --force*)" in pm["deny"] and s["model"] == "opus" and "Bash(ssh *)" not in pm["ask"]
-          and "Bash(helm uninstall *)" not in pm["ask"] and "Bash(git rebase*)" in pm["ask"] and "Bash(git revert *)" in pm["ask"],
-          "apply-user-settings: bare Bash allow, git rollback/rebase asks, helm uninstall lifted (dev/qa full control), keeps existing keys/rules", p.stderr)
+          and "Bash(git push* --force*)" not in pm["deny"] and "Bash(sudo *)" in pm["deny"] and s["model"] == "opus" and "Bash(ssh *)" not in pm["ask"]
+          and "Bash(helm uninstall *)" not in pm["ask"] and "Bash(git rebase*)" not in pm["ask"] and "Bash(git revert *)" not in pm["ask"],
+          "apply-user-settings: bare Bash allow, git rules left to the repo-aware guard, helm uninstall lifted (dev/qa full control), keeps existing keys/rules", p.stderr)
     check("AS1b", True, "full control" in json.dumps(s["autoMode"]) and "need the owner (the guard prompts)" not in json.dumps(s["autoMode"]),
           "apply-user-settings: autoMode gives <app>-dev/<app>-qa full kubectl/helm control")
-    check("AS2", True, pm["defaultMode"] == "auto" and "Bash(sudo *)" in pm["deny"] and "Bash(git reset --hard*)" in pm["ask"]
+    check("AS2", True, pm["defaultMode"] == "auto" and "Bash(sudo *)" in pm["deny"] and "Bash(git reset --hard*)" not in pm["ask"]
+          and "Bash(docker system prune*)" in pm["ask"]
           and "https://10.10.10.20:6443" in json.dumps(s["autoMode"]), "apply-user-settings: mode, deny/ask lists, autoMode from policy")
     check("AS3", 1, sum("sdlc-guard.sh" in json.dumps(e) for e in s["hooks"]["PreToolUse"]), "apply-user-settings: guard hook added once (idempotent)")
     check("AS4", True, len(pm["allow"]) == len(set(pm["allow"])) and any(f.startswith("settings.json.bak-") for f in os.listdir(os.path.join(fh, ".claude"))),
@@ -811,6 +851,7 @@ def main():
           "apply-user-settings: autoMode allow/environment name the aws.projects directories", p.stderr)
 
     aws_cases(env)
+    git_trust_cases(env)
 
     # vet-package.py (SEC-02): offline fixtures only — these tests never touch the network
     VP = os.path.join(GUARD_DIR, "vet-package.py")

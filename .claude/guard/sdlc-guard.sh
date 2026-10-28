@@ -570,10 +570,8 @@ def check_docker(argv, env):
     rest = args[i:]
     if a0 == "docker-compose": rest = ["compose"] + rest
     words = [r for r in rest if not r.startswith("-")]
-    if rest[:1] == ["compose"] and "down" in rest and ("-v" in rest or "--volumes" in rest):
-        confirm("docker compose down -v deletes volumes (user rule: ask first)")
-    if words[:2] in (["volume", "rm"], ["volume", "prune"], ["volume", "remove"]):
-        confirm("docker volume deletion (user rule: ask first)")
+    # compose down -v / docker volume rm|prune: local compose stacks are dev, resetting their volumes is the
+    # agent's call (owner decision 2026-10-28); system prune --volumes (every project's data) still confirms
     if words[:2] == ["system", "prune"] and "--volumes" in rest:
         confirm("docker system prune --volumes (user rule: ask first)")
     if words[:1] in (["login"], ["logout"]) or words[:2] in (["context", "use"], ["context", "create"], ["context", "rm"], ["context", "update"]):
@@ -599,12 +597,51 @@ def push_destination(rest):
         return r
     return None
 
-def check_git(argv, env):
+GIT = (POLICY or {}).get("git") or {}
+def git_toplevel(d):
+    d = os.path.realpath(d)
+    while True:
+        if os.path.exists(os.path.join(d, ".git")): return d
+        if os.path.dirname(d) == d: return None
+        d = os.path.dirname(d)
+
+def git_trusted(dirs):
+    """True when every directory the command may run in lies inside a trusted repo: the startup-agents
+    framework itself (identified by its own guard source) or a path listed in the policy's git.trusted_repos
+    (owner decision 2026-10-28: agents run every git operation in the framework repo)."""
+    if not dirs or None in dirs: return False
+    roots = [os.path.realpath(os.path.expanduser(str(p))) for p in GIT.get("trusted_repos", []) or []]
+    for d in dirs:
+        top = git_toplevel(d)
+        if not top: return False
+        if GIT.get("trust_framework", True) and os.path.isfile(os.path.join(top, ".claude", "guard", "sdlc-guard.sh")) and \
+                os.path.isfile(os.path.join(top, ".claude", "guard", "make-policy.py")):
+            continue
+        if not any(under(top, r) for r in roots): return False
+    return True
+
+PROTECTED_BRANCHES = ("main", "master")
+def git_branch(d):
+    """The checked-out branch of the repo holding d (None when detached or unreadable)."""
+    top = git_toplevel(d) if d else None
+    try:
+        g = os.path.join(top, ".git")
+        if os.path.isfile(g):                                    # worktree: "gitdir: <path>"
+            g = open(g).read().split(":", 1)[1].strip()
+        head = open(os.path.join(g, "HEAD")).read().strip()
+        return head[len("ref: refs/heads/"):] if head.startswith("ref: refs/heads/") else None
+    except Exception:
+        return None
+def check_git(argv, env, cands=None):
     args = argv[1:]
+    dirs = set(cands or [os.path.realpath(CWD)])
     while args and args[0] in ("-C", "-c", "--git-dir", "--work-tree", "--namespace"):
         if args[0] == "-c" and len(args) > 1 and GIT_URL_CONFIG.match(args[1]):
             ask(f"git -c {args[1]} redirects where git talks to (user rule: non-local network needs approval)")
+        if args[0] == "-C" and len(args) > 1:
+            dirs = {None if d is None else os.path.realpath(os.path.join(d, os.path.expanduser(expand(args[1], env)))) for d in dirs}
         args = args[2:]
+    trusted = git_trusted(dirs)
     while args and args[0].startswith(("--git-dir=", "--work-tree=", "--no-pager", "-P", "--bare")): args = args[1:]
     if not args: return
     sub, rest = args[0], args[1:]
@@ -617,6 +654,20 @@ def check_git(argv, env):
         dest = push_destination(rest)
         if dest is not None and dest != "origin":
             ask(f"git push to '{dest}', not origin (a new or URL remote is an exfiltration path; user rule: ask first)")
+    if trusted:
+        if sub == "push":
+            # the one thing still asked in a trusted repo: rewriting or deleting the shared main/master
+            dest_refs = [r for r in rest if not r.startswith("-")][1:]
+            rewrite = any(r in ("--force", "-f", "--mirror", "--delete", "-d") or r.startswith("+") for r in rest)
+            hits = [r for r in dest_refs if re.sub(r"^[+:]|.*:", "", r) in PROTECTED_BRANCHES or r.startswith(":")]
+            if rewrite and not dest_refs:
+                cur = {git_branch(d) for d in dirs}
+                hits = [c for c in cur if c in PROTECTED_BRANCHES or c is None]
+            if "--mirror" in rest or (rewrite and hits):
+                confirm(f"git push {' '.join(rest)} rewrites or deletes {', '.join(PROTECTED_BRANCHES)} on the remote "
+                        "(force-with-lease to a feature branch passes)")
+        return
+    if sub == "push":
         if any(r in ("--force", "-f", "--force-with-lease", "--force-if-includes", "--mirror", "--delete", "-d", "--prune") or r.startswith(("--force-with-lease=", "+", ":")) for r in rest):
             confirm("git push rewriting/deleting remote refs (user rule: ask first)")
     elif sub == "reset" and "--hard" in rest: confirm("git reset --hard discards work (user rule)")
@@ -655,9 +706,21 @@ def check_rm(argv, env, cwd, scratch):
 
 SQL_CLIENTS = {"psql", "mysql", "mariadb", "sqlite3", "mongosh", "mongo", "redis-cli", "cockroach", "clickhouse-client", "dropdb"}
 SQL_DESTRUCTIVE = re.compile(r"\bDROP\s+(DATABASE|SCHEMA|TABLE|OWNED|ROLE|USER)\b|\bTRUNCATE\b|\bFLUSH(ALL|DB)\b|dropDatabase\(|\bDELETE\s+FROM\s+[\w.\"]+\s*(;|$|\"|')", re.I)
+def dev_qa_exec(argv):
+    """`kubectl exec -n <app>-dev|<app>-qa …` / `docker compose exec …`: a database in a disposable environment."""
+    a0 = os.path.basename(argv[0])
+    if a0 in ("docker", "docker-compose") and "exec" in argv:
+        return True                                    # local compose stack = dev (owner decision 2026-10-28)
+    if a0 in KUBE_TOOLS and "exec" in argv:
+        flags, _ = parse_flags(argv[1:argv.index("--")] if "--" in argv else argv[1:])
+        ns = fget(flags, "-n", "--namespace")
+        ctxs = ((POLICY or {}).get("kube") or {}).get("contexts", {})
+        return bool(ns) and any(ns_writable(ns, w) for w in ctxs.values())
+    return False
+
 def check_sql(argv):
     names = {os.path.basename(a) for a in argv}
-    if names & SQL_CLIENTS:
+    if names & SQL_CLIENTS and not dev_qa_exec(argv):
         if "dropdb" in names: confirm("dropdb (user rule: ask before DROP DATABASE)")
         text = " ".join(argv)
         if SQL_DESTRUCTIVE.search(text): confirm("destructive SQL (DROP/TRUNCATE/DELETE without WHERE) — user rule: ask first")
@@ -1211,7 +1274,7 @@ def check_command(cmd, cwd, scratch, depth=0, env=None, st=None):
         elif a0 in ("kubectx", "kubens", "k9s"): deny(f"{a0} changes/uses ambient kube context; use kubectl with the pinned KUBECONFIG and an explicit -n")
         elif a0 in ("limactl", "lima"): check_limactl(argv, env)
         elif a0 in ("docker", "docker-compose"): check_docker(argv, env)
-        elif a0 == "git": check_git(argv, env)
+        elif a0 == "git": check_git(argv, env, st.cands)
         elif a0 == "rm": check_rm(argv, env, cwd, scratch)
         elif a0 == "find" and ("-delete" in argv or ("-exec" in argv and "rm" in argv)): confirm("find -delete/-exec rm (user rule: ask before bulk deletion)")
         aws_argv = argv if a0 == "aws" else (["aws"] + argv[3:] if interpreter_name(a0) == "python" and argv[1:3] == ["-m", "awscli"] else None)

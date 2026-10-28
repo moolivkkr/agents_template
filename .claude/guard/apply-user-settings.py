@@ -12,7 +12,9 @@ What it changes (everything else in the file is kept):
                       destructive and prod/credential commands). --narrow keeps the old narrow list instead
                       (git, kubectl/helm/crane/trivy, scripts/k8s/*, local docker, localhost curl, builds)
                       and drops the bare "Bash"
-  permissions.ask     the ~/.claude/CLAUDE.md "ask first" list, so it holds even if hooks are disabled
+  permissions.ask     the destructive commands no guard rule scopes (system prune, terraform apply, ...);
+                      git and compose-volume rules are REMOVED from ask/deny because the guard decides
+                      them per repo / environment (decision 2026-10-28; --narrow keeps them)
   permissions.deny    sudo, context switching, namespace deletion, VM deletion, cloud CLIs, reading
                       the admin kubeconfig / ~/.ssh / ~/.aws, editing ~/.kube, the guard policy, hooks
   permissions.defaultMode = "auto"
@@ -46,21 +48,34 @@ ALLOW = [
     "Bash(pytest*)", "Bash(jq *)",
 ]
 ASK = [
-    "Bash(git reset --hard*)", "Bash(git clean -f*)", "Bash(git checkout -- *)", "Bash(git restore *)",
-    "Bash(git stash drop*)", "Bash(git stash clear*)", "Bash(git branch -D *)",
-    "Bash(docker compose down -v*)", "Bash(docker compose * down -v*)", "Bash(docker compose down --volumes*)",
-    "Bash(docker volume rm *)", "Bash(docker volume prune*)", "Bash(docker system prune*)",
+    "Bash(docker system prune*)",
     "Bash(dropdb *)", "Bash(chmod 777 *)", "Bash(chmod -R 777 *)",
     "Bash(terraform apply*)", "Bash(terraform destroy*)", "Bash(npm publish*)",
-    # git: history rewrites and rollbacks ask (owner decision 2026-10-12); everything else in git runs
-    "Bash(git rebase*)", "Bash(git revert *)", "Bash(git reset --soft*)", "Bash(git reset --mixed*)",
-    "Bash(git reset --keep*)", "Bash(git reset --merge*)", "Bash(git reset HEAD~*)", "Bash(git reset HEAD^*)",
-    "Bash(git push --force*)", "Bash(git push -f*)", "Bash(git push --force-with-lease*)",
 ]
 # Rules earlier versions added that the owner has since lifted: removed from settings on every run.
 # helm uninstall / delete in <app>-dev/<app>-qa is the agent's call (owner decision 2026-10-12); the guard
 # still refuses them in any namespace that isn't writable (prod, system).
 LIFTED_ASK = ["Bash(helm uninstall *)", "Bash(helm delete *)"]
+# Rules a settings prefix can't scope by repo or environment: the guard decides these instead (git in the
+# framework repo and git.trusted_repos, local compose volumes as dev; owner decision 2026-10-28), so they
+# are REMOVED from existing settings. Under --narrow they stay as ask rules.
+REPO_AWARE_ASK = [
+    # git rewrites/rollbacks (asked since 2026-10-12): the guard still asks for them outside trusted repos
+    "Bash(git rebase*)", "Bash(git revert *)", "Bash(git reset --soft*)", "Bash(git reset --mixed*)",
+    "Bash(git reset --keep*)", "Bash(git reset --merge*)", "Bash(git reset HEAD~*)", "Bash(git reset HEAD^*)",
+    "Bash(git push --force*)", "Bash(git push -f*)", "Bash(git push --force-with-lease*)",
+    "Bash(git reset --hard*)", "Bash(git clean -f*)", "Bash(git checkout -- *)", "Bash(git restore *)",
+    "Bash(git stash drop*)", "Bash(git stash clear*)", "Bash(git branch -D *)",
+    "Bash(docker compose down -v*)", "Bash(docker compose * down -v*)", "Bash(docker compose down --volumes*)",
+    "Bash(docker volume rm *)", "Bash(docker volume prune*)",
+]
+REPO_AWARE_DENY = [
+    "Bash(git push* --force*)", "Bash(git push* -f *)", "Bash(git push* -f)",
+    "Bash(git -C * push* --force*)", "Bash(git -C * push* -f *)", "Bash(git -C * push* -f)",
+    "Bash(git push* --delete*)", "Bash(git push* -d *)", "Bash(git push* :*)",
+    "Bash(git -C * push* --delete*)", "Bash(git -C * push* -d *)", "Bash(git -C * push* :*)",
+    "Bash(gh pr merge* --delete-branch*)", "Bash(gh pr merge* -d*)",
+]
 # prompted under --narrow only; in the default broad mode the guard checks the remote command instead
 NARROW_ASK = ["Bash(ssh *)", "Bash(scp *)"]
 DENY = [
@@ -161,11 +176,12 @@ def main():
     if a.narrow:
         perm["allow"] = [x for x in perm.get("allow", []) if x != "Bash"]
         add(perm["allow"], ALLOW)
-        add(perm.setdefault("ask", []), ASK + NARROW_ASK)
+        add(perm.setdefault("ask", []), ASK + NARROW_ASK + REPO_AWARE_ASK)
     else:
         add(perm.setdefault("allow", []), ["Bash"] + ALLOW)
-        perm["ask"] = [x for x in perm.get("ask", []) if x not in NARROW_ASK]
+        perm["ask"] = [x for x in perm.get("ask", []) if x not in NARROW_ASK + REPO_AWARE_ASK]
         add(perm["ask"], ASK)
+        perm["deny"] = [x for x in perm.get("deny", []) if x not in REPO_AWARE_DENY]
     add(perm.setdefault("deny", []), DENY)
     perm["ask"] = [x for x in perm.get("ask", []) if x not in LIFTED_ASK]
     perm["defaultMode"] = "auto"
