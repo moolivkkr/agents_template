@@ -302,6 +302,15 @@ FAKE_APPLY="$W2/bad.yaml" FAKE_MAC_IPS="0.0.0.0/0" KUBECTL="$W2/bin/kubectl" bas
   && bad "app-namespaces accepted a CIDR as a lab Mac IP" || ok "app-namespaces refuses a malformed lab-network entry (no 0.0.0.0/0)"
 rm -rf "$W2"
 
+# cluster-up tailnet: [user@]mac[:instance] entries, VM size overrides
+eval "$(sed -n '/^mac_of() {/p;/^target_of() {/p;/^inst_of() {/p' "$CU")"
+[ "$(mac_of bookbridgeadmin@macstudio51)" = macstudio51 ] && [ "$(target_of bookbridgeadmin@macstudio51)" = bookbridgeadmin@macstudio51 ] \
+  && [ "$(mac_of studio256:sdlc-agent-tn)" = studio256 ] && [ "$(inst_of studio256:sdlc-agent-tn sdlc-agent)" = sdlc-agent-tn ] \
+  && [ "$(inst_of macm4 sdlc-agent)" = sdlc-agent ] && [ "$(target_of u@studio256:x)" = u@studio256 ] \
+  && ok "cluster-up: [user@]mac[:instance] parses (ssh target, tailnet name, Lima instance)" || bad "cluster-up entry parsing"
+grep -q 'SERVER_MEMORY' "$CU" && grep -q '\^\[0-9\]+GiB\$' "$CU" && grep -q 'select(.static != true)' "$CU" \
+  && ok "cluster-up: validated VM size overrides; a Mac whose 5001/18080 are taken gets a VM without those forwards" || bad "cluster-up sizing/forward handling"
+
 echo "────────────────────────────────────────────"
 echo "k8s-templates.test.sh: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

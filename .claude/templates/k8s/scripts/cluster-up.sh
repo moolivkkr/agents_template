@@ -16,8 +16,16 @@
 #   TRANSPORT=tailnet SERVER_MAC=macstudio51 AGENT_MACS="macm4 studio52 studio256" \
 #     TS_AUTHKEY=tskey-auth-... .claude/templates/k8s/scripts/cluster-up.sh
 #
-#   SERVER_MAC    tailnet name of the Mac that runs sdlc-server ("" = this Mac)
-#   AGENT_MACS    tailnet names of the Macs that each run one sdlc-agent VM (this Mac may be one)
+#   SERVER_MAC    [user@]mac of the Mac that runs sdlc-server ("" = this Mac)
+#   AGENT_MACS    [user@]mac[:instance] for each Mac that runs one agent VM (this Mac may be one).
+#                 mac = its tailnet name; user@ = its ssh login when it differs from yours;
+#                 :instance = a Lima instance name other than sdlc-agent, to leave a VM already
+#                 called sdlc-agent on that Mac alone (e.g. studio256:sdlc-agent-tn)
+#   SERVER_CPUS / SERVER_MEMORY / SERVER_DISK, AGENT_CPUS / AGENT_MEMORY / AGENT_DISK
+#                 VM size on creation (e.g. 12 / 48GiB / 200GiB); unset = the template's 6 / 24GiB / 100GiB
+#   ADMIN_KC / AGENT_KC  output kubeconfig paths (defaults below), e.g. to keep another cluster's files
+#   If a Mac already serves 127.0.0.1:5001 or :18080 (another VM's registry/ingress forward), its new VM
+#   is created without those two forwards; that Mac then reaches the registry and apps through another.
 #   TS_AUTHKEY    reusable, pre-approved auth key tagged $TS_TAG (prompted for when unset; only
 #                 needed while a VM still has to join). The tailnet policy must own the tag and
 #                 auto-approve CLUSTER_CIDR for it (lima-k8s-lab.md "Tailnet mode").
@@ -37,8 +45,8 @@ SERVER_NODE_IP="${SERVER_NODE_IP:-172.30.10.2}"
 AGENT_NODE_IP="${AGENT_NODE_IP:-172.30.10.3}"
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 K8S="$(cd "$HERE/.." && pwd)"
-ADMIN_KC="$HOME/.kube/sdlc-lab-admin.yaml"
-AGENT_KC="$HOME/.kube/sdlc-lab.json"
+ADMIN_KC="${ADMIN_KC:-$HOME/.kube/sdlc-lab-admin.yaml}"
+AGENT_KC="${AGENT_KC:-$HOME/.kube/sdlc-lab.json}"
 POLICY="${SDLC_GUARD_POLICY:-$HOME/.config/sdlc-guard/policy.json}"
 export PATH="/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 
@@ -64,9 +72,12 @@ REMOTE_TS='$(command -v tailscale || echo /Applications/Tailscale.app/Contents/M
 ts_json() { "$TS_CLI" status --json; }
 SELF_MAC="$(ts_json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["DNSName"].split(".")[0])')" \
   || die "Tailscale is not running on this Mac"
-is_self() { [ -z "$1" ] || [ "$1" = "$SELF_MAC" ]; }
-on_mac() {   # run a command on a lab Mac by tailnet name (local for this Mac); stdin is passed through
-  local m="$1"; shift
+mac_of() { local e="${1#*@}"; echo "${e%%:*}"; }                 # [user@]mac[:inst] -> mac
+target_of() { echo "${1%%:*}"; }                                # [user@]mac[:inst] -> [user@]mac (ssh)
+inst_of() { case "$1" in *:*) echo "${1##*:}" ;; *) echo "$2" ;; esac; }   # <entry> <default>
+is_self() { [ -z "$1" ] || [ "$(mac_of "$1")" = "$SELF_MAC" ]; }
+on_mac() {   # run a command on a lab Mac by [user@]tailnet name (local for this Mac); stdin passes through
+  local m; m="$(target_of "$1")"; shift
   if is_self "$m"; then bash -c "$*"; else ssh -o BatchMode=yes "$m" "export PATH=/opt/homebrew/bin:/usr/local/bin:\$PATH; $*"; fi
 }
 ts_ipv4() {  # tailnet IPv4 of a device by its tailnet name, from this Mac's view of the tailnet
@@ -77,10 +88,10 @@ for p in [d["Self"]]+list((d.get("Peer") or {}).values()):
     if p["DNSName"].split(".")[0]==want:
         print(next(i for i in p["TailscaleIPs"] if ":" not in i)); break' "$1"
 }
-is_self "$SERVER_MAC" && SERVER_SSH="" || SERVER_SSH="$SERVER_MAC"   # on_server/server_status use it
+is_self "$SERVER_MAC" && SERVER_SSH="" || SERVER_SSH="$(target_of "$SERVER_MAC")"   # on_server/server_status use it
 
-tailnet_node() {   # <mac> <lima instance> <node name> <role>
-  local m="$1" inst="$2" name="$3" role="$4" tpl="$K8S/lima/sdlc-node-tailnet.yaml"
+tailnet_node() {   # <[user@]mac> <lima instance> <node name> <role>
+  local m; m="$(target_of "$1")"; local inst="$2" name="$3" role="$4" tpl="$K8S/lima/sdlc-node-tailnet.yaml"
   say "k3s $role VM ($inst -> node $name) on ${m:-$SELF_MAC}"
   on_mac "$m" "for b in limactl ssh; do command -v \$b >/dev/null || { echo \"\$b missing\" >&2; exit 1; }; done; $REMOTE_TS set --accept-routes" \
     || die "$m: needs Lima (brew install lima) and Tailscale; accept-routes could not be set"
@@ -95,7 +106,19 @@ tailnet_node() {   # <mac> <lima instance> <node name> <role>
     Stopped) on_mac "$m" "limactl start --tty=false $inst" ;;
     *)
       if ! is_self "$m"; then scp -q "$tpl" "$m:/tmp/sdlc-node-tailnet.yaml"; tpl=/tmp/sdlc-node-tailnet.yaml; fi
-      on_mac "$m" "limactl create --tty=false --name $inst $tpl && limactl start --tty=false $inst" ;;
+      local set="" c mem disk
+      if [ "$role" = server ]; then c="${SERVER_CPUS:-}"; mem="${SERVER_MEMORY:-}"; disk="${SERVER_DISK:-}"
+      else c="${AGENT_CPUS:-}"; mem="${AGENT_MEMORY:-}"; disk="${AGENT_DISK:-}"; fi
+      [ -n "$c" ] && { [[ "$c" =~ ^[0-9]+$ ]] || die "CPUS must be a number: $c"; set="$set | .cpus=$c"; }
+      [ -n "$mem" ] && { [[ "$mem" =~ ^[0-9]+GiB$ ]] || die "MEMORY must look like 48GiB: $mem"; set="$set | .memory=\"$mem\""; }
+      [ -n "$disk" ] && { [[ "$disk" =~ ^[0-9]+GiB$ ]] || die "DISK must look like 200GiB: $disk"; set="$set | .disk=\"$disk\""; }
+      # another VM on this Mac already owns the registry/ingress forwards: don't fight it for them
+      if on_mac "$m" "nc -z -G 2 127.0.0.1 5001 >/dev/null 2>&1 || nc -z -G 2 127.0.0.1 18080 >/dev/null 2>&1"; then
+        echo "127.0.0.1:5001/18080 already served on ${m:-$SELF_MAC}: $inst gets no registry/ingress forwards"
+        set="$set | .portForwards = [.portForwards[] | select(.static != true)]"
+      fi
+      set="${set# | }"
+      on_mac "$m" "limactl create --tty=false --name $inst ${set:+--set '$set'} $tpl && limactl start --tty=false $inst" ;;
   esac
   if [ -z "${TS_AUTHKEY:-}" ] && ! on_mac "$m" "limactl shell $inst tailscale status >/dev/null 2>&1"; then
     read -rsp "Tailscale auth key ($TS_TAG, reusable, pre-approved): " TS_AUTHKEY; echo
@@ -124,9 +147,9 @@ TOKEN="$(on_server "limactl shell sdlc-server sudo cat /var/lib/rancher/k3s/serv
 [ -n "$TOKEN" ] || die "could not read the join token"
 
 NODES=1
-for m in $AGENT_MACS; do
-  [ "$m" = "${SERVER_MAC:-$SELF_MAC}" ] && die "$m runs sdlc-server; list it in SERVER_MAC only"
-  NODES=$((NODES+1)); tailnet_node "$m" sdlc-agent "sdlc-agent-$m" agent
+for e in $AGENT_MACS; do
+  [ "$(mac_of "$e")" = "$(mac_of "${SERVER_MAC:-$SELF_MAC}")" ] && die "$(mac_of "$e") runs sdlc-server; list it in SERVER_MAC only"
+  NODES=$((NODES+1)); tailnet_node "$e" "$(inst_of "$e" sdlc-agent)" "sdlc-agent-$(mac_of "$e")" agent
 done
 unset TOKEN TS_AUTHKEY
 
@@ -220,12 +243,13 @@ if [ "$TRANSPORT" = tailnet ]; then
   # other machines on the same tailnet stay non-local to the guard.
   LIMA_ARGS=(); [ -z "$SERVER_SSH" ] && LIMA_ARGS+=(--lima-instance sdlc-server)
   HOST_ARGS=(); MAC_IPS=()
-  for m in "${SERVER_MAC:-$SELF_MAC}" $AGENT_MACS; do
-    is_self "$m" && [ "$m" != "${SERVER_MAC:-$SELF_MAC}" ] && LIMA_ARGS+=(--lima-instance sdlc-agent)
+  for e in "${SERVER_MAC:-$SELF_MAC}" $AGENT_MACS; do
+    m="$(mac_of "$e")"
+    is_self "$m" && [ "$m" != "$(mac_of "${SERVER_MAC:-$SELF_MAC}")" ] && LIMA_ARGS+=(--lima-instance "$(inst_of "$e" sdlc-agent)")
     ip="$(ts_ipv4 "$m")"; [ -n "$ip" ] || die "no tailnet IPv4 for $m"
     MAC_IPS+=("$ip"); HOST_ARGS+=(--lab-host "$m" --lab-host "$ip")
   done
-  for n in sdlc-server $(for m in $AGENT_MACS; do echo "sdlc-agent-$m"; done); do
+  for n in sdlc-server $(for e in $AGENT_MACS; do echo "sdlc-agent-$(mac_of "$e")"; done); do
     ip="$(ts_ipv4 "$n")"; [ -n "$ip" ] || die "no tailnet IPv4 for node $n"
     HOST_ARGS+=(--lab-host "$n" --lab-host "$ip")
   done
