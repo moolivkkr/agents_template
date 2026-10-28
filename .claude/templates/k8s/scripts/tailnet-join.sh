@@ -23,6 +23,15 @@ if ! tailscale status >/dev/null 2>&1; then
 else
   tailscale set --hostname="$NODE_NAME" --ssh --accept-routes --snat-subnet-routes=false
 fi
+# The server also routes the Service CIDR, so every lab Mac reaches ClusterIPs (and CoreDNS, for
+# split DNS on cluster.local). k3s's flannel backend then runs `tailscale set --advertise-routes=
+# <pod /24>,<routes already advertised>` (vpn.GetAdvertisedRoutes), so this survives.
+if [ "$ROLE" = server ]; then   # add, never replace: a re-run must not drop k3s's pod /24
+  ROUTES="$(tailscale debug prefs | python3 -c 'import json,sys
+r=json.load(sys.stdin).get("AdvertiseRoutes") or []
+c=sys.argv[1]; print(",".join(r if c in r else r+[c]))' "$SERVICE_CIDR")"
+  tailscale set --advertise-routes="$ROUTES"
+fi
 NODE_IP="$(tailscale ip -4)"
 echo "tailnet-join: $NODE_NAME is $NODE_IP"
 

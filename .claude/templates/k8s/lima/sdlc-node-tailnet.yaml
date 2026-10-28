@@ -37,7 +37,8 @@ provision:
     sysctl -p /etc/sysctl.d/99-sdlc-tailnet.conf
 portForwards:
 # STATIC (set up by the host agent at start), the same on every lab Mac: push images to
-# localhost:5001, reach apps at http://<app>-<env>.localhost:18080 — without leaving 127.0.0.1.
+# localhost:5001, reach apps at http://<app>-<env>.localhost:18080 (https on :18443) — without
+# leaving 127.0.0.1.
 - guestPort: 30501          # in-cluster registry NodePort
   guestIP: "127.0.0.1"
   hostPort: 5001
@@ -46,6 +47,11 @@ portForwards:
 - guestPort: 80             # Traefik ingress (svclb hostPort on every node)
   guestIP: "127.0.0.1"
   hostPort: 18080
+  hostIP: "127.0.0.1"
+  static: true
+- guestPort: 443            # Traefik websecure -> https://<app>-<env>.localhost:18443
+  guestIP: "127.0.0.1"
+  hostPort: 18443
   hostIP: "127.0.0.1"
   static: true
 - guestIP: "0.0.0.0"

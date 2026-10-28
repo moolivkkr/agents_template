@@ -113,8 +113,8 @@ tailnet_node() {   # <[user@]mac> <lima instance> <node name> <role>
       [ -n "$mem" ] && { [[ "$mem" =~ ^[0-9]+GiB$ ]] || die "MEMORY must look like 48GiB: $mem"; set="$set | .memory=\"$mem\""; }
       [ -n "$disk" ] && { [[ "$disk" =~ ^[0-9]+GiB$ ]] || die "DISK must look like 200GiB: $disk"; set="$set | .disk=\"$disk\""; }
       # another VM on this Mac already owns the registry/ingress forwards: don't fight it for them
-      if on_mac "$m" "nc -z -G 2 127.0.0.1 5001 >/dev/null 2>&1 || nc -z -G 2 127.0.0.1 18080 >/dev/null 2>&1"; then
-        echo "127.0.0.1:5001/18080 already served on ${m:-$SELF_MAC}: $inst gets no registry/ingress forwards"
+      if on_mac "$m" "nc -z -G 2 127.0.0.1 5001 >/dev/null 2>&1 || nc -z -G 2 127.0.0.1 18080 >/dev/null 2>&1 || nc -z -G 2 127.0.0.1 18443 >/dev/null 2>&1"; then
+        echo "127.0.0.1:5001/18080/18443 already served on ${m:-$SELF_MAC}: $inst gets no registry/ingress forwards"
         set="$set | .portForwards = [.portForwards[] | select(.static != true)]"
       fi
       set="${set# | }"
@@ -249,13 +249,15 @@ if [ "$TRANSPORT" = tailnet ]; then
     ip="$(ts_ipv4 "$m")"; [ -n "$ip" ] || die "no tailnet IPv4 for $m"
     MAC_IPS+=("$ip"); HOST_ARGS+=(--lab-host "$m" --lab-host "$ip")
   done
+  NODE_IPS=()
   for n in sdlc-server $(for e in $AGENT_MACS; do echo "sdlc-agent-$(mac_of "$e")"; done); do
     ip="$(ts_ipv4 "$n")"; [ -n "$ip" ] || die "no tailnet IPv4 for node $n"
-    HOST_ARGS+=(--lab-host "$n" --lab-host "$ip")
+    NODE_IPS+=("$ip"); HOST_ARGS+=(--lab-host "$n" --lab-host "$ip")
   done
   # app-namespaces.sh reads this to let the lab Macs (and only them) reach pod IPs directly
   "${KC[@]}" -n sdlc-system create configmap lab-network --from-literal=transport=tailnet \
-    --from-literal=mac-ips="${MAC_IPS[*]}" --dry-run=client -o yaml | "${KC[@]}" apply -f - >/dev/null
+    --from-literal=mac-ips="${MAC_IPS[*]}" --from-literal=node-ips="${NODE_IPS[*]}" \
+    --from-literal=service-cidr="$SERVICE_CIDR" --dry-run=client -o yaml | "${KC[@]}" apply -f - >/dev/null
 else
   LIMA_ARGS=(); [ -n "$AGENT_IP" ] && LIMA_ARGS+=(--lima-instance sdlc-agent); [ -z "$SERVER_SSH" ] && LIMA_ARGS+=(--lima-instance sdlc-server)
   HOST_ARGS=(--lab-host "$SERVER_IP"); [ -n "$AGENT_IP" ] && HOST_ARGS+=(--lab-host "$AGENT_IP")

@@ -63,8 +63,21 @@ Mac C ── VM sdlc-agent (sdlc-agent-C) ────────────�
 - **Every lab Mac reaches every pod IP directly.** `cluster-up.sh` stores the lab Macs' tailnet IPs
   in ConfigMap `sdlc-system/lab-network`. `app-namespaces.sh` then adds one `ipBlock /32` per lab Mac
   to `env-isolation`. Other tailnet devices and other namespaces are still refused.
-- Each Mac keeps the loopback conventions: `localhost:5001` (registry) and
-  `http://<app>-<env>.localhost:18080` (ingress). The API is `https://<sdlc-server tailnet IP>:6443`.
+- **Every lab Mac reaches every Service too, by name.** `sdlc-server` also advertises the Service
+  CIDR (10.43.0.0/16). With split DNS for `cluster.local` (console step 2 below), any Mac reaches,
+  for example, `postgres.<app>-dev.svc.cluster.local:5432`, or any `http(s)://<svc>.<ns>.svc.cluster.local`.
+  kube-proxy masquerades that traffic to the node that routed it, so `env-isolation` also admits the
+  node VMs' tailnet IPs (`lab-network` key `node-ips`). Pod-to-pod and pod-to-Service traffic keeps
+  the pod's own IP, so other namespaces are still refused.
+- Each Mac keeps the loopback conventions: `localhost:5001` (registry),
+  `http://<app>-<env>.localhost:18080` and `https://<app>-<env>.localhost:18443` (ingress; Traefik's
+  default certificate is self-signed). The API is `https://<sdlc-server tailnet IP>:6443`.
+- **Mac to Mac**, outside the cluster: Tailscale's default policy passes every port. On the LandOS
+  hosts, pf (`io.landos`) only restricts ssh and VNC. For ssh, run landos
+  `infra/scripts/host-ssh-tailnet-onboard.sh` once per Mac; it admits the lab Macs' tailnet IPs.
+  The macOS application firewall lets signed software listen. An unsigned host service needs
+  allowing in System Settings › Network › Firewall. Prove every pair, both ways, with
+  `MACS="[user@]mac ..." scripts/lab-mesh-check.sh` (path direct or relayed, ssh, HTTP on a test port).
 - The guard's lab hosts are the lab Macs and node VMs only, by tailnet name and IP. Other devices on
   the same tailnet (for example another site's Mac) stay non-local.
 
@@ -73,13 +86,15 @@ Mac C ── VM sdlc-agent (sdlc-agent-C) ────────────�
 1. Merge this into the policy file:
    ```hujson
    "tagOwners":     {"tag:k8s": ["autogroup:admin"]},
-   "autoApprovers": {"routes": {"10.42.0.0/16": ["tag:k8s"]}},
+   "autoApprovers": {"routes": {"10.42.0.0/16": ["tag:k8s"], "10.43.0.0/16": ["tag:k8s"]}},
    "ssh": [{"action": "accept", "src": ["autogroup:member"], "dst": ["tag:k8s"],
             "users": ["autogroup:nonroot", "root"]}],
    ```
    With a restricted policy (not the default allow-all), also grant the lab Macs and `tag:k8s`
-   access to `tag:k8s:*` and `10.42.0.0/16:*`. Grant nothing else to `10.42.0.0/16`.
-2. Settings › Keys: create an auth key that is reusable, pre-approved and tagged `tag:k8s`
+   access to `tag:k8s:*`, `10.42.0.0/16:*` and `10.43.0.0/16:*`. Grant nothing else to those ranges.
+2. DNS › Nameservers › Add nameserver › Custom: `10.43.0.10` (CoreDNS), with "Restrict to domain"
+   set to `cluster.local`. This is split DNS: only `*.cluster.local` goes there.
+3. Settings › Keys: create an auth key that is reusable, pre-approved and tagged `tag:k8s`
    (not ephemeral).
 
 **Each lab Mac:** Tailscale running, `brew install lima`, Remote Login on, and

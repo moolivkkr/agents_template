@@ -311,6 +311,25 @@ eval "$(sed -n '/^mac_of() {/p;/^target_of() {/p;/^inst_of() {/p' "$CU")"
 grep -q 'SERVER_MEMORY' "$CU" && grep -q '\^\[0-9\]+GiB\$' "$CU" && grep -q 'select(.static != true)' "$CU" \
   && ok "cluster-up: validated VM size overrides; a Mac whose 5001/18080 are taken gets a VM without those forwards" || bad "cluster-up sizing/forward handling"
 
+# seamless access: Service CIDR route, node IPs in env-isolation, https forward, mesh check
+grep -q 'advertise-routes="\$ROUTES"' "$TJ" && grep -q 'if c in r else r+\[c\]' "$TJ" \
+  && ok "tailnet-join: server ADDS the Service CIDR to its advertised routes (a re-run keeps k3s's pod /24)" || bad "tailnet-join Service CIDR route"
+grep -q 'hostPort: 18443' "$TL" && ok "sdlc-node-tailnet: https ingress on 127.0.0.1:18443" || bad "no 18443 forward"
+W3="$(mktemp -d)"; mkdir -p "$W3/bin"
+cat > "$W3/bin/kubectl" <<'SH'
+#!/bin/bash
+case "$*" in
+  *"get configmap lab-network"*) printf '%s' "100.95.253.107 100.80.0.1" ;;
+  *apply*) cat >> "$FAKE_APPLY" ;;
+esac
+SH
+chmod +x "$W3/bin/kubectl"
+FAKE_APPLY="$W3/a.yaml" KUBECTL="$W3/bin/kubectl" bash "$K8S/scripts/app-namespaces.sh" demo dev >/dev/null 2>&1
+grep -q 'cidr: 100.80.0.1/32' "$W3/a.yaml" && grep -q "jsonpath='{.data.mac-ips} {.data.node-ips}'" "$K8S/scripts/app-namespaces.sh" \
+  && ok "env-isolation admits node tailnet IPs too (Mac -> ClusterIP arrives masqueraded to a node)" || bad "node-ips not in env-isolation"
+rm -rf "$W3"
+grep -q 'node-ips=' "$CU" && ok "cluster-up records node-ips in lab-network" || bad "cluster-up lacks node-ips"
+
 echo "────────────────────────────────────────────"
 echo "k8s-templates.test.sh: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

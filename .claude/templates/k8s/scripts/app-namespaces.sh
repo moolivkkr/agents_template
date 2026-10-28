@@ -26,7 +26,10 @@ CPU="${QUOTA_CPU:-4}"; MEM="${QUOTA_MEMORY:-8Gi}"; STORAGE="${QUOTA_STORAGE:-20G
 P_CPU="${PROD_QUOTA_CPU:-8}"; P_MEM="${PROD_QUOTA_MEMORY:-16Gi}"; P_STORAGE="${PROD_QUOTA_STORAGE:-40Gi}"
 export PATH="/opt/homebrew/bin:/Applications/Docker.app/Contents/Resources/bin:$PATH"
 LAB_FROM=""   # extra NetworkPolicy peers: one ipBlock per lab Mac (tailnet mode only)
-for ip in $("${KUBECTL:-kubectl}" --kubeconfig "$ADMIN_KC" -n sdlc-system get configmap lab-network -o jsonpath='{.data.mac-ips}' 2>/dev/null); do
+# mac-ips: a lab Mac -> pod IP arrives with the Mac's own tailnet IP. node-ips: a lab Mac -> ClusterIP
+# (Postgres, any Service) is masqueraded by kube-proxy to the node that routed it. Pod -> pod and
+# pod -> Service keep the pod's own IP, so other namespaces stay refused.
+for ip in $("${KUBECTL:-kubectl}" --kubeconfig "$ADMIN_KC" -n sdlc-system get configmap lab-network -o jsonpath='{.data.mac-ips} {.data.node-ips}' 2>/dev/null); do
   [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "lab-network: bad mac-ips entry '$ip'" >&2; exit 1; }
   LAB_FROM="$LAB_FROM
     - ipBlock: {cidr: $ip/32}"
