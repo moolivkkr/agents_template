@@ -9,6 +9,7 @@
 #   svc-dns   pod -> Service by DNS name across nodes, both directions, ROUNDS times
 #   mac-pod   tailnet mode only: this Mac -> every pod IP over the tailnet's pod routes
 #   mac-svc   tailnet mode only: this Mac -> a ClusterIP, and by its cluster.local name (split DNS)
+#   registry  tailnet mode only: the registry NodePort does NOT answer on any node's tailnet IP
 #   https     tailnet mode only: https://sdlc-check.localhost:18443 (Traefik websecure via the Lima forward)
 #   ingress   http://sdlc-check.localhost:18080 from this Mac (Traefik via the Lima forward)
 # Everything it creates (pods, services, ingress in sdlc-system, and its registry image) is deleted at the end.
@@ -79,6 +80,12 @@ if [ "$("${K[@]}" get configmap lab-network -o jsonpath='{.data.transport}' 2>/d
     IP="$("${K[@]}" get pod "$P" -o jsonpath='{.status.podIP}')"
     curl -s -m 5 "http://$IP/" | grep -q '<title>Welcome' && ok "mac-pod $P ($IP)" \
       || bad "mac-pod $P ($IP): no route? (tailscale set --accept-routes; pod routes approved in the admin console?)"
+  done
+  echo "== registry NodePort is NOT on the tailnet (it has no auth)"
+  for n in "${NODES[@]}"; do
+    NIP="$(kubectl --kubeconfig "$ADMIN_KC" get node "$n" -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' | awk '{print $1}')"
+    curl -s -m 4 -o /dev/null "http://$NIP:30501/v2/" && bad "registry answers on $n ($NIP:30501): NodePorts must be loopback-only" \
+      || ok "registry closed on $n's tailnet IP"
   done
   echo "== this Mac -> Services over the tailnet (ClusterIP route, then cluster.local via split DNS)"
   if [ "${#PODS[@]}" -ge 1 ]; then

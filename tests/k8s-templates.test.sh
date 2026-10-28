@@ -330,6 +330,10 @@ grep -q 'cidr: 100.80.0.1/32' "$W3/a.yaml" && grep -q "jsonpath='{.data.mac-ips}
 rm -rf "$W3"
 grep -q 'node-ips=' "$CU" && ok "cluster-up records node-ips in lab-network" || bad "cluster-up lacks node-ips"
 
+grep -q 'nodeport-addresses=127.0.0.0/8' "$TJ" && grep -q '"http://127.0.0.1:30501"' "$TJ" \
+  && [ "$(grep -c 'NODEPORT_ARGS" sh -' "$TJ")" = 2 ] \
+  && ok "tailnet: NodePorts (the unauthenticated registry) loopback-only on server and agents; mirror via 127.0.0.1" || bad "registry/NodePort exposure on the tailnet"
+
 echo "────────────────────────────────────────────"
 echo "k8s-templates.test.sh: $PASS passed, $FAIL failed, $SKIP skipped"
 [ "$FAIL" -eq 0 ]

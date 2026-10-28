@@ -37,20 +37,23 @@ echo "tailnet-join: $NODE_NAME is $NODE_IP"
 
 mkdir -p /etc/rancher/k3s
 (umask 077; printf 'name=tailscale,joinKey=%s' "$TS_AUTHKEY" > /etc/rancher/k3s/vpn-auth)
-# images are referenced as localhost:5001/...; each node pulls through its own registry NodePort
+# images are referenced as localhost:5001/...; each node pulls through its own registry NodePort on
+# loopback. NodePorts answer on 127.0.0.0/8 only (NODEPORT_ARGS): the registry has no auth, and on the
+# tailnet IP any tailnet device could push an image the cluster would then run.
 cat >/etc/rancher/k3s/registries.yaml <<EOF
 mirrors:
   "localhost:5001":
-    endpoint: ["http://$NODE_IP:30501"]
+    endpoint: ["http://127.0.0.1:30501"]
 EOF
+NODEPORT_ARGS="--kube-proxy-arg=nodeport-addresses=127.0.0.0/8"
 
 [ -d /var/lib/rancher/k3s ] && { echo "tailnet-join: k3s already installed"; exit 0; }
 if [ "$ROLE" = server ]; then
   curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="server --write-kubeconfig-mode 644 \
     --vpn-auth-file=/etc/rancher/k3s/vpn-auth --node-name=$NODE_NAME \
     --cluster-cidr=$CLUSTER_CIDR --service-cidr=$SERVICE_CIDR \
-    --tls-san=$NODE_IP --tls-san=$NODE_NAME --tls-san=127.0.0.1" sh -
+    --tls-san=$NODE_IP --tls-san=$NODE_NAME --tls-san=127.0.0.1 $NODEPORT_ARGS" sh -
 else
   curl -sfL https://get.k3s.io | K3S_URL="$SERVER_URL" K3S_TOKEN="$K3S_TOKEN" \
-    INSTALL_K3S_EXEC="agent --vpn-auth-file=/etc/rancher/k3s/vpn-auth --node-name=$NODE_NAME" sh -
+    INSTALL_K3S_EXEC="agent --vpn-auth-file=/etc/rancher/k3s/vpn-auth --node-name=$NODE_NAME $NODEPORT_ARGS" sh -
 fi
