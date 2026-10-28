@@ -84,7 +84,13 @@ tailnet_node() {   # <mac> <lima instance> <node name> <role>
   say "k3s $role VM ($inst -> node $name) on ${m:-$SELF_MAC}"
   on_mac "$m" "for b in limactl ssh; do command -v \$b >/dev/null || { echo \"\$b missing\" >&2; exit 1; }; done; $REMOTE_TS set --accept-routes" \
     || die "$m: needs Lima (brew install lima) and Tailscale; accept-routes could not be set"
-  case "$(on_mac "$m" "limactl list $inst --format '{{.Status}}' 2>/dev/null || true")" in
+  local st; st="$(on_mac "$m" "limactl list $inst --format '{{.Status}}' 2>/dev/null || true")"
+  # a Thunderbolt-mode VM of the same name has k3s joined to the old server; reusing it would skip the
+  # install and leave the node pointing there. Rebuilding wipes the old cluster's data: the human does it.
+  if [ -n "$st" ] && on_mac "$m" "limactl list $inst --format '{{.Dir}}' | xargs -I{} grep -q 'sdlc0' {}/lima.yaml"; then
+    die "$m: $inst is a Thunderbolt-mode VM. Rebuild it yourself first (wipes its namespaces): ssh $m limactl delete -f $inst"
+  fi
+  case "$st" in
     Running) echo "already running" ;;
     Stopped) on_mac "$m" "limactl start --tty=false $inst" ;;
     *)
